@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v15
+AEL-MINI AUTONOMOUS AGENT v16
 
 ARCHITEKTURA:
 
@@ -684,7 +684,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v15")
+    print("             AEL-MINI AUTONOMOUS AGENT v16")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9853,6 +9853,74 @@ Tylko JSON.
 # MAIN
 # ============================================================
 
+def maybe_clear_previous_session_data():
+    """
+    Gdy użytkownik zaczyna NOWY cel (nie wznawia poprzedniego),
+    pyta czy usunąć dane poprzedniej sesji: kolejkę zadań, zapisane
+    wyniki, licznik powtarzających się porażek narzędzi, ostatni
+    wynik.
+
+    Bez tego: jeśli poprzednia sesja padła z zadaniem w stanie
+    PENDING w kolejce, a użytkownik startuje zupełnie INNY cel,
+    run_agent() na pierwszym kroku podjąłby i wykonał to stare
+    zadanie — dotyczące poprzedniego, niepowiązanego celu — zanim
+    w ogóle skonsultowałby nowy.
+
+    Nie dotyka custom_tools/ (to trwałe, celowo dodane narzędzia,
+    nie dane sesji) ani samego GOAL_FILE (to obsługiwane osobno,
+    tam gdzie ta funkcja jest wołana).
+    """
+
+    queue_files = list(QUEUE_DIR.glob("*.json"))
+    result_files = list(RESULTS_DIR.glob("*.json"))
+
+    if not queue_files and not result_files:
+        return
+
+    description = (
+        "Dane poprzedniej sesji: "
+        + str(len(queue_files))
+        + " zadań w kolejce, "
+        + str(len(result_files))
+        + " zapisanych wyników."
+    )
+
+    print()
+    print(description)
+
+    if not _confirm_destructive_action(
+        "USUNIĘCIE DANYCH POPRZEDNIEJ SESJI (kolejka + wyniki) — "
+        "nowy cel zacznie się na czysto"
+    ):
+        log(
+            "MAIN",
+            "Zachowano dane poprzedniej sesji (kolejka/wyniki)."
+        )
+        return
+
+    for f in queue_files + result_files:
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+    for extra in (
+        TOOL_ATTEMPTS_FILE,
+        LAST_RESULT_FILE,
+        GEMINI_STATE_FILE
+    ):
+        try:
+            extra.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    log(
+        "MAIN",
+        "Usunięto dane poprzedniej sesji (kolejka, wyniki, "
+        "licznik prób narzędzi, ostatni wynik)."
+    )
+
+
 def prompt_adb_target():
     """
     Pyta przy starcie programu o adres bezprzewodowego ADB
@@ -10025,12 +10093,15 @@ def main():
             ).strip()
 
             goal = typed if typed else saved_goal
+            is_new_goal = bool(typed)
 
         else:
 
             goal = input(
                 "Podaj CEL AGENTA > "
             ).strip()
+
+            is_new_goal = True
 
     except KeyboardInterrupt:
 
@@ -10044,6 +10115,9 @@ def main():
         )
 
         return
+
+    if is_new_goal:
+        maybe_clear_previous_session_data()
 
     print()
 
