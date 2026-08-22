@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v38
+AEL-MINI AUTONOMOUS AGENT v39
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v38")
+    print("             AEL-MINI AUTONOMOUS AGENT v39")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3564,6 +3564,102 @@ def _confirm_destructive_action(description):
         return False
 
 
+# ------------------------------------------------------------
+# Narzędzia Gemini/Pythona NIE SĄ plikami wykonywalnymi — nie
+# istnieją w PATH Termuksa. Zaobserwowany, POWTARZAJĄCY SIĘ (v25,
+# v35, v38 — trzy razy w coraz to innej postaci) wzorzec błędu:
+# skrypt shell próbuje wywołać jedno z tych narzędzi bezpośrednio
+# (`android_screenshot ...`) albo sprawdzić jego istnienie przez
+# `command -v`/`which` — to ZAWSZE kończy się "nie znaleziono" i
+# cichym przejściem na gorszy zamiennik (screencap/dumpsys), a nie
+# realnym wywołaniem narzędzia. Zamiast łatać to w promptach za
+# każdym razem, gdy pojawi się kolejny wariant (co robić przy
+# BARDZIEJ złożonych zadaniach w przyszłości?) — blokujemy to
+# STRUKTURALNIE, w kodzie, dla WSZYSTKICH tych nazw na raz, zanim
+# taka komenda w ogóle zostanie wykonana. To działa niezależnie od
+# tego, czy model "pamięta" regułę z promptu.
+_GEMINI_ONLY_TOOL_NAMES = [
+    "termux_mkdir", "termux_ls", "termux_write_file",
+    "termux_read_file", "termux_run_background", "termux_processes",
+    "termux_check_process", "termux_stop_process",
+    "termux_start_second_session", "termux_file_exists",
+    "termux_delete", "termux_check_apk", "termux_patch_file",
+    "ask_deepseek",
+    "chrome_tabs", "chrome_inspect", "chrome_open", "chrome_click",
+    "chrome_type",
+    "android_state", "android_click", "android_click_resource",
+    "android_tap", "android_type", "android_press", "android_swipe",
+    "android_screenshot", "android_launch_app",
+    "android_run_in_new_window", "android_install_apk",
+    "android_uninstall_app", "android_logcat",
+]
+
+_TOOL_NAMES_ALT = "|".join(
+    re.escape(n)
+    for n in sorted(
+        _GEMINI_ONLY_TOOL_NAMES,
+        key=len,
+        reverse=True
+    )
+)
+
+_FAKE_TOOL_EXISTENCE_CHECK_PATTERN = re.compile(
+    r"\b(?:command\s+-v|which|type)\s+(" + _TOOL_NAMES_ALT + r")\b"
+)
+
+_FAKE_TOOL_BARE_INVOCATION_PATTERN = re.compile(
+    r"^(?:if\s+|elif\s+|while\s+|!\s*)?(" + _TOOL_NAMES_ALT + r")\b"
+)
+
+
+def _looks_like_fake_tool_shell_invocation(command):
+    """
+    Wykrywa próbę wywołania narzędzia Gemini/Pythona jako polecenia
+    powłoki (albo sprawdzenia go przez command -v/which) — analizuje
+    KAŻDĄ linię osobno, bo to właśnie tak wygląda w realnych
+    skryptach (jedna linia z `if command -v NAZWA`, inna z samym
+    `NAZWA argumenty`). Zwraca nazwę wykrytego narzędzia albo None.
+    """
+
+    if not command:
+        return None
+
+    for line in str(command).splitlines():
+
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        match = _FAKE_TOOL_EXISTENCE_CHECK_PATTERN.search(stripped)
+
+        if match:
+            return match.group(1)
+
+        match = _FAKE_TOOL_BARE_INVOCATION_PATTERN.match(stripped)
+
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def _fake_tool_invocation_error(tool_name):
+    return {
+        "ok": False,
+        "error": (
+            "'" + tool_name + "' to narzędzie Gemini/Pythona, NIE "
+            "polecenie powłoki — nie istnieje jako plik wykonywalny "
+            "w PATH, więc command -v/which zawsze zwróci "
+            "\"nie znaleziono\", a próba uruchomienia go w shellu "
+            "zawsze się nie powiedzie. Wywołaj '" + tool_name + "' "
+            "BEZPOŚREDNIO jako osobne, prawdziwe narzędzie Gemini — "
+            "nie przez termux_run/termux_run_background/shell."
+        ),
+        "blocked_fake_tool_invocation": True
+    }
+
+
 # ============================================================
 # SHELL
 # ============================================================
@@ -3579,6 +3675,11 @@ def execute_shell(command, timeout=None):
             "ok": False,
             "error": "Pusta komenda"
         }
+
+    fake_tool = _looks_like_fake_tool_shell_invocation(command)
+
+    if fake_tool:
+        return _fake_tool_invocation_error(fake_tool)
 
     if _looks_like_delete_command(command):
 
@@ -5593,6 +5694,11 @@ def termux_run_background(
                 "ok": False,
                 "error": "Pusta komenda"
             }
+
+        fake_tool = _looks_like_fake_tool_shell_invocation(command)
+
+        if fake_tool:
+            return _fake_tool_invocation_error(fake_tool)
 
         if _looks_like_delete_command(command):
 
