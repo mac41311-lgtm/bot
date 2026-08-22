@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v45
+AEL-MINI AUTONOMOUS AGENT v46
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v45")
+    print("             AEL-MINI AUTONOMOUS AGENT v46")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11204,6 +11204,52 @@ Tylko JSON.
 # MAIN
 # ============================================================
 
+def maybe_restart_team_sessions_for_new_goal():
+    """
+    Gdy użytkownik zaczyna NOWY cel (nie wznawia poprzedniego przez
+    Enter), pyta czy zresetować 9 sesji DeepSeek zespołu.
+
+    init_team() jest wołane RAZ, na starcie programu, ZANIM
+    użytkownik w ogóle zdąży wpisać cel — więc wszystkie sesje są
+    już wznowione (v31) ze STARĄ historią rozmowy, zanim wiadomo,
+    czy to ten sam cel, czy zupełnie inny. Bez tej funkcji: nowy,
+    niepowiązany cel dostaje zespół, który w tle wciąż "pamięta"
+    fakty/ustalenia z POPRZEDNIEGO projektu — a to dokładnie ten
+    rodzaj mieszania kontekstu, który CRITIC ma wyłapywać jako
+    podejrzenie fabrykacji (v36), tylko że tu źródłem nie jest
+    konfabulacja Gemini, tylko realna, stara historia czatu.
+
+    Ten sam cel wznawiany przez Enter (is_new_goal=False) NIE woła
+    tej funkcji — tam ciągłość starych sesji jest pożądana i to
+    właśnie po to v31 w ogóle powstało.
+    """
+
+    if not _confirm_destructive_action(
+        "RESET 9 SESJI DEEPSEEK (MAIN, PLANNER, RESEARCHER, "
+        "CRITIC, BROWSER, CODE_REVIEWER, CODE_FIXER, "
+        "ANDROID_GAME_ENGINEER, PROGRESS_ESTIMATOR) — nowy cel "
+        "dostanie zespół bez kontekstu poprzedniego, "
+        "niepowiązanego celu (świeży system_prompt dla każdej roli)"
+    ):
+        log(
+            "DEEPSEEK",
+            "Zachowano stare sesje zespołu mimo nowego celu "
+            "(użytkownik odmówił resetu)."
+        )
+        return
+
+    for name in _ROLE_ACCOUNT:
+        _clear_session_state(name)
+
+    init_team()
+
+    log(
+        "DEEPSEEK",
+        "Zresetowano 9 sesji zespołu — nowy cel zaczyna się bez "
+        "kontekstu poprzedniego."
+    )
+
+
 def maybe_clear_previous_session_data():
     """
     Gdy użytkownik zaczyna NOWY cel (nie wznawia poprzedniego),
@@ -11633,6 +11679,7 @@ def main():
         return
 
     if is_new_goal:
+        maybe_restart_team_sessions_for_new_goal()
         maybe_clear_previous_session_data()
         maybe_clear_generated_project_files()
 
