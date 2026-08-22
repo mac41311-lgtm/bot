@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v16
+AEL-MINI AUTONOMOUS AGENT v17
 
 ARCHITEKTURA:
 
@@ -397,6 +397,17 @@ GOAL_FILE = AGENT_DIR / "current_goal.txt"
 # nic nie zwróci.
 ADB_CONNECT_FILE = AGENT_DIR / "adb_connect.txt"
 
+# Lista top-level katalogów/plików pod $HOME, w których Gemini
+# faktycznie coś zapisał (termux_mkdir/termux_write_file/
+# termux_patch_file/write_engineer_code_to) — jedyny sposób, żeby
+# przy nowym celu zaproponować usunięcie WYGENEROWANYCH PLIKÓW
+# PROJEKTU (kod gry, build.gradle itd.), skoro nazwa katalogu
+# projektu zmienia się za każdym razem (OpenWorld3D, Game3D,
+# 3dgame...). Osobna, dodatkowa lista od danych samego agenta
+# (kolejka/wyniki) i NIGDY nie zawiera AGENT_DIR ani kluczy API —
+# patrz _track_project_path()/maybe_clear_generated_project_files().
+PROJECT_DIRS_FILE = AGENT_DIR / "project_dirs.json"
+
 # Gdzie run_agent() spodziewa się finalnego APK i FINAL_OK.txt —
 # używane wyłącznie do FIZYCZNEJ weryfikacji przed przyjęciem DONE.
 APK_OUTPUT_DIR = AGENT_DIR / "apk_output"
@@ -601,6 +612,74 @@ def write_json(path, value):
         return False
 
 
+# Nazwy top-level wpisów pod $HOME, które NIGDY nie trafiają na
+# listę "wygenerowanych plików projektu" do ewentualnego kasowania
+# — własny katalog agenta (klucze API, kod, kolejka) i typowe
+# ukryte pliki konfiguracyjne Termuksa.
+_PROJECT_TRACKING_EXCLUDED_NAMES = {
+    AGENT_DIR.name,
+    ".termux",
+    ".termux_run_command_scripts",
+    ".bashrc",
+    ".bash_profile",
+    ".profile",
+    ".shortcuts",
+}
+
+
+def _track_project_path(path):
+    """
+    Zapisuje top-level katalog/plik pod $HOME, w którym Gemini
+    właśnie coś zapisał, do PROJECT_DIRS_FILE — jedyny sposób,
+    żeby przy kolejnym NOWYM celu wiedzieć, co właściwie zostało
+    wygenerowane w POPRZEDNIEJ sesji (nazwa katalogu projektu jest
+    inna za każdym razem, agent jej nie narzuca).
+
+    Woływane z termux_mkdir/termux_write_file/termux_patch_file
+    oraz z obsługi write_engineer_code_to w run_agent(). Nigdy nie
+    zgłasza wyjątku wyżej — to czysto pomocnicze śledzenie, błąd
+    tutaj nie może wywrócić właściwej operacji na pliku.
+    """
+
+    try:
+        target = Path(str(path)).expanduser().resolve()
+        home = Path.home().resolve()
+
+        if home not in target.parents and target != home:
+            # Ścieżka spoza $HOME (np. /data/data/com.termux/...
+            # poza katalogiem domowym) — nic tu nie śledzimy, to
+            # nie jest "projekt użytkownika" w sensie, w jakim tu
+            # chodzi.
+            return
+
+        relative = target.relative_to(home)
+
+        if not relative.parts:
+            return
+
+        top_level_name = relative.parts[0]
+
+        if top_level_name in _PROJECT_TRACKING_EXCLUDED_NAMES:
+            return
+
+        if top_level_name.startswith("."):
+            return
+
+        top_level_path = str(home / top_level_name)
+
+        tracked = read_json(PROJECT_DIRS_FILE, [])
+
+        if not isinstance(tracked, list):
+            tracked = []
+
+        if top_level_path not in tracked:
+            tracked.append(top_level_path)
+            write_json(PROJECT_DIRS_FILE, tracked)
+
+    except Exception:
+        pass
+
+
 def append_memory(path, timestamp, content):
     """
     Dopisuje wpis do pliku pamięci (Markdown).
@@ -684,7 +763,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v16")
+    print("             AEL-MINI AUTONOMOUS AGENT v17")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4588,6 +4667,7 @@ def termux_mkdir(path):
     try:
         p = Path(str(path)).expanduser()
         p.mkdir(parents=True, exist_ok=True)
+        _track_project_path(p)
         return {
             "ok": True,
             "path": str(p)
@@ -4657,6 +4737,8 @@ def termux_write_file(path, content):
             data,
             encoding="utf-8"
         )
+
+        _track_project_path(p)
 
         return {
             "ok": True,
@@ -5326,6 +5408,8 @@ def termux_patch_file(path, search, replace):
             # py_compile samo w sobie niedostępne — nie blokuj
             # patcha z tego powodu, tylko pomiń dodatkową walidację.
             pass
+
+    _track_project_path(target)
 
     return {
         "ok": True,
@@ -9459,6 +9543,8 @@ Zwróć tylko JSON.
                         encoding="utf-8"
                     )
 
+                    _track_project_path(target_path)
+
                     log(
                         "MAIN",
                         "Zapisano kod ANDROID_GAME_ENGINEER "
@@ -9921,6 +10007,116 @@ def maybe_clear_previous_session_data():
     )
 
 
+def maybe_clear_generated_project_files():
+    """
+    OSOBNE pytanie od maybe_clear_previous_session_data() — to
+    dotyczy PLIKÓW WYGENEROWANYCH przez Gemini/DeepSeek (kod gry,
+    build.gradle, katalogi projektu), NIE wewnętrznych danych
+    agenta. Celowo osobna decyzja: można wyczyścić kolejkę zadań,
+    a mimo to zachować już napisany kod, albo odwrotnie.
+
+    Lista kandydatów pochodzi WYŁĄCZNIE z PROJECT_DIRS_FILE —
+    ścieżek, które faktycznie zaobserwowaliśmy jako zapisywane
+    przez termux_mkdir/termux_write_file/termux_patch_file/
+    write_engineer_code_to (patrz _track_project_path()). Nigdy
+    nie zgaduje na podstawie samej treści celu.
+
+    Twarda ochrona, niezależna od potwierdzenia: nigdy nie usuwa
+    AGENT_DIR (klucze API, kod agenta, kolejka) ani katalogu
+    domowego — to samo zabezpieczenie co w termux_delete().
+    """
+
+    tracked = read_json(PROJECT_DIRS_FILE, [])
+
+    if not isinstance(tracked, list) or not tracked:
+        return
+
+    home = Path.home().resolve()
+    agent_dir_resolved = AGENT_DIR.resolve()
+
+    candidates = []
+
+    for entry in tracked:
+
+        try:
+            p = Path(entry).expanduser().resolve()
+        except Exception:
+            continue
+
+        if not p.exists():
+            continue
+
+        if p == home or p == agent_dir_resolved:
+            # Nigdy nie powinno się tu znaleźć (patrz
+            # _track_project_path()), ale sprawdzamy jeszcze raz —
+            # druga warstwa tej samej ochrony.
+            continue
+
+        candidates.append(p)
+
+    if not candidates:
+        # Wszystko co śledziliśmy albo już nie istnieje, albo
+        # zostało odfiltrowane — nic do zaproponowania.
+        write_json(PROJECT_DIRS_FILE, [])
+        return
+
+    print()
+    print("Wygenerowane pliki z poprzedniej sesji:")
+
+    for p in candidates:
+
+        if p.is_dir():
+            try:
+                count = sum(1 for _ in p.rglob("*"))
+            except Exception:
+                count = "?"
+            print("  - " + str(p) + " (katalog, " + str(count) + " elementów)")
+        else:
+            try:
+                size = p.stat().st_size
+            except Exception:
+                size = "?"
+            print("  - " + str(p) + " (plik, " + str(size) + " B)")
+
+    if not _confirm_destructive_action(
+        "USUNIĘCIE WYGENEROWANYCH PLIKÓW PROJEKTU (kod/build "
+        "powyżej) — klucze API i program agenta NIE są tym objęte"
+    ):
+        log(
+            "MAIN",
+            "Zachowano wygenerowane pliki projektu poprzedniej "
+            "sesji."
+        )
+        return
+
+    remaining = []
+
+    for p in candidates:
+
+        try:
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+
+            log(
+                "MAIN",
+                "Usunięto wygenerowany plik/katalog projektu: "
+                + str(p)
+            )
+
+        except Exception as e:
+
+            log(
+                "MAIN",
+                "Nie udało się usunąć " + str(p) + ": " + str(e)
+            )
+
+            remaining.append(str(p))
+
+    write_json(PROJECT_DIRS_FILE, remaining)
+
+
 def prompt_adb_target():
     """
     Pyta przy starcie programu o adres bezprzewodowego ADB
@@ -10118,6 +10314,7 @@ def main():
 
     if is_new_goal:
         maybe_clear_previous_session_data()
+        maybe_clear_generated_project_files()
 
     print()
 
