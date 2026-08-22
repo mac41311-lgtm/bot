@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v43
+AEL-MINI AUTONOMOUS AGENT v44
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v43")
+    print("             AEL-MINI AUTONOMOUS AGENT v44")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7660,6 +7660,20 @@ CO POWINIEN ZROBIĆ MAIN:
     # PIERWSZA INTERAKCJA
     # ========================================================
 
+    # Sygnały z narzędzi (content_warning z v29, compile_error z v43,
+    # blocked_fake_tool_invocation z v39 itp.) widzi na bieżąco tylko
+    # Gemini w trakcie TEGO zadania — jeśli samo ich nie wspomni w
+    # swoim dowolnym, tekstowym podsumowaniu (a wiemy z realnych
+    # logów, że potrafi konfabulować/pomijać), MAIN/PLANNER/CRITIC
+    # nigdy się o nich nie dowiedzą. Zbieramy je tu NIEZALEŻNIE od
+    # tego, co Gemini napisze, i dołączamy do zwracanego wyniku
+    # zadania — to gwarantuje, że zespół dostanie te sygnały
+    # strukturalnie, a nie tylko "jeśli Gemini raczy wspomnieć".
+    # Zdefiniowane PRZED try:, żeby było dostępne nawet gdy wyjątek
+    # wystąpi już przy samym client.interactions.create(...)
+    # (np. ścieżka QUOTA_EXHAUSTED).
+    collected_warnings = []
+
     try:
         interaction = client.interactions.create(
             model=GEMINI_MODEL,
@@ -7789,7 +7803,8 @@ CO POWINIEN ZROBIĆ MAIN:
                         RESULT_LIMIT
                     ),
                     "tool_calls": tool_calls,
-                    "interaction_id": interaction_id
+                    "interaction_id": interaction_id,
+                    "tool_warnings": collected_warnings
                 }
 
             # ------------------------------------------------
@@ -7934,6 +7949,24 @@ CO POWINIEN ZROBIĆ MAIN:
                     )
                 )
 
+                if isinstance(result, dict):
+
+                    for warning_key in (
+                        "content_warning",
+                        "compile_error",
+                        "blocked_fake_tool_invocation"
+                    ):
+
+                        if result.get(warning_key):
+
+                            collected_warnings.append(
+                                name + " [" + warning_key + "]: "
+                                + short(
+                                    str(result[warning_key]),
+                                    300
+                                )
+                            )
+
                 # --------------------------------------------
                 # KRYTYCZNA ZASADA:
                 #
@@ -7969,7 +8002,8 @@ CO POWINIEN ZROBIĆ MAIN:
                             "Gemini nie wykonuje samodzielnej naprawy. "
                             "MAIN / DeepSeek musi przygotować następny TASK lub PATCH."
                         ),
-                        "interaction_id": interaction_id
+                        "interaction_id": interaction_id,
+                        "tool_warnings": collected_warnings
                     }
 
                     log(
@@ -8030,7 +8064,8 @@ CO POWINIEN ZROBIĆ MAIN:
                         "Gemini nie zwrócił "
                         "interaction_id."
                     ),
-                    "tool_calls": tool_calls
+                    "tool_calls": tool_calls,
+                    "tool_warnings": collected_warnings
                 }
 
             # ------------------------------------------------
@@ -8074,7 +8109,8 @@ CO POWINIEN ZROBIĆ MAIN:
                 "Gemini osiągnął limit narzędzi."
             ),
             "tool_calls": tool_calls,
-            "interaction_id": interaction_id
+            "interaction_id": interaction_id,
+            "tool_warnings": collected_warnings
         }
 
     # ========================================================
@@ -8144,7 +8180,8 @@ CO POWINIEN ZROBIĆ MAIN:
                 "error": short(
                     error_text,
                     3000
-                )
+                ),
+                "tool_warnings": collected_warnings
             }
 
         return {
@@ -8154,7 +8191,8 @@ CO POWINIEN ZROBIĆ MAIN:
             "error": short(
                 error_text,
                 3000
-            )
+            ),
+            "tool_warnings": collected_warnings
         }
 
 
@@ -9340,6 +9378,20 @@ def consult_team(
                 tool_hint += f" Błąd: {err}."
             tool_hint += (
                 " Nie proponuj tego samego podejścia."
+            )
+
+        tool_warnings = last_result.get("tool_warnings") or []
+
+        if tool_warnings:
+            tool_hint += (
+                "\n\n⚠️ SYGNAŁY Z NARZĘDZI W OSTATNIM ZADANIU "
+                "(wykryte automatycznie w kodzie, NIEZALEŻNIE od "
+                "tego, co Gemini napisało w swoim raporcie — "
+                "traktuj jako fakty, nawet jeśli raport poniżej "
+                "brzmi na sukces):\n"
+                + "\n".join(
+                    "- " + str(w) for w in tool_warnings[:8]
+                )
             )
 
     context = f"""
