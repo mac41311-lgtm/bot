@@ -1114,6 +1114,39 @@ ZASADY:
 5. Nie sugeruj pobierania gotowej gry/APK — projekt ma być
    zbudowany od zera w Termux.
 
+============================================================
+KRYTYCZNE OGRANICZENIE TERMUXA — BRAK SERWERA WYŚWIETLANIA
+============================================================
+
+Termux to terminal tekstowy działający jako zwykła apka Android.
+NIE MA X11, NIE MA GLX, NIE MA żadnego okna. Dlatego:
+
+- pyglet — `pyglet.gl` ładuje libGL przez GLX. W Termuxie zawsze
+  wyleci błędem przy imporcie. NIE proponuj pyglet.
+- kivy / pygame z prawdziwym oknem (SDL2 window) — SDL2 w
+  Termuxie też nie ma do czego się podłączyć. `python game.py`
+  odpalone bezpośrednio w Termuksie NIE POKAŻE żadnej grafiki,
+  nawet jeśli proces "działa" bez błędu w logach.
+- Jedyne dwie DZIAŁAJĄCE drogi do gry widocznej na ekranie
+  telefonu:
+    1. Prawdziwa aplikacja Android (Java/Kotlin, ewentualnie
+       LibGDX) budowana przez Gradle do .apk, renderowana przez
+       Android SurfaceView/Canvas/OpenGL ES — instalowana przez
+       `adb install` i uruchamiana jak normalna apka.
+    2. Kivy/Python spakowany przez python-for-android / buildozer
+       do .apk. Kivy na Androidzie działa TYLKO jako zbudowana i
+       zainstalowana aplikacja — nigdy jako skrypt odpalony
+       bezpośrednio w Termuksie.
+- Android SDK cmdline-tools (potrzebne do Gradle) NIE są
+  pakietem apt — `pkg install sdkmanager` nie istnieje. Trzeba je
+  pobrać ręcznie (wget) z developer.android.com i rozpakować.
+- NIE proponuj jako "testu działania" samego uruchomienia skryptu
+  w Termuksie (`python game.py` / sprawdzenie że proces nie
+  crashuje) — to nie dowodzi niczego o tym, co widać na ekranie.
+  Jedynym akceptowalnym dowodem działania jest zbudowany,
+  zainstalowany i URUCHOMIONY .apk potwierdzony przez
+  android_screenshot (prawdziwy zrzut ekranu z widoczną grą).
+
 Odpowiedź:
 
 AKTUALNY ETAP BUDOWY:
@@ -4919,6 +4952,15 @@ ZASADY:
 
 7. Po każdym udanym działaniu sprawdź faktyczny rezultat.
 
+8. Jeżeli monitorujesz proces uruchomiony przez
+   termux_run_background (termux_check_process /
+   termux_read_file na log_file): wykonaj NAJWYŻEJ 2-3 takie
+   sprawdzenia w TYM zadaniu. Jeżeli proces nadal działa,
+   ZAKOŃCZ raport stwierdzeniem, że instalacja/build nadal trwa
+   w tle, podaj PID i ścieżkę do log_file — NIE zapętlaj się w
+   sprawdzaniu aż do wyczerpania limitu narzędzi. MAIN utworzy
+   kolejny TASK sprawdzający ten sam proces później.
+
 ============================================================
 WARUNEK SUKCESU:
 
@@ -6332,12 +6374,24 @@ def consult_team(
     last_result
 ):
     """
-    Konsultuje wszystkie role równolegle (ThreadPoolExecutor).
+    Konsultuje wszystkie role SEKWENCYJNIE.
 
-    Każda rola startuje natychmiast — nie czeka, aż poprzednia
-    skończy. opendeep i tak serializuje requesty po swojej stronie,
-    ale dzięki wątkom główna pętla agenta nie stoi, a łączny czas
-    konsultacji = czas najwolniejszej roli, nie suma wszystkich.
+    WCZEŚNIEJ ta funkcja odpytywała PLANNER/RESEARCHER/BROWSER
+    równolegle przez ThreadPoolExecutor, zakładając że "opendeep i
+    tak serializuje requesty po swojej stronie". W praktyce
+    powodowało to POWTARZALNY błąd na każdym kroku:
+
+        DEEPSEEK ERROR [...]: invalid message id
+
+    Trzy wątki wysyłały wiadomości do wspólnego połączenia opendeep
+    w tym samym momencie, a serwer gubił kolejność message-id
+    między różnymi sesjami czatu — najczęściej ofiarą padał
+    BROWSER, którego sesja była restartowana na każdym kroku
+    (tracąc pamięć), kosztem dodatkowych ~5-10s bez żadnego
+    realnego zysku z "równoległości" — skoro opendeep i tak nie
+    obsługuje współbieżnych requestów poprawnie, wątki nie dawały
+    przyspieszenia, tylko psuły poprawność. Stąd powrót do
+    sekwencyjnych wywołań.
     """
 
     tool_hint = ""
@@ -6385,78 +6439,46 @@ AKTUALNY ANDROID:
 {short(android_summary(), 2000)}
 """
 
-    # Role uruchamiane równolegle.
-    # CRITIC i ANDROID_GAME_ENGINEER dostają dodatkowo wyjście
-    # PLANNERA — ale tylko jeśli PLANNER skończy pierwszy.
-    # Rozwiązanie: PLANNER i RESEARCHER idą w pierwszej fali,
-    # CRITIC/ENGINEER w drugiej (z wynikiem pierwszej fali).
-    # BROWSER i CODE_REVIEWER nie zależą od nikogo — też fala 1.
+    # Role odpytywane PO KOLEI — jedno realne połączenie do
+    # opendeep na raz. CRITIC i ANDROID_GAME_ENGINEER dostają
+    # dodatkowo wyjście PLANNERA/RESEARCHERA, więc muszą i tak
+    # czekać, aż tamci skończą.
 
     results = {}
 
-    def _call(name, msg):
-        results[name] = deepseek(name, msg)
-
-    # ── Fala 1: role niezależne ─────────────────────────────
-    wave1 = {
-        "PLANNER": context,
-        "RESEARCHER": context,
-        "BROWSER": context,
-    }
-
-    import concurrent.futures as _cf
-
-    with _cf.ThreadPoolExecutor(
-        max_workers=len(wave1),
-        thread_name_prefix="ds_wave1"
-    ) as ex:
-        futs = {
-            ex.submit(_call, name, msg): name
-            for name, msg in wave1.items()
-        }
-        for fut in _cf.as_completed(futs):
-            try:
-                fut.result()
-            except Exception as e:
-                role = futs[fut]
-                results[role] = f"BŁĄD WĄTKU {role}: {e}"
-
-    # RESEARCHER może chcieć web search — obsłuż to.
-    results["RESEARCHER"] = researcher_web_search(
-        results.get("RESEARCHER", ""),
+    results["PLANNER"] = deepseek(
+        "PLANNER",
         context
     )
 
-    # ── Fala 2: role zależne od Plannera ────────────────────
+    results["RESEARCHER"] = researcher_web_search(
+        deepseek(
+            "RESEARCHER",
+            context
+        ),
+        context
+    )
+
+    results["BROWSER"] = deepseek(
+        "BROWSER",
+        context
+    )
+
     planner_out = short(results.get("PLANNER", ""), 2000)
     researcher_out = short(results.get("RESEARCHER", ""), 2000)
 
-    wave2 = {
-        "ANDROID_GAME_ENGINEER": (
-            context
-            + "\n\nPLAN PLANNERA:\n" + planner_out
-            + "\n\nINFO RESEARCHER:\n" + researcher_out
-        ),
-        "CRITIC": (
-            context
-            + "\n\nPLAN PLANNERA:\n" + planner_out
-        ),
-    }
+    results["ANDROID_GAME_ENGINEER"] = deepseek(
+        "ANDROID_GAME_ENGINEER",
+        context
+        + "\n\nPLAN PLANNERA:\n" + planner_out
+        + "\n\nINFO RESEARCHER:\n" + researcher_out
+    )
 
-    with _cf.ThreadPoolExecutor(
-        max_workers=len(wave2),
-        thread_name_prefix="ds_wave2"
-    ) as ex:
-        futs = {
-            ex.submit(_call, name, msg): name
-            for name, msg in wave2.items()
-        }
-        for fut in _cf.as_completed(futs):
-            try:
-                fut.result()
-            except Exception as e:
-                role = futs[fut]
-                results[role] = f"BŁĄD WĄTKU {role}: {e}"
+    results["CRITIC"] = deepseek(
+        "CRITIC",
+        context
+        + "\n\nPLAN PLANNERA:\n" + planner_out
+    )
 
     return {
         "planner":   short(results.get("PLANNER", ""), 4000),
