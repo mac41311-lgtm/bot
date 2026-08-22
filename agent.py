@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v34
+AEL-MINI AUTONOMOUS AGENT v35
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v34")
+    print("             AEL-MINI AUTONOMOUS AGENT v35")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1541,6 +1541,32 @@ NIE MA X11, NIE MA GLX, NIE MA żadnego okna. Dlatego:
   potwierdzony przez android_screenshot (prawdziwy zrzut ekranu z
   widoczną grą) — obie te akcje działają na CAŁYM ekranie systemu,
   nie tylko w oknie Termuksa.
+
+============================================================
+NIE WSADZAJ ZRZUTU EKRANU/SPRAWDZENIA KARTY CHROME DO SKRYPTU BASH
+============================================================
+
+Zaobserwowany powtarzający się wzorzec: żeby zaoszczędzić kroki,
+proponujesz JEDEN skrypt bash łączący kilka czynności (otwórz
+apkę, zrób zrzut, otwórz URL, sprawdź kartę) w jedno polecenie
+`termux_run`. Problem: `android_screenshot` i `chrome_tabs`/
+`chrome_inspect` to narzędzia PO STRONIE GEMINI/PYTHONA — nie mają
+odpowiednika jako gołe polecenie shell wewnątrz takiego skryptu.
+Kiedy skrypt bash próbuje to zastąpić przez `screencap -p` albo
+`dumpsys`/`uiautomator dump`, to w Termuksie zwykle kończy się
+"brak uprawnień" / "not found" (te binaria wymagają roota albo
+kontekstu instrumentacji, którego Termux nie ma) — a mimo to
+skrypt zwraca kod wyjścia 0, więc wygląda na sukces, choć zrzutu
+nie ma.
+
+Zamiast tego: jeśli TASK wymaga zrzutu ekranu lub sprawdzenia
+karty Chrome, te dwa konkretne kroki MUSZĄ być osobnymi
+wywołaniami narzędzi Gemini (android_screenshot, chrome_tabs/
+chrome_inspect) — NIE częścią połączonego skryptu bash. Możesz
+nadal łączyć w jeden skrypt to, co jest czystym shellem (mkdir,
+zapis do pliku, sprawdzanie wersji narzędzi, curl) — tylko zrzut
+ekranu i stan karty Chrome zostają na zewnątrz, jako osobne kroki
+po skrypcie.
 
 ============================================================
 ZNANA PUŁAPKA — NIEZGODNOŚĆ WERSJI GRADLE / AGP W TERMUXIE
