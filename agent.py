@@ -811,7 +811,9 @@ TERMUX:
 - termux_stop_process
 - termux_start_second_session
 
-ANDROID:
+ANDROID (działa na CAŁYM ekranie systemu, nie tylko w oknie
+Termuksa — Gemini widzi i obsługuje dowolną aplikację na
+urządzeniu, Termux jest tylko jedną z wielu):
 - android_state
 - android_click
 - android_click_resource (klik po resource-id — dokładniejszy niż tekst)
@@ -820,6 +822,9 @@ ANDROID:
 - android_press
 - android_swipe (gest przesunięcia)
 - android_screenshot (prawdziwy zrzut ekranu PNG, do fizycznego dowodu)
+- android_launch_app (otwórz DOWOLNĄ zainstalowaną aplikację po
+  nazwie pakietu — np. zbudowaną i zainstalowaną grę, żeby ją
+  faktycznie zobaczyć na ekranie, a nie tylko sprawdzić plik .apk)
 
 CHROME:
 - chrome_tabs
@@ -1143,9 +1148,11 @@ NIE MA X11, NIE MA GLX, NIE MA żadnego okna. Dlatego:
 - NIE proponuj jako "testu działania" samego uruchomienia skryptu
   w Termuksie (`python game.py` / sprawdzenie że proces nie
   crashuje) — to nie dowodzi niczego o tym, co widać na ekranie.
-  Jedynym akceptowalnym dowodem działania jest zbudowany,
-  zainstalowany i URUCHOMIONY .apk potwierdzony przez
-  android_screenshot (prawdziwy zrzut ekranu z widoczną grą).
+  Jedynym akceptowalnym dowodem działania jest zbudowany i
+  zainstalowany .apk, URUCHOMIONY przez android_launch_app i
+  potwierdzony przez android_screenshot (prawdziwy zrzut ekranu z
+  widoczną grą) — obie te akcje działają na CAŁYM ekranie systemu,
+  nie tylko w oknie Termuksa.
 
 Odpowiedź:
 
@@ -2213,6 +2220,53 @@ def android_screenshot(path=None):
             "action": "screenshot",
             "error": str(e)
         }
+
+
+def android_launch_app(package):
+    """
+    Uruchamia zainstalowaną aplikację po nazwie pakietu przez
+    `adb shell monkey` — w odróżnieniu od `am start -n pakiet/
+    .Activity` nie wymaga znajomości nazwy głównej activity, więc
+    działa dla DOWOLNEJ aplikacji na urządzeniu (nie tylko tej
+    budowanej w bieżącym projekcie).
+
+    To jest brakujący kawałek "rąk": android_screenshot/
+    android_click/android_state już działają na CAŁYM ekranie
+    systemu (nie tylko w oknie Termuksa), ale wcześniej nie było
+    jawnego narzędzia, żeby SAMEMU otworzyć inną aplikację — np.
+    zbudowaną i zainstalowaną (`adb install`) grę, zanim zrobi się
+    zrzut ekranu jako dowód, że coś faktycznie się renderuje.
+    """
+
+    package = str(package or "").strip()
+
+    if not package:
+        return {
+            "ok": False,
+            "error": "Pusta nazwa pakietu."
+        }
+
+    result = execute_shell(
+        "adb shell monkey -p " + package
+        + " -c android.intent.category.LAUNCHER 1",
+        timeout=20
+    )
+
+    started = bool(
+        result.get("ok")
+        and "Events injected: 1" in result.get("stdout", "")
+    )
+
+    return {
+        "ok": started,
+        "action": "launch_app",
+        "package": package,
+        "detail": short(
+            result.get("stdout", "")
+            + result.get("stderr", ""),
+            500
+        )
+    }
 
 
 # ============================================================
@@ -3661,6 +3715,27 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "android_launch_app",
+            "description": (
+                "Uruchom zainstalowaną aplikację po nazwie pakietu "
+                "(np. po adb install .apk) — działa dla DOWOLNEJ "
+                "aplikacji na urządzeniu, nie tylko dla tej "
+                "budowanej w projekcie. Używaj do faktycznego "
+                "odpalenia zbudowanej gry PRZED zrobieniem "
+                "android_screenshot jako dowodu, że coś się "
+                "renderuje na ekranie."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "package": {"type": "string"}
+                },
+                "required": ["package"]
+            }
+        },
+
+        {
+            "type": "function",
             "name": "shell",
             "description": "Wykonaj komendę w Termuxie.",
             "parameters": {
@@ -4639,6 +4714,33 @@ def _dispatch_tool_inner(
             return fn(
                 args.get("path")
             )
+
+        # Gemini: android_launch_app
+        # Python: android_launch_app
+        if name == "android_launch_app":
+
+            fn = globals().get(
+                "android_launch_app"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_launch_app()."
+                }
+
+            package = args.get("package")
+
+            if not package:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_launch_app wymaga package.",
+                    "arguments": args
+                }
+
+            return fn(package)
 
         # ====================================================
         # CHROME
