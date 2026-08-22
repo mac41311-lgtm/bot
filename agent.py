@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v28
+AEL-MINI AUTONOMOUS AGENT v29
 
 ARCHITEKTURA:
 
@@ -781,7 +781,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v28")
+    print("             AEL-MINI AUTONOMOUS AGENT v29")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6057,6 +6057,65 @@ def load_custom_tools():
         )
 
 
+# ------------------------------------------------------------
+# Narzędzie może zwrócić ok=true (samo WYWOŁANIE się powiodło —
+# proces wystartował, plik dało się odczytać) mimo że TREŚĆ wyniku
+# opisuje prawdziwą awarię (nieudany build, wyjątek, brakujący
+# moduł). Zaobserwowany realny przypadek: `gradlew assembleDebug`
+# skończył się "BUILD FAILED", ale samo polecenie shell zwróciło
+# kod wyjścia z którego Gemini/MAIN nie zawsze wyciągali wniosek,
+# że TO jest błąd — ok=true w wyniku narzędzia wygląda jak sukces
+# na pierwszy rzut oka. To NIE jest specyficzne dla Gradle/gier —
+# dotyczy każdego narzędzia zwracającego stdout/stderr/content
+# dowolnego builda/skryptu/procesu, więc sprawdzane jest centralnie
+# tutaj, dla WSZYSTKICH narzędzi na raz, zamiast osobno w każdym.
+#
+# Celowo tylko OSTRZEŻENIE (nie zmienia "ok"): fałszywy pozytyw
+# (np. plik tekstowy opisujący jak naprawić błąd) nie powinien
+# blokować prawdziwego sukcesu — ale Gemini/MAIN dostają jawny
+# sygnał, żeby nie uznawać tego automatycznie za ukończone zadanie.
+# ------------------------------------------------------------
+
+_EMBEDDED_FAILURE_SIGNATURES = [
+    "BUILD FAILED",
+    "FAILURE: Build failed",
+    "Traceback (most recent call last):",
+    "npm ERR!",
+    "FATAL EXCEPTION",
+    "Segmentation fault",
+    "core dumped",
+    "INSTALL_FAILED_",
+    "ModuleNotFoundError:",
+    "cannot find symbol",
+    "fatal error:",
+    "SyntaxError:",
+    "panic:",
+    "Unhandled promise rejection",
+    "ERR_MODULE_NOT_FOUND",
+]
+
+
+def _find_embedded_failure_signature(result):
+
+    if not isinstance(result, dict):
+        return None
+
+    for key in ("stdout", "stderr", "content"):
+
+        value = result.get(key)
+
+        if not isinstance(value, str):
+            continue
+
+        lowered = value.lower()
+
+        for signature in _EMBEDDED_FAILURE_SIGNATURES:
+            if signature.lower() in lowered:
+                return signature
+
+    return None
+
+
 def dispatch_tool(
     name,
     args
@@ -6099,6 +6158,28 @@ def dispatch_tool(
 
         if ok is True:
             reset_tool_attempts(name, args)
+
+            signature = _find_embedded_failure_signature(result)
+
+            if signature:
+
+                result["content_warning"] = (
+                    "UWAGA: to narzędzie zwróciło ok=true, ale "
+                    "treść wyniku zawiera fragment '" + signature
+                    + "' — to WYGLĄDA jak prawdziwa awaria (nieudany "
+                    "build, wyjątek, brakujący moduł) mimo że samo "
+                    "wywołanie narzędzia się powiodło. NIE traktuj "
+                    "tego automatycznie jako sukcesu — sprawdź "
+                    "treść uważnie przed zgłoszeniem zadania jako "
+                    "wykonanego."
+                )
+
+                log(
+                    "GEMINI",
+                    "Wykryto sygnaturę błędu w treści wyniku mimo "
+                    "ok=true: '" + signature + "' (narzędzie: "
+                    + name + ")"
+                )
 
     log_event(
         "tool_call",
