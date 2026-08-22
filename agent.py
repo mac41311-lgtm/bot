@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v46
+AEL-MINI AUTONOMOUS AGENT v47
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v46")
+    print("             AEL-MINI AUTONOMOUS AGENT v47")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1090,7 +1090,17 @@ urządzeniu, Termux jest tylko jedną z wielu):
 - android_type
 - android_press
 - android_swipe (gest przesunięcia)
-- android_screenshot (prawdziwy zrzut ekranu PNG, do fizycznego dowodu)
+- android_screenshot (prawdziwy zrzut ekranu PNG — OPCJONALNE,
+  ostateczność: nikt — ani Gemini, ani zespół DeepSeek — nie
+  odczytuje TREŚCI tego obrazu, więc plik sam w sobie potwierdza
+  tylko "narzędzie się wykonało", nie "na ekranie jest to, co
+  powinno być". Używaj TYLKO gdy naprawdę nie ma żadnego
+  tekstowego sposobu potwierdzenia — np. czy własna grafika/gra
+  (SurfaceView/OpenGL/Canvas) faktycznie coś rysuje, czego
+  android_state (tekstowy dump drzewa UI) nie pokaże. Dla zwykłego
+  "czy aplikacja X jest otwarta" android_state W ZUPEŁNOŚCI
+  wystarcza i jest darmowy — NIE rób zrzutu ekranu tylko po to,
+  żeby potwierdzić, że apka się otworzyła)
 - android_launch_app (otwórz DOWOLNĄ zainstalowaną aplikację po
   nazwie pakietu — np. zbudowaną i zainstalowaną grę, żeby ją
   faktycznie zobaczyć na ekranie, a nie tylko sprawdzić plik .apk)
@@ -1117,12 +1127,19 @@ otworzenie i sprawdzenie NOWEGO adresu to: `am start -a
 android.intent.action.VIEW -d <url>` żeby faktycznie wyświetlić
 stronę na ekranie, `curl -s <url> | grep -o '<title>.*</title>'`
 (albo podobne parsowanie HTML) do sprawdzenia tytułu/zawartości
-BEZ polegania na CDP/UI, i android_screenshot jako dowód wizualny.
-PREFEROWANE, DARMOWE (bez zużywania limitu na obrazy) narzędzia do
-sprawdzenia "co jest na ekranie/w przeglądarce" to zawsze najpierw
-android_state (stan ekranu telefonu jako tekst) i chrome_tabs/
-chrome_inspect (stan ISTNIEJĄCEJ karty Chrome jako tekst) — obie
-są już częścią kontekstu każdego kroku i nie kosztują nic więcej.
+BEZ polegania na CDP/UI. android_state (stan ekranu telefonu jako
+tekst) i chrome_tabs/chrome_inspect (stan ISTNIEJĄCEJ karty Chrome
+jako tekst) to JEDYNE i WYSTARCZAJĄCE dowody dla "co jest na
+ekranie/w przeglądarce" — są już częścią kontekstu każdego kroku,
+nic nie kosztują i, co ważniejsze, TY (Gemini) faktycznie je
+czytasz i na ich podstawie działasz. android_screenshot NIE jest
+tu potrzebny — to obraz PNG, którego treści nikt (ani Ty, ani
+zespół DeepSeek) nie analizuje, więc sam plik potwierdza tylko
+"narzędzie się wykonało", a nie "to, co powinno być widoczne,
+faktycznie tam jest". Rób zrzut ekranu WYŁĄCZNIE gdy cel wprost
+wymaga potwierdzenia własnej grafiki/gry (SurfaceView/OpenGL/
+Canvas), której android_state nie pokaże w ogóle — nie rób go
+rutynowo "na wszelki wypadek" przy każdym otwarciu apki/karty.
 
 Jeżeli mimo to potrzebujesz `dumpsys`/`uiautomator dump` z poziomu
 skryptu bash: NIGDY nie uruchamiaj ich gołych w Termuksie —
@@ -3238,6 +3255,14 @@ def android_screenshot(path=None):
         android_device.screenshot(
             str(target)
         )
+
+        # Nikt (Gemini/DeepSeek) nie odczytuje TREŚCI tego pliku —
+        # bez śledzenia zostawałby na dysku na zawsze, niewidoczny
+        # dla maybe_clear_generated_project_files() (ta lista bierze
+        # WYŁĄCZNIE ścieżki zgłoszone przez _track_project_path()).
+        # Zgłaszamy go tu, żeby trafił do tej samej, potwierdzanej
+        # ręcznie listy sprzątania przy starcie nowego celu.
+        _track_project_path(target)
 
         return {
             "ok": target.exists(),
@@ -11266,12 +11291,23 @@ def maybe_clear_previous_session_data():
     Nie dotyka custom_tools/ (to trwałe, celowo dodane narzędzia,
     nie dane sesji) ani samego GOAL_FILE (to obsługiwane osobno,
     tam gdzie ta funkcja jest wołana).
+
+    Obejmuje też AGENT_DIR/screenshots/ (domyślna ścieżka
+    android_screenshot, gdy Gemini nie poda własnej) — te pliki PNG
+    nie są przez nikogo odczytywane treściowo (ani Gemini, ani
+    zespół DeepSeek), więc to czysty balast bez żadnej roli poza
+    "narzędzie się wykonało"; bez tego zostawałyby tam bezterminowo,
+    bo są poza $HOME-owym mechanizmem śledzenia projektu
+    (AGENT_DIR jest celowo wyłączony z _track_project_path()).
     """
 
     queue_files = list(QUEUE_DIR.glob("*.json"))
     result_files = list(RESULTS_DIR.glob("*.json"))
+    screenshot_files = list(
+        (AGENT_DIR / "screenshots").glob("*.png")
+    ) if (AGENT_DIR / "screenshots").is_dir() else []
 
-    if not queue_files and not result_files:
+    if not queue_files and not result_files and not screenshot_files:
         return
 
     description = (
@@ -11279,23 +11315,27 @@ def maybe_clear_previous_session_data():
         + str(len(queue_files))
         + " zadań w kolejce, "
         + str(len(result_files))
-        + " zapisanych wyników."
+        + " zapisanych wyników, "
+        + str(len(screenshot_files))
+        + " zrzutów ekranu (nieużywanych do niczego poza dowodem "
+        "wykonania)."
     )
 
     print()
     print(description)
 
     if not _confirm_destructive_action(
-        "USUNIĘCIE DANYCH POPRZEDNIEJ SESJI (kolejka + wyniki) — "
-        "nowy cel zacznie się na czysto"
+        "USUNIĘCIE DANYCH POPRZEDNIEJ SESJI (kolejka + wyniki + "
+        "zrzuty ekranu) — nowy cel zacznie się na czysto"
     ):
         log(
             "MAIN",
-            "Zachowano dane poprzedniej sesji (kolejka/wyniki)."
+            "Zachowano dane poprzedniej sesji (kolejka/wyniki/"
+            "zrzuty ekranu)."
         )
         return
 
-    for f in queue_files + result_files:
+    for f in queue_files + result_files + screenshot_files:
         try:
             f.unlink()
         except Exception:
@@ -11314,7 +11354,7 @@ def maybe_clear_previous_session_data():
     log(
         "MAIN",
         "Usunięto dane poprzedniej sesji (kolejka, wyniki, "
-        "licznik prób narzędzi, ostatni wynik)."
+        "licznik prób narzędzi, ostatni wynik, zrzuty ekranu)."
     )
 
 
