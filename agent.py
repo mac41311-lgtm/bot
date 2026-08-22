@@ -3742,6 +3742,36 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "termux_patch_file",
+            "description": (
+                "Podmień DOKŁADNIE JEDNO wystąpienie fragmentu "
+                "'search' na 'replace' w istniejącym pliku "
+                "projektu (kod gry, build.gradle itp.) — NIE "
+                "agent.py. UŻYWAJ TEGO zamiast termux_write_file, "
+                "gdy zmieniasz fragment DUŻEGO, już istniejącego "
+                "pliku — nie przepisuj całej zawartości od nowa, "
+                "to marnuje tokeny i ryzykuje zgubienie reszty "
+                "pliku. termux_write_file zostaw dla NOWYCH plików "
+                "albo bardzo małych. 'search' musi wystąpić w "
+                "pliku dokładnie raz (skopiuj 1:1 z tego, co "
+                "wcześniej odczytałeś przez termux_read_file) — "
+                "inaczej patch zostanie odrzucony. Dla plików .py "
+                "automatycznie sprawdzany jest py_compile z "
+                "rollbackiem przy błędzie składni."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "search": {"type": "string"},
+                    "replace": {"type": "string"}
+                },
+                "required": ["path", "search", "replace"]
+            }
+        },
+
+        {
+            "type": "function",
             "name": "chrome_tabs",
             "description": "Pobierz listę istniejących kart Chrome.",
             "parameters": {
@@ -4615,6 +4645,150 @@ def termux_check_apk(path):
     }
 
 
+def termux_patch_file(path, search, replace):
+    """
+    Podmienia DOKŁADNIE JEDNO wystąpienie fragmentu `search` na
+    `replace` w istniejącym pliku PROJEKTU (kod gry, build.gradle
+    itp. — NIE agent.py, to osobny mechanizm od
+    apply_patch_from_fixer_text, który naprawia samego agenta).
+
+    Używaj zamiast termux_write_file, gdy zmieniasz fragment
+    DUŻEGO, już istniejącego pliku — nie trzeba przepisywać całej
+    zawartości (oszczędność tokenów), a ryzyko przypadkowego
+    "zgubienia" reszty pliku przy przepisywaniu od zera znika.
+
+    Bezpieczeństwo identyczne jak przy naprawie agenta: `search`
+    musi wystąpić w pliku dokładnie raz (inaczej patch jest
+    odrzucony), zawsze robiony jest backup obok pliku, a dla
+    plików .py dodatkowo sprawdzane jest py_compile z automatycznym
+    rollbackiem przy błędzie składni.
+    """
+
+    path = str(path or "").strip()
+
+    if not path:
+        return {
+            "ok": False,
+            "error": "Pusta ścieżka."
+        }
+
+    target = Path(path).expanduser()
+
+    if not target.exists():
+        return {
+            "ok": False,
+            "error": "Plik nie istnieje: " + str(target)
+        }
+
+    try:
+        source = target.read_text(
+            encoding="utf-8",
+            errors="ignore"
+        )
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "Nie udało się odczytać pliku: " + str(e)
+        }
+
+    search = str(search or "")
+    replace = str(replace if replace is not None else "")
+
+    if not search:
+        return {
+            "ok": False,
+            "error": "Puste 'search' — nic do znalezienia."
+        }
+
+    occurrences = source.count(search)
+
+    if occurrences == 0:
+        return {
+            "ok": False,
+            "error": (
+                "Fragment 'search' nie występuje w pliku dokładnie "
+                "1:1 (sprawdź wcięcia i białe znaki — muszą się "
+                "zgadzać co do znaku)."
+            )
+        }
+
+    if occurrences > 1:
+        return {
+            "ok": False,
+            "error": (
+                "Fragment 'search' występuje "
+                + str(occurrences)
+                + " razy — patch odrzucony, musi być jednoznaczny "
+                "(dodaj więcej kontekstu do 'search')."
+            )
+        }
+
+    backup_path = target.with_name(
+        target.name
+        + ".bak_"
+        + datetime.now().strftime("%Y%m%d_%H%M%S")
+    )
+
+    try:
+        backup_path.write_text(source, encoding="utf-8")
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "Nie udało się utworzyć backupu: " + str(e)
+        }
+
+    new_source = source.replace(search, replace, 1)
+
+    try:
+        target.write_text(new_source, encoding="utf-8")
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "Nie udało się zapisać patcha: " + str(e),
+            "backup": str(backup_path)
+        }
+
+    if target.suffix == ".py":
+
+        try:
+            compile_check = subprocess.run(
+                [sys.executable, "-m", "py_compile", str(target)],
+                capture_output=True,
+                text=True,
+                timeout=20
+            )
+
+            if compile_check.returncode != 0:
+
+                target.write_text(source, encoding="utf-8")
+
+                return {
+                    "ok": False,
+                    "rolled_back": True,
+                    "error": (
+                        "py_compile nie przeszedł po patchu — "
+                        "przywrócono poprzednią wersję pliku."
+                    ),
+                    "compile_error": short(
+                        compile_check.stderr, 1500
+                    ),
+                    "backup": str(backup_path)
+                }
+
+        except Exception:
+            # py_compile samo w sobie niedostępne — nie blokuj
+            # patcha z tego powodu, tylko pomiń dodatkową walidację.
+            pass
+
+    return {
+        "ok": True,
+        "path": str(target),
+        "backup": str(backup_path),
+        "bytes_before": len(source.encode("utf-8")),
+        "bytes_after": len(new_source.encode("utf-8"))
+    }
+
+
 # ============================================================
 # NOWE NARZĘDZIA PROJEKTOWANE PRZEZ DEEPSEEK (custom_tools/)
 # ============================================================
@@ -4964,6 +5138,13 @@ def _dispatch_tool_inner(
         if name == "termux_check_apk":
             return termux_check_apk(
                 args.get("path", "")
+            )
+
+        if name == "termux_patch_file":
+            return termux_patch_file(
+                args.get("path", ""),
+                args.get("search", ""),
+                args.get("replace", "")
             )
 
         # ====================================================
@@ -5543,8 +5724,15 @@ Masz dostęp do:
 
 ZASADY:
 
-1. Jeżeli trzeba utworzyć duży plik:
+1. Jeżeli trzeba UTWORZYĆ NOWY plik (albo mały plik):
    użyj termux_write_file.
+
+   Jeżeli trzeba ZMIENIĆ FRAGMENT JUŻ ISTNIEJĄCEGO, dużego pliku
+   (np. poprawka błędu w kodzie gry): użyj termux_patch_file
+   (search/replace), NIE przepisuj całego pliku przez
+   termux_write_file — to marnuje tokeny i ryzykuje literówkę przy
+   przepisywaniu reszty, której nie musiałeś dotykać. Najpierw
+   termux_read_file, żeby skopiować dokładny fragment do 'search'.
 
 2. Jeżeli trzeba wykonać krótką komendę:
    użyj termux_run.
