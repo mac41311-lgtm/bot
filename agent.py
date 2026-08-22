@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v25
+AEL-MINI AUTONOMOUS AGENT v26
 
 ARCHITEKTURA:
 
@@ -765,7 +765,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v25")
+    print("             AEL-MINI AUTONOMOUS AGENT v26")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2036,6 +2036,8 @@ def init_android():
             "uiautomator2 OK"
         )
 
+        warn_if_aggressive_oem_battery_management()
+
         return True
 
     except Exception as e:
@@ -2048,6 +2050,87 @@ def init_android():
         android_device = None
 
         return False
+
+
+_AGGRESSIVE_OEM_BATTERY_PROPS = [
+    ("ro.build.version.opporom", "ColorOS (OPPO/OnePlus/Realme)"),
+    ("ro.miui.ui.version.name", "MIUI/HyperOS (Xiaomi/Redmi/POCO)"),
+    ("ro.build.version.emui", "EMUI/HarmonyOS (Huawei/Honor)"),
+    ("ro.vivo.os.build.display.id", "Funtouch/OriginOS (vivo/iQOO)"),
+]
+
+_oem_battery_warning_shown = False
+
+
+def warn_if_aggressive_oem_battery_management():
+    """
+    Niektóre nakładki producentów (ColorOS, MIUI, EMUI, Funtouch)
+    agresywnie ograniczają/zawieszają aplikacje w tle DUŻO mocniej
+    niż standardowy Android Doze — i w praktyce często IGNORUJĄ
+    zwykłe "ignoruj optymalizację baterii" oraz termux-wake-lock,
+    chyba że dodatkowo ręcznie zezwoli się Termuksowi na aktywność
+    w tle we WŁASNYCH ustawieniach baterii tej nakładki. Jeżeli
+    agent przełącza ekran na inną aplikację (android_launch_app,
+    otwarcie przeglądarki) i Termux przestaje być aplikacją na
+    pierwszym planie, to na takich nakładkach jest realne ryzyko,
+    że zapytania sieciowe (do DeepSeek/Gemini) w tle zaczną się
+    zawieszać lub failować, dopóki użytkownik nie wróci do Termuksa
+    — co wygląda z zewnątrz jak przypadkowa awaria sieci, a jest
+    ograniczeniem systemu operacyjnego, nie błędem w kodzie agenta.
+
+    Tego nie da się naprawić z poziomu Pythona — można tylko
+    wykryć nakładkę i jednorazowo, jasno ostrzec użytkownika, co
+    dokładnie sprawdzić w ustawieniach telefonu.
+    """
+
+    global _oem_battery_warning_shown
+
+    if _oem_battery_warning_shown:
+        return
+
+    try:
+        for prop, label in _AGGRESSIVE_OEM_BATTERY_PROPS:
+
+            result = execute_shell(
+                "adb shell getprop " + prop,
+                timeout=10
+            )
+
+            value = (result.get("stdout") or "").strip()
+
+            if result.get("ok") and value:
+
+                _oem_battery_warning_shown = True
+
+                log(
+                    "ANDROID",
+                    "Wykryto nakładkę " + label
+                    + " (" + prop + "=" + value + ")."
+                )
+
+                print()
+                print(
+                    "⚠️  Ten telefon używa " + label + " — ta "
+                    "nakładka potrafi agresywnie zawieszać "
+                    "aplikacje w tle, silniej niż standardowy "
+                    "Android, i często IGNORUJE zwykłe "
+                    "termux-wake-lock / 'ignoruj optymalizację "
+                    "baterii'. Jeśli po przełączeniu ekranu na "
+                    "inną aplikację (np. android_launch_app, "
+                    "otwarcie przeglądarki) zauważysz nagłe błędy "
+                    "sieciowe/DeepSeek dopóki nie wrócisz do "
+                    "Termuksa — to prawdopodobnie WŁAŚNIE TO, nie "
+                    "błąd agenta. Sprawdź w ustawieniach telefonu "
+                    "(zwykle: Ustawienia -> Bateria -> Zarządzanie "
+                    "aplikacjami w tle / Autostart) i zezwól "
+                    "Termuksowi na pełną aktywność w tle."
+                )
+                print()
+
+                return
+
+    except Exception:
+        pass
 
 
 def android_summary():
