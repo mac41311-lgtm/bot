@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v44
+AEL-MINI AUTONOMOUS AGENT v45
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v44")
+    print("             AEL-MINI AUTONOMOUS AGENT v45")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1140,6 +1140,20 @@ To działa (uprzywilejowany `shell` przez ADB), podczas gdy gołe
 ale i tak PIERWSZY WYBÓR to android_state/chrome_tabs, bo są
 prostsze i już dostępne bez dodatkowego polecenia.
 
+KRYTYCZNE — gdy piszesz TASK dla Gemini, NIGDY nie każ mu wsadzać
+android_screenshot / chrome_tabs / chrome_inspect / chrome_open /
+android_launch_app DO treści skryptu bash (termux_run/
+termux_run_background). Zaobserwowany realny incydent: TASK kazał
+"napisać jeden skrypt robiący wszystko", Gemini napisał bash, który
+PO CICHU nie mógł wykonać zrzutu/sprawdzenia karty (to nie są
+polecenia shell), wypisał w swoim outpucie "brak narzędzia" i mimo
+to zgłosił TASK jako COMPLETED — w całym kroku nie padło ANI JEDNO
+prawdziwe wywołanie tych narzędzi. Jeśli TASK wymaga dowodu
+wizualnego/stanu Chrome, treść TASKu ma wprost nakazywać Gemini
+wywołanie KONKRETNEGO narzędzia bezpośrednio ("wywołaj
+android_screenshot", "wywołaj chrome_tabs") jako osobny krok w tym
+samym zadaniu — nie "zrób to w skrypcie".
+
 SHELL:
 - shell
 
@@ -1296,6 +1310,23 @@ ZASADY:
   nowa. Jeśli tylko jeden podpunkt z kilku wciąż zawodzi (np.
   zrzut ekranu) — zaplanuj krok, który naprawia TYLKO ten jeden
   podpunkt, bez ponownego wykonywania już potwierdzonych.
+- KRYTYCZNE — NIGDY nie planuj zrzutu ekranu (android_screenshot),
+  sprawdzenia karty Chrome (chrome_tabs/chrome_inspect/chrome_open)
+  ani otwarcia aplikacji (android_launch_app) jako CZĘŚCI jednego
+  skryptu bash uruchamianego przez termux_run/termux_run_background.
+  Zaobserwowany realny problem — zaplanowano "jeden skrypt robiący
+  wszystko", Gemini napisał bash, który wewnątrz próbował zastąpić
+  te narzędzia gołym `screencap`/`dumpsys` (co w Termuksie zawsze
+  kończy się brakiem uprawnień) i sam skrypt po cichu wypisał
+  "brak narzędzia" zamiast w ogóle spróbować prawdziwego narzędzia
+  — a MAIN/Ty nie miałeś jak to zauważyć, bo w kroku nie było
+  ŻADNEGO wywołania android_screenshot/chrome_*/android_launch_app.
+  Zamiast tego: TE konkretne czynności zawsze planuj jako OSOBNY,
+  bezpośredni krok dla Gemini ("wywołaj narzędzie android_screenshot
+  bezpośrednio", "wywołaj chrome_open/chrome_tabs bezpośrednio",
+  NIE "napisz skrypt, który zrobi zrzut") — czysty shell (mkdir,
+  zapis pliku, sprawdzenie wersji, curl) możesz nadal łączyć w
+  jeden skrypt, ale te konkretne narzędzia — nigdy.
 
 Format odpowiedzi:
 
@@ -1388,6 +1419,21 @@ Sprawdź KONIECZNIE:
   nie prawdziwej weryfikacji. BLOKUJ i zażądaj ponownego,
   rzeczywistego sprawdzenia (odczyt pliku / powtórzenie komendy),
   zanim to zostanie przyjęte jako dowód.
+- KRYTYCZNE — ZRZUT EKRANU / STAN CHROME WSADZONY DO SKRYPTU BASH:
+  zaobserwowany realny przypadek — zaplanowany krok kazał Gemini
+  napisać JEDEN skrypt bash (termux_run) robiący wszystko naraz,
+  w tym "zrzut ekranu" i "sprawdzenie karty Chrome" — ale to są
+  narzędzia PO STRONIE GEMINI (android_screenshot, chrome_tabs/
+  chrome_inspect/chrome_open, android_launch_app), nie polecenia
+  shell, więc skrypt nie mógł ich faktycznie wykonać i po cichu
+  wypisał "brak narzędzia", a MAIN i tak dostał "COMPLETED" bez
+  ŻADNEGO realnego wywołania tych narzędzi w całym kroku. Jeśli
+  proponowany krok wymaga zrzutu ekranu, stanu Chrome albo
+  otwarcia aplikacji, a treść kroku każe to zrobić "w skrypcie"/
+  "w tym samym poleceniu shell" zamiast jako osobne, bezpośrednie
+  wywołanie narzędzia Gemini — BLOKUJ i zażądaj rozbicia na osobny
+  krok z bezpośrednim wywołaniem (android_screenshot / chrome_tabs
+  / chrome_open / android_launch_app), NIE przez shell/termux_run.
 
 Format:
 
