@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v37
+AEL-MINI AUTONOMOUS AGENT v38
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v37")
+    print("             AEL-MINI AUTONOMOUS AGENT v38")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1583,6 +1583,26 @@ nadal łączyć w jeden skrypt to, co jest czystym shellem (mkdir,
 zapis do pliku, sprawdzanie wersji narzędzi, curl) — tylko zrzut
 ekranu i stan karty Chrome zostają na zewnątrz, jako osobne kroki
 po skrypcie.
+
+UWAGA — zaobserwowana "sprytna" wersja tego samego błędu: skrypt
+sprawdzał `if command -v android_screenshot >/dev/null 2>&1; then
+android_screenshot ...`. To NIE ZADZIAŁA NIGDY — android_screenshot
+i chrome_tabs/chrome_inspect nie są plikami wykonywalnymi w PATH,
+`command -v`/`which` zawsze zwróci "nie znaleziono", więc skrypt
+zawsze wpadnie w gorszy fallback (screencap/dumpsys). Nie próbuj
+wywoływać tych narzędzi żadnym poleceniem shell, nawet warunkowo —
+jedyny sposób ich użycia to osobne wywołanie narzędzia przez
+Gemini, w ogóle poza skryptem.
+
+Kolejny zaobserwowany problem tego samego wzorca: gdy zrzut w
+skrypcie nie wyszedł, kolejne podejście POPRAWIAŁO i CAŁOŚCIOWO
+URUCHAMIAŁO PONOWNIE cały skrypt (łącznie z linią otwierającą
+aplikację) tylko po to, żeby przetestować jeden fragment dotyczący
+zrzutu — efekt uboczny: aplikacja otwierana od nowa za każdym
+podejściem, mylące i niepotrzebne. Jeśli aplikacja jest już otwarta
+(potwierdzone wcześniejszym krokiem), NIE otwieraj jej ponownie —
+napraw i wykonaj TYLKO brakującą, osobną czynność (android_screenshot),
+bez ponownego uruchamiania całego skryptu od początku.
 
 ============================================================
 ZNANA PUŁAPKA — NIEZGODNOŚĆ WERSJI GRADLE / AGP W TERMUXIE
