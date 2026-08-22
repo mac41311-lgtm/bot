@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v26
+AEL-MINI AUTONOMOUS AGENT v27
 
 ARCHITEKTURA:
 
@@ -765,7 +765,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v26")
+    print("             AEL-MINI AUTONOMOUS AGENT v27")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1007,20 +1007,23 @@ CHROME:
 - chrome_type
 
 UWAGA — otwieranie URL do SPRAWDZENIA (tytuł/URL/zawartość):
-zawsze każ Gemini użyć chrome_open (a potem chrome_tabs/
-chrome_inspect), NIGDY `am start -a android.intent.action.VIEW`
-przez surowy shell do tego celu. `am start` otwiera cokolwiek jest
-domyślną przeglądarką na urządzeniu — niekoniecznie tę samą kartę,
-którą widzi CDP — więc późniejsze chrome_tabs zwróci pustą listę i
-zadanie nie da się zweryfikować. Zaobserwowany realny przypadek:
-TASK kazał otworzyć wikipedia.org przez `am start`, potem
-sprawdzić tytuł przez `dumpsys window windows | grep mTitle` i
-`uiautomator dump` w Termuksie — oba polecenia zwróciły "not
-found" (to systemowe binaria Androida, zwykle niedostępne w
-Termuksie bez roota/kontekstu instrumentacji), a chrome_tabs był
-pusty, bo karta nigdy nie powstała przez CDP. Do stanu ekranu
-telefonu używaj android_state, do stanu przeglądarki wyłącznie
-chrome_tabs/chrome_inspect — nie dumpsys/uiautomator przez shell.
+w tym wdrożeniu Chrome/CDP działa w trybie "ISTNIEJĄCE KARTY" —
+chrome_open NIE tworzy nowych kart, zadziała tylko gdy pasująca
+karta już jest otwarta (inaczej zwróci błąd "Nie znaleziono
+istniejącej karty. Nowe karty są zablokowane."). Jeśli żadna
+pasująca karta nie istnieje, NIE próbuj wymuszać chrome_open w
+kółko — zamiast tego zweryfikowany, działający sposób na
+otworzenie i sprawdzenie NOWEGO adresu to: `am start -a
+android.intent.action.VIEW -d <url>` żeby faktycznie wyświetlić
+stronę na ekranie, `curl -s <url> | grep -o '<title>.*</title>'`
+(albo podobne parsowanie HTML) do sprawdzenia tytułu/zawartości
+BEZ polegania na CDP/UI, i android_screenshot jako dowód wizualny.
+Tego NIE rób do weryfikacji stanu ekranu/przeglądarki: `dumpsys
+window windows`, `uiautomator dump` przez surowy shell w Termuksie
+— to systemowe binaria Androida, zwykle niedostępne bez roota/
+kontekstu instrumentacji, zwrócą "not found". Do stanu ekranu
+telefonu używaj android_state, do stanu ISTNIEJĄCEJ karty Chrome
+używaj chrome_tabs/chrome_inspect.
 
 SHELL:
 - shell
@@ -1669,11 +1672,16 @@ def _get_session_lock(name):
 
 _deepseek_health = {
     "consecutive_failures": 0,
-    "cooldown_until": 0.0
+    "cooldown_until": 0.0,
+    # Ile razy z rzędu breaker już się uruchamiał bez ŻADNEGO
+    # sukcesu pomiędzy — rośnie cooldown wykładniczo (patrz niżej),
+    # zeruje się przy pierwszym udanym wywołaniu.
+    "trip_count": 0
 }
 
 _DEEPSEEK_FAILURE_BURST_THRESHOLD = 3
-_DEEPSEEK_COOLDOWN_SECONDS = 90
+_DEEPSEEK_BASE_COOLDOWN_SECONDS = 90
+_DEEPSEEK_MAX_COOLDOWN_SECONDS = 600
 
 
 def _deepseek_circuit_wait():
@@ -1773,6 +1781,7 @@ def deepseek(name, message):
                 )
 
                 _deepseek_health["consecutive_failures"] = 0
+                _deepseek_health["trip_count"] = 0
 
                 return text
 
@@ -1822,9 +1831,27 @@ def deepseek(name, message):
                     >= _DEEPSEEK_FAILURE_BURST_THRESHOLD
                 ):
 
+                    # Wykładniczy backoff: 90s, 180s, 360s, potem
+                    # zatrzymuje się na pułapie 600s. Realny
+                    # przypadek: awaria konta trwała ponad 6 minut
+                    # (4 kolejne 90s cooldowny z rzędu, każdy
+                    # kończący się nową porażką) — stały 90s
+                    # cooldown przez cały ten czas to wciąż sporo
+                    # prób na próżno. Rośnie tylko dopóki awaria
+                    # trwa; pierwszy sukces zeruje trip_count.
+                    _deepseek_health["trip_count"] += 1
+
+                    cooldown = min(
+                        _DEEPSEEK_BASE_COOLDOWN_SECONDS
+                        * (2 ** (
+                            _deepseek_health["trip_count"] - 1
+                        )),
+                        _DEEPSEEK_MAX_COOLDOWN_SECONDS
+                    )
+
                     _deepseek_health["cooldown_until"] = (
                         time.time()
-                        + _DEEPSEEK_COOLDOWN_SECONDS
+                        + cooldown
                     )
 
                     log(
@@ -1843,8 +1870,10 @@ def deepseek(name, message):
                         "tym samym koncie w tym samym czasie), "
                         "nie pojedynczej sesji. Wstrzymuję "
                         "kolejne zapytania na "
-                        + str(_DEEPSEEK_COOLDOWN_SECONDS)
-                        + "s zamiast dalej próbować w kółko w "
+                        + str(int(cooldown))
+                        + "s (próba wstrzymania nr "
+                        + str(_deepseek_health["trip_count"])
+                        + ") zamiast dalej próbować w kółko w "
                         "tym samym tempie."
                     )
 
