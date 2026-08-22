@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v23
+AEL-MINI AUTONOMOUS AGENT v24
 
 ARCHITEKTURA:
 
@@ -765,7 +765,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v23")
+    print("             AEL-MINI AUTONOMOUS AGENT v24")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1630,6 +1630,56 @@ def _get_session_lock(name):
         return _session_locks[name]
 
 
+# ------------------------------------------------------------
+# CIRCUIT BREAKER: seria porażek na RÓŻNYCH sesjach z rzędu.
+#
+# Realny przypadek: od kroku 2 do ręcznego przerwania (Ctrl+C) w
+# kroku 8 (~4 minuty, ~90 zapytań) KAŻDA sesja — MAIN, PLANNER,
+# RESEARCHER, BROWSER, ANDROID_GAME_ENGINEER, CRITIC — failowała
+# z "invalid message id", restart sesji NIE POMAGAŁ (świeżo
+# zrestartowana sesja failowała na PIERWSZEJ wiadomości), a mimo
+# to agent brnął dalej przez kolejne kroki, próbując wszystkie
+# role od nowa za każdym razem. To NIE jest błąd pojedynczej
+# sesji (świeża sesja bez historii nie może mieć złej kolejności
+# message-id) — to sygnatura awarii na poziomie CAŁEGO KONTA
+# (zbyt wiele jednoczesnych sesji, inna aktywność na koncie itp.).
+# Dalsze spamowanie w tej sytuacji tylko pogarsza sprawę.
+#
+# Licznik: KAŻDA porażka innej roli z rzędu (bez żadnego sukcesu
+# pomiędzy) inkrementuje; jeden sukces resetuje do zera. Po
+# przekroczeniu progu — odczekaj zanim spróbujesz dalej, zamiast
+# katować backend w tym samym tempie.
+# ------------------------------------------------------------
+
+_deepseek_health = {
+    "consecutive_failures": 0,
+    "cooldown_until": 0.0
+}
+
+_DEEPSEEK_FAILURE_BURST_THRESHOLD = 3
+_DEEPSEEK_COOLDOWN_SECONDS = 90
+
+
+def _deepseek_circuit_wait():
+
+    remaining = (
+        _deepseek_health["cooldown_until"]
+        - time.time()
+    )
+
+    if remaining > 0:
+
+        log(
+            "DEEPSEEK",
+            "Podejrzenie awarii na poziomie KONTA (seria porażek "
+            "na różnych sesjach z rzędu, restart nie pomagał) — "
+            "odczekuję jeszcze " + str(int(remaining)) + "s "
+            "zamiast dalej spamować, zanim spróbuję ponownie."
+        )
+
+        time.sleep(remaining)
+
+
 def deepseek(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
@@ -1644,6 +1694,8 @@ def deepseek(name, message):
     jednokrotnie zamiast zwracać cichy błąd, który MAIN bierze
     za normalną odpowiedź.
     """
+
+    _deepseek_circuit_wait()
 
     lock = _get_session_lock(name)
 
@@ -1704,6 +1756,8 @@ def deepseek(name, message):
                     + " znaków"
                 )
 
+                _deepseek_health["consecutive_failures"] = 0
+
                 return text
 
             except Exception as e:
@@ -1744,6 +1798,39 @@ def deepseek(name, message):
                         if new_session:
                             session = new_session
                             continue
+
+                _deepseek_health["consecutive_failures"] += 1
+
+                if (
+                    _deepseek_health["consecutive_failures"]
+                    >= _DEEPSEEK_FAILURE_BURST_THRESHOLD
+                ):
+
+                    _deepseek_health["cooldown_until"] = (
+                        time.time()
+                        + _DEEPSEEK_COOLDOWN_SECONDS
+                    )
+
+                    log(
+                        "DEEPSEEK",
+                        "UWAGA: "
+                        + str(
+                            _deepseek_health[
+                                "consecutive_failures"
+                            ]
+                        )
+                        + " kolejnych sesji z rzędu w pełni "
+                        "zawiodło (restart nie pomógł) — to "
+                        "wygląda na awarię na poziomie CAŁEGO "
+                        "KONTA DeepSeek (np. zbyt wiele "
+                        "jednoczesnych sesji, inna aktywność na "
+                        "tym samym koncie w tym samym czasie), "
+                        "nie pojedynczej sesji. Wstrzymuję "
+                        "kolejne zapytania na "
+                        + str(_DEEPSEEK_COOLDOWN_SECONDS)
+                        + "s zamiast dalej próbować w kółko w "
+                        "tym samym tempie."
+                    )
 
                 return (
                     "DEEPSEEK ERROR ["
