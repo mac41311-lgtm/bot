@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v42
+AEL-MINI AUTONOMOUS AGENT v43
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v42")
+    print("             AEL-MINI AUTONOMOUS AGENT v43")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5594,13 +5594,65 @@ def termux_write_file(path, content):
 
         _track_project_path(p)
 
-        return {
+        result = {
             "ok": True,
             "path": str(p),
             "bytes": len(
                 data.encode("utf-8")
             )
         }
+
+        # Niespójność naprawiona: termux_patch_file od dawna
+        # sprawdza py_compile po każdej edycji .py i zwraca
+        # dokładny błąd (plik+linia+treść) bez potrzeby ponownego
+        # czytania całego pliku — ale termux_write_file (używane
+        # gdy Gemini pisze kod OD ZERA, nie edytuje fragment) nie
+        # sprawdzało NIC. Plik z błędem składni zapisywał się po
+        # cichu, a błąd wychodził dopiero przy próbie uruchomienia,
+        # zmuszając Gemini do zgadywania na podstawie tracebacka
+        # zamiast dostać dokładne miejsce od razu. Nie cofamy pliku
+        # (w przeciwieństwie do patcha — tu często nie ma do czego
+        # wracać, bo plik jest nowy) — tylko jawnie sygnalizujemy
+        # błąd i jego dokładną lokalizację.
+        if p.suffix == ".py":
+
+            try:
+                compile_check = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "py_compile",
+                        str(p)
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=20
+                )
+
+                if compile_check.returncode != 0:
+
+                    result["ok"] = False
+                    result["compile_error"] = short(
+                        compile_check.stderr,
+                        1500
+                    )
+                    result["warning"] = (
+                        "Plik ZOSTAŁ zapisany na dysku, ale NIE "
+                        "PRZECHODZI py_compile — zawiera błąd "
+                        "składni (patrz compile_error: dokładny "
+                        "plik, numer linii i treść błędu). Plik "
+                        "NIE został cofnięty (w przeciwieństwie do "
+                        "termux_patch_file) — popraw dokładnie "
+                        "wskazaną linię, zanim spróbujesz go "
+                        "uruchomić."
+                    )
+
+            except Exception:
+                # py_compile samo w sobie niedostępne — nie
+                # blokujemy zapisu z tego powodu.
+                pass
+
+        return result
 
     except Exception as e:
         return {
