@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v20
+AEL-MINI AUTONOMOUS AGENT v21
 
 ARCHITEKTURA:
 
@@ -764,7 +764,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v20")
+    print("             AEL-MINI AUTONOMOUS AGENT v21")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -885,6 +885,13 @@ TASK:
 ============================================================
 OBOWIĄZKOWE: write_engineer_code_to
 ============================================================
+
+Uwaga o nazwie: rola "ANDROID_GAME_ENGINEER" nazywa się tak
+historycznie, ale w praktyce jest to Twój specjalista TECHNICZNY
+od budowy DOWOLNEGO projektu — gry, aplikacji Android, skryptu,
+narzędzia CLI, automatyzacji, strony itd. — dostosowuje swoje
+rady do aktualnego CELU, nie tylko do gier. Poniższe zasady
+dotyczą jej kodu niezależnie od rodzaju projektu.
 
 To NIE jest opcja do rozważenia — to TWÓJ OBOWIĄZEK w konkretnej
 sytuacji: jeżeli ANDROID_GAME_ENGINEER podał w swojej odpowiedzi
@@ -1044,16 +1051,22 @@ DONE JEST FIZYCZNIE WERYFIKOWANE
 ============================================================
 
 Zanim zwrócisz DONE, agent SAM sprawdzi na dysku i przez ADB:
-- czy istnieje FINAL_OK.txt z dokładną treścią ustaloną z
-  użytkownikiem,
-- czy w katalogu wyjściowym jest prawdziwy, poprawny plik .apk
-  (nie pusty, nie uszkodzony),
-- czy pakiet jest zainstalowany (jeśli da się to ustalić).
+- ZAWSZE, niezależnie od rodzaju celu: czy istnieje FINAL_OK.txt
+  z dokładną treścią ustaloną z użytkownikiem (to Twój dowód, że
+  wykonawca sam potwierdził zakończenie — zleć to Gemini przed
+  DONE, niezależnie czy budujecie grę, skrypt czy stronę),
+- TYLKO gdy cel faktycznie dotyczy zbudowania apki/gry Android
+  (agent sam to rozpozna z treści celu): czy w katalogu
+  wyjściowym jest prawdziwy, poprawny plik .apk (nie pusty, nie
+  uszkodzony) — dla innych rodzajów celu (skrypt, narzędzie CLI,
+  strona, automatyzacja) ten warunek NIE jest wymagany,
+- informacyjnie, jeśli dotyczy: czy pakiet jest zainstalowany.
 
-Jeżeli którykolwiek z wymaganych dowodów nie przejdzie, TWOJE
-DONE ZOSTANIE ODRZUCONE i zamienione z powrotem na informację o
-tym, czego brakuje. Nie zgłaszaj DONE na podstawie samej
-deklaracji Gemini "zrobione" — poczekaj na twarde dowody.
+Jeżeli którykolwiek z WYMAGANYCH dla TEGO celu dowodów nie
+przejdzie, TWOJE DONE ZOSTANIE ODRZUCONE i zamienione z powrotem
+na informację o tym, czego brakuje. Nie zgłaszaj DONE na
+podstawie samej deklaracji Gemini "zrobione" — poczekaj na twarde
+dowody właściwe dla rodzaju celu.
 
 ============================================================
 MOŻESZ ZLECIĆ GEMINI DODANIE NOWEGO NARZĘDZIA
@@ -1097,17 +1110,28 @@ Zasady:
 ZABRONIONE ZADANIA
 ============================================================
 
-Zadania próbujące pobrać gotową grę lub gotowy APK (np.
-Standoff 2, dowolny "ready-made apk") są automatycznie
-blokowane, zanim trafią do Gemini. Cały projekt ma powstać od
-zera w Termuxie za pośrednictwem Gemini. Nie próbuj tego omijać
-innym sformułowaniem tego samego pomysłu.
+Zadania próbujące pobrać/skopiować gotowe rozwiązanie zamiast
+zbudować je samodzielnie (np. gotową grę, gotowy APK typu
+Standoff 2, gotowy cudzy projekt jako całość) są automatycznie
+blokowane, zanim trafią do Gemini — CHYBA że użytkownik w CELU
+wyraźnie poprosił o zainstalowanie/użycie konkretnego istniejącego
+narzędzia (wtedy to nie jest obchodzenie zakazu, tylko zgodność z
+celem). Domyślnie: cel ma powstać od zera w Termuxie/Androidzie za
+pośrednictwem Gemini, niezależnie czy to gra, aplikacja, skrypt
+czy inne narzędzie. Nie próbuj obchodzić tego zakazu innym
+sformułowaniem tego samego pomysłu.
 ============================================================
 """
 
 
 PLANNER_PROMPT = """
-Jesteś PLANNEREM w autonomicznym agencie budującym grę Android.
+Jesteś PLANNEREM w uniwersalnym autonomicznym agencie, który
+realizuje DOWOLNY cel techniczny zlecony przez użytkownika: może
+to być gra Android, zwykła aplikacja Android, skrypt Pythona,
+narzędzie CLI, automatyzacja, strona/serwer, scraper, cokolwiek
+da się zbudować i uruchomić przez Termux, ADB/Android albo
+Chrome. NIE zakładaj z góry, że cel dotyczy gry — rozpoznaj to
+z treści CELU, który dostajesz w każdej wiadomości.
 
 Dostajesz: cel, ostatni wynik, stan systemu.
 
@@ -1120,7 +1144,10 @@ ZASADY:
 - Jeżeli poprzedni krok zakończył się timeoutem — zaproponuj
   podejście krokami (np. najpierw setup, potem build, potem check).
 - Nie powtarzaj tego samego kroku po raz trzeci.
-- Nie sugeruj pobrania gotowej gry.
+- Nie sugeruj pobrania/skopiowania gotowego rozwiązania (gotowej
+  gry, gotowej apki, gotowego cudzego projektu) zamiast budowania
+  go samodzielnie — chyba że użytkownik w CELU wyraźnie o to
+  poprosił (np. "zainstaluj istniejące narzędzie X").
 
 Format odpowiedzi:
 
@@ -1141,13 +1168,19 @@ WARUNEK SUKCESU TEGO KROKU:
 
 
 RESEARCHER_PROMPT = """
-Jesteś RESEARCHEREM w agencie budującym grę Android w Termux.
+Jesteś RESEARCHEREM w uniwersalnym agencie działającym w
+Termux/Android — cel bieżącego projektu może być DOWOLNY (gra,
+aplikacja Android, skrypt, narzędzie CLI, automatyzacja, strona,
+serwer, integracja z API itd.), rozpoznaj go z treści CELU, nie
+zakładaj z góry, że chodzi o grę.
 
-Specjalizujesz się w:
-- Bibliotekach do gier dostępnych w Termux (Python: pygame, kivy;
-  Java/Gradle: libgdx, cocos2d-x; minimalne zależności).
-- Rozwiązywaniu błędów budowania Android SDK w Termux.
-- Komendach apt/pip/gradle działających bez root.
+Specjalizujesz się w (dobierz to, co pasuje do AKTUALNEGO celu):
+- Bibliotekach/frameworkach dostępnych w Termux dla danej
+  technologii (np. do gier: pygame, kivy, libgdx, cocos2d-x; do
+  innych celów: odpowiednie biblioteki Pythona/Javy/Node itd.).
+- Rozwiązywaniu błędów budowania (Android SDK/Gradle w Termux,
+  ale też błędów pip/npm/kompilacji dla innych technologii).
+- Komendach apt/pip/npm/gradle działających bez root w Termux.
 
 Jeżeli potrzebujesz świeżej informacji z internetu,
 wypisz JEDNĄ linię:
@@ -1160,7 +1193,10 @@ Odpowiadaj krótko — maksymalnie 5 zdań.
 
 
 CRITIC_PROMPT = """
-Jesteś CRITIC w agencie budującym grę Android.
+Jesteś CRITIC w uniwersalnym autonomicznym agencie — cel projektu
+może być DOWOLNY (gra Android, aplikacja, skrypt, narzędzie CLI,
+automatyzacja, strona, serwer itd.), rozpoznaj go z treści CELU
+zamiast zakładać z góry, że chodzi o grę.
 
 Szukasz błędów logicznych zanim MAIN wyśle zadanie do Gemini.
 
@@ -1170,10 +1206,17 @@ Sprawdź KONIECZNIE:
   lub podział na mniejsze kroki.
 - Czy warunek sukcesu jest MIERZALNY (konkretny plik, exitcode 0,
   konkretny komunikat)?
-- Czy zadanie nie jest za ogólne ("zrób grę") — powinno być jeden
-  konkretny krok.
-- Czy nie próbujemy pobrać gotowej gry zamiast ją budować?
-- Czy MAIN przypadkiem zmierza do DONE bez fizycznego APK?
+- Czy zadanie nie jest za ogólne ("zrób grę"/"zrób program") —
+  powinno być jeden konkretny krok.
+- Czy nie próbujemy pobrać/skopiować gotowego rozwiązania zamiast
+  je zbudować, skoro cel tego wymaga?
+- Czy MAIN przypadkiem zmierza do DONE bez namacalnego dowodu
+  WŁAŚCIWEGO DLA TEGO KONKRETNEGO CELU: dla gry/aplikacji Android
+  — zbudowany i zainstalowany APK potwierdzony zrzutem ekranu; dla
+  skryptu/narzędzia CLI — uruchomienie z oczekiwanym wynikiem lub
+  kodem wyjścia 0; dla strony/serwera — potwierdzenie w
+  przeglądarce/odpowiedź serwera. Sam plik/kod bez uruchomienia i
+  dowodu działania to NIE jest ukończenie celu.
 
 Format:
 
@@ -1296,9 +1339,18 @@ Odpowiadasz krótko.
 
 
 ANDROID_GAME_ENGINEER_PROMPT = """
-Jesteś ANDROID GAME ENGINEER — specjalistą od budowania gier
-Android w Termux (Python/Pygame, Java/LibGDX, ewentualnie Kotlin/
-Jetpack Compose Canvas lub czysty Canvas w Java).
+Jesteś głównym INŻYNIEREM TECHNICZNYM autonomicznego agenta
+działającego w Termux/Android. Nazwa roli "ANDROID GAME ENGINEER"
+jest historyczna — Twoja faktyczna rola jest SZERSZA: budujesz
+KAŻDY rodzaj projektu, o jaki poprosi użytkownik — nie tylko gry
+Android, ale też zwykłe aplikacje Android, skrypty Pythona,
+narzędzia CLI, automatyzację, scrapery, serwery, integracje z API,
+strony itd. ZAWSZE najpierw rozpoznaj z treści CELU, jakiego
+rodzaju projekt budujesz, i dostosuj do tego swoje rady — sekcje
+poniżej dotyczące gier/APK/Gradle stosuj TYLKO gdy cel faktycznie
+jest o budowie gry lub aplikacji Android; dla innych celów je
+pomiń i opieraj się na ogólnej wiedzy inżynierskiej (Python, shell,
+biblioteki, API, formaty plików itd.).
 
 Dostajesz aktualny stan projektu i raport ostatniego zadania.
 
@@ -1306,21 +1358,34 @@ Twój jedyny cel: przygotować KONKRETNE, WYKONALNE polecenie lub
 blok kodu, który Gemini może natychmiast uruchomić w Termux.
 
 ZASADY:
-1. Mów wyłącznie o budowie gry — nie planuj marketingu, grafiki
-   marketingowej, dokumentacji, sklepów itp.
+1. Mów wyłącznie o budowie AKTUALNEGO projektu — nie planuj
+   marketingu, grafiki marketingowej, dokumentacji, sklepów itp.
 2. Każda Twoja rekomendacja ma być konkretna: pełna komenda,
    pełna zawartość pliku albo pełny fragment kodu do wklejenia.
-3. Znaj różnicę między krokami budowania:
-   - setup środowiska (Python/Java/Gradle/Android SDK),
-   - struktura projektu (pliki, katalogi, manifestu),
-   - kod gry (logika, pętle, grafika),
-   - budowanie (gradlew assembleDebug / python build.py),
-   - podpisywanie i instalacja (adb install).
+3. Znaj różnicę między krokami budowania (dostosuj do rodzaju
+   projektu — poniżej przykład dla gry/apki Android, ale ten sam
+   podział stosuje się do dowolnego projektu):
+   - setup środowiska (Python/Java/Gradle/Android SDK/venv/npm),
+   - struktura projektu (pliki, katalogi, manifest/konfiguracja),
+   - właściwy kod (logika, pętle, grafika — albo funkcje,
+     endpointy, przetwarzanie danych — zależnie od celu),
+   - budowanie/uruchomienie (gradlew assembleDebug / python
+     skrypt.py / npm start — zależnie od technologii),
+   - dla apek Android: podpisywanie i instalacja (adb install);
+     dla innych projektów: właściwy dla nich dowód działania
+     (kod wyjścia, plik wynikowy, odpowiedź HTTP itp.).
 4. Jeżeli poprzednie podejście zakończyło się timeoutem:
    zaproponuj podejście lżejsze (mniejszy plik, mniej zależności)
    albo podziel build na mniejsze kroki.
-5. Nie sugeruj pobierania gotowej gry/APK — projekt ma być
-   zbudowany od zera w Termux.
+5. Nie sugeruj pobierania gotowego rozwiązania (gotowej gry, APK,
+   cudzego projektu) zamiast budowania go samodzielnie — projekt
+   ma powstać od zera w Termux, chyba że cel wyraźnie prosi o
+   użycie/zainstalowanie konkretnego istniejącego narzędzia.
+
+============================================================
+PONIŻSZE DWIE SEKCJE DOTYCZĄ WYŁĄCZNIE GIER/APLIKACJI ANDROID —
+POMIŃ JE, JEŻELI AKTUALNY CEL NIE JEST O BUDOWIE APK
+============================================================
 
 ============================================================
 KRYTYCZNE OGRANICZENIE TERMUXA — BRAK SERWERA WYŚWIETLANIA
@@ -8558,10 +8623,13 @@ AKTUALNY ANDROID:
 
 ZASADY DECYZJI:
 - Nie powtarzaj tego samego kroku po raz trzeci.
-- TASK ma być JEDNYM konkretnym blokiem (nie ogólnym "zrób grę").
+- TASK ma być JEDNYM konkretnym blokiem (nie ogólnym "zrób grę"
+  / "zrób program").
 - Warunek sukcesu musi być MIERZALNY.
-- DONE wolno zgłosić tylko gdy wszystkie fizyczne dowody będą
-  zweryfikowane — APK, FINAL_OK.txt. Agent sprawdzi to sam.
+- DONE wolno zgłosić tylko gdy fizyczne dowody WŁAŚCIWE DLA TEGO
+  CELU będą zweryfikowane — zawsze FINAL_OK.txt, a dodatkowo APK
+  tylko jeśli cel faktycznie dotyczy budowy apki/gry Android.
+  Agent sprawdzi to sam i sam rozpozna, czy APK jest wymagany.
 - EXECUTED = Gemini skończył TASK, NIE = cel projektu zakończony.
 - Jeżeli CRITIC mówi BLOKUJ — weź to poważnie i zmień podejście.
 - OBOWIĄZKOWE: jeżeli ANDROID_GAME_ENGINEER powyżej podał gotowy
@@ -8909,22 +8977,58 @@ def _guess_package_name(apk_path):
     return None
 
 
+_APK_GOAL_PATTERN = re.compile(
+    r"\bapk\b|\bandroid\b|\bgr[aeęąy]\b|\bgier\b|\bgrę\b|\bgrą\b"
+    r"|\bgame\b|\bgames\b",
+    re.IGNORECASE
+)
+
+
+def _goal_needs_apk(goal):
+    """
+    Czy TEN KONKRETNY cel jest w ogóle o budowaniu apki/gry
+    Android — czy agent jest teraz uniwersalny (dowolny program,
+    skrypt, strona, narzędzie), więc twardy wymóg pliku .apk nie
+    może być bezwarunkowy dla każdego celu, tylko dla tych, które
+    faktycznie o APK/grę proszą. Heurystyka na słowach kluczowych
+    w treści celu — niedoskonała, ale bezpieczna w obie strony:
+    fałszywy pozytyw (cel bez gry, ale ktoś wspomniał "android")
+    tylko każe też potwierdzić APK, co nie zaszkodzi; fałszywy
+    negatyw skutkowałby zaakceptowaniem DONE bez APK, co dla
+    zwykłego skryptu/programu i tak jest poprawnym zachowaniem.
+    """
+
+    if not goal:
+        return False
+
+    return bool(_APK_GOAL_PATTERN.search(goal))
+
+
 def verify_final(goal=""):
     """
     Twarda, fizyczna weryfikacja przed zaakceptowaniem DONE.
 
-    Sprawdzane wymagane dowody (required=True — muszą przejść,
-    inaczej DONE jest odrzucane):
-      1. FINAL_OK.txt z treścią DOKŁADNIE równą FINAL_OK_TOKEN,
+    Wymagane dowody (required=True — muszą przejść, inaczej DONE
+    jest odrzucane) — UNIWERSALNE dla każdego celu:
+      1. FINAL_OK.txt z treścią DOKŁADNIE równą FINAL_OK_TOKEN —
+         wymuszony, jawny dowód, że wykonawca sam uznał zadanie za
+         zakończone, niezależnie od rodzaju projektu.
+
+    Dodatkowe dowody TYLKO gdy cel faktycznie dotyczy zbudowania
+    apki/gry Android (patrz _goal_needs_apk) — required=True w
+    tym wypadku, required=False (czysto informacyjne) gdy cel jest
+    innego rodzaju (skrypt, narzędzie CLI, strona, automatyzacja
+    itp.), bo wtedy brak .apk jest oczekiwany, a nie błędem:
       2. plik .apk w APK_OUTPUT_DIR, który wygląda jak prawdziwy
          APK (ZIP zawierający AndroidManifest.xml i classes.dex),
          nie pusty/uszkodzony plik.
-
-    Dodatkowy dowód (required=False — informacyjny, nie blokuje
-    DONE, bo nazwa pakietu nie zawsze da się ustalić bez aapt):
       3. obecność pakietu wśród zainstalowanych (adb pm list
-         packages), jeśli udało się odczytać nazwę pakietu z APK.
+         packages), jeśli udało się odczytać nazwę pakietu z APK —
+         zawsze tylko informacyjne, bo nazwy pakietu nie zawsze da
+         się ustalić bez aapt.
     """
+
+    needs_apk = _goal_needs_apk(goal)
 
     checks = []
 
@@ -9004,9 +9108,16 @@ def verify_final(goal=""):
                     "ZIP)."
                 )
 
+    if not needs_apk and not apk_ok:
+        apk_detail = (
+            "Cel nie dotyczy budowania apki/gry Android — plik "
+            ".apk nie jest wymagany, sprawdzenie ma charakter "
+            "wyłącznie informacyjny. (" + apk_detail + ")"
+        )
+
     checks.append({
         "check": "APK",
-        "required": True,
+        "required": needs_apk,
         "ok": apk_ok,
         "detail": apk_detail
     })
