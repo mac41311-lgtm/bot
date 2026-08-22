@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v29
+AEL-MINI AUTONOMOUS AGENT v30
 
 ARCHITEKTURA:
 
@@ -265,6 +265,13 @@ HOME = Path.home()
 AGENT_DIR = HOME / "agent"
 
 TOKEN_FILE = HOME / "api_token.txt"
+
+# Opcjonalne DRUGIE konto DeepSeek — jeśli plik istnieje i zawiera
+# token, część ról (patrz _ROLE_ACCOUNT niżej) używa go zamiast
+# konta głównego, żeby rozłożyć 9 jednoczesnych sesji na dwa konta
+# zamiast katować limity jednego. Jeśli plik nie istnieje/jest
+# pusty, WSZYSTKO działa dokładnie tak jak wcześniej — jedno konto.
+TOKEN_FILE_2 = HOME / "api_token_2.txt"
 
 GEMINI_KEY_FILE = AGENT_DIR / "gemini_api_key.txt"
 GEMINI_KEYS_DIR = AGENT_DIR / "gemini_keys"
@@ -636,6 +643,7 @@ def write_json(path, value):
 _PROJECT_TRACKING_EXCLUDED_NAMES = {
     AGENT_DIR.name,
     TOKEN_FILE.name,
+    TOKEN_FILE_2.name,
     ".termux",
     ".termux_run_command_scripts",
     ".bashrc",
@@ -781,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v29")
+    print("             AEL-MINI AUTONOMOUS AGENT v30")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -802,6 +810,52 @@ def banner():
 # DEEPSEEK
 # ============================================================
 
+# Które role wysyłają przez konto 2 (jeśli TOKEN_FILE_2 istnieje)
+# zamiast konto 1 — cel: rozłożyć 9 jednoczesnych sesji na dwa
+# konta, żeby żadne z nich nie miało ich za dużo naraz. Jeśli
+# TOKEN_FILE_2 nie istnieje, ta mapa jest bez znaczenia — wszystko
+# i tak ląduje na koncie 1.
+_ROLE_ACCOUNT = {
+    "MAIN": 1,
+    "PLANNER": 1,
+    "CRITIC": 1,
+    "ANDROID_GAME_ENGINEER": 1,
+    "RESEARCHER": 2,
+    "BROWSER": 2,
+    "CODE_REVIEWER": 2,
+    "CODE_FIXER": 2,
+    "PROGRESS_ESTIMATOR": 2,
+}
+
+# {1: token_konta_1, 2: token_konta_2_lub_1_jesli_brak_drugiego}
+_account_tokens = {}
+
+
+def _activate_account_for_role(name):
+    """
+    Przełącza globalny opendeep.config.api_key na token właściwy
+    dla roli `name`, TUŻ PRZED wysłaniem/utworzeniem sesji.
+
+    Bezpieczne wyłącznie dlatego, że wszystkie wywołania do
+    DeepSeek w tym programie są sekwencyjne (jedno na raz — patrz
+    consult_team() i blokady w _get_session_lock) — opendeep trzyma
+    api_key w jednym globalnym obiekcie config czytanym na żywo
+    przy KAŻDYM żądaniu (nie zapisuje go w instancji sesji przy
+    tworzeniu), więc bez tego przełączania nie dałoby się w ogóle
+    rozróżnić kont w jednym procesie.
+    """
+
+    account = _ROLE_ACCOUNT.get(name, 1)
+
+    token = (
+        _account_tokens.get(account)
+        or _account_tokens.get(1)
+    )
+
+    if token:
+        opendeep.configure(api_key=token)
+
+
 def init_deepseek():
 
     global deepseek_model
@@ -816,6 +870,22 @@ def init_deepseek():
         )
         print(TOKEN_FILE)
         return False
+
+    token2 = read_text(
+        TOKEN_FILE_2
+    ).strip()
+
+    _account_tokens[1] = token
+    _account_tokens[2] = token2 or token
+
+    if token2:
+        log(
+            "DEEPSEEK",
+            "Drugie konto wykryte (" + TOKEN_FILE_2.name + ") — "
+            "role " + ", ".join(
+                r for r, a in _ROLE_ACCOUNT.items() if a == 2
+            ) + " będą go używać."
+        )
 
     try:
 
@@ -1562,6 +1632,8 @@ def start_session(name, system_prompt):
 
     try:
 
+        _activate_account_for_role(name)
+
         session = (
             deepseek_model.start_chat()
         )
@@ -1686,24 +1758,46 @@ def _get_session_lock(name):
 # katować backend w tym samym tempie.
 # ------------------------------------------------------------
 
-_deepseek_health = {
-    "consecutive_failures": 0,
-    "cooldown_until": 0.0,
-    # Ile razy z rzędu breaker już się uruchamiał bez ŻADNEGO
-    # sukcesu pomiędzy — rośnie cooldown wykładniczo (patrz niżej),
-    # zeruje się przy pierwszym udanym wywołaniu.
-    "trip_count": 0
-}
+def _account_of(name):
+    return _ROLE_ACCOUNT.get(name, 1)
+
+
+# Stan (porażki/cooldown) trzymany OSOBNO na konto — inaczej awaria
+# konta 2 (np. RESEARCHER/BROWSER) wstrzymywałaby też konto 1
+# (MAIN/PLANNER/CRITIC), co niweczyłoby cały sens rozdzielenia ról
+# na dwa konta DeepSeek. Bez drugiego konta (TOKEN_FILE_2) i tak
+# wszystko ląduje pod kluczem 1 — zachowanie identyczne jak wcześniej.
+_deepseek_health = {}
+
+
+def _get_health(account):
+
+    return _deepseek_health.setdefault(
+        account,
+        {
+            "consecutive_failures": 0,
+            "cooldown_until": 0.0,
+            # Ile razy z rzędu breaker już się uruchamiał bez
+            # ŻADNEGO sukcesu pomiędzy — rośnie cooldown
+            # wykładniczo (patrz niżej), zeruje się przy pierwszym
+            # udanym wywołaniu.
+            "trip_count": 0
+        }
+    )
+
 
 _DEEPSEEK_FAILURE_BURST_THRESHOLD = 3
 _DEEPSEEK_BASE_COOLDOWN_SECONDS = 90
 _DEEPSEEK_MAX_COOLDOWN_SECONDS = 600
 
 
-def _deepseek_circuit_wait():
+def _deepseek_circuit_wait(name):
+
+    account = _account_of(name)
+    health = _get_health(account)
 
     remaining = (
-        _deepseek_health["cooldown_until"]
+        health["cooldown_until"]
         - time.time()
     )
 
@@ -1711,10 +1805,10 @@ def _deepseek_circuit_wait():
 
         log(
             "DEEPSEEK",
-            "Podejrzenie awarii na poziomie KONTA (seria porażek "
-            "na różnych sesjach z rzędu, restart nie pomagał) — "
-            "odczekuję jeszcze " + str(int(remaining)) + "s "
-            "zamiast dalej spamować, zanim spróbuję ponownie."
+            "Podejrzenie awarii na poziomie KONTA " + str(account)
+            + " (seria porażek na różnych sesjach z rzędu, restart "
+            "nie pomagał) — odczekuję jeszcze " + str(int(remaining))
+            + "s zamiast dalej spamować, zanim spróbuję ponownie."
         )
 
         time.sleep(remaining)
@@ -1722,21 +1816,23 @@ def _deepseek_circuit_wait():
 
 # ------------------------------------------------------------
 # TEMPOWANIE: wymuszony minimalny odstęp między KOLEJNYMI
-# wiadomościami do DeepSeek, niezależnie od roli — to WSPÓLNE
-# konto/chat, więc "sesja A" i "sesja B" nie są dla serwera
-# niezależne w kwestii limitu tempa wysyłania.
+# wiadomościami do DeepSeek NA TO SAMO KONTO (per-konto, z tego
+# samego powodu co circuit breaker wyżej — dwa różne konta mają
+# niezależne limity tempa, nie ma sensu tempować ich wspólnie).
 # ------------------------------------------------------------
 
-_deepseek_last_send = {"ts": 0.0}
+_deepseek_last_send = {}
 _deepseek_pacing_lock = _threading.Lock()
 
 
-def _deepseek_pace():
+def _deepseek_pace(name):
+
+    account = _account_of(name)
 
     with _deepseek_pacing_lock:
 
         remaining = (
-            _deepseek_last_send["ts"]
+            _deepseek_last_send.get(account, 0.0)
             + DEEPSEEK_MIN_INTERVAL_SECONDS
             - time.time()
         )
@@ -1744,7 +1840,7 @@ def _deepseek_pace():
         if remaining > 0:
             time.sleep(remaining)
 
-        _deepseek_last_send["ts"] = time.time()
+        _deepseek_last_send[account] = time.time()
 
 
 def deepseek(name, message):
@@ -1762,7 +1858,7 @@ def deepseek(name, message):
     za normalną odpowiedź.
     """
 
-    _deepseek_circuit_wait()
+    _deepseek_circuit_wait(name)
 
     lock = _get_session_lock(name)
 
@@ -1809,7 +1905,8 @@ def deepseek(name, message):
 
             try:
 
-                _deepseek_pace()
+                _deepseek_pace(name)
+                _activate_account_for_role(name)
 
                 response = session.send_message(message)
 
@@ -1825,8 +1922,9 @@ def deepseek(name, message):
                     + " znaków"
                 )
 
-                _deepseek_health["consecutive_failures"] = 0
-                _deepseek_health["trip_count"] = 0
+                health = _get_health(_account_of(name))
+                health["consecutive_failures"] = 0
+                health["trip_count"] = 0
 
                 return text
 
@@ -1869,10 +1967,12 @@ def deepseek(name, message):
                             session = new_session
                             continue
 
-                _deepseek_health["consecutive_failures"] += 1
+                health = _get_health(_account_of(name))
+
+                health["consecutive_failures"] += 1
 
                 if (
-                    _deepseek_health["consecutive_failures"]
+                    health["consecutive_failures"]
                     >= _DEEPSEEK_FAILURE_BURST_THRESHOLD
                 ):
 
@@ -1884,17 +1984,17 @@ def deepseek(name, message):
                     # cooldown przez cały ten czas to wciąż sporo
                     # prób na próżno. Rośnie tylko dopóki awaria
                     # trwa; pierwszy sukces zeruje trip_count.
-                    _deepseek_health["trip_count"] += 1
+                    health["trip_count"] += 1
 
                     cooldown = min(
                         _DEEPSEEK_BASE_COOLDOWN_SECONDS
                         * (2 ** (
-                            _deepseek_health["trip_count"] - 1
+                            health["trip_count"] - 1
                         )),
                         _DEEPSEEK_MAX_COOLDOWN_SECONDS
                     )
 
-                    _deepseek_health["cooldown_until"] = (
+                    health["cooldown_until"] = (
                         time.time()
                         + cooldown
                     )
@@ -1902,22 +2002,19 @@ def deepseek(name, message):
                     log(
                         "DEEPSEEK",
                         "UWAGA: "
-                        + str(
-                            _deepseek_health[
-                                "consecutive_failures"
-                            ]
-                        )
-                        + " kolejnych sesji z rzędu w pełni "
-                        "zawiodło (restart nie pomógł) — to "
-                        "wygląda na awarię na poziomie CAŁEGO "
+                        + str(health["consecutive_failures"])
+                        + " kolejnych sesji z rzędu na koncie "
+                        + str(_account_of(name))
+                        + " w pełni zawiodło (restart nie pomógł) "
+                        "— to wygląda na awarię na poziomie CAŁEGO "
                         "KONTA DeepSeek (np. zbyt wiele "
                         "jednoczesnych sesji, inna aktywność na "
                         "tym samym koncie w tym samym czasie), "
                         "nie pojedynczej sesji. Wstrzymuję "
-                        "kolejne zapytania na "
+                        "kolejne zapytania na tym koncie na "
                         + str(int(cooldown))
                         + "s (próba wstrzymania nr "
-                        + str(_deepseek_health["trip_count"])
+                        + str(health["trip_count"])
                         + ") zamiast dalej próbować w kółko w "
                         "tym samym tempie."
                     )
