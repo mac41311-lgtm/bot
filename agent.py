@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v36
+AEL-MINI AUTONOMOUS AGENT v37
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v36")
+    print("             AEL-MINI AUTONOMOUS AGENT v37")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1639,20 +1639,38 @@ POTENCJALNE PROBLEMY:
 
 PROGRESS_ESTIMATOR_PROMPT = """
 Jesteś PROGRESS_ESTIMATOR — oceniasz procentowy postęp realizacji
-celu autonomicznego agenta budującego aplikację/grę Android.
+DOWOLNEGO celu autonomicznego agenta (gra/aplikacja Android,
+skrypt, narzędzie CLI, automatyzacja, strona itd. — rozpoznaj
+rodzaj celu z jego treści, nie zakładaj z góry, że to gra).
 
-Dostajesz cel oraz listę kilku ostatnio wykonanych zadań (status,
-skrócony raport/błąd). Na tej podstawie oceniasz, jaki procent
-CAŁEGO celu jest już faktycznie zrealizowany.
+Dostajesz:
+1. Listę kilku ostatnio wykonanych zadań (status, skrócony
+   raport/błąd) — to WŁASNE deklaracje Gemini o tym, co zrobiło.
+   Traktuj je z rezerwą: zaobserwowany realny przypadek — Gemini
+   podało konkretne "potwierdzone" liczby (wersje narzędzi), które
+   kilka kroków wcześniej w tej samej rozmowie były zupełnie inne
+   naprawdę zweryfikowane — czyli zmyślone, nie sprawdzone na nowo.
+2. AKTUALNY, ŚWIEŻO POBRANY stan Chrome i Androida — TO jest
+   prawdziwe źródło (dokładnie ta sama funkcja, z której korzysta
+   MAIN), nie deklaracja Gemini. Jeśli np. raport twierdzi "otwarto
+   kartę X", a w AKTUALNYM stanie Chrome/Androida nic takiego nie
+   widać — to rozbieżność, obniż ocenę i napisz to wprost w
+   uzasadnieniu.
 
-Bądź REALISTYCZNY, nie optymistyczny. "Utworzono plik" to nie to
-samo co "gra działa". Pełny cel zwykle wymaga: struktury projektu,
-napisanego kodu, zbudowanego APK, instalacji, i fizycznego
-potwierdzenia że aplikacja się uruchamia i renderuje (nie samej
-deklaracji sukcesu w raporcie).
+Na tej podstawie oceniasz, jaki procent CAŁEGO celu jest już
+FAKTYCZNIE zrealizowany — nie ile Gemini zadeklarowało.
+
+Bądź REALISTYCZNY, nie optymistyczny. "Utworzono plik" / "napisano
+raport" to nie to samo co "cel działa i jest potwierdzony". Zależnie
+od rodzaju celu, pełne ukończenie zwykle wymaga fizycznego dowodu
+(zbudowany+zainstalowany+uruchomiony APK ze zrzutem ekranu dla
+gry/aplikacji; realny kod wyjścia dla skryptu; potwierdzony stan w
+Chrome/Androidzie dla czynności na ekranie) — nie samej deklaracji
+sukcesu w raporcie.
 
 Jeżeli w ostatnich zadaniach widzisz powtarzające się błędy bez
-postępu — obniż ocenę, nawet jeśli poprzednio było wyżej.
+postępu, albo rozbieżność między deklaracją a aktualnym stanem
+urządzenia — obniż ocenę, nawet jeśli poprzednio było wyżej.
 
 Zwróć WYŁĄCZNIE JSON, bez żadnego dodatkowego tekstu:
 {
@@ -8942,12 +8960,32 @@ def estimate_progress(goal):
     if not summaries:
         return None
 
+    # WCZEŚNIEJ ten prompt zawierał WYŁĄCZNIE własne raporty Gemini
+    # z poprzednich zadań — czyli to, co Gemini SAM o sobie
+    # napisało, nie faktyczny stan urządzenia. Zaobserwowany
+    # problem: ocena procentowa "nie widziała", że np. jakieś okno
+    # jest faktycznie otwarte na ekranie, bo nigdy nie dostawała
+    # świeżego stanu Chrome/Androida — tylko cudze, potencjalnie
+    # naciągnięte podsumowania. Dokładamy prawdziwy, świeżo pobrany
+    # stan (te same funkcje, których używa MAIN każdy krok), żeby
+    # ocena miała choć trochę oparcia w rzeczywistości, nie tylko
+    # w tym, co ktoś inny zadeklarował.
     prompt = f"""
 CEL:
 {goal}
 
-OSTATNIE ZADANIA (od najstarszego do najnowszego):
+OSTATNIE ZADANIA (od najstarszego do najnowszego, WŁASNE raporty
+Gemini — traktuj je z rezerwą, mogą być niedokładne):
 {json.dumps(summaries, ensure_ascii=False, indent=2)}
+
+AKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (to jest prawdziwe źródło,
+nie deklaracja Gemini):
+
+AKTUALNY CHROME:
+{short(chrome_summary(), 1500)}
+
+AKTUALNY ANDROID:
+{short(android_summary(), 1500)}
 
 Zwróć WYŁĄCZNIE JSON zgodnie z formatem z Twojego prompta
 systemowego.
@@ -9681,6 +9719,42 @@ def _goal_needs_apk(goal):
     return bool(_APK_GOAL_PATTERN.search(goal))
 
 
+# Ścieżki w stylu "~/coś.rozszerzenie" wspomniane wprost w treści
+# celu (np. "zapisz plik ~/raport_systemowy.txt").
+_GOAL_FILE_PATH_PATTERN = re.compile(r"~[\w./\-]+\.\w+")
+
+
+def _extract_goal_mentioned_files(goal):
+    """
+    Wyciąga z treści CELU ścieżki plików, które użytkownik wprost
+    wymienił (np. "~/raport_systemowy.txt"). To pozwala sprawdzić
+    NIEZALEŻNIE OD TEGO, CO DEKLARUJE GEMINI/MAIN — bezpośrednio na
+    dysku — czy te konkretne pliki faktycznie istnieją i nie są
+    puste, zamiast ufać samej prozie w raporcie ("plik zapisany",
+    "zrzut zrobiony").
+
+    Zaobserwowany realny problem: raport potrafi z pewnością siebie
+    twierdzić, że coś jest "potwierdzone", z konkretnymi
+    (czasem zmyślonymi) liczbami, bez żadnego świeżego sprawdzenia.
+    Ten mechanizm nie ocenia TREŚCI (na to nie ma prostego, w pełni
+    niezawodnego sposobu bez kolejnego modelu), ale przynajmniej
+    twardo sprawdza, że deklarowane pliki NAPRAWDĘ ISTNIEJĄ i mają
+    jakąkolwiek zawartość — najbardziej podstawowy, ale całkowicie
+    niezależny od LLM fakt do zweryfikowania.
+    """
+
+    if not goal:
+        return []
+
+    seen = []
+
+    for match in _GOAL_FILE_PATH_PATTERN.findall(goal):
+        if match not in seen:
+            seen.append(match)
+
+    return seen
+
+
 def verify_final(goal=""):
     """
     Twarda, fizyczna weryfikacja przed zaakceptowaniem DONE.
@@ -9837,6 +9911,40 @@ def verify_final(goal=""):
                 "Nie udało się ustalić nazwy pakietu z APK (aapt "
                 "niedostępny lub błąd) — wymaga ręcznej weryfikacji, "
                 "nie blokuje DONE."
+            )
+        })
+
+    # --- 4. Pliki wprost wymienione w treści CELU ------------------
+    #
+    # Sprawdzane BEZPOŚREDNIO na dysku, niezależnie od tego, co
+    # deklaruje raport Gemini/MAIN — jeśli cel mówi "zapisz plik
+    # ~/raport_systemowy.txt", ten plik MUSI faktycznie istnieć i
+    # być niepusty, niezależnie od tego, jak pewnie brzmi raport.
+
+    mentioned_files = _extract_goal_mentioned_files(goal)
+
+    if mentioned_files:
+
+        missing_or_empty = []
+
+        for rel_path in mentioned_files:
+
+            p = Path(rel_path).expanduser()
+
+            if not p.exists() or p.stat().st_size == 0:
+                missing_or_empty.append(rel_path)
+
+        checks.append({
+            "check": "Pliki wymienione w treści CELU",
+            "required": True,
+            "ok": not missing_or_empty,
+            "detail": (
+                "Wszystkie wymienione w celu pliki istnieją i są "
+                "niepuste: " + ", ".join(mentioned_files)
+                if not missing_or_empty
+                else "BRAKUJE lub są PUSTE (sprawdzone bezpośrednio "
+                "na dysku, niezależnie od raportu): "
+                + ", ".join(missing_or_empty)
             )
         })
 
