@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v22
+AEL-MINI AUTONOMOUS AGENT v23
 
 ARCHITEKTURA:
 
@@ -59,6 +59,7 @@ import sys
 import json
 import time
 import re
+import select
 import shutil
 import subprocess
 import traceback
@@ -764,7 +765,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v22")
+    print("             AEL-MINI AUTONOMOUS AGENT v23")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10356,6 +10357,48 @@ def prompt_adb_target():
     return target
 
 
+def _read_full_input(prompt):
+    """
+    input() zwraca tylko PIERWSZĄ linię ze stdin. Jeżeli użytkownik
+    WKLEJA wieloliniowy tekst do terminala Termuksa (a nie wpisuje
+    go znak po znaku), cała wklejka trafia do bufora stdin naraz —
+    input() odda tylko pierwszą linię, a REST zostanie w buforze i
+    zostanie PO CICHU skonsumowany przez KOLEJNE wywołanie input(),
+    bez żadnej realnej interakcji użytkownika.
+
+    Realny, zaobserwowany przypadek: użytkownik wkleił 8-liniowy
+    cel. Zamiast całego tekstu, agent zapisał jako CEL tylko
+    pierwszą linię — a dwa NASTĘPNE pytania potwierdzające
+    usunięcie plików ("Zezwolić? [t/N]") zostały automatycznie
+    "odpowiedziane" resztkami tej samej wklejki, zanim użytkownik
+    zdążył cokolwiek nacisnąć. To nie tylko ucina cel — to realne
+    ryzyko bezpieczeństwa: gdyby któraś z pozostałych linii wklejki
+    zaczynała się od "tak"/"t", operacja usuwania zostałaby
+    zaakceptowana bez żadnej świadomej zgody użytkownika, dokładnie
+    tego typu incydent, po którym dodaliśmy te pytania.
+
+    Fix: po pierwszej linii z input() dociągamy WSZYSTKIE dodatkowe
+    linie, które są JUŻ dostępne w buforze stdin w tej chwili (bez
+    czekania na nowe dane od użytkownika) — odtwarzając całą
+    wklejkę jako jeden tekst, zamiast zostawiać resztę do
+    przypadkowej konsumpcji przez późniejsze input().
+    """
+
+    first_line = input(prompt)
+    lines = [first_line]
+
+    try:
+        while select.select([sys.stdin], [], [], 0)[0]:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            lines.append(line.rstrip("\n"))
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
 def main():
 
     banner()
@@ -10469,7 +10512,7 @@ def main():
             )
             print()
 
-            typed = input(
+            typed = _read_full_input(
                 "CEL AGENTA [Enter = wznów] > "
             ).strip()
 
@@ -10478,7 +10521,7 @@ def main():
 
         else:
 
-            goal = input(
+            goal = _read_full_input(
                 "Podaj CEL AGENTA > "
             ).strip()
 
