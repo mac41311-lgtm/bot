@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v35
+AEL-MINI AUTONOMOUS AGENT v36
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v35")
+    print("             AEL-MINI AUTONOMOUS AGENT v36")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1337,6 +1337,22 @@ Sprawdź KONIECZNIE:
   kodem wyjścia 0; dla strony/serwera — potwierdzenie w
   przeglądarce/odpowiedź serwera. Sam plik/kod bez uruchomienia i
   dowodu działania to NIE jest ukończenie celu.
+- KRYTYCZNE — SFABRYKOWANE "POTWIERDZENIA": zaobserwowany realny
+  przypadek — raport Gemini podał konkretne liczby jako rzekomo
+  potwierdzone fakty (np. wersje narzędzi: "Python 3.11.8, Node
+  v20.15.1, Gradle 8.9"), a KILKA KROKÓW WCZEŚNIEJ w TEJ SAMEJ
+  rozmowie realnie odczytany plik pokazywał zupełnie inne liczby
+  ("Python 3.14.6, Node v26.4.0, Gradle: brak"). Gemini nie
+  sprawdził niczego na nowo — wymyślił wiarygodnie brzmiące dane
+  zamiast zacytować to, co faktycznie wcześniej ustalono. Zawsze
+  porównaj KONKRETNE liczby/fakty w OSTATNIM RAPORCIE z tym, co
+  było w poprzednich krokach (jeśli masz dostęp do historii) — jeśli
+  się różnią bez wyjaśnienia, albo raport podaje "potwierdzone"
+  fakty bez widocznego w tym kroku świeżego wywołania narzędzia,
+  które by to faktycznie sprawdziło — to podejrzenie fabrykacji,
+  nie prawdziwej weryfikacji. BLOKUJ i zażądaj ponownego,
+  rzeczywistego sprawdzenia (odczyt pliku / powtórzenie komendy),
+  zanim to zostanie przyjęte jako dowód.
 
 Format:
 
