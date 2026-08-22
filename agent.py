@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v32
+AEL-MINI AUTONOMOUS AGENT v33
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v32")
+    print("             AEL-MINI AUTONOMOUS AGENT v33")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1756,10 +1756,48 @@ def start_session(name, system_prompt):
 
     except Exception as e:
 
-        log(
-            "DEEPSEEK",
-            f"Sesja {name} ERROR: {e}"
+        error_text = str(e)
+
+        # Zaobserwowany realny przypadek: token konta (userToken z
+        # localStorage chat.deepseek.com) po prostu WYGASŁ po
+        # wielu godzinach użycia — _create_session() w opendeep
+        # dostaje wtedy od serwera odpowiedź z "data": null zamiast
+        # oczekiwanego słownika, i pada surowym
+        # AttributeError/RuntimeError zamiast czytelnego komunikatu.
+        # To NORMALNA, powtarzalna sytuacja przy długim używaniu
+        # jednego konta (nie błąd w kodzie) — więc zamiast suchego
+        # tracebacka dajemy konkretną, wykonalną wskazówkę.
+        looks_like_expired_token = (
+            ("NoneType" in error_text and "get" in error_text)
+            or "Failed to extract chat session ID" in error_text
         )
+
+        if looks_like_expired_token:
+
+            account = _account_of(name)
+            token_file_name = (
+                TOKEN_FILE.name
+                if account == 1
+                else TOKEN_FILE_2.name
+            )
+
+            log(
+                "DEEPSEEK",
+                f"Sesja {name} (konto {account}) — token "
+                "prawdopodobnie WYGASŁ lub jest nieprawidłowy "
+                "(serwer nie zwrócił poprawnej sesji zamiast "
+                "błędu). Zaloguj się ponownie na "
+                "chat.deepseek.com na TYM koncie, wyciągnij "
+                "świeży userToken z localStorage i zaktualizuj "
+                f"~/{token_file_name}, potem zrestartuj program."
+            )
+
+        else:
+
+            log(
+                "DEEPSEEK",
+                f"Sesja {name} ERROR: {e}"
+            )
 
         return None
 
