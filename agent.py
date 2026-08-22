@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v14
+AEL-MINI AUTONOMOUS AGENT v15
 
 ARCHITEKTURA:
 
@@ -684,7 +684,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v14")
+    print("             AEL-MINI AUTONOMOUS AGENT v15")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6445,6 +6445,15 @@ ZASADY:
    przepisywaniu reszty, której nie musiałeś dotykać. Najpierw
    termux_read_file, żeby skopiować dokładny fragment do 'search'.
 
+   NIGDY nie używaj `sed -i 'N,Md'` ani innego usuwania/zamiany PO
+   NUMERZE LINII do edycji plików projektu (build.gradle, kod gry
+   itp.) — zaobserwowany realny przypadek: `sed -i '10,12d'` urwał
+   środek bloku `allprojects {{ repositories {{ ... }} }}`, zostawiając
+   uszkodzony plik, który psuł build przez kilka kolejnych kroków.
+   Numery linii są kruche — jedna wcześniejsza zmiana i usuwasz
+   coś innego niż zamierzałeś. termux_patch_file (dopasowanie po
+   TREŚCI, nie numerze linii) nie ma tego problemu.
+
 2. Jeżeli trzeba wykonać krótką komendę:
    użyj termux_run.
 
@@ -7482,6 +7491,37 @@ def extract_code_block(text):
     code = match.group(1).rstrip("\n")
 
     return code if code.strip() else None
+
+
+_SHELL_SCRIPT_MARKERS = re.compile(
+    r"^#!/|<<\s*['\"]?EOF['\"]?\s*$|^\s*cat\s+>>?\s|\$\(",
+    re.MULTILINE
+)
+
+
+def _looks_like_shell_script(code, target_path):
+    """
+    Wykrywa, czy blok kodu wygląda jak SKRYPT POWŁOKI (komendy do
+    URUCHOMIENIA), a nie treść pliku do zapisania 1:1.
+
+    Zaobserwowany realny przypadek: ANDROID_GAME_ENGINEER podał w
+    bloku "POLECENIE / KOD" komendę w stylu
+    `cat > plik << 'EOF' ... EOF` (czyli: "uruchom to, żeby
+    zapisać plik"), a write_engineer_code_to zapisało ten skrypt
+    DOSŁOWNIE jako zawartość build.gradle, zamiast go wykonać.
+    Gemini akurat to zauważyło i naprawiło samo, ale to był traf,
+    nie zabezpieczenie.
+
+    Nie ostrzega dla plików .sh (tam skrypt powłoki jest właściwą
+    zawartością).
+    """
+
+    suffix = Path(str(target_path)).suffix.lower()
+
+    if suffix == ".sh":
+        return False
+
+    return bool(_SHELL_SCRIPT_MARKERS.search(code or ""))
 
 
 def apply_patch_from_fixer_text(fixer_text):
@@ -9314,6 +9354,44 @@ Zwróć tylko JSON.
                 target_path = Path(
                     write_target
                 ).expanduser()
+
+                # --------------------------------------------------
+                # BEZPIECZEŃSTWO: blok kodu może być SKRYPTEM DO
+                # URUCHOMIENIA (np. "cat > plik << EOF ..."), nie
+                # treścią pliku do zapisania. Zaobserwowane naprawdę
+                # — write_engineer_code_to o mało nie zapisało
+                # komend powłoki jako zawartości build.gradle.
+                # --------------------------------------------------
+
+                if _looks_like_shell_script(
+                    engineer_code,
+                    target_path
+                ):
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
+                        "message": (
+                            "write_engineer_code_to ODRZUCONE: "
+                            "blok kodu od ANDROID_GAME_ENGINEER "
+                            "wygląda jak SKRYPT POWŁOKI (zawiera "
+                            "np. 'cat > plik << EOF' albo "
+                            "podstawienie $(...)), nie treść "
+                            "pliku " + str(target_path) + ". "
+                            "Zapisanie tego dosłownie jako "
+                            "zawartość pliku by go uszkodziło. "
+                            "Jeżeli to naprawdę miał być skrypt do "
+                            "WYKONANIA — zrób zwykły TASK i każ "
+                            "Gemini uruchomić go przez termux_run, "
+                            "NIE używaj write_engineer_code_to. "
+                            "Jeżeli to miała być treść pliku — "
+                            "poproś ANDROID_GAME_ENGINEER o czysty "
+                            "kod pliku, bez komend powłoki wokół "
+                            "niego."
+                        )
+                    }
+
+                    continue
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: write_engineer_code_to NADPISUJE
