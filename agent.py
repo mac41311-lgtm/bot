@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v7
+AEL-MINI AUTONOMOUS AGENT v8
 
 ARCHITEKTURA:
 
@@ -671,7 +671,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v7")
+    print("             AEL-MINI AUTONOMOUS AGENT v8")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7279,12 +7279,19 @@ potrzebne jest kolejne wyszukiwanie.
 
 
 
+# Ostatnie odpowiedzi RESEARCHER/BROWSER — trzymane MIĘDZY krokami,
+# żeby MAIN nadal dostawał jakiś kontekst z tych ról nawet w
+# krokach, w których nie są odpytywane (patrz consult_team()).
+_role_response_cache = {}
+
+
 def consult_team(
     goal,
-    last_result
+    last_result,
+    step=1
 ):
     """
-    Konsultuje wszystkie role SEKWENCYJNIE.
+    Konsultuje role SEKWENCYJNIE, nie na każdym kroku wszystkie.
 
     WCZEŚNIEJ ta funkcja odpytywała PLANNER/RESEARCHER/BROWSER
     równolegle przez ThreadPoolExecutor, zakładając że "opendeep i
@@ -7295,13 +7302,22 @@ def consult_team(
 
     Trzy wątki wysyłały wiadomości do wspólnego połączenia opendeep
     w tym samym momencie, a serwer gubił kolejność message-id
-    między różnymi sesjami czatu — najczęściej ofiarą padał
-    BROWSER, którego sesja była restartowana na każdym kroku
-    (tracąc pamięć), kosztem dodatkowych ~5-10s bez żadnego
-    realnego zysku z "równoległości" — skoro opendeep i tak nie
-    obsługuje współbieżnych requestów poprawnie, wątki nie dawały
-    przyspieszenia, tylko psuły poprawność. Stąd powrót do
-    sekwencyjnych wywołań.
+    między różnymi sesjami czatu. Powrót do sekwencyjnych wywołań
+    pomógł, ale nie usunął problemu całkowicie — opendeep steruje
+    STRONĄ CZATU (chat.deepseek.com), nie oficjalnym API, a to
+    oznacza że 5-6 wiadomości NA KAŻDY krok, na jednym koncie, to
+    realne obciążenie tego mechanizmu (i tak nieprzeznaczonego do
+    automatyzacji w tym tempie) — czyli de facto spam.
+
+    Dlatego PLANNER, CRITIC i ANDROID_GAME_ENGINEER (te trzy
+    bezpośrednio napędzają decyzję MAIN) są pytane na KAŻDYM kroku,
+    ale RESEARCHER i BROWSER — które w praktyce rzadko mają coś
+    nowego do powiedzenia z kroku na krok — tylko co 3. krok, plus
+    zawsze od razu po świeżym błędzie narzędzia (wtedy RESEARCHER
+    faktycznie może pomóc znaleźć przyczynę). W pominiętych krokach
+    MAIN dostaje ich OSTATNIĄ znaną odpowiedź z jasną adnotacją, że
+    jest nieaktualna — lepsze to niż pusty kontekst, ale MAIN wie,
+    że nie powinien na niej ślepo polegać.
     """
 
     tool_hint = ""
@@ -7361,18 +7377,74 @@ AKTUALNY ANDROID:
         context
     )
 
-    results["RESEARCHER"] = researcher_web_search(
-        deepseek(
-            "RESEARCHER",
-            context
-        ),
-        context
+    fresh_tool_error = (
+        isinstance(last_result, dict)
+        and last_result.get("status") == "GEMINI_TOOL_ERROR"
     )
 
-    results["BROWSER"] = deepseek(
-        "BROWSER",
-        context
+    consult_researcher = (
+        (step % 3 == 1)
+        or fresh_tool_error
     )
+
+    consult_browser = (step % 3 == 1)
+
+    if consult_researcher:
+
+        results["RESEARCHER"] = researcher_web_search(
+            deepseek(
+                "RESEARCHER",
+                context
+            ),
+            context
+        )
+
+        _role_response_cache["RESEARCHER"] = results["RESEARCHER"]
+
+    else:
+
+        log(
+            "DEEPSEEK",
+            "RESEARCHER pominięty w tym kroku "
+            "(oszczędzanie limitu/sesji) — "
+            "użyta ostatnia znana odpowiedź."
+        )
+
+        results["RESEARCHER"] = (
+            "[NIEAKTUALNE — RESEARCHER nie był pytany w tym "
+            "kroku, poniżej jego ostatnia znana odpowiedź]\n\n"
+            + _role_response_cache.get(
+                "RESEARCHER",
+                "(RESEARCHER nie był jeszcze konsultowany.)"
+            )
+        )
+
+    if consult_browser:
+
+        results["BROWSER"] = deepseek(
+            "BROWSER",
+            context
+        )
+
+        _role_response_cache["BROWSER"] = results["BROWSER"]
+
+    else:
+
+        log(
+            "DEEPSEEK",
+            "BROWSER pominięty w tym kroku "
+            "(oszczędzanie limitu/sesji) — "
+            "użyta ostatnia znana odpowiedź."
+        )
+
+        results["BROWSER"] = (
+            "[NIEAKTUALNE — BROWSER nie był pytany w tym kroku, "
+            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            + _role_response_cache.get(
+                "BROWSER",
+                "(BROWSER nie był jeszcze konsultowany.)"
+            )
+        )
 
     planner_out = short(results.get("PLANNER", ""), 2000)
     researcher_out = short(results.get("RESEARCHER", ""), 2000)
@@ -8136,7 +8208,8 @@ def run_agent(goal):
 
         team = consult_team(
             goal,
-            last_result
+            last_result,
+            step
         )
 
         # ------------------------------------------------------
