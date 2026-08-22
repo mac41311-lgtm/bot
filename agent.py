@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v11
+AEL-MINI AUTONOMOUS AGENT v12
 
 ARCHITEKTURA:
 
@@ -683,7 +683,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v11")
+    print("             AEL-MINI AUTONOMOUS AGENT v12")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2549,6 +2549,160 @@ def android_run_in_new_window(command, background=False):
     }
 
 
+def android_install_apk(path, reinstall=True):
+    """
+    Instaluje APK przez `adb install` i PARSUJE wynik zamiast
+    zgadywać po returncode — `adb install` potrafi zwrócić
+    returncode=0 nawet gdy instalacja faktycznie się nie powiodła
+    (błąd jest tylko w tekście stdout, np.
+    "INSTALL_FAILED_UPDATE_INCOMPATIBLE" albo
+    "INSTALL_FAILED_VERSION_DOWNGRADE"). Wcześniej Gemini musiałoby
+    to zgadywać przez surowe `shell("adb install ...")`.
+
+    reinstall=True dodaje flagę -r (nadpisz istniejącą instalację,
+    zachowując dane) — domyślne, bo to typowy przypadek przy
+    iteracyjnym budowaniu tej samej aplikacji.
+    """
+
+    path = str(path or "").strip()
+
+    if not path:
+        return {
+            "ok": False,
+            "error": "Pusta ścieżka do APK."
+        }
+
+    flags = "-r" if reinstall else ""
+
+    result = execute_shell(
+        "adb install " + flags + " " + path,
+        timeout=90
+    )
+
+    output = (
+        result.get("stdout", "")
+        + result.get("stderr", "")
+    )
+
+    success = "Success" in output
+
+    failure_match = re.search(
+        r"(INSTALL_FAILED_[A-Z_]+)",
+        output
+    )
+
+    return {
+        "ok": success,
+        "action": "install_apk",
+        "path": path,
+        "failure_reason": (
+            failure_match.group(1) if failure_match else None
+        ),
+        "detail": short(output, 800)
+    }
+
+
+def android_uninstall_app(package):
+    """
+    Odinstalowuje aplikację po nazwie pakietu przez
+    `adb uninstall`. Przydatne przed czystą reinstalacją, gdy
+    android_install_apk zwróci błąd typu
+    INSTALL_FAILED_UPDATE_INCOMPATIBLE (podpis/wersja niezgodne z
+    poprzednią instalacją) — wtedy zwykłe -r nie wystarczy, trzeba
+    najpierw odinstalować.
+    """
+
+    package = str(package or "").strip()
+
+    if not package:
+        return {
+            "ok": False,
+            "error": "Pusta nazwa pakietu."
+        }
+
+    result = execute_shell(
+        "adb uninstall " + package,
+        timeout=30
+    )
+
+    output = (
+        result.get("stdout", "")
+        + result.get("stderr", "")
+    )
+
+    success = "Success" in output
+
+    return {
+        "ok": success,
+        "action": "uninstall_app",
+        "package": package,
+        "detail": short(output, 500)
+    }
+
+
+def android_logcat(package=None, lines=200):
+    """
+    Zrzuca ostatnie wpisy logcat (adb logcat -d = zrzuć i wyjdź,
+    NIE zawiesza się czekając na nowe logi) — kluczowe do
+    diagnozowania APLIKACJI, KTÓRA SIĘ ZAINSTALOWAŁA, ALE PADA PRZY
+    URUCHOMIENIU. Wcześniej agent nie miał ŻADNEGO sposobu, żeby
+    zobaczyć crash stack trace — jedyne dostępne narzędzia
+    (android_screenshot, android_state) nic nie pokażą, jeśli
+    aplikacja zdąży się wywalić, zanim cokolwiek narysuje.
+
+    Jeżeli podano `package`, filtruje po PID tego procesu (przez
+    `adb shell pidof <package>`) — jeśli proces już nie działa
+    (bo padł), logi PID-u nadal są w buforze logcat, więc to wciąż
+    działa tuż po crashu.
+    """
+
+    lines = int(lines or 200)
+
+    pid = None
+
+    if package:
+
+        package = str(package).strip()
+
+        pid_result = execute_shell(
+            "adb shell pidof " + package,
+            timeout=15
+        )
+
+        pid_out = pid_result.get("stdout", "").strip()
+
+        if pid_out:
+            pid = pid_out.split()[0]
+
+    command = "adb logcat -d -t " + str(lines)
+
+    if pid:
+        command += " --pid=" + pid
+
+    result = execute_shell(
+        command,
+        timeout=30
+    )
+
+    output = result.get("stdout", "")
+
+    crashed = bool(
+        re.search(
+            r"FATAL EXCEPTION|AndroidRuntime.*FATAL",
+            output
+        )
+    )
+
+    return {
+        "ok": result.get("ok", False),
+        "action": "logcat",
+        "package": package,
+        "pid": pid,
+        "crash_detected": crashed,
+        "log": short(output, 6000)
+    }
+
+
 # ============================================================
 # SHELL
 # ============================================================
@@ -4097,6 +4251,73 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "android_install_apk",
+            "description": (
+                "Zainstaluj plik .apk przez `adb install` z "
+                "poprawnym rozpoznaniem sukcesu/porażki (w "
+                "odróżnieniu od surowego shell — `adb install` "
+                "potrafi zwrócić kod 0 mimo że instalacja się nie "
+                "powiodła, błąd jest tylko w tekście). Sprawdź "
+                "najpierw termux_check_apk. Jeśli dostaniesz "
+                "failure_reason=INSTALL_FAILED_UPDATE_INCOMPATIBLE "
+                "— użyj najpierw android_uninstall_app, potem "
+                "spróbuj ponownie."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "reinstall": {"type": "boolean"}
+                },
+                "required": ["path"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_uninstall_app",
+            "description": (
+                "Odinstaluj aplikację po nazwie pakietu — używaj "
+                "przed czystą reinstalacją, gdy android_install_apk "
+                "zwróci INSTALL_FAILED_UPDATE_INCOMPATIBLE albo "
+                "INSTALL_FAILED_VERSION_DOWNGRADE (zwykłe -r wtedy "
+                "nie wystarcza)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "package": {"type": "string"}
+                },
+                "required": ["package"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_logcat",
+            "description": (
+                "Zrzuć ostatnie logi systemowe Androida (adb "
+                "logcat -d — zrzuca i kończy, NIE zawiesza się). "
+                "UŻYWAJ TEGO, gdy aplikacja się zainstalowała i "
+                "uruchomiła (android_launch_app), ale nic nie "
+                "widać na zrzucie ekranu albo podejrzewasz crash — "
+                "to jedyny sposób, żeby zobaczyć prawdziwy błąd "
+                "(stack trace), zamiast zgadywać z samego zrzutu "
+                "ekranu. Podaj 'package', żeby przefiltrować po "
+                "PID tej aplikacji. Pole 'crash_detected' w wyniku "
+                "mówi wprost, czy w logu jest FATAL EXCEPTION."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "package": {"type": "string"},
+                    "lines": {"type": "integer"}
+                }
+            }
+        },
+
+        {
+            "type": "function",
             "name": "shell",
             "description": "Wykonaj komendę w Termuxie.",
             "parameters": {
@@ -5586,6 +5807,83 @@ def _dispatch_tool_inner(
                     "error":
                         "android_run_in_new_window wymaga command.",
                     "arguments": args
+                }
+
+            return _call_tool_function(
+                fn,
+                args
+            )
+
+        # Gemini: android_install_apk
+        # Python: android_install_apk
+        if name == "android_install_apk":
+
+            fn = globals().get(
+                "android_install_apk"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_install_apk()."
+                }
+
+            path = args.get("path")
+
+            if not path:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_install_apk wymaga path.",
+                    "arguments": args
+                }
+
+            return _call_tool_function(
+                fn,
+                args
+            )
+
+        # Gemini: android_uninstall_app
+        # Python: android_uninstall_app
+        if name == "android_uninstall_app":
+
+            fn = globals().get(
+                "android_uninstall_app"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_uninstall_app()."
+                }
+
+            package = args.get("package")
+
+            if not package:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_uninstall_app wymaga package.",
+                    "arguments": args
+                }
+
+            return fn(package)
+
+        # Gemini: android_logcat
+        # Python: android_logcat
+        if name == "android_logcat":
+
+            fn = globals().get(
+                "android_logcat"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_logcat()."
                 }
 
             return _call_tool_function(
@@ -9149,6 +9447,18 @@ def prompt_adb_target():
 def main():
 
     banner()
+
+    # ----------------------------------------------------------
+    # Wake lock — utrzymuje Termux aktywny w tle nawet gdy ekran
+    # zgaśnie. BEZ TEGO Android (Doze mode) może dławić/usypiać
+    # proces po dłuższej bezczynności ekranu, co przy wielogodzinnej
+    # autonomicznej sesji ryzykuje ciche zawieszenie agenta bez
+    # żadnego błędu w logach. Funkcja istniała w pliku od dawna, ale
+    # nigdy nie była wołana — zwolnienie (agent_wake_unlock) już
+    # było podpięte przez atexit, tylko nikt nigdy nie włączał blokady.
+    # ----------------------------------------------------------
+
+    agent_wake_lock()
 
     # ----------------------------------------------------------
     # DeepSeek
