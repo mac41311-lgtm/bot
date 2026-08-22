@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v41
+AEL-MINI AUTONOMOUS AGENT v42
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v41")
+    print("             AEL-MINI AUTONOMOUS AGENT v42")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1118,12 +1118,27 @@ android.intent.action.VIEW -d <url>` żeby faktycznie wyświetlić
 stronę na ekranie, `curl -s <url> | grep -o '<title>.*</title>'`
 (albo podobne parsowanie HTML) do sprawdzenia tytułu/zawartości
 BEZ polegania na CDP/UI, i android_screenshot jako dowód wizualny.
-Tego NIE rób do weryfikacji stanu ekranu/przeglądarki: `dumpsys
-window windows`, `uiautomator dump` przez surowy shell w Termuksie
-— to systemowe binaria Androida, zwykle niedostępne bez roota/
-kontekstu instrumentacji, zwrócą "not found". Do stanu ekranu
-telefonu używaj android_state, do stanu ISTNIEJĄCEJ karty Chrome
-używaj chrome_tabs/chrome_inspect.
+PREFEROWANE, DARMOWE (bez zużywania limitu na obrazy) narzędzia do
+sprawdzenia "co jest na ekranie/w przeglądarce" to zawsze najpierw
+android_state (stan ekranu telefonu jako tekst) i chrome_tabs/
+chrome_inspect (stan ISTNIEJĄCEJ karty Chrome jako tekst) — obie
+są już częścią kontekstu każdego kroku i nie kosztują nic więcej.
+
+Jeżeli mimo to potrzebujesz `dumpsys`/`uiautomator dump` z poziomu
+skryptu bash: NIGDY nie uruchamiaj ich gołych w Termuksie —
+zwrócą "not found"/odmowę dostępu, bo (dokładnie jak screencap)
+to systemowe polecenia wymagające uprawnień użytkownika `shell`,
+których zwykła aplikacja (czym jest tu Termux) nie ma. Jedyna
+działająca droga to przepuszczenie ich przez ADB, tak samo jak
+przy zrzucie ekranu:
+
+  adb shell dumpsys activity activities | grep mResumedActivity
+  adb shell dumpsys window windows | grep mCurrentFocus
+
+To działa (uprzywilejowany `shell` przez ADB), podczas gdy gołe
+`dumpsys ...` uruchomione wprost w Termuksie zawsze zawiedzie —
+ale i tak PIERWSZY WYBÓR to android_state/chrome_tabs, bo są
+prostsze i już dostępne bez dodatkowego polecenia.
 
 SHELL:
 - shell
