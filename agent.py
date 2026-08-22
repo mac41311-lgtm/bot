@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v9
+AEL-MINI AUTONOMOUS AGENT v10
 
 ARCHITEKTURA:
 
@@ -671,7 +671,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v9")
+    print("             AEL-MINI AUTONOMOUS AGENT v10")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -821,6 +821,26 @@ kodu (```...```), pole zostanie odrzucone z jasnym błędem — nie
 zgaduj, poproś ANDROID_GAME_ENGINEER o konkretny kod albo zrób
 zwykły TASK bez tego pola (dozwolone tylko gdy naprawdę nie ma
 gotowego kodu do zapisania).
+
+============================================================
+UWAGA — write_engineer_code_to NADPISUJE CAŁY PLIK
+============================================================
+
+write_engineer_code_to zastępuje CAŁĄ zawartość pliku blokiem kodu
+ANDROID_GAME_ENGINEER. To bezpieczne TYLKO gdy ten blok to PEŁNA,
+kompletna zawartość pliku (np. pierwszy zapis nowego pliku, albo
+ANDROID_GAME_ENGINEER świadomie podał cały plik od nowa).
+
+NIE UŻYWAJ write_engineer_code_to, jeżeli ANDROID_GAME_ENGINEER
+podał tylko FRAGMENT/POPRAWKĘ istniejącego pliku (np. "zmień tę
+jedną funkcję") — nadpisałbyś resztę pliku tym fragmentem i
+zniszczył wszystko inne. Do poprawek fragmentu istniejącego pliku
+zrób zamiast tego zwykły TASK instruujący Gemini, żeby użyło
+termux_patch_file (search/replace) — poproś Gemini, żeby najpierw
+odczytało plik (termux_read_file), znalazło dokładny fragment do
+zmiany, i podmieniło go przez termux_patch_file. To jest właściwe
+narzędzie do poprawek fragmentów, write_engineer_code_to jest do
+zapisu całych plików.
 ============================================================
 
 DONE:
@@ -8461,11 +8481,66 @@ Zwróć tylko JSON.
 
                     continue
 
-                try:
-                    target_path = Path(
-                        write_target
-                    ).expanduser()
+                target_path = Path(
+                    write_target
+                ).expanduser()
 
+                # --------------------------------------------------
+                # BEZPIECZEŃSTWO: write_engineer_code_to NADPISUJE
+                # cały plik. Jeżeli plik już istnieje i jest sporo
+                # większy niż nowy blok kodu, to prawie na pewno
+                # oznacza, że ANDROID_GAME_ENGINEER podał tylko
+                # FRAGMENT/poprawkę, a nie cały plik od nowa —
+                # nadpisanie zniszczyłoby resztę. Odmawiamy zamiast
+                # zgadywać; prompt sam w sobie to tylko sugestia dla
+                # modelu, ta blokada obowiązuje niezależnie od tego,
+                # czy MAIN się do niej zastosuje.
+                # --------------------------------------------------
+
+                if target_path.exists():
+
+                    try:
+                        existing_size = target_path.stat().st_size
+                    except Exception:
+                        existing_size = 0
+
+                    new_size = len(
+                        engineer_code.encode("utf-8")
+                    )
+
+                    if (
+                        existing_size > 200
+                        and new_size < existing_size * 0.4
+                    ):
+
+                        last_result = {
+                            "status":
+                                "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
+                            "message": (
+                                "write_engineer_code_to ODRZUCONE: "
+                                "plik " + str(target_path)
+                                + " ma już " + str(existing_size)
+                                + "B, a nowy blok kodu od "
+                                "ANDROID_GAME_ENGINEER ma tylko "
+                                + str(new_size) + "B (mniej niż "
+                                "40% obecnego rozmiaru). To wygląda "
+                                "na FRAGMENT/poprawkę, nie cały "
+                                "plik — nadpisanie zniszczyłoby "
+                                "resztę. Jeżeli to naprawdę cała "
+                                "nowa zawartość pliku, zmień "
+                                "podejście (np. poproś "
+                                "ANDROID_GAME_ENGINEER o "
+                                "potwierdzenie że plik ma być "
+                                "krótszy). Jeżeli to poprawka "
+                                "fragmentu — utwórz zwykły TASK z "
+                                "termux_patch_file (search/replace) "
+                                "zamiast write_engineer_code_to."
+                            )
+                        }
+
+                        continue
+
+                try:
                     target_path.parent.mkdir(
                         parents=True,
                         exist_ok=True
