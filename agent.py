@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v18
+AEL-MINI AUTONOMOUS AGENT v19
 
 ARCHITEKTURA:
 
@@ -618,6 +618,7 @@ def write_json(path, value):
 # ukryte pliki konfiguracyjne Termuksa.
 _PROJECT_TRACKING_EXCLUDED_NAMES = {
     AGENT_DIR.name,
+    TOKEN_FILE.name,
     ".termux",
     ".termux_run_command_scripts",
     ".bashrc",
@@ -763,7 +764,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v18")
+    print("             AEL-MINI AUTONOMOUS AGENT v19")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10007,87 +10008,6 @@ def maybe_clear_previous_session_data():
     )
 
 
-# Nazwy top-level wpisów pod $HOME, które skan fallback (patrz
-# _scan_untracked_home_dirs()) ma ZAWSZE pomijać, niezależnie od
-# _PROJECT_TRACKING_EXCLUDED_NAMES — w szczególności "storage" to
-# w Termuksie zwykle SYMLINK do współdzielonej pamięci telefonu
-# (po termux-setup-storage) — usunięcie przez niego mogłoby
-# ruszyć prawdziwe zdjęcia/pliki użytkownika, nie coś, co
-# stworzył agent.
-_HOME_SCAN_ALWAYS_EXCLUDED = {
-    "storage",
-    "downloads",
-    "download",
-    "dcim",
-    "pictures",
-    "movies",
-    "music",
-    "documents",
-}
-
-
-def _scan_untracked_home_dirs():
-    """
-    Fallback dla projektów sprzed wdrożenia śledzenia
-    (_track_project_path()) — takie katalogi NIGDY nie trafiły do
-    PROJECT_DIRS_FILE, bo mechanizm śledzący jeszcze nie istniał,
-    gdy je tworzono. Bez tego maybe_clear_generated_project_files()
-    milczałoby, mimo że stare pliki (np. z sesji sprzed kilku
-    wersji) nadal leżą w katalogu domowym.
-
-    Skanuje TYLKO bezpośrednie wpisy $HOME (nie rekurencyjnie),
-    pomija dotfile/dotdir, AGENT_DIR, oraz znane symlinki/katalogi
-    systemowe Termuksa (patrz _HOME_SCAN_ALWAYS_EXCLUDED — w
-    szczególności NIGDY "storage", bo to zwykle symlink do
-    prawdziwej pamięci telefonu). Pomija też same symlinki jako
-    dodatkową warstwę ostrożności — nie chcemy przypadkiem wejść
-    przez dowiązanie w coś spoza zamierzonego katalogu.
-
-    To best-effort ZGADYWANIE, nie potwierdzone śledzenie — dlatego
-    wywołujący MUSI to wyraźnie oznaczyć w komunikacie dla
-    operatora jako niezweryfikowane.
-    """
-
-    home = Path.home().resolve()
-    agent_dir_resolved = AGENT_DIR.resolve()
-
-    results = []
-
-    try:
-        entries = sorted(home.iterdir())
-    except Exception:
-        return results
-
-    for entry in entries:
-
-        name = entry.name
-
-        if name.startswith("."):
-            continue
-
-        if name in _PROJECT_TRACKING_EXCLUDED_NAMES:
-            continue
-
-        if name.lower() in _HOME_SCAN_ALWAYS_EXCLUDED:
-            continue
-
-        try:
-            if entry.is_symlink():
-                continue
-
-            resolved = entry.resolve()
-
-        except Exception:
-            continue
-
-        if resolved == agent_dir_resolved or resolved == home:
-            continue
-
-        results.append(resolved)
-
-    return results
-
-
 def maybe_clear_generated_project_files():
     """
     OSOBNE pytanie od maybe_clear_previous_session_data() — to
@@ -10096,15 +10016,24 @@ def maybe_clear_generated_project_files():
     agenta. Celowo osobna decyzja: można wyczyścić kolejkę zadań,
     a mimo to zachować już napisany kod, albo odwrotnie.
 
-    Lista kandydatów w pierwszej kolejności pochodzi z
-    PROJECT_DIRS_FILE — ścieżek faktycznie zaobserwowanych przez
-    termux_mkdir/termux_write_file/termux_patch_file/
-    write_engineer_code_to (patrz _track_project_path()). Jeżeli
-    ta lista jest pusta (np. projekt powstał w sesji SPRZED
-    wdrożenia śledzenia), używa _scan_untracked_home_dirs() jako
-    zapasowego, jawnie oznaczonego jako niezweryfikowany, źródła
-    kandydatów — inaczej agent milczałby o starych plikach, o
-    których po prostu nigdy się nie dowiedział.
+    Lista kandydatów pochodzi WYŁĄCZNIE z PROJECT_DIRS_FILE —
+    ścieżek faktycznie zaobserwowanych przez termux_mkdir/
+    termux_write_file/termux_patch_file/write_engineer_code_to
+    (patrz _track_project_path()). CELOWO nie ma tu żadnego
+    "zapasowego skanu katalogu domowego" — wcześniejsza wersja to
+    miała i skończyło się to skasowaniem ~/api_token.txt (prawdziwy
+    token DeepSeek), ~/test/pow_helper.js (krytyczna zależność
+    biblioteki opendeep) i wielu zupełnie niepowiązanych plików
+    użytkownika (llama.cpp, wallets.json). Katalog domowy
+    użytkownika może zawierać cokolwiek — agent nie ma prawa
+    zgadywać, co w nim usunąć, tylko dlatego że sam tego nie
+    stworzył.
+
+    Dla plików sprzed wdrożenia śledzenia (v17): nie da się ich tu
+    bezpiecznie pokazać automatycznie. Usuń je ręcznie przez
+    termux_delete w trakcie sesji (poda konkretną nazwę do
+    potwierdzenia) albo sam w Termuksie — nigdy nie przez ślepy
+    skan całego $HOME.
 
     Twarda ochrona, niezależna od potwierdzenia: nigdy nie usuwa
     AGENT_DIR (klucze API, kod agenta, kolejka) ani katalogu
@@ -10139,28 +10068,12 @@ def maybe_clear_generated_project_files():
 
         candidates.append(p)
 
-    verified = bool(candidates)
-
-    if not candidates:
-        # Nic świadomie śledzonego — spróbuj zapasowego skanu, bo
-        # to może być projekt sprzed wdrożenia śledzenia, a nie
-        # "naprawdę nic nie ma".
-        candidates = _scan_untracked_home_dirs()
-
     if not candidates:
         write_json(PROJECT_DIRS_FILE, [])
         return
 
     print()
-
-    if verified:
-        print("Wygenerowane pliki z poprzedniej sesji:")
-    else:
-        print(
-            "NIEZWERYFIKOWANE (znalezione skanem katalogu domowego, "
-            "nie jawnym śledzeniem — mogą to być pliki sprzed "
-            "aktualizacji agenta, sprawdź uważnie przed zgodą):"
-        )
+    print("Wygenerowane pliki z poprzedniej sesji:")
 
     for p in candidates:
 
@@ -10181,13 +10094,6 @@ def maybe_clear_generated_project_files():
         "USUNIĘCIE WYGENEROWANYCH PLIKÓW PROJEKTU (kod/build "
         "powyżej) — klucze API i program agenta NIE są tym objęte"
     )
-
-    if not verified:
-        confirm_message = (
-            "USUNIĘCIE NIEZWERYFIKOWANYCH KATALOGÓW ZNALEZIONYCH "
-            "SKANEM (lista powyżej) — sprawdź, że to na pewno "
-            "śmieci z poprzednich sesji, nie Twoje własne pliki"
-        )
 
     if not _confirm_destructive_action(confirm_message):
         log(
