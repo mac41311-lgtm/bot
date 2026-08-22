@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v13
+AEL-MINI AUTONOMOUS AGENT v14
 
 ARCHITEKTURA:
 
@@ -684,7 +684,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v13")
+    print("             AEL-MINI AUTONOMOUS AGENT v14")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1295,6 +1295,31 @@ POTENCJALNE PROBLEMY:
 """
 
 
+PROGRESS_ESTIMATOR_PROMPT = """
+Jesteś PROGRESS_ESTIMATOR — oceniasz procentowy postęp realizacji
+celu autonomicznego agenta budującego aplikację/grę Android.
+
+Dostajesz cel oraz listę kilku ostatnio wykonanych zadań (status,
+skrócony raport/błąd). Na tej podstawie oceniasz, jaki procent
+CAŁEGO celu jest już faktycznie zrealizowany.
+
+Bądź REALISTYCZNY, nie optymistyczny. "Utworzono plik" to nie to
+samo co "gra działa". Pełny cel zwykle wymaga: struktury projektu,
+napisanego kodu, zbudowanego APK, instalacji, i fizycznego
+potwierdzenia że aplikacja się uruchamia i renderuje (nie samej
+deklaracji sukcesu w raporcie).
+
+Jeżeli w ostatnich zadaniach widzisz powtarzające się błędy bez
+postępu — obniż ocenę, nawet jeśli poprzednio było wyżej.
+
+Zwróć WYŁĄCZNIE JSON, bez żadnego dodatkowego tekstu:
+{
+  "percent": <liczba całkowita 0-100>,
+  "summary": "krótkie uzasadnienie po polsku, maksymalnie 2 zdania"
+}
+"""
+
+
 # ============================================================
 # SESJE DEEPSEEK
 # ============================================================
@@ -1395,6 +1420,11 @@ def init_team():
         ANDROID_GAME_ENGINEER_PROMPT
     )
 
+    start_session(
+        "PROGRESS_ESTIMATOR",
+        PROGRESS_ESTIMATOR_PROMPT
+    )
+
     log(
         "DEEPSEEK",
         "Aktywne sesje: "
@@ -1459,6 +1489,8 @@ def deepseek(name, message):
                 "CODE_FIXER": CODE_FIXER_PROMPT,
                 "ANDROID_GAME_ENGINEER":
                     ANDROID_GAME_ENGINEER_PROMPT,
+                "PROGRESS_ESTIMATOR":
+                    PROGRESS_ESTIMATOR_PROMPT,
             }
 
             prompt = prompt_map.get(name)
@@ -1517,6 +1549,8 @@ def deepseek(name, message):
                         "CODE_FIXER": CODE_FIXER_PROMPT,
                         "ANDROID_GAME_ENGINEER":
                             ANDROID_GAME_ENGINEER_PROMPT,
+                        "PROGRESS_ESTIMATOR":
+                            PROGRESS_ESTIMATOR_PROMPT,
                     }
 
                     prompt = prompt_map.get(name)
@@ -7963,6 +7997,115 @@ potrzebne jest kolejne wyszukiwanie.
     return str(final_response or "").strip()
 
 
+# ============================================================
+# SZACOWANIE POSTĘPU CELU (PROGRESS_ESTIMATOR)
+# ============================================================
+
+def _recent_task_summaries(n=8):
+    """
+    Czyta N ostatnio zakończonych zadań z RESULTS_DIR (już
+    zapisywane tam przez run_next_task() niezależnie od tej
+    funkcji) i redukuje je do zwięzłej listy status+raport/błąd —
+    to jedyny kontekst, jaki dostaje PROGRESS_ESTIMATOR, więc musi
+    być krótki, ale wystarczający do oceny.
+    """
+
+    files = sorted(
+        RESULTS_DIR.glob("*.json")
+    )[-n:]
+
+    summaries = []
+
+    for f in files:
+
+        data = read_json(f, {})
+
+        if not isinstance(data, dict):
+            continue
+
+        summaries.append({
+            "task_id": f.stem,
+            "status": data.get("status"),
+            "report": short(
+                str(
+                    data.get("report")
+                    or data.get("message")
+                    or data.get("error")
+                    or ""
+                ),
+                300
+            )
+        })
+
+    return summaries
+
+
+def estimate_progress(goal):
+    """
+    Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
+    podstawie kilku ostatnio zakończonych zadań. Zwraca None, jeśli
+    nie ma jeszcze żadnej historii albo odpowiedź nie sparsowała
+    się do sensownego JSON — nigdy nie przerywa głównej pętli
+    agenta z tego powodu.
+    """
+
+    summaries = _recent_task_summaries(8)
+
+    if not summaries:
+        return None
+
+    prompt = f"""
+CEL:
+{goal}
+
+OSTATNIE ZADANIA (od najstarszego do najnowszego):
+{json.dumps(summaries, ensure_ascii=False, indent=2)}
+
+Zwróć WYŁĄCZNIE JSON zgodnie z formatem z Twojego prompta
+systemowego.
+"""
+
+    raw = deepseek(
+        "PROGRESS_ESTIMATOR",
+        prompt
+    )
+
+    parsed = parse_json(raw)
+
+    if not parsed or "percent" not in parsed:
+        return None
+
+    try:
+        percent = int(parsed.get("percent", 0))
+    except Exception:
+        percent = 0
+
+    percent = max(0, min(100, percent))
+
+    return {
+        "percent": percent,
+        "summary": short(
+            str(parsed.get("summary", "")),
+            300
+        )
+    }
+
+
+def print_progress_bar(step, percent, summary):
+
+    filled = int(round(percent / 5))
+    bar = ("█" * filled) + ("░" * (20 - filled))
+
+    print()
+    print("═" * 60)
+    print(f"  POSTĘP CELU (po kroku {step})")
+    print(f"  [{bar}] {percent}%")
+
+    if summary:
+        print("  " + short(summary, 200))
+
+    print("═" * 60)
+    print()
 
 
 # Ostatnie odpowiedzi RESEARCHER/BROWSER — trzymane MIĘDZY krokami,
@@ -8887,6 +9030,36 @@ def run_agent(goal):
                 900
             )
         )
+
+        # ------------------------------------------------------
+        # POSTĘP CELU — co 5 kroków, żeby nie dokładać kolejnego
+        # wywołania DeepSeeka na każdym kroku (ten sam powód co
+        # ograniczenie RESEARCHER/BROWSER). Błąd tutaj nigdy nie
+        # przerywa głównej pętli — to czysto informacyjne.
+        # ------------------------------------------------------
+
+        if step % 5 == 0:
+
+            try:
+                progress = estimate_progress(goal)
+
+                if progress:
+                    print_progress_bar(
+                        step,
+                        progress["percent"],
+                        progress["summary"]
+                    )
+
+                    log_event(
+                        "progress_estimate",
+                        progress
+                    )
+
+            except Exception as e:
+                log(
+                    "PROGRESS_ESTIMATOR",
+                    "Błąd oceny postępu (pomijam): " + str(e)
+                )
 
         # ------------------------------------------------------
         # TEAM
