@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v30
+AEL-MINI AUTONOMOUS AGENT v31
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v30")
+    print("             AEL-MINI AUTONOMOUS AGENT v31")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1628,6 +1628,68 @@ def session_state_file(name):
     )
 
 
+# ------------------------------------------------------------
+# WZNAWIANIE SESJI PO RESTARCIE PROGRAMU
+#
+# opendeep.ChatSession.__init__ ZAWSZE tworzy nową sesję po
+# stronie serwera (self.chat_session_id = self.model._create_
+# session()) — biblioteka nie ma publicznego API do podania
+# istniejącego chat_session_id. Ale to zwykłe atrybuty Pythona, a
+# send_message() sam aktualizuje parent_message_id z odpowiedzi
+# serwera (self.parent_message_id = data["response_message_id"]) —
+# więc jeśli zapiszemy oba te pola po każdej udanej wiadomości i
+# NADPISZEMY nimi świeżo utworzoną sesję przy starcie, kolejna
+# wiadomość pójdzie tak, jakby kontynuowała TAMTĄ rozmowę. Jedna
+# pusta, odrzucona sesja powstaje po stronie serwera przy każdym
+# restarcie (koszt _create_session() w konstruktorze) — nieszkodliwe,
+# tylko kosmetyczne (widoczna jako pusty wpis w historii czatu).
+# ------------------------------------------------------------
+
+# Role, których sesja została właśnie WZNOWIONA, ale jeszcze nie
+# potwierdzona żadną udaną wiadomością w tym uruchomieniu — jeśli
+# pierwsza prawdziwa wiadomość po wznowieniu zawiedzie, czyścimy
+# zapisany stan (patrz deepseek()), żeby kolejna próba/restart nie
+# próbowała wznowić tego samego, najwyraźniej nieważnego już wątku.
+_resume_unverified = set()
+
+
+def _load_session_state(name):
+
+    data = read_json(
+        session_state_file(name),
+        {}
+    )
+
+    if (
+        isinstance(data, dict)
+        and data.get("chat_session_id")
+    ):
+        return data
+
+    return None
+
+
+def _save_session_state(name, session):
+
+    write_json(
+        session_state_file(name),
+        {
+            "chat_session_id": session.chat_session_id,
+            "parent_message_id": session.parent_message_id
+        }
+    )
+
+
+def _clear_session_state(name):
+
+    try:
+        session_state_file(name).unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
 def start_session(name, system_prompt):
 
     try:
@@ -1638,17 +1700,43 @@ def start_session(name, system_prompt):
             deepseek_model.start_chat()
         )
 
-        # Jednorazowa instrukcja roli.
-        session.send_message(
-            system_prompt
-        )
+        saved = _load_session_state(name)
+
+        if saved:
+
+            # Wznawiamy — nadpisujemy ID świeżo utworzonej (i teraz
+            # porzuconej) sesji zapisanymi wcześniej. Pomijamy
+            # priming system_prompt: model już go dostał w tamtej
+            # rozmowie, ponowne wysłanie zmarnowałoby wiadomość i
+            # zaśmieciłoby historię duplikatem instrukcji roli.
+            session.chat_session_id = saved["chat_session_id"]
+            session.parent_message_id = saved.get(
+                "parent_message_id"
+            )
+
+            _resume_unverified.add(name)
+
+            log(
+                "DEEPSEEK",
+                f"Sesja {name}: OK (wznowiona z poprzedniego "
+                "uruchomienia)"
+            )
+
+        else:
+
+            # Jednorazowa instrukcja roli — tylko dla NOWEJ sesji.
+            session.send_message(
+                system_prompt
+            )
+
+            _save_session_state(name, session)
+
+            log(
+                "DEEPSEEK",
+                f"Sesja {name}: OK"
+            )
 
         sessions[name] = session
-
-        log(
-            "DEEPSEEK",
-            f"Sesja {name}: OK"
-        )
 
         return session
 
@@ -1926,6 +2014,9 @@ def deepseek(name, message):
                 health["consecutive_failures"] = 0
                 health["trip_count"] = 0
 
+                _resume_unverified.discard(name)
+                _save_session_state(name, session)
+
                 return text
 
             except Exception as e:
@@ -1934,6 +2025,20 @@ def deepseek(name, message):
                     "DEEPSEEK",
                     f"{name} próba {attempt + 1} błąd: {e}"
                 )
+
+                if name in _resume_unverified:
+
+                    _resume_unverified.discard(name)
+                    _clear_session_state(name)
+
+                    log(
+                        "DEEPSEEK",
+                        f"Wznowiona sesja {name} nie zadziałała na "
+                        "pierwszej prawdziwej wiadomości — czyszczę "
+                        "zapisany stan, restart zacznie od zera "
+                        "zamiast próbować tego samego wznowienia "
+                        "ponownie."
+                    )
 
                 if attempt == 0:
                     # Pierwsza awaria — próba restartu sesji.
