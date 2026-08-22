@@ -822,7 +822,7 @@ TERMUX:
 - termux_processes
 - termux_check_process
 - termux_stop_process
-- termux_start_second_session
+- termux_start_second_session (otwiera drugą sesję Termuksa — PUSTĄ)
 
 ANDROID (działa na CAŁYM ekranie systemu, nie tylko w oknie
 Termuksa — Gemini widzi i obsługuje dowolną aplikację na
@@ -838,6 +838,10 @@ urządzeniu, Termux jest tylko jedną z wielu):
 - android_launch_app (otwórz DOWOLNĄ zainstalowaną aplikację po
   nazwie pakietu — np. zbudowaną i zainstalowaną grę, żeby ją
   faktycznie zobaczyć na ekranie, a nie tylko sprawdzić plik .apk)
+- android_run_in_new_window (uruchom komendę w NOWYM, widocznym
+  oknie Termuksa — konkretna komenda, nie puste okno jak
+  termux_start_second_session; do procesów, które mają być
+  widoczne osobno od głównego logu, np. serwer albo długi build)
 
 CHROME:
 - chrome_tabs
@@ -2320,6 +2324,164 @@ def android_launch_app(package):
     }
 
 
+def _ensure_termux_allow_external_apps():
+    """
+    RUN_COMMAND (uruchomienie komendy w NOWYM, widocznym oknie/
+    sesji Termuksa) wymaga allow-external-apps=true w
+    ~/.termux/termux.properties. Domyślnie to WYŁĄCZONE.
+
+    Dopisuje brakującą linię, jeśli jej nie ma — ale Termux czyta
+    ten plik TYLKO przy starcie aplikacji (albo po ręcznym "Reload
+    Settings" z powiadomienia Termuksa), więc jeśli dopiero co
+    dopisaliśmy tę linię, RUN_COMMAND i tak nie zadziała, dopóki
+    ktoś nie zrestartuje Termuksa / nie kliknie Reload Settings.
+
+    Zwraca True, jeśli linia JUŻ była obecna wcześniej (można
+    próbować od razu), False jeśli właśnie ją dopisano.
+    """
+
+    props_path = Path(
+        "~/.termux/termux.properties"
+    ).expanduser()
+
+    content = read_text(props_path)
+
+    if re.search(
+        r"^\s*allow-external-apps\s*=\s*true\s*$",
+        content,
+        re.MULTILINE
+    ):
+        return True
+
+    props_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    new_content = (
+        content.rstrip("\n")
+        + ("\n" if content.strip() else "")
+        + "allow-external-apps=true\n"
+    )
+
+    write_text(props_path, new_content)
+
+    log(
+        "TERMUX",
+        "Dopisano allow-external-apps=true do "
+        + str(props_path)
+        + " — RUN_COMMAND zadziała dopiero po restarcie Termuksa "
+        "albo 'Reload Settings' z powiadomienia Termuksa."
+    )
+
+    return False
+
+
+def android_run_in_new_window(command, background=False):
+    """
+    Uruchamia komendę w NOWYM, widocznym oknie/sesji Termuksa
+    przez wbudowany w Termux mechanizm RUN_COMMAND — w odróżnieniu
+    od termux_run_background (ten sam proces, log tylko w pliku),
+    to faktycznie OTWIERA nowe okno Termuksa z tą komendą, więc
+    output jest widoczny na żywo, osobno od głównej sesji agenta.
+
+    Wymaga allow-external-apps=true w termux.properties — jeśli
+    dopiero teraz zostało włączone, ta i kolejne próby mogą się
+    nie udać, dopóki Termux nie zostanie zrestartowany (patrz pole
+    "needs_termux_restart" w wyniku).
+    """
+
+    command = str(command or "").strip()
+
+    if not command:
+        return {
+            "ok": False,
+            "error": "Pusta komenda."
+        }
+
+    already_enabled = _ensure_termux_allow_external_apps()
+
+    script_dir = Path(
+        "~/.termux_run_command_scripts"
+    ).expanduser()
+
+    script_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    script_path = script_dir / (uuid.uuid4().hex + ".sh")
+
+    script_path.write_text(
+        "#!/data/data/com.termux/files/usr/bin/sh\n"
+        + command
+        + "\n",
+        encoding="utf-8"
+    )
+
+    try:
+        script_path.chmod(0o700)
+    except Exception:
+        pass
+
+    background_flag = "true" if background else "false"
+
+    result = execute_shell(
+        "adb shell am start -n "
+        "com.termux/com.termux.app.RunCommandActivity "
+        "-a com.termux.RUN_COMMAND "
+        "--es com.termux.RUN_COMMAND_PATH '"
+        + str(script_path)
+        + "' --ez com.termux.RUN_COMMAND_BACKGROUND "
+        + background_flag,
+        timeout=15
+    )
+
+    output = (
+        result.get("stdout", "")
+        + result.get("stderr", "")
+    )
+
+    denied = (
+        "SecurityException" in output
+        or "Permission Denial" in output
+    )
+
+    started = bool(
+        result.get("ok")
+        and "Starting: Intent" in output
+        and not denied
+    )
+
+    detail = short(output, 500)
+
+    if not already_enabled:
+        detail = (
+            "UWAGA: allow-external-apps właśnie zostało włączone "
+            "w termux.properties — RUN_COMMAND zadziała dopiero "
+            "po restarcie Termuksa albo 'Reload Settings' z "
+            "powiadomienia Termuksa. "
+        ) + detail
+
+    if denied:
+        detail = (
+            "ODRZUCONE przez system — allow-external-apps "
+            "prawdopodobnie nadal wyłączone (Termux nie został "
+            "zrestartowany po włączeniu, albo właściwości nie "
+            "zostały przeładowane). "
+        ) + detail
+
+    return {
+        "ok": started,
+        "action": "run_in_new_window",
+        "command": command,
+        "script": str(script_path),
+        "background": bool(background),
+        "needs_termux_restart": not already_enabled,
+        "detail": detail
+    }
+
+
 # ============================================================
 # SHELL
 # ============================================================
@@ -3787,6 +3949,32 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "android_run_in_new_window",
+            "description": (
+                "Uruchom komendę w NOWYM, widocznym oknie/sesji "
+                "Termuksa (nie w tle, nie w bieżącej sesji) — "
+                "użyj, gdy chcesz żeby proces (np. serwer, gra, "
+                "długi build) był widoczny OSOBNO, a nie zmieszany "
+                "z logiem głównej sesji agenta. Różni się od "
+                "termux_start_second_session tym, że od razu "
+                "odpala w nowym oknie KONKRETNĄ komendę, nie samo "
+                "puste okno. Wymaga allow-external-apps w "
+                "termux.properties — agent włącza to samo, ale "
+                "pierwsza próba może wymagać restartu Termuksa "
+                "(patrz needs_termux_restart w wyniku)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "background": {"type": "boolean"}
+                },
+                "required": ["command"]
+            }
+        },
+
+        {
+            "type": "function",
             "name": "shell",
             "description": "Wykonaj komendę w Termuxie.",
             "parameters": {
@@ -5018,6 +5206,37 @@ def _dispatch_tool_inner(
                 }
 
             return fn(package)
+
+        # Gemini: android_run_in_new_window
+        # Python: android_run_in_new_window
+        if name == "android_run_in_new_window":
+
+            fn = globals().get(
+                "android_run_in_new_window"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji "
+                        "android_run_in_new_window()."
+                }
+
+            command = args.get("command")
+
+            if not command:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_run_in_new_window wymaga command.",
+                    "arguments": args
+                }
+
+            return _call_tool_function(
+                fn,
+                args
+            )
 
         # ====================================================
         # CHROME
