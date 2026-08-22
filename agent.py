@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v21
+AEL-MINI AUTONOMOUS AGENT v22
 
 ARCHITEKTURA:
 
@@ -764,7 +764,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v21")
+    print("             AEL-MINI AUTONOMOUS AGENT v22")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4931,7 +4931,16 @@ def termux_run(command):
                     "COMMAND_TIMEOUT=" + str(COMMAND_TIMEOUT) + "s. "
                     "Monitoruj przez termux_check_process(pid) i "
                     "termux_read_file(log_file). NIE uruchamiaj "
-                    "tej samej komendy ponownie przez termux_run."
+                    "tej samej komendy ponownie przez termux_run. "
+                    "UWAGA: 'log_file' powyżej jest UNIKALNY dla "
+                    "TEGO wywołania — nie myl go z log_file z "
+                    "poprzednich komend w tym kroku/zadaniu. Jeśli "
+                    "od uruchomienia minęło kilka sekund, plik może "
+                    "być jeszcze pusty albo zawierać tylko "
+                    "początkowe komunikaty — to NIE oznacza błędu "
+                    "ani zakończenia, poczekaj (termux_check_"
+                    "process) i sprawdź log_file ponownie, zanim "
+                    "cokolwiek zgłosisz jako wynik."
                 )
 
             return bg
@@ -5022,9 +5031,25 @@ def termux_run_background(
                 str(log_file)
             ).expanduser()
         else:
+            # WCZEŚNIEJ: stała nazwa "agent_background.log" dla
+            # KAŻDEJ komendy w tle, otwierana w trybie append. To
+            # oznaczało, że nowa komenda dopisywała się na końcu
+            # pliku po wyniku POPRZEDNIEJ, niepowiązanej komendy —
+            # jeśli Gemini odczytał log_file sekundy po starcie
+            # (zanim nowa komenda zdążyła cokolwiek wypisać),
+            # widział WYŁĄCZNIE stare dane i błędnie wnioskował
+            # np. "BUILD FAILED" na podstawie logu sprzed kilku
+            # kroków. Realny przypadek: gradlew assembleDebug
+            # uruchomiony o 17:57:34, log odczytany o 18:02:05 —
+            # zawierał ciąg dalszy loga z komendy `pkg install
+            # gradle` sprzed kilkunastu minut, nie nic z nowego
+            # builda. Każda auto-backgroundowana komenda dostaje
+            # teraz WŁASNY, unikalny plik logu.
             log = Path(
                 "/data/data/com.termux/files/home/"
-                "agent_background.log"
+                "agent_background_"
+                + datetime.now().strftime("%H%M%S_%f")
+                + ".log"
             )
 
         log.parent.mkdir(
