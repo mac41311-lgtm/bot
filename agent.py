@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v39
+AEL-MINI AUTONOMOUS AGENT v40
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v39")
+    print("             AEL-MINI AUTONOMOUS AGENT v40")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1268,6 +1268,19 @@ ZASADY:
   gry, gotowej apki, gotowego cudzego projektu) zamiast budowania
   go samodzielnie — chyba że użytkownik w CELU wyraźnie o to
   poprosił (np. "zainstaluj istniejące narzędzie X").
+- KRYTYCZNE — NIE KAŻ ROBIĆ WSZYSTKIEGO OD ZERA PRZY KAŻDYM KROKU:
+  zaobserwowany realny problem — cel miał 6 punktów, punkty 1,2,4,5
+  już dawno się udały (widać to w OSTATNIM RAPORCIE/historii), a
+  mimo to kolejne "NASTĘPNE KROKI" wciąż każą Gemini pisać jeden
+  wielki skrypt na nowo wykonujący WSZYSTKIE 6 punktów od zera —
+  marnuje to czas/wiadomości i wygląda jak brak postępu, choć
+  większość jest zrobiona. Zanim zaplanujesz krok, sprawdź, co z
+  celu JUŻ ZOSTAŁO potwierdzone (pliki/dowody z poprzednich zadań)
+  — Twój NASTĘPNY KROK ma dotyczyć WYŁĄCZNIE tego, co realnie
+  jeszcze nie działa/nie jest potwierdzone, nie całego celu od
+  nowa. Jeśli tylko jeden podpunkt z kilku wciąż zawodzi (np.
+  zrzut ekranu) — zaplanuj krok, który naprawia TYLKO ten jeden
+  podpunkt, bez ponownego wykonywania już potwierdzonych.
 
 Format odpowiedzi:
 
@@ -1324,6 +1337,13 @@ Sprawdź KONIECZNIE:
 - Czy ten sam krok nie był już wykonywany i kończył się timeoutem?
   Jeżeli tak — zaprotestuj i zaproponuj użycie termux_run_background
   lub podział na mniejsze kroki.
+- Czy proponowany krok każe wykonać OD ZERA coś, co poprzednie
+  zadania już potwierdziły jako zrobione (np. cały skrypt na nowo
+  wykonujący wszystkie podpunkty celu, gdy tylko JEDEN z nich
+  faktycznie jeszcze zawodzi)? Zaobserwowany realny problem — to
+  marnuje czas/wiadomości i wygląda jak brak postępu. Jeśli tak —
+  zablokuj i zażądaj kroku dotyczącego WYŁĄCZNIE tego, co jeszcze
+  nie jest potwierdzone.
 - Czy warunek sukcesu jest MIERZALNY (konkretny plik, exitcode 0,
   konkretny komunikat)?
 - Czy zadanie nie jest za ogólne ("zrób grę"/"zrób program") —
