@@ -785,8 +785,34 @@ TASK:
   "reason": "...",
   "task": "...",
   "success_condition": "...",
-  "priority": "high"
+  "priority": "high",
+  "write_engineer_code_to": "opcjonalne — patrz sekcja niżej"
 }
+
+============================================================
+OSZCZĘDZANIE LIMITU GEMINI: write_engineer_code_to
+============================================================
+
+Gdy ANDROID_GAME_ENGINEER podał w swojej odpowiedzi gotowy blok
+kodu (sekcja "POLECENIE / KOD:") i chcesz, żeby ten kod trafił do
+pliku DOKŁADNIE tak, jak go napisał — NIE opisuj go słownie w
+"task" licząc, że Gemini go odtworzy. Zamiast tego podaj ścieżkę
+docelową w polu "write_engineer_code_to" (np.
+"/data/data/com.termux/files/home/game3d/game.py"). Python zapisze
+ten kod do pliku SAM, zanim TASK w ogóle trafi do Gemini — bez
+zużycia ani jednego wywołania Gemini na przepisywanie.
+
+W takim przypadku pole "task" powinno dotyczyć WYŁĄCZNIE
+uruchomienia i przetestowania już zapisanego pliku (np. "Uruchom
+~/game3d/game.py i sprawdź czy proces nie kończy się błędem"), NIE
+jego tworzenia — plik już tam będzie, zanim Gemini zacznie
+pracować.
+
+Jeżeli w ostatniej odpowiedzi ANDROID_GAME_ENGINEER nie ma bloku
+kodu (```...```), to pole zostanie odrzucone z jasnym błędem — nie
+zgaduj, poproś ANDROID_GAME_ENGINEER o konkretny kod albo zrób
+zwykły TASK bez tego pola.
+============================================================
 
 DONE:
 {
@@ -6664,6 +6690,37 @@ def extract_function_source(source, function_name):
     return source[start:end].rstrip()
 
 
+def extract_code_block(text):
+    """
+    Wyciąga zawartość PIERWSZEGO bloku ```...``` z tekstu.
+
+    ANDROID_GAME_ENGINEER_PROMPT każe zwracać kod w sekcji
+    "POLECENIE / KOD:" wewnątrz dokładnie takiego bloku — ta
+    funkcja pozwala Pythonowi wyciąć ten kod i zapisać go
+    bezpośrednio do pliku (patrz write_engineer_code_to w
+    run_agent()), zamiast zmuszać Gemini do przepisywania go od
+    nowa z opisu słownego przygotowanego przez MAIN. Oszczędza to
+    tokeny/limit Gemini i eliminuje błędy przepisywania — kod trafia
+    do pliku 1:1 taki, jaki wymyślił DeepSeek.
+
+    Ignoruje opcjonalny znacznik języka po otwierających ``` (np.
+    ```python, ```java).
+    """
+
+    match = re.search(
+        r"```[a-zA-Z0-9_+-]*\n(.*?)```",
+        text or "",
+        re.DOTALL
+    )
+
+    if not match:
+        return None
+
+    code = match.group(1).rstrip("\n")
+
+    return code if code.strip() else None
+
+
 def apply_patch_from_fixer_text(fixer_text):
     """
     Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
@@ -7294,6 +7351,12 @@ AKTUALNY ANDROID:
         "planner":   short(results.get("PLANNER", ""), 4000),
         "researcher": short(results.get("RESEARCHER", ""), 4000),
         "engineer":  short(results.get("ANDROID_GAME_ENGINEER", ""), 4000),
+        # Pełna, nieskrócona odpowiedź ANDROID_GAME_ENGINEER — NIE
+        # trafia do prompta MAIN (żeby nie pompować mu kontekstu),
+        # ale run_agent() jej potrzebuje w całości, żeby wyciąć z
+        # niej blok kodu przy write_engineer_code_to (patrz
+        # extract_code_block() / obsługa TASK w run_agent()).
+        "engineer_full": results.get("ANDROID_GAME_ENGINEER", ""),
         "critic":    short(results.get("CRITIC", ""), 4000),
         "browser":   short(results.get("BROWSER", ""), 2000),
     }
@@ -7397,6 +7460,12 @@ ZASADY DECYZJI:
   zweryfikowane — APK, FINAL_OK.txt. Agent sprawdzi to sam.
 - EXECUTED = Gemini skończył TASK, NIE = cel projektu zakończony.
 - Jeżeli CRITIC mówi BLOKUJ — weź to poważnie i zmień podejście.
+- Jeżeli ANDROID_GAME_ENGINEER powyżej podał gotowy blok kodu i
+  chcesz zapisać go 1:1 do pliku BEZ zużywania Gemini na
+  przepisywanie — użyj "write_engineer_code_to" (ścieżka pliku).
+  Wtedy "task" ma dotyczyć TYLKO uruchomienia/testowania tego
+  pliku, nie jego tworzenia (patrz pełny opis w Twoim prompcie
+  systemowym).
 
 Zwróć WYŁĄCZNIE JSON.
 
@@ -7406,7 +7475,8 @@ TASK:
   "reason": "...",
   "task": "...",
   "success_condition": "...",
-  "priority": "high"
+  "priority": "high",
+  "write_engineer_code_to": "opcjonalne"
 }}
 
 DONE:
@@ -8223,6 +8293,92 @@ Zwróć tylko JSON.
                 }
 
                 continue
+
+            # --------------------------------------------------
+            # ZAPIS KODU ANDROID_GAME_ENGINEER BEZ UDZIAŁU GEMINI
+            #
+            # Jeżeli MAIN zdecydował, że gotowy blok kodu z
+            # bieżącej odpowiedzi ANDROID_GAME_ENGINEER ma trafić
+            # do pliku 1:1 — robi to Python, TERAZ, zanim TASK
+            # w ogóle trafi do Gemini. Gemini dostaje wtedy zadanie
+            # WYŁĄCZNIE uruchomienia/testowania, nigdy przepisania
+            # kodu od zera z opisu — oszczędza to jego limit/tokeny
+            # i eliminuje błędy przepisywania.
+            # --------------------------------------------------
+
+            write_target = str(
+                decision.get("write_engineer_code_to", "")
+            ).strip()
+
+            if write_target:
+
+                engineer_code = extract_code_block(
+                    team.get("engineer_full", "")
+                )
+
+                if not engineer_code:
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_MISSING",
+                        "message": (
+                            "MAIN poprosił o zapisanie kodu "
+                            "ANDROID_GAME_ENGINEER do "
+                            + write_target
+                            + ", ale w jego ostatniej odpowiedzi "
+                            "nie znaleziono bloku kodu (```...```). "
+                            "Zapytaj ANDROID_GAME_ENGINEER "
+                            "ponownie o konkretny kod w bloku, albo "
+                            "utwórz zwykły TASK bez "
+                            "write_engineer_code_to."
+                        )
+                    }
+
+                    continue
+
+                try:
+                    target_path = Path(
+                        write_target
+                    ).expanduser()
+
+                    target_path.parent.mkdir(
+                        parents=True,
+                        exist_ok=True
+                    )
+
+                    target_path.write_text(
+                        engineer_code,
+                        encoding="utf-8"
+                    )
+
+                    log(
+                        "MAIN",
+                        "Zapisano kod ANDROID_GAME_ENGINEER "
+                        "bezpośrednio do "
+                        + str(target_path)
+                        + " ("
+                        + str(len(engineer_code))
+                        + " znaków, bez zużycia Gemini)."
+                    )
+
+                    log_event(
+                        "engineer_code_written",
+                        {
+                            "path": str(target_path),
+                            "chars": len(engineer_code)
+                        }
+                    )
+
+                except Exception as e:
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_WRITE_ERROR",
+                        "error": str(e),
+                        "path": write_target
+                    }
+
+                    continue
 
             # --------------------------------------------------
             # GEMINI ZABLOKOWANY
