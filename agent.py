@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v33
+AEL-MINI AUTONOMOUS AGENT v34
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v33")
+    print("             AEL-MINI AUTONOMOUS AGENT v34")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8993,6 +8993,14 @@ def consult_team(
     MAIN dostaje ich OSTATNIĄ znaną odpowiedź z jasną adnotacją, że
     jest nieaktualna — lepsze to niż pusty kontekst, ale MAIN wie,
     że nie powinien na niej ślepo polegać.
+
+    KOLEJNOŚĆ (jak w ludzkim zespole — najpierw ustal fakty, potem
+    planuj na ich podstawie, nie odwrotnie): RESEARCHER -> PLANNER
+    -> BROWSER -> ANDROID_GAME_ENGINEER -> CRITIC -> (MAIN, poza tą
+    funkcją). Wcześniej PLANNER planował PRZED RESEARCHEREM, więc
+    świeże ustalenia trafiały dopiero do NASTĘPNEGO kroku — o krok
+    za późno na to, żeby faktycznie wpłynąć na plan, którego
+    dotyczyły.
     """
 
     tool_hint = ""
@@ -9047,11 +9055,6 @@ AKTUALNY ANDROID:
 
     results = {}
 
-    results["PLANNER"] = deepseek(
-        "PLANNER",
-        context
-    )
-
     fresh_tool_error = (
         isinstance(last_result, dict)
         and last_result.get("status") == "GEMINI_TOOL_ERROR"
@@ -9063,6 +9066,10 @@ AKTUALNY ANDROID:
     )
 
     consult_browser = (step % 3 == 1)
+
+    # RESEARCHER PRZED PLANNEREM — żeby świeże ustalenia (gdy w
+    # ogóle konsultowane w tym kroku) mogły od razu wpłynąć na plan
+    # z TEGO SAMEGO kroku, zamiast czekać na następny.
 
     if consult_researcher:
 
@@ -9094,6 +9101,14 @@ AKTUALNY ANDROID:
             )
         )
 
+    researcher_out = short(results.get("RESEARCHER", ""), 2000)
+
+    results["PLANNER"] = deepseek(
+        "PLANNER",
+        context
+        + "\n\nINFO RESEARCHER:\n" + researcher_out
+    )
+
     if consult_browser:
 
         results["BROWSER"] = deepseek(
@@ -9122,7 +9137,6 @@ AKTUALNY ANDROID:
         )
 
     planner_out = short(results.get("PLANNER", ""), 2000)
-    researcher_out = short(results.get("RESEARCHER", ""), 2000)
 
     results["ANDROID_GAME_ENGINEER"] = deepseek(
         "ANDROID_GAME_ENGINEER",
