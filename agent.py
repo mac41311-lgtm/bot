@@ -5095,10 +5095,46 @@ def dispatch_tool(
     return result
 
 
+# Częste, wiarygodnie brzmiące nazwy narzędzi, które słabszy model
+# (Gemini flash-lite) czasem "wymyśla" zamiast prawdziwej nazwy —
+# argumenty pokrywają się z narzędziem docelowym, więc bezpieczne
+# jest ciche przekierowanie zamiast marnowania całego TASK-u na
+# "Nieznane narzędzie: ...".
+_TOOL_NAME_ALIASES = {
+    "termux_check_pid": "termux_check_process",
+    "termux_kill_process": "termux_stop_process",
+    "termux_kill_pid": "termux_stop_process",
+    "termux_run_bg": "termux_run_background",
+    "termux_background_run": "termux_run_background",
+    "termux_exists": "termux_file_exists",
+    "termux_file_exist": "termux_file_exists",
+    "android_launch": "android_launch_app",
+    "android_open_app": "android_launch_app",
+    "android_start_app": "android_launch_app",
+    "android_run_new_window": "android_run_in_new_window",
+    "android_new_window": "android_run_in_new_window",
+}
+
+
 def _dispatch_tool_inner(
     name,
     args
 ):
+
+    aliased = _TOOL_NAME_ALIASES.get(name)
+
+    if aliased:
+
+        log(
+            "GEMINI",
+            "Alias narzędzia: '"
+            + name
+            + "' -> '"
+            + aliased
+            + "'"
+        )
+
+        name = aliased
 
     try:
 
