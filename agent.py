@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v31
+AEL-MINI AUTONOMOUS AGENT v32
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v31")
+    print("             AEL-MINI AUTONOMOUS AGENT v32")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -811,20 +811,34 @@ def banner():
 # ============================================================
 
 # Które role wysyłają przez konto 2 (jeśli TOKEN_FILE_2 istnieje)
-# zamiast konto 1 — cel: rozłożyć 9 jednoczesnych sesji na dwa
-# konta, żeby żadne z nich nie miało ich za dużo naraz. Jeśli
-# TOKEN_FILE_2 nie istnieje, ta mapa jest bez znaczenia — wszystko
-# i tak ląduje na koncie 1.
+# zamiast konto 1.
+#
+# WAŻNE: podział NIE jest po liczbie ról (4 vs 5) — to była pierwsza,
+# błędna wersja. consult_team() pyta role z bardzo różną
+# częstotliwością:
+#   - MAIN, PLANNER, CRITIC, ANDROID_GAME_ENGINEER — KAŻDY krok
+#     (waga ~1.0 każda),
+#   - RESEARCHER — co ~3. krok + świeży błąd narzędzia (waga ~0.4),
+#   - BROWSER — co ~3. krok (waga ~0.33),
+#   - PROGRESS_ESTIMATOR — co 5. krok (waga ~0.2),
+#   - CODE_REVIEWER/CODE_FIXER — tylko przy powtarzającym się
+#     błędzie, rzadko (waga ~0.05 każda).
+# Wrzucenie WSZYSTKICH czterech "co krok" ról na jedno konto (jak
+# w pierwszej wersji) zostawiało to konto z ~4.0 wagi ruchu, a
+# drugie z ~1.0 — podział tylko z nazwy, nie z realnego obciążenia.
+# Poniższy podział rozdziela też "co krok" role między oba konta,
+# żeby faktycznie wyrównać ruch (~2.6 vs ~2.4 wagi):
 _ROLE_ACCOUNT = {
     "MAIN": 1,
-    "PLANNER": 1,
     "CRITIC": 1,
-    "ANDROID_GAME_ENGINEER": 1,
-    "RESEARCHER": 2,
+    "RESEARCHER": 1,
+    "PROGRESS_ESTIMATOR": 1,
+
+    "PLANNER": 2,
+    "ANDROID_GAME_ENGINEER": 2,
     "BROWSER": 2,
     "CODE_REVIEWER": 2,
     "CODE_FIXER": 2,
-    "PROGRESS_ESTIMATOR": 2,
 }
 
 # {1: token_konta_1, 2: token_konta_2_lub_1_jesli_brak_drugiego}
