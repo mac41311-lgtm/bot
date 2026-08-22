@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v10
+AEL-MINI AUTONOMOUS AGENT v11
 
 ARCHITEKTURA:
 
@@ -322,6 +322,18 @@ GEMINI_MAX_TOOL_CALLS = int(
     os.environ.get(
         "GEMINI_MAX_TOOL_CALLS",
         "25"
+    )
+)
+
+# Ile razy Gemini może w JEDNYM TASKu poprosić o podpowiedź przez
+# ask_deepseek(), zanim dalsze prośby zostaną ucięte (patrz
+# gemini_execute_task()). Celowo niskie — to awaryjna konsultacja
+# w trakcie zadania, nie zamiennik zwykłego przepływu MAIN -> team,
+# którego częstotliwość dopiero co ograniczyliśmy (v8).
+ASK_DEEPSEEK_MAX_PER_TASK = int(
+    os.environ.get(
+        "ASK_DEEPSEEK_MAX_PER_TASK",
+        "2"
     )
 )
 
@@ -671,7 +683,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v10")
+    print("             AEL-MINI AUTONOMOUS AGENT v11")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3827,6 +3839,31 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "ask_deepseek",
+            "description": (
+                "Zapytaj o KRÓTKĄ podpowiedź, jeśli utknąłeś W "
+                "TRAKCIE tego zadania i nie jesteś pewien jak "
+                "kontynuować (np. nie wiesz dokładnie jaki "
+                "fragment podać jako 'search' do "
+                "termux_patch_file, bo zgubiłeś kontekst pliku). "
+                "Odpowiedź wraca od razu jako wynik tego narzędzia "
+                "— możesz kontynuować zadanie, NIE musisz go "
+                "kończyć błędem. Limitowane do "
+                "kilku razy na zadanie — nie nadużywaj, najpierw "
+                "spróbuj sam (np. termux_read_file, żeby zobaczyć "
+                "aktualną zawartość pliku)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"}
+                },
+                "required": ["question"]
+            }
+        },
+
+        {
+            "type": "function",
             "name": "chrome_tabs",
             "description": "Pobierz listę istniejących kart Chrome.",
             "parameters": {
@@ -4844,6 +4881,47 @@ def termux_patch_file(path, search, replace):
     }
 
 
+def ask_deepseek_hint(question):
+    """
+    Pozwala Gemini poprosić o krótką podpowiedź W TRAKCIE
+    wykonywania zadania, zamiast kończyć cały TASK błędem, gdy
+    czegoś nie wie (typowy przypadek: nie jest pewien dokładnego
+    fragmentu kodu do podania jako 'search' w termux_patch_file,
+    bo zgubił kontekst pliku).
+
+    Odpowiedzi udziela sesja CODE_FIXER — już istniejąca, skupiona
+    na kodzie — NIE tworzymy dla tego osobnej, nowej persystentnej
+    sesji (to podniosłoby liczbę równoległych rozmów na koncie
+    DeepSeek, dokładnie to, co ograniczyliśmy w consult_team()).
+
+    Limit wywołań na TASK pilnowany jest w gemini_execute_task()
+    (ASK_DEEPSEEK_MAX_PER_TASK) — to awaryjna konsultacja, nie
+    zamiennik zwykłego przepływu MAIN -> team -> TASK.
+    """
+
+    question = str(question or "").strip()
+
+    if not question:
+        return {
+            "ok": False,
+            "error": "Puste pytanie."
+        }
+
+    answer = deepseek(
+        "CODE_FIXER",
+        "Gemini (wykonawca) utknął W TRAKCIE wykonywania zadania "
+        "i prosi o krótką podpowiedź — NIE pełny patch w formacie "
+        "SZUKAJ/ZAMIEŃ, po prostu odpowiedz krótko i konkretnie na "
+        "poniższe pytanie, żeby mógł kontynuować:\n\n"
+        + question
+    )
+
+    return {
+        "ok": True,
+        "answer": short(str(answer or ""), 3000)
+    }
+
+
 # ============================================================
 # NOWE NARZĘDZIA PROJEKTOWANE PRZEZ DEEPSEEK (custom_tools/)
 # ============================================================
@@ -5236,6 +5314,11 @@ def _dispatch_tool_inner(
                 args.get("path", ""),
                 args.get("search", ""),
                 args.get("replace", "")
+            )
+
+        if name == "ask_deepseek":
+            return ask_deepseek_hint(
+                args.get("question", "")
             )
 
         # ====================================================
@@ -5869,6 +5952,15 @@ ZASADY:
    /data/data/com.termux/files/usr/tmp), np. zamiast
    "echo OK > /tmp/x.txt" użyj "echo OK > ~/x.txt".
 
+10. Jeżeli w trakcie zadania NIE JESTEŚ PEWIEN jak kontynuować
+    (typowy przypadek: masz zrobić poprawkę przez
+    termux_patch_file, ale nie wiesz dokładnie jaki fragment
+    podać jako 'search') — NAJPIERW spróbuj sam ustalić to przez
+    termux_read_file. Jeśli to nie wystarczy, użyj ask_deepseek —
+    dostaniesz krótką podpowiedź i możesz kontynuować TEN SAM
+    TASK, zamiast kończyć go błędem. Limitowane do kilku razy na
+    zadanie — nie zastępuj tym normalnego czytania plików.
+
 ============================================================
 WARUNEK SUKCESU:
 
@@ -5938,6 +6030,7 @@ CO POWINIEN ZROBIĆ MAIN:
             )
 
         tool_calls = 0
+        ask_deepseek_calls = 0
 
         # ====================================================
         # PĘTLA INTERACTIONS
@@ -6101,6 +6194,60 @@ CO POWINIEN ZROBIĆ MAIN:
                     "GEMINI",
                     f"narzędzie #{tool_calls}: {name}"
                 )
+
+                # --------------------------------------------
+                # LIMIT ask_deepseek NA TASK
+                #
+                # Przechwytujemy TUTAJ, przed dispatch_tool(), żeby
+                # przekroczenie limitu nie kosztowało ani jednego
+                # dodatkowego wywołania DeepSeeka — to dokładnie to,
+                # co miało być ograniczone (v8: mniej spamu do
+                # chat.deepseek.com).
+                # --------------------------------------------
+
+                if name == "ask_deepseek":
+
+                    ask_deepseek_calls += 1
+
+                    if ask_deepseek_calls > ASK_DEEPSEEK_MAX_PER_TASK:
+
+                        log(
+                            "GEMINI",
+                            "Limit ask_deepseek w tym zadaniu "
+                            "wyczerpany ("
+                            + str(ASK_DEEPSEEK_MAX_PER_TASK)
+                            + ") — pomijam wywołanie DeepSeeka."
+                        )
+
+                        result = {
+                            "ok": True,
+                            "answer": (
+                                "Limit podpowiedzi w tym zadaniu "
+                                "wyczerpany (max "
+                                + str(ASK_DEEPSEEK_MAX_PER_TASK)
+                                + "). Kontynuuj samodzielnie na "
+                                "podstawie tego co już wiesz, albo "
+                                "zakończ zadanie i zwróć dokładny "
+                                "raport do MAIN."
+                            ),
+                            "limit_reached": True
+                        }
+
+                        responses.append({
+                            "type": "function_result",
+                            "name": name,
+                            "call_id": getattr(call, "id", None),
+                            "result": [{
+                                "type": "text",
+                                "text": json.dumps(
+                                    result,
+                                    ensure_ascii=False,
+                                    default=str
+                                )
+                            }]
+                        })
+
+                        continue
 
                 # --------------------------------------------
                 # DISPATCH
