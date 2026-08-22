@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v19
+AEL-MINI AUTONOMOUS AGENT v20
 
 ARCHITEKTURA:
 
@@ -764,7 +764,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v19")
+    print("             AEL-MINI AUTONOMOUS AGENT v20")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1356,6 +1356,41 @@ NIE MA X11, NIE MA GLX, NIE MA żadnego okna. Dlatego:
   potwierdzony przez android_screenshot (prawdziwy zrzut ekranu z
   widoczną grą) — obie te akcje działają na CAŁYM ekranie systemu,
   nie tylko w oknie Termuksa.
+
+============================================================
+ZNANA PUŁAPKA — NIEZGODNOŚĆ WERSJI GRADLE / AGP W TERMUXIE
+============================================================
+
+`pkg install gradle` w Termuxie instaluje NAJNOWSZĄ dostępną
+wersję Gradle (często dużo nowszą niż jakikolwiek konkretny
+Android Gradle Plugin, np. Gradle 8.x/9.x). Jeśli w
+`build.gradle` (root) wpiszesz classpath ze STARĄ, "bezpieczną"
+wersją AGP na pamięć (np. `com.android.tools.build:gradle:7.4.2`)
+bez sprawdzenia, jaki Gradle jest faktycznie zainstalowany —
+build padnie błędem w stylu:
+
+  'org.gradle.api.artifacts.Dependency
+   org.gradle.api.artifacts.dsl.DependencyHandler.module(...)'
+
+albo innym MissingMethodException/NoSuchMethodError w skrypcie
+Gradle. To ZAWSZE oznacza niezgodność wersji Gradle<->AGP, nie
+błąd w kodzie gry. NIE próbuj tego naprawiać przez zmianę
+zależności aplikacji (appcompat itp.) — to nie jest przyczyna.
+
+Poprawna procedura:
+1. Każ Gemini najpierw wykonać `gradle -v` i odczytać dokładną
+   zainstalowaną wersję Gradle.
+2. Dobierz wersję `com.android.tools.build:gradle` (AGP) z
+   oficjalnej tabeli zgodności Gradle<->AGP pasującą do TEJ
+   zainstalowanej wersji Gradle (nowszy Gradle -> nowszy AGP,
+   zwykle AGP i Gradle w tej samej "generacji", np. Gradle 8.x
+   -> AGP 8.x).
+3. Jeśli build nadal się nie zgadza, zamiast zgadywać kolejne
+   pary wersji — każ zbudować/skonfigurować Gradle Wrapper
+   (`gradle wrapper --gradle-version <dokładna wersja pasująca
+   do wybranego AGP>`) i budować przez `./gradlew`, nie przez
+   systemowy `gradle`, żeby wersja była deterministyczna i nie
+   zależała od tego, co akurat zaktualizował `pkg`.
 
 Odpowiedź:
 
