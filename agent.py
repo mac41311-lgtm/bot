@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v27
+AEL-MINI AUTONOMOUS AGENT v28
 
 ARCHITEKTURA:
 
@@ -336,6 +336,22 @@ ASK_DEEPSEEK_MAX_PER_TASK = int(
     os.environ.get(
         "ASK_DEEPSEEK_MAX_PER_TASK",
         "2"
+    )
+)
+
+# Minimalny odstęp między KOLEJNYMI wiadomościami do DeepSeek —
+# niezależnie od roli/sesji, bo to WSPÓLNE konto/chat.deepseek.com.
+# Realny przypadek: użytkownik dostał na stronie DeepSeek "Messages
+# too frequent. Try again later" — to nie jest to samo co "invalid
+# message id" (obsłużone przez circuit breaker w deepseek()), tylko
+# zwykły limit tempa wysyłania po stronie serwera. consult_team()
+# i tak woła role sekwencyjnie (jedna na raz), ale bez wymuszonego
+# odstępu odpowiedzi przychodzą tak szybko, jak DeepSeek zdąży
+# odpowiedzieć — a to może wciąż być za szybko dla jego limitu.
+DEEPSEEK_MIN_INTERVAL_SECONDS = float(
+    os.environ.get(
+        "DEEPSEEK_MIN_INTERVAL_SECONDS",
+        "6"
     )
 )
 
@@ -765,7 +781,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v27")
+    print("             AEL-MINI AUTONOMOUS AGENT v28")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1704,6 +1720,33 @@ def _deepseek_circuit_wait():
         time.sleep(remaining)
 
 
+# ------------------------------------------------------------
+# TEMPOWANIE: wymuszony minimalny odstęp między KOLEJNYMI
+# wiadomościami do DeepSeek, niezależnie od roli — to WSPÓLNE
+# konto/chat, więc "sesja A" i "sesja B" nie są dla serwera
+# niezależne w kwestii limitu tempa wysyłania.
+# ------------------------------------------------------------
+
+_deepseek_last_send = {"ts": 0.0}
+_deepseek_pacing_lock = _threading.Lock()
+
+
+def _deepseek_pace():
+
+    with _deepseek_pacing_lock:
+
+        remaining = (
+            _deepseek_last_send["ts"]
+            + DEEPSEEK_MIN_INTERVAL_SECONDS
+            - time.time()
+        )
+
+        if remaining > 0:
+            time.sleep(remaining)
+
+        _deepseek_last_send["ts"] = time.time()
+
+
 def deepseek(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
@@ -1765,6 +1808,8 @@ def deepseek(name, message):
         for attempt in range(2):
 
             try:
+
+                _deepseek_pace()
 
                 response = session.send_message(message)
 
