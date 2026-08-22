@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v6
+AEL-MINI AUTONOMOUS AGENT v7
 
 ARCHITEKTURA:
 
@@ -671,7 +671,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v6")
+    print("             AEL-MINI AUTONOMOUS AGENT v7")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5832,6 +5832,13 @@ ZASADY:
    w tle, podaj PID i ścieżkę do log_file — NIE zapętlaj się w
    sprawdzaniu aż do wyczerpania limitu narzędzi. MAIN utworzy
    kolejny TASK sprawdzający ten sam proces później.
+
+9. NIGDY nie zapisuj plików w /tmp — to katalog systemu Android,
+   Termux (jako zwykła aplikacja) nie ma tam praw zapisu
+   ("Permission denied"). Pliki tymczasowe zapisuj w $HOME (~)
+   albo w $PREFIX/tmp (czyli
+   /data/data/com.termux/files/usr/tmp), np. zamiast
+   "echo OK > /tmp/x.txt" użyj "echo OK > ~/x.txt".
 
 ============================================================
 WARUNEK SUKCESU:
