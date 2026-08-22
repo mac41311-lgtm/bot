@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v8
+AEL-MINI AUTONOMOUS AGENT v9
 
 ARCHITEKTURA:
 
@@ -671,7 +671,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v8")
+    print("             AEL-MINI AUTONOMOUS AGENT v9")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -786,32 +786,41 @@ TASK:
   "task": "...",
   "success_condition": "...",
   "priority": "high",
-  "write_engineer_code_to": "opcjonalne — patrz sekcja niżej"
+  "write_engineer_code_to": "WYMAGANE, gdy dotyczy — patrz niżej"
 }
 
 ============================================================
-OSZCZĘDZANIE LIMITU GEMINI: write_engineer_code_to
+OBOWIĄZKOWE: write_engineer_code_to
 ============================================================
 
-Gdy ANDROID_GAME_ENGINEER podał w swojej odpowiedzi gotowy blok
-kodu (sekcja "POLECENIE / KOD:") i chcesz, żeby ten kod trafił do
-pliku DOKŁADNIE tak, jak go napisał — NIE opisuj go słownie w
-"task" licząc, że Gemini go odtworzy. Zamiast tego podaj ścieżkę
-docelową w polu "write_engineer_code_to" (np.
+To NIE jest opcja do rozważenia — to TWÓJ OBOWIĄZEK w konkretnej
+sytuacji: jeżeli ANDROID_GAME_ENGINEER podał w swojej odpowiedzi
+gotowy blok kodu (sekcja "POLECENIE / KOD:", wewnątrz ```...```),
+A Twój TASK dotyczy ZAPISANIA tego kodu do pliku — MASZ UŻYĆ pola
+"write_engineer_code_to" z docelową ścieżką (np.
 "/data/data/com.termux/files/home/game3d/game.py"). Python zapisze
-ten kod do pliku SAM, zanim TASK w ogóle trafi do Gemini — bez
-zużycia ani jednego wywołania Gemini na przepisywanie.
+kod do pliku SAM, zanim TASK w ogóle trafi do Gemini — zero zużycia
+Gemini na przepisywanie.
 
-W takim przypadku pole "task" powinno dotyczyć WYŁĄCZNIE
-uruchomienia i przetestowania już zapisanego pliku (np. "Uruchom
-~/game3d/game.py i sprawdź czy proces nie kończy się błędem"), NIE
-jego tworzenia — plik już tam będzie, zanim Gemini zacznie
-pracować.
+ZABRONIONE w tej sytuacji: opisywanie kodu słownie w "task" i
+liczenie, że Gemini sam go napisze/odtworzy przez termux_write_file.
+To marnuje limit Gemini (którego brakuje) i wprowadza błędy
+przepisywania — dokładnie to, czego ten mechanizm ma unikać. Jeżeli
+zauważysz, że ostatni TASK kazał Gemini samodzielnie napisać duży
+plik, mimo że ANDROID_GAME_ENGINEER miał gotowy kod — to był błąd,
+napraw podejście w następnym TASKu.
 
-Jeżeli w ostatniej odpowiedzi ANDROID_GAME_ENGINEER nie ma bloku
-kodu (```...```), to pole zostanie odrzucone z jasnym błędem — nie
+Kiedy używasz write_engineer_code_to, pole "task" ma dotyczyć
+WYŁĄCZNIE uruchomienia i przetestowania już zapisanego pliku (np.
+"Uruchom ~/game3d/game.py i sprawdź czy proces nie kończy się
+błędem"), NIE jego tworzenia — plik już tam będzie, zanim Gemini
+zacznie pracować.
+
+Jeżeli w ostatniej odpowiedzi ANDROID_GAME_ENGINEER NIE MA bloku
+kodu (```...```), pole zostanie odrzucone z jasnym błędem — nie
 zgaduj, poproś ANDROID_GAME_ENGINEER o konkretny kod albo zrób
-zwykły TASK bez tego pola.
+zwykły TASK bez tego pola (dozwolone tylko gdy naprawdę nie ma
+gotowego kodu do zapisania).
 ============================================================
 
 DONE:
@@ -7575,12 +7584,12 @@ ZASADY DECYZJI:
   zweryfikowane — APK, FINAL_OK.txt. Agent sprawdzi to sam.
 - EXECUTED = Gemini skończył TASK, NIE = cel projektu zakończony.
 - Jeżeli CRITIC mówi BLOKUJ — weź to poważnie i zmień podejście.
-- Jeżeli ANDROID_GAME_ENGINEER powyżej podał gotowy blok kodu i
-  chcesz zapisać go 1:1 do pliku BEZ zużywania Gemini na
-  przepisywanie — użyj "write_engineer_code_to" (ścieżka pliku).
-  Wtedy "task" ma dotyczyć TYLKO uruchomienia/testowania tego
-  pliku, nie jego tworzenia (patrz pełny opis w Twoim prompcie
-  systemowym).
+- OBOWIĄZKOWE: jeżeli ANDROID_GAME_ENGINEER powyżej podał gotowy
+  blok kodu, a Twój TASK ma go zapisać do pliku — MUSISZ użyć
+  "write_engineer_code_to" (ścieżka pliku) zamiast opisywać kod
+  słownie w "task". Nie jest to opcja do rozważenia. Wtedy "task"
+  dotyczy TYLKO uruchomienia/testowania już zapisanego pliku, nie
+  jego tworzenia (patrz pełny opis w Twoim prompcie systemowym).
 
 Zwróć WYŁĄCZNIE JSON.
 
@@ -7591,7 +7600,7 @@ TASK:
   "task": "...",
   "success_condition": "...",
   "priority": "high",
-  "write_engineer_code_to": "opcjonalne"
+  "write_engineer_code_to": "WYMAGANE gdy dotyczy, patrz wyżej"
 }}
 
 DONE:
