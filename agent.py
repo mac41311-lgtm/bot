@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v12
+AEL-MINI AUTONOMOUS AGENT v13
 
 ARCHITEKTURA:
 
@@ -59,6 +59,7 @@ import sys
 import json
 import time
 import re
+import shutil
 import subprocess
 import traceback
 import uuid
@@ -683,7 +684,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v12")
+    print("             AEL-MINI AUTONOMOUS AGENT v13")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2704,6 +2705,57 @@ def android_logcat(package=None, lines=200):
 
 
 # ============================================================
+# BEZPIECZEŃSTWO: POTWIERDZENIE PRZED USUWANIEM
+# ============================================================
+#
+# Żadne narzędzie nie usuwało dotąd niczego bez pytania — Gemini
+# mogło uruchomić `rm -rf cokolwiek` przez shell/termux_run bez
+# żadnej bramki. Poniższe dwie funkcje to naprawiają: wykrywają
+# komendy wyglądające na usuwanie i zatrzymują się, pytając
+# operatora w terminalu, zanim cokolwiek faktycznie zniknie.
+# ============================================================
+
+_DELETE_COMMAND_PATTERN = re.compile(
+    r"\b(rm|rmdir|unlink)\b|\bfind\b[^\n]*-delete\b",
+    re.IGNORECASE
+)
+
+
+def _looks_like_delete_command(command):
+    return bool(
+        _DELETE_COMMAND_PATTERN.search(str(command or ""))
+    )
+
+
+def _confirm_destructive_action(description):
+    """
+    Blokuje i pyta operatora w terminalu, zanim agent wykona
+    nieodwracalną operację (usunięcie pliku/katalogu).
+
+    Zwraca True TYLKO przy jawnym potwierdzeniu. Każdy inny
+    przypadek — odmowa, brak terminala (EOFError), Ctrl+C — jest
+    traktowany jako odmowa. To bezpieczny domyślny wybór: agent
+    może czasem niepotrzebnie zapytać (np. o nieszkodliwe "grep
+    -rm" w komentarzu), ale nigdy nie usunie niczego bez pytania.
+    """
+
+    try:
+        print()
+        print("⚠️  AGENT CHCE WYKONAĆ OPERACJĘ USUWANIA:")
+        print("   " + str(description))
+
+        answer = input(
+            "   Zezwolić? [t/N] > "
+        ).strip().lower()
+
+        return answer in ("t", "tak", "y", "yes")
+
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
+# ============================================================
 # SHELL
 # ============================================================
 
@@ -2718,6 +2770,24 @@ def execute_shell(command, timeout=None):
             "ok": False,
             "error": "Pusta komenda"
         }
+
+    if _looks_like_delete_command(command):
+
+        if not _confirm_destructive_action(
+            "Komenda usuwająca: " + command
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "Operacja usuwania odrzucona (brak "
+                    "potwierdzenia operatora). Jeżeli to "
+                    "naprawdę potrzebne, zapytaj użytkownika "
+                    "wprost i poczekaj na jego decyzję zamiast "
+                    "ponawiać tę samą komendę."
+                ),
+                "command": command,
+                "blocked_by_safety_gate": True
+            }
 
     effective_timeout = int(
         timeout or COMMAND_TIMEOUT
@@ -3944,6 +4014,27 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "termux_delete",
+            "description": (
+                "Usuń plik lub katalog. UŻYWAJ TEGO zamiast `rm` "
+                "przez shell/termux_run — operator zobaczy "
+                "dokładnie jaką ścieżkę i ile w niej jest, i musi "
+                "to jawnie potwierdzić w terminalu, zanim cokolwiek "
+                "zniknie. Jeśli odmówi, dostaniesz błąd — nie "
+                "próbuj obchodzić tego inną komendą, zapytaj MAIN "
+                "co dalej."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"}
+                },
+                "required": ["path"]
+            }
+        },
+
+        {
+            "type": "function",
             "name": "termux_check_apk",
             "description": (
                 "Sprawdź czy plik pod daną ścieżką jest prawdziwym, "
@@ -4682,6 +4773,21 @@ def termux_run_background(
                 "error": "Pusta komenda"
             }
 
+        if _looks_like_delete_command(command):
+
+            if not _confirm_destructive_action(
+                "Komenda usuwająca (w tle): " + command
+            ):
+                return {
+                    "ok": False,
+                    "error": (
+                        "Operacja usuwania odrzucona (brak "
+                        "potwierdzenia operatora)."
+                    ),
+                    "command": command,
+                    "blocked_by_safety_gate": True
+                }
+
         cwd = None
 
         if workdir:
@@ -4882,6 +4988,100 @@ def termux_file_exists(path):
         "ok": True,
         "exists": exists,
         "path": path
+    }
+
+
+def termux_delete(path):
+    """
+    Usuwa plik lub katalog PO POTWIERDZENIU operatora w terminalu.
+
+    To zamierzony, jawny sposób usuwania czegokolwiek — czystszy
+    niż `rm` przez shell/termux_run (też objęte tą samą bramką
+    bezpieczeństwa, patrz _looks_like_delete_command()), bo
+    operator widzi dokładnie JAKĄ ścieżkę i ile w niej jest, a nie
+    surową komendę powłoki.
+    """
+
+    path = str(path or "").strip()
+
+    if not path:
+        return {
+            "ok": False,
+            "error": "Pusta ścieżka."
+        }
+
+    target = Path(path).expanduser()
+
+    if not target.exists():
+        return {
+            "ok": False,
+            "error": "Ścieżka nie istnieje: " + str(target)
+        }
+
+    # Twarda podłoga bezpieczeństwa — niezależna od potwierdzenia
+    # operatora, bo to niemal na pewno pomyłka (Gemini pomyliło
+    # ścieżkę), a szkoda byłaby katastrofalna.
+    try:
+        resolved = target.resolve()
+        home = Path.home().resolve()
+    except Exception:
+        resolved = target
+        home = Path.home()
+
+    if resolved == home or str(resolved) == "/":
+        return {
+            "ok": False,
+            "error": (
+                "Odmowa: cel to katalog domowy albo root systemu "
+                "plików — to prawie na pewno pomyłka, nie zostanie "
+                "wykonane nawet z potwierdzeniem."
+            )
+        }
+
+    is_dir = target.is_dir()
+
+    try:
+        if is_dir:
+            item_count = sum(1 for _ in target.rglob("*"))
+            size_info = "katalog, " + str(item_count) + " elementów wewnątrz"
+        else:
+            size_info = "plik, " + str(target.stat().st_size) + " B"
+    except Exception:
+        size_info = "nieznany rozmiar"
+
+    if not _confirm_destructive_action(
+        "USUNIĘCIE: " + str(target) + " (" + size_info + ")"
+    ):
+        return {
+            "ok": False,
+            "error": (
+                "Usunięcie odrzucone — brak potwierdzenia operatora."
+            ),
+            "path": str(target)
+        }
+
+    try:
+        if is_dir:
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "Błąd podczas usuwania: " + str(e)
+        }
+
+    log(
+        "TERMUX",
+        "Usunięto (potwierdzone przez operatora): " + str(target)
+    )
+
+    return {
+        "ok": True,
+        "action": "delete",
+        "path": str(target),
+        "was_directory": is_dir
     }
 
 
@@ -5522,6 +5722,11 @@ def _dispatch_tool_inner(
 
         if name == "termux_file_exists":
             return termux_file_exists(
+                args.get("path", "")
+            )
+
+        if name == "termux_delete":
+            return termux_delete(
                 args.get("path", "")
             )
 
@@ -6258,6 +6463,13 @@ ZASADY:
     dostaniesz krótką podpowiedź i możesz kontynuować TEN SAM
     TASK, zamiast kończyć go błędem. Limitowane do kilku razy na
     zadanie — nie zastępuj tym normalnego czytania plików.
+
+11. Do usuwania plików/katalogów UŻYWAJ termux_delete, NIE `rm`
+    przez shell/termux_run. Obie ścieżki wymagają potwierdzenia
+    operatora w terminalu, ale termux_delete jest czytelniejsze
+    (operator widzi konkretną ścieżkę, nie surową komendę). Jeżeli
+    operator odmówi — NIE próbuj obejść tego inną komendą ani
+    innym sformułowaniem, zakończ zadanie i zgłoś odmowę do MAIN.
 
 ============================================================
 WARUNEK SUKCESU:
