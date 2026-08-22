@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v40
+AEL-MINI AUTONOMOUS AGENT v41
 
 ARCHITEKTURA:
 
@@ -789,7 +789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v40")
+    print("             AEL-MINI AUTONOMOUS AGENT v41")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1596,13 +1596,35 @@ skrypt zwraca kod wyjścia 0, więc wygląda na sukces, choć zrzutu
 nie ma.
 
 Zamiast tego: jeśli TASK wymaga zrzutu ekranu lub sprawdzenia
-karty Chrome, te dwa konkretne kroki MUSZĄ być osobnymi
-wywołaniami narzędzi Gemini (android_screenshot, chrome_tabs/
-chrome_inspect) — NIE częścią połączonego skryptu bash. Możesz
+karty Chrome, te dwa konkretne kroki NAJLEPIEJ zrobić jako osobne
+wywołania narzędzi Gemini (android_screenshot, chrome_tabs/
+chrome_inspect) — NIE część połączonego skryptu bash. Możesz
 nadal łączyć w jeden skrypt to, co jest czystym shellem (mkdir,
-zapis do pliku, sprawdzanie wersji narzędzi, curl) — tylko zrzut
-ekranu i stan karty Chrome zostają na zewnątrz, jako osobne kroki
-po skrypcie.
+zapis do pliku, sprawdzanie wersji narzędzi, curl) — zrzut ekranu
+i stan karty Chrome najlepiej zostają na zewnątrz, jako osobne
+kroki po skrypcie.
+
+DLACZEGO goły `screencap`/`screenshot` W SAMYM TERMUKSIE ZAWSZE
+KOŃCZY SIĘ "brak uprawnień": Termux, uruchomiony bezpośrednio (nie
+przez ADB), działa jako ZWYKŁA APLIKACJA — a zrzut całego ekranu
+to uprawnienie systemowe, którego zwykłe aplikacje nie mają (Android
+nie ma przełącznika w Ustawieniach na to, w przeciwieństwie do
+aparatu/pamięci). android_screenshot działa, bo idzie przez ADB/
+uiautomator2 — czyli wykonuje się jako uprzywilejowany użytkownik
+`shell`, który TO uprawnienie ma.
+
+JEŚLI naprawdę potrzebujesz zrzutu WEWNĄTRZ jednego skryptu bash
+(nie jako osobnego wywołania narzędzia) — jedyny sposób, który
+FAKTYCZNIE DZIAŁA, to przepuszczenie go przez TO SAMO połączenie
+ADB, które agent już ma nawiązane, zamiast gołego `screencap`:
+
+  adb shell screencap -p /sdcard/x.png && adb pull /sdcard/x.png ~/x.png
+
+To działa (bo `adb shell` = uprzywilejowany `shell`), podczas gdy
+sam `screencap -p ~/x.png` uruchomiony wprost w Termuksie zawsze
+zwróci "Permission denied" — to nie jest kwestia jakiegoś
+brakującego ustawienia do włączenia, tylko fundamentalnej różnicy
+między "zwykła aplikacja" a "adb shell".
 
 UWAGA — zaobserwowana "sprytna" wersja tego samego błędu: skrypt
 sprawdzał `if command -v android_screenshot >/dev/null 2>&1; then
