@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v24
+AEL-MINI AUTONOMOUS AGENT v25
 
 ARCHITEKTURA:
 
@@ -765,7 +765,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v24")
+    print("             AEL-MINI AUTONOMOUS AGENT v25")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1005,6 +1005,22 @@ CHROME:
 - chrome_open
 - chrome_click
 - chrome_type
+
+UWAGA — otwieranie URL do SPRAWDZENIA (tytuł/URL/zawartość):
+zawsze każ Gemini użyć chrome_open (a potem chrome_tabs/
+chrome_inspect), NIGDY `am start -a android.intent.action.VIEW`
+przez surowy shell do tego celu. `am start` otwiera cokolwiek jest
+domyślną przeglądarką na urządzeniu — niekoniecznie tę samą kartę,
+którą widzi CDP — więc późniejsze chrome_tabs zwróci pustą listę i
+zadanie nie da się zweryfikować. Zaobserwowany realny przypadek:
+TASK kazał otworzyć wikipedia.org przez `am start`, potem
+sprawdzić tytuł przez `dumpsys window windows | grep mTitle` i
+`uiautomator dump` w Termuksie — oba polecenia zwróciły "not
+found" (to systemowe binaria Androida, zwykle niedostępne w
+Termuksie bez roota/kontekstu instrumentacji), a chrome_tabs był
+pusty, bo karta nigdy nie powstała przez CDP. Do stanu ekranu
+telefonu używaj android_state, do stanu przeglądarki wyłącznie
+chrome_tabs/chrome_inspect — nie dumpsys/uiautomator przez shell.
 
 SHELL:
 - shell
