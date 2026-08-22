@@ -394,6 +394,19 @@ APK_OUTPUT_DIR.mkdir(
     exist_ok=True
 )
 
+# Katalog na NOWE narzędzia projektowane przez DeepSeek i zapisywane
+# przez Gemini jako osobne pliki .py — NIE modyfikują agent.py.
+# Każdy plik jest wykrywany, walidowany i ładowany automatycznie
+# (patrz load_custom_tools()), bez restartu agenta. Zepsuty plik
+# jest po prostu pomijany z jasnym komunikatem — nigdy nie wywraca
+# reszty agenta.
+CUSTOM_TOOLS_DIR = AGENT_DIR / "custom_tools"
+
+CUSTOM_TOOLS_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
 # Wzorce zadań, które użytkownik jawnie zabronił (np. pobieranie
 # gotowej gry zamiast tworzenia jej od zera przez Gemini).
 # Dopisz tu kolejne wzorce, jeśli MAIN znajdzie nowy sposób na
@@ -889,6 +902,44 @@ Jeżeli którykolwiek z wymaganych dowodów nie przejdzie, TWOJE
 DONE ZOSTANIE ODRZUCONE i zamienione z powrotem na informację o
 tym, czego brakuje. Nie zgłaszaj DONE na podstawie samej
 deklaracji Gemini "zrobione" — poczekaj na twarde dowody.
+
+============================================================
+MOŻESZ ZLECIĆ GEMINI DODANIE NOWEGO NARZĘDZIA
+============================================================
+
+Jeżeli istniejące narzędzia (Termux/Android/Chrome/Shell) nie
+wystarczają do jakiejś POWTARZALNEJ czynności — zamiast wymyślać
+to za każdym razem od nowa przez surowe komendy shell, możesz
+zlecić Gemini UTWORZENIE NOWEGO NARZĘDZIA jako osobnego pliku.
+Nie modyfikuje to agent.py i nie wymaga restartu — nowe narzędzie
+pojawi się automatycznie w Twojej następnej konsultacji.
+
+Zleć TASK, w którym Gemini zapisze (termux_write_file) plik pod
+ścieżką ~/agent/custom_tools/<nazwa>.py w DOKŁADNIE takim
+kontrakcie:
+
+TOOL_NAME = "nazwa_narzedzia"          # str
+TOOL_DESCRIPTION = "Co robi."          # str
+TOOL_PARAMETERS = {                    # JSON Schema
+    "type": "object",
+    "properties": {"x": {"type": "string"}},
+    "required": ["x"]
+}
+
+def run(x):
+    return {"ok": True, ...}
+
+Zasady:
+- Plik musi być samowystarczalny (własne importy na górze).
+- run() musi zwracać dict z kluczem "ok".
+- Błąd składni, brak wymaganych atrybutów albo kolizja nazwy z
+  istniejącym narzędziem = plik jest po cichu odrzucany (agent
+  loguje dokładny powód) — poproś Gemini o poprawki, jeśli tak
+  się stanie.
+- Używaj tego do rzeczy, które będą wywoływane WIELOKROTNIE z
+  różnymi argumentami (np. "sprawdź rozmiar i typ pliku",
+  "policz linie kodu w katalogu") — nie do jednorazowych operacji,
+  te po prostu zleć przez zwykły shell.
 
 ============================================================
 ZABRONIONE ZADANIA
@@ -3854,9 +3905,26 @@ def gemini_tools():
 
         result.append(data)
 
+    # Narzędzia dopisane przez DeepSeek jako osobne pliki w
+    # custom_tools/ (patrz load_custom_tools()) — dołączane obok
+    # wbudowanych, bez modyfikowania _gemini_tools_legacy().
+    for name, entry in CUSTOM_TOOLS.items():
+
+        result.append({
+            "type": "function",
+            "name": name,
+            "description": entry.get("description", ""),
+            "parameters": entry.get(
+                "parameters",
+                {"type": "object", "properties": {}}
+            )
+        })
+
     print(
         "[GEMINI] Interactions tools:",
-        len(result)
+        len(result),
+        "(w tym niestandardowe:",
+        str(len(CUSTOM_TOOLS)) + ")"
     )
 
     return result
@@ -4359,6 +4427,215 @@ def termux_check_apk(path):
     }
 
 
+# ============================================================
+# NOWE NARZĘDZIA PROJEKTOWANE PRZEZ DEEPSEEK (custom_tools/)
+# ============================================================
+#
+# Kontrakt pliku ~/agent/custom_tools/<cokolwiek>.py:
+#
+#   TOOL_NAME = "moje_narzedzie"          # str, unikalna nazwa
+#   TOOL_DESCRIPTION = "Co to robi."      # str, dla Gemini
+#   TOOL_PARAMETERS = {                   # JSON Schema, jak reszta
+#       "type": "object",
+#       "properties": {"x": {"type": "string"}},
+#       "required": ["x"]
+#   }
+#
+#   def run(x):
+#       return {"ok": True, "wynik": ...}
+#
+# Plik NIGDY nie dotyka agent.py. Jest wykrywany i ładowany
+# automatycznie (load_custom_tools() jest wołane raz na krok
+# w run_agent() — nowe/zmienione pliki pojawiają się bez
+# restartu). Błąd składni, brak wymaganych atrybutów albo
+# kolizja nazwy z istniejącym narzędziem = plik jest POMIJANY
+# z jasnym logiem, nigdy nie wywraca reszty agenta.
+
+CUSTOM_TOOLS = {}
+
+_custom_tool_file_state = {}
+
+
+def _builtin_tool_names():
+    return {
+        decl.get("name")
+        for decl in _gemini_tools_legacy()
+        if isinstance(decl, dict)
+    }
+
+
+def _load_one_custom_tool(path):
+    """
+    Wczytuje i waliduje JEDEN plik z custom_tools/.
+
+    Zwraca (name, entry) przy sukcesie, albo (None, powód_błędu).
+    """
+
+    try:
+        compile_check = subprocess.run(
+            [sys.executable, "-m", "py_compile", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+
+        if compile_check.returncode != 0:
+            return None, (
+                "Błąd składni: "
+                + short(compile_check.stderr, 500)
+            )
+
+    except Exception as e:
+        return None, "py_compile nie powiódł się: " + str(e)
+
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "custom_tool_" + path.stem + "_" + uuid.uuid4().hex[:6],
+            str(path)
+        )
+
+        module = importlib.util.module_from_spec(spec)
+
+        spec.loader.exec_module(module)
+
+    except Exception as e:
+        return None, (
+            "Błąd importu: "
+            + type(e).__name__
+            + ": "
+            + str(e)
+        )
+
+    tool_name = getattr(module, "TOOL_NAME", None)
+    description = getattr(module, "TOOL_DESCRIPTION", None)
+    parameters = getattr(module, "TOOL_PARAMETERS", None)
+    run_fn = getattr(module, "run", None)
+
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return None, "Brak poprawnego TOOL_NAME (str)."
+
+    if not isinstance(description, str) or not description.strip():
+        return None, "Brak poprawnego TOOL_DESCRIPTION (str)."
+
+    if not isinstance(parameters, dict):
+        return None, "Brak poprawnego TOOL_PARAMETERS (dict)."
+
+    if not callable(run_fn):
+        return None, "Brak funkcji run(...)."
+
+    if tool_name in _builtin_tool_names():
+        return None, (
+            "Nazwa '"
+            + tool_name
+            + "' koliduje z wbudowanym narzędziem."
+        )
+
+    existing = CUSTOM_TOOLS.get(tool_name)
+
+    if existing and existing.get("source_file") != str(path):
+        return None, (
+            "Nazwa '"
+            + tool_name
+            + "' już jest zajęta przez inne narzędzie z pliku "
+            + str(existing.get("source_file"))
+        )
+
+    return tool_name, {
+        "description": description,
+        "parameters": parameters,
+        "run": run_fn,
+        "source_file": str(path)
+    }
+
+
+def load_custom_tools():
+    """
+    Skanuje CUSTOM_TOOLS_DIR i (re)ładuje pliki, których mtime się
+    zmienił od poprzedniego wywołania. Usuwa z rejestru narzędzia,
+    których plik źródłowy zniknął. Tanie do wołania na każdym
+    kroku run_agent() — bez zmian w katalogu to tylko stat() na
+    plikach.
+    """
+
+    try:
+        current_files = sorted(
+            CUSTOM_TOOLS_DIR.glob("*.py")
+        )
+    except Exception:
+        return
+
+    current_paths = {str(p) for p in current_files}
+
+    # Usuń narzędzia, których plik zniknął.
+    for name in list(CUSTOM_TOOLS.keys()):
+
+        source = CUSTOM_TOOLS[name].get("source_file")
+
+        if source not in current_paths:
+            del CUSTOM_TOOLS[name]
+            _custom_tool_file_state.pop(source, None)
+
+    for path in current_files:
+
+        path_str = str(path)
+
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            continue
+
+        if _custom_tool_file_state.get(path_str) == mtime:
+            # Nic się nie zmieniło od ostatniego razu.
+            continue
+
+        _custom_tool_file_state[path_str] = mtime
+
+        # Usuń starą wersję tego narzędzia (jeśli to reload pliku),
+        # zanim spróbujemy załadować nową — unika sytuacji, w
+        # której zepsuty reload zostawia nieaktualną, ale wciąż
+        # "działającą" starą wersję pod tą samą nazwą.
+        for existing_name in list(CUSTOM_TOOLS.keys()):
+            if CUSTOM_TOOLS[existing_name].get(
+                "source_file"
+            ) == path_str:
+                del CUSTOM_TOOLS[existing_name]
+
+        name, result = _load_one_custom_tool(path)
+
+        if name is None:
+
+            log(
+                "CUSTOM_TOOL",
+                "ODRZUCONO "
+                + path.name
+                + ": "
+                + str(result)
+            )
+
+            log_event(
+                "custom_tool_rejected",
+                {"file": path_str, "reason": str(result)}
+            )
+
+            continue
+
+        CUSTOM_TOOLS[name] = result
+
+        log(
+            "CUSTOM_TOOL",
+            "Załadowano nowe narzędzie: "
+            + name
+            + " (" + path.name + ")"
+        )
+
+        log_event(
+            "custom_tool_loaded",
+            {"tool": name, "file": path_str}
+        )
+
+
 def dispatch_tool(
     name,
     args
@@ -4832,6 +5109,30 @@ def _dispatch_tool_inner(
                 fn,
                 args
             )
+
+        # ====================================================
+        # NARZĘDZIA DOPISANE PRZEZ DEEPSEEK (custom_tools/)
+        # ====================================================
+
+        custom = CUSTOM_TOOLS.get(name)
+
+        if custom is not None:
+
+            try:
+                return _call_tool_function(
+                    custom["run"],
+                    args
+                )
+
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error":
+                        "Błąd w niestandardowym narzędziu '"
+                        + name + "': "
+                        + type(e).__name__ + ": " + str(e),
+                    "source_file": custom.get("source_file")
+                }
 
         # ====================================================
         # NIEZNANE
@@ -7212,6 +7513,10 @@ def run_agent(goal):
             + " ---"
         )
 
+        # Wykryj nowe/zmienione narzędzia w custom_tools/ — tanie
+        # (stat() na plikach), gdy nic się nie zmieniło.
+        load_custom_tools()
+
         # ------------------------------------------------------
         # Najpierw wykonujemy istniejący task.
         # ------------------------------------------------------
@@ -7955,6 +8260,22 @@ def main():
     # ----------------------------------------------------------
 
     init_android()
+
+    # ----------------------------------------------------------
+    # Niestandardowe narzędzia (custom_tools/) — DeepSeek może je
+    # dopisywać jako osobne pliki w trakcie działania agenta,
+    # patrz load_custom_tools(). Ładujemy istniejące przy starcie;
+    # run_agent() dogrywa nowe/zmienione co krok bez restartu.
+    # ----------------------------------------------------------
+
+    load_custom_tools()
+
+    if CUSTOM_TOOLS:
+        log(
+            "CUSTOM_TOOL",
+            "Wczytano przy starcie: "
+            + ", ".join(CUSTOM_TOOLS.keys())
+        )
 
     # ----------------------------------------------------------
     # Gemini
