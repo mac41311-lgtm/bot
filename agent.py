@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v52
+AEL-MINI AUTONOMOUS AGENT v53
 
 ARCHITEKTURA:
 
@@ -791,7 +791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v52")
+    print("             AEL-MINI AUTONOMOUS AGENT v53")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1136,8 +1136,11 @@ istniejącej karty. Nowe karty są zablokowane."). Jeśli żadna
 pasująca karta nie istnieje, NIE próbuj wymuszać chrome_open w
 kółko — zamiast tego zweryfikowany, działający sposób na
 otworzenie i sprawdzenie NOWEGO adresu to: `am start -a
-android.intent.action.VIEW -d <url>` żeby faktycznie wyświetlić
-stronę na ekranie, `curl -s <url> | grep -o '<title>.*</title>'`
+android.intent.action.VIEW -p com.android.chrome -d <url>` żeby
+faktycznie wyświetlić stronę na ekranie W CHROME (KRYTYCZNE: zawsze
+z `-p com.android.chrome` — bez tego Android może otworzyć adres w
+INNEJ zainstalowanej przeglądarce, np. Firefoksie, co jest
+zaobserwowanym realnym incydentem na tym urządzeniu), `curl -s <url> | grep -o '<title>.*</title>'`
 (albo podobne parsowanie HTML) do sprawdzenia tytułu/zawartości
 BEZ polegania na CDP/UI. android_state (stan ekranu telefonu jako
 tekst) i chrome_tabs/chrome_inspect (stan ISTNIEJĄCEJ karty Chrome
@@ -1153,17 +1156,22 @@ wymaga potwierdzenia własnej grafiki/gry (SurfaceView/OpenGL/
 Canvas), której android_state nie pokaże w ogóle — nie rób go
 rutynowo "na wszelki wypadek" przy każdym otwarciu apki/karty.
 
-ZAOBSERWOWANY REALNY PROBLEM z `am start -a VIEW -d <url>`: w tym
-wdrożeniu ta komenda otwiera adres na ekranie telefonu, ale
-NOWA karta bardzo często NIE pojawia się w `chrome_tabs()` — CDP
-dalej widzi tylko starą, pustą kartę. Jeśli po `am start` + kilku
-sekundach `chrome_tabs`/`chrome_inspect` DALEJ nie pokazuje nowego
-URL — NIE próbuj tego w kółko (to marnowanie kroków na coś, co się
-prawdopodobnie nie zmieni). Zamiast tego użyj `android_screenshot_ocr`
-(darmowe, lokalne, zero limitu) — jeśli w rozpoznanym tekście jest
-nazwa/treść oczekiwanej strony (np. "Wikipedia"), to WYSTARCZAJĄCY
-dowód, że strona faktycznie się otworzyła, niezależnie od tego, co
-pokazuje CDP.
+ZAOBSERWOWANY I POTWIERDZONY REALNY PROBLEM — ZNALEZIONA PRZYCZYNA:
+goły `am start -a VIEW -d <url>` BEZ `-p com.android.chrome` pozwala
+Androidowi wybrać DOWOLNĄ zainstalowaną aplikację obsługującą ten
+intent — na tym urządzeniu otworzył Firefoksa zamiast Chrome. CDP
+jest podłączone WYŁĄCZNIE do Chrome (adb forward tcp:9222), więc
+karta otwarta w innej przeglądarce jest dla `chrome_tabs()`
+całkowicie niewidoczna, niezależnie od tego, ile razy spróbujesz —
+to nie jest kwestia czekania dłużej ani ponawiania. ZAWSZE dodawaj
+`-p com.android.chrome`. Jeśli mimo to (np. inny wariant Chrome na
+danym urządzeniu) po `am start` + kilku sekundach `chrome_tabs`/
+`chrome_inspect` DALEJ nie pokazuje nowego URL — NIE próbuj tego w
+kółko. Zamiast tego użyj `android_screenshot_ocr` (darmowe, lokalne,
+zero limitu) — jeśli w rozpoznanym tekście jest nazwa/treść
+oczekiwanej strony (np. "Wikipedia"), to WYSTARCZAJĄCY dowód, że
+strona faktycznie się otworzyła, niezależnie od tego, co pokazuje
+(albo jaka aplikacja obsłużyła) CDP.
 
 Jeżeli mimo to potrzebujesz `dumpsys`/`uiautomator dump` z poziomu
 skryptu bash: NIGDY nie uruchamiaj ich gołych w Termuksie —
@@ -4663,12 +4671,31 @@ def chrome_open(
     # obejściu, ale nie wykonujący go konsekwentnie za każdym razem
     # (chrome_open zawodził 4x pod rząd zamiast raz przełączyć się
     # na am start).
+    #
+    # KRYTYCZNE — zaobserwowany realny incydent: goły `am start -a
+    # VIEW -d <url>` BEZ pakietu pozwala Androidowi wybrać DOWOLNĄ
+    # aplikację obsługującą ten intent — na tym urządzeniu czasem
+    # otworzył Firefoksa zamiast Chrome. CDP jest podłączone
+    # WYŁĄCZNIE do Chrome (adb forward tcp:9222), więc karta otwarta
+    # w innej przeglądarce jest dla chrome_tabs() całkowicie
+    # niewidoczna, niezależnie od tego, ile razy spróbujemy. Wymuszamy
+    # więc pakiet Chrome (-p com.android.chrome); jeśli akurat go nie
+    # ma na tym urządzeniu (inny build/wariant Chrome), próbujemy
+    # jeszcze raz bez wymuszenia pakietu jako ostatniej deski ratunku.
     if tab is None:
 
         fallback = execute_shell(
-            "am start -a android.intent.action.VIEW -d "
+            "am start -a android.intent.action.VIEW -p "
+            "com.android.chrome -d "
             + shlex.quote(str(url))
         )
+
+        if not fallback.get("ok"):
+
+            fallback = execute_shell(
+                "am start -a android.intent.action.VIEW -d "
+                + shlex.quote(str(url))
+            )
 
         if not fallback.get("ok"):
 
