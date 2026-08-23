@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v49
+AEL-MINI AUTONOMOUS AGENT v50
 
 ARCHITEKTURA:
 
@@ -791,7 +791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v49")
+    print("             AEL-MINI AUTONOMOUS AGENT v50")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1102,7 +1102,17 @@ urządzeniu, Termux jest tylko jedną z wielu):
   android_state (tekstowy dump drzewa UI) nie pokaże. Dla zwykłego
   "czy aplikacja X jest otwarta" android_state W ZUPEŁNOŚCI
   wystarcza i jest darmowy — NIE rób zrzutu ekranu tylko po to,
-  żeby potwierdzić, że apka się otworzyła)
+  żeby potwierdzić, że apka się otworzyła). Zrzuty są automatycznie
+  kasowane po zakończeniu programu — nie traktuj ich jako trwałego
+  zapisu, tylko jednorazowy dowód.
+- android_screenshot_ocr (zrzut ekranu + NATYCHMIASTOWE rozpoznanie
+  widocznego tekstu lokalnie przez Tesseract, ZERO kosztu limitu —
+  działa offline, nikt nic nie wysyła do żadnego modelu. Zwraca
+  sam TEKST, nie obraz. Używaj wyłącznie tam, gdzie android_state
+  NIE pokazuje treści — np. tekst wyrenderowany wewnątrz WebView/
+  Canvas/gry, który nie ma odpowiadającego węzła accessibility.
+  Nadal NIE pomoże przy weryfikacji czystej grafiki bez tekstu
+  — kształtów, kolorów, układu bez napisów)
 - android_launch_app (otwórz DOWOLNĄ zainstalowaną aplikację po
   nazwie pakietu — np. zbudowaną i zainstalowaną grę, żeby ją
   faktycznie zobaczyć na ekranie, a nie tylko sprawdzić plik .apk)
@@ -3220,6 +3230,68 @@ def android_swipe(
         }
 
 
+# Ścieżki wszystkich zrzutów ekranu zrobionych w TYM uruchomieniu
+# (android_screenshot/android_screenshot_ocr, niezależnie od tego,
+# gdzie Gemini je zapisał) — użytkownik dał jawną, trwałą zgodę na
+# ich automatyczne kasowanie bez pytania o potwierdzenie, więc są
+# śledzone tu osobno od _track_project_path() (ta lista dalej
+# wymaga confirmu dla reszty wygenerowanych plików projektu).
+# Patrz _cleanup_screenshots_silently().
+_screenshot_paths_this_run = []
+
+
+def _cleanup_screenshots_silently():
+    """
+    Kasuje WSZYSTKIE zrzuty ekranu — te z TEGO uruchomienia
+    (_screenshot_paths_this_run, niezależnie od tego, gdzie Gemini
+    je zapisał) oraz wszystko, co zalega w domyślnym katalogu
+    AGENT_DIR/screenshots/ (np. resztki po poprzednim, twardo
+    zabitym procesie) — BEZ pytania o potwierdzenie. Użytkownik dał
+    na to jawną, trwałą zgodę: zrzuty to jednorazowy, nieczytany
+    przez nikogo dowód wykonania, nie coś, co warto zachowywać albo
+    o co warto pytać za każdym razem jak resztę wygenerowanych
+    plików projektu.
+
+    Wołane i na starcie programu (sprząta resztki sprzed ewentualnej
+    awarii poprzedniego uruchomienia), i przez atexit (normalne
+    zamknięcie, także Ctrl+C).
+    """
+
+    removed = 0
+
+    for raw_path in list(_screenshot_paths_this_run):
+        try:
+            Path(raw_path).unlink(missing_ok=True)
+            removed += 1
+        except Exception:
+            pass
+
+    _screenshot_paths_this_run.clear()
+
+    try:
+        screenshots_dir = AGENT_DIR / "screenshots"
+
+        if screenshots_dir.is_dir():
+            for p in screenshots_dir.glob("*.png"):
+                try:
+                    p.unlink()
+                    removed += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    if removed:
+        log(
+            "MAIN",
+            "Usunięto " + str(removed) + " zrzutów ekranu "
+            "(automatycznie, bez pytania — stała zgoda użytkownika)."
+        )
+
+
+atexit.register(_cleanup_screenshots_silently)
+
+
 def android_screenshot(path=None):
     """
     Prawdziwy zrzut ekranu (PNG), nie tylko tekstowy dump drzewa
@@ -3259,12 +3331,13 @@ def android_screenshot(path=None):
         )
 
         # Nikt (Gemini/DeepSeek) nie odczytuje TREŚCI tego pliku —
-        # bez śledzenia zostawałby na dysku na zawsze, niewidoczny
-        # dla maybe_clear_generated_project_files() (ta lista bierze
-        # WYŁĄCZNIE ścieżki zgłoszone przez _track_project_path()).
-        # Zgłaszamy go tu, żeby trafił do tej samej, potwierdzanej
-        # ręcznie listy sprzątania przy starcie nowego celu.
-        _track_project_path(target)
+        # użytkownik dał jawną, trwałą zgodę na automatyczne
+        # kasowanie zrzutów bez pytania o potwierdzenie za każdym
+        # razem (w przeciwieństwie do reszty wygenerowanych plików
+        # projektu). Śledzimy więc ścieżkę tu, żeby
+        # _cleanup_screenshots_silently() (atexit + start programu)
+        # mogła ją posprzątać automatycznie, bez confirmu.
+        _screenshot_paths_this_run.append(str(target))
 
         return {
             "ok": target.exists(),
@@ -3281,6 +3354,81 @@ def android_screenshot(path=None):
             "ok": False,
             "action": "screenshot",
             "error": str(e)
+        }
+
+
+def android_screenshot_ocr(path=None, lang=None):
+    """
+    Zrzut ekranu + NATYCHMIASTOWE rozpoznanie tekstu lokalnie przez
+    Tesseract OCR (pkg install tesseract-ocr w Termuksie) — ZERO
+    wywołań do Gemini/innego modelu, zero kosztu limitu API,
+    działa całkowicie offline na urządzeniu. Zwraca sam TEKST
+    widoczny na ekranie (nie plik obrazu) — przydatne tam, gdzie
+    android_state (tekstowy dump drzewa UI/accessibility) nie
+    pokazuje treści, np. tekst wyrenderowany wewnątrz WebView/
+    Canvas/gry, który nie ma odpowiadającego węzła accessibility.
+
+    NIE pomoże przy weryfikacji czystej grafiki bez tekstu (kształty,
+    kolory, układ elementów) — do tego nadal potrzebny jest ręczny
+    podgląd zrzutu przez człowieka, nie automatyczna analiza.
+    """
+
+    screenshot_result = android_screenshot(path)
+
+    if not screenshot_result.get("ok"):
+        return screenshot_result
+
+    target = screenshot_result["path"]
+
+    tesseract_bin = shutil.which("tesseract")
+
+    if not tesseract_bin:
+        return {
+            "ok": False,
+            "error": (
+                "Brak zainstalowanego 'tesseract' w Termuksie. "
+                "Zainstaluj: pkg install tesseract-ocr "
+                "(opcjonalnie dodatkowy pakiet języka, np. "
+                "tesseract-ocr-pol dla polskiego) i spróbuj ponownie."
+            ),
+            "path": target
+        }
+
+    try:
+        cmd = [tesseract_bin, target, "-"]
+
+        if lang:
+            cmd += ["-l", str(lang)]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "error": (
+                    "tesseract zakończył się błędem: "
+                    + short(result.stderr, 500)
+                ),
+                "path": target
+            }
+
+        return {
+            "ok": True,
+            "action": "screenshot_ocr",
+            "path": target,
+            "text": result.stdout.strip()
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "path": target
         }
 
 
@@ -3741,7 +3889,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "chrome_type",
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
-    "android_screenshot", "android_launch_app",
+    "android_screenshot", "android_screenshot_ocr", "android_launch_app",
     "android_run_in_new_window", "android_install_apk",
     "android_uninstall_app", "android_logcat",
 ]
@@ -5421,6 +5569,35 @@ def _gemini_tools_legacy():
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"}
+                }
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_screenshot_ocr",
+            "description": (
+                "Zrzut ekranu + NATYCHMIASTOWE rozpoznanie widocznego "
+                "tekstu lokalnie przez Tesseract OCR — zero wywołań "
+                "do Gemini/innego modelu, zero kosztu limitu, "
+                "działa offline. Zwraca sam TEKST (nie obraz) — "
+                "używaj tam, gdzie android_state (drzewo UI) nie "
+                "pokazuje treści, np. tekst wewnątrz WebView/Canvas/"
+                "gry bez węzła accessibility. NIE pomoże przy "
+                "weryfikacji czystej grafiki bez tekstu."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "lang": {
+                        "type": "string",
+                        "description": (
+                            "Kod języka Tesseract, np. 'eng' albo "
+                            "'pol' (wymaga zainstalowanego pakietu "
+                            "danych języka). Domyślnie eng."
+                        )
+                    }
                 }
             }
         },
@@ -7312,6 +7489,26 @@ def _dispatch_tool_inner(
 
             return fn(
                 args.get("path")
+            )
+
+        # Gemini: android_screenshot_ocr
+        # Python: android_screenshot_ocr
+        if name == "android_screenshot_ocr":
+
+            fn = globals().get(
+                "android_screenshot_ocr"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_screenshot_ocr()."
+                }
+
+            return _call_tool_function(
+                fn,
+                args
             )
 
         # Gemini: android_launch_app
@@ -11438,24 +11635,16 @@ def maybe_clear_previous_session_data():
 
     Nie dotyka custom_tools/ (to trwałe, celowo dodane narzędzia,
     nie dane sesji) ani samego GOAL_FILE (to obsługiwane osobno,
-    tam gdzie ta funkcja jest wołana).
-
-    Obejmuje też AGENT_DIR/screenshots/ (domyślna ścieżka
-    android_screenshot, gdy Gemini nie poda własnej) — te pliki PNG
-    nie są przez nikogo odczytywane treściowo (ani Gemini, ani
-    zespół DeepSeek), więc to czysty balast bez żadnej roli poza
-    "narzędzie się wykonało"; bez tego zostawałyby tam bezterminowo,
-    bo są poza $HOME-owym mechanizmem śledzenia projektu
-    (AGENT_DIR jest celowo wyłączony z _track_project_path()).
+    tam gdzie ta funkcja jest wołana). Zrzuty ekranu NIE są już tu
+    obsługiwane — mają teraz jawną, trwałą zgodę użytkownika na
+    automatyczne kasowanie bez pytania, patrz
+    _cleanup_screenshots_silently() (atexit + start programu).
     """
 
     queue_files = list(QUEUE_DIR.glob("*.json"))
     result_files = list(RESULTS_DIR.glob("*.json"))
-    screenshot_files = list(
-        (AGENT_DIR / "screenshots").glob("*.png")
-    ) if (AGENT_DIR / "screenshots").is_dir() else []
 
-    if not queue_files and not result_files and not screenshot_files:
+    if not queue_files and not result_files:
         return
 
     description = (
@@ -11463,27 +11652,23 @@ def maybe_clear_previous_session_data():
         + str(len(queue_files))
         + " zadań w kolejce, "
         + str(len(result_files))
-        + " zapisanych wyników, "
-        + str(len(screenshot_files))
-        + " zrzutów ekranu (nieużywanych do niczego poza dowodem "
-        "wykonania)."
+        + " zapisanych wyników."
     )
 
     print()
     print(description)
 
     if not _confirm_destructive_action(
-        "USUNIĘCIE DANYCH POPRZEDNIEJ SESJI (kolejka + wyniki + "
-        "zrzuty ekranu) — nowy cel zacznie się na czysto"
+        "USUNIĘCIE DANYCH POPRZEDNIEJ SESJI (kolejka + wyniki) — "
+        "nowy cel zacznie się na czysto"
     ):
         log(
             "MAIN",
-            "Zachowano dane poprzedniej sesji (kolejka/wyniki/"
-            "zrzuty ekranu)."
+            "Zachowano dane poprzedniej sesji (kolejka/wyniki)."
         )
         return
 
-    for f in queue_files + result_files + screenshot_files:
+    for f in queue_files + result_files:
         try:
             f.unlink()
         except Exception:
@@ -11502,7 +11687,7 @@ def maybe_clear_previous_session_data():
     log(
         "MAIN",
         "Usunięto dane poprzedniej sesji (kolejka, wyniki, "
-        "licznik prób narzędzi, ostatni wynik, zrzuty ekranu)."
+        "licznik prób narzędzi, ostatni wynik)."
     )
 
 
@@ -11728,6 +11913,11 @@ def _read_full_input(prompt):
 def main():
 
     banner()
+
+    # Sprząta ewentualne zrzuty ekranu z poprzedniego, twardo
+    # zabitego uruchomienia (np. zamknięte przed atexit) — bez
+    # pytania, patrz _cleanup_screenshots_silently().
+    _cleanup_screenshots_silently()
 
     # ----------------------------------------------------------
     # Wake lock — utrzymuje Termux aktywny w tle nawet gdy ekran
