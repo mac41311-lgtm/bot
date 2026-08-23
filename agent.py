@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v76
+AEL-MINI AUTONOMOUS AGENT v77
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v76")
+    print("             AEL-MINI AUTONOMOUS AGENT v77")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2615,7 +2615,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                         current_fragment_type = fragments[0].get(
                             "type", "RESPONSE"
                         )
-                        if current_fragment_type != "THINK":
+                        if current_fragment_type == "THINK":
+                            pass
+                        else:
                             content = fragments[0].get(
                                 "content", ""
                             )
@@ -2630,7 +2632,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                             frag_type = frag.get(
                                 "type", "RESPONSE"
                             )
-                            if frag_type != "THINK":
+                            if frag_type == "THINK":
+                                pass
+                            else:
                                 content = frag.get("content", "")
                             current_fragment_type = frag_type
 
@@ -2641,7 +2645,23 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                         # tu je przechwytujemy zamiast wyrzucac.
                         status_seen = val
                         continue
-                    if current_fragment_type != "THINK":
+                    # BUG znaleziony w realnym logu v75 (2026-08-23):
+                    # KAZDA odpowiedz zaczynala sie od ucietego
+                    # fragmentu slowa ("godnie z", "zę
+                    # przeanalizowac") — bo ten warunek pomijal
+                    # DRUGA czesc oryginalnego testu biblioteki
+                    # (`current_fragment_type == "THINK" or
+                    # "thinking" in current_patch_target`), wiec
+                    # koncowka strumienia rozumowania (nadal plynaca
+                    # sciezka z "thinking" w nazwie, zanim
+                    # current_fragment_type zdazyl sie przestawic na
+                    # "THINK") trafiala do full_text jako tresc.
+                    if (
+                        current_fragment_type == "THINK"
+                        or "thinking" in current_patch_target
+                    ):
+                        pass
+                    else:
                         content = val
 
             if content:
@@ -2820,9 +2840,18 @@ def deepseek(name, message):
                     )
 
                     try:
+                        # Realny dowod z produkcji (v75, 2026-08-23):
+                        # pusty prompt z action="continue" serwer
+                        # odrzuca kodem 422/biz_code 6 "missing
+                        # prompt or ref file" — wiec pusty string tu
+                        # nigdy nie mial szansy zadzialac niezaleznie
+                        # od tego, czy "continue" jest wlasciwa
+                        # wartoscia. Jeden odstep spelnia wymog
+                        # "niepusty prompt" bez dopisywania nowej
+                        # instrukcji do rozmowy.
                         continue_text, continue_status = (
                             _deepseek_send_experimental(
-                                name, session, "", action="continue"
+                                name, session, " ", action="continue"
                             )
                         )
 
@@ -3473,6 +3502,9 @@ def android_summary():
             )
 
 
+_ANDROID_NUMERIC_NEEDLE_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
 def android_assert_text_visible(text):
     """
     Sprawdza JEDNOZNACZNIE, czy podany fragment tekstu jest
@@ -3513,7 +3545,22 @@ def android_assert_text_visible(text):
             "error": summary
         }
 
-    found = needle.lower() in summary.lower()
+    # Zgloszony realny przypadek (2026-08-23): uzytkownik na wlasne
+    # oczy widzial ZLY wynik na ekranie kalkulatora, a mimo to
+    # android_assert_text_visible("42") zwrocilo found=True. Zwykle
+    # `in` dopasowuje krotki numeryczny needle jako PODCIAG dluzszej,
+    # niepowiazanej liczby (np. "42" trafia wewnatrz "1542" albo
+    # "420") — dla liczb (w tym z kropka dziesietna) wymagaj wiec
+    # granic: sasiednie znaki nie moga byc cyfra ani kropka.
+    if _ANDROID_NUMERIC_NEEDLE_RE.match(needle):
+        pattern = (
+            r"(?<![\d.])"
+            + re.escape(needle)
+            + r"(?![\d.])"
+        )
+        found = re.search(pattern, summary) is not None
+    else:
+        found = needle.lower() in summary.lower()
 
     return {
         "ok": True,
