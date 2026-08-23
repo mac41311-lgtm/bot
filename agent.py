@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v48
+AEL-MINI AUTONOMOUS AGENT v49
 
 ARCHITEKTURA:
 
@@ -791,7 +791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v48")
+    print("             AEL-MINI AUTONOMOUS AGENT v49")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3683,6 +3683,28 @@ def _confirm_destructive_action(description):
         print("⚠️  AGENT CHCE WYKONAĆ OPERACJĘ USUWANIA:")
         print("   " + str(description))
 
+        # Zaobserwowany realny incydent: użytkownik wpisał "t" na
+        # PIERWSZE z trzech pytań pod rząd (nowy cel -> reset sesji
+        # -> usunięcie danych sesji -> usunięcie plików projektu),
+        # a mimo to program odczytał to jako odmowę — kolejne dwa
+        # "t" (identyczny mechanizm) zadziałały poprawnie. Winny:
+        # _read_full_input() dla promptu CELU tuż wcześniej robi
+        # nieblokujący drenaż stdin (select z timeout=0) — jeśli
+        # reszta wklejonego tekstu (typowo końcowa pusta linia ze
+        # schowka) dotarła do bufora O UŁAMEK SEKUNDY ZA PÓŹNO na
+        # ten drenaż, zostaje w buforze i to ONA, nie prawdziwe "t"
+        # użytkownika, odpowiada na TO pytanie. Użytkownik fizycznie
+        # nie mógł zareagować na pytanie, którego jeszcze nie
+        # widział — więc każda treść już czekająca w buforze PRZED
+        # wydrukowaniem pytania jest odrzucana w ciszy, zanim
+        # zapytamy o prawdziwą odpowiedź.
+        try:
+            while select.select([sys.stdin], [], [], 0)[0]:
+                if not sys.stdin.readline():
+                    break
+        except Exception:
+            pass
+
         answer = input(
             "   Zezwolić? [t/N] > "
         ).strip().lower()
@@ -5793,6 +5815,59 @@ def termux_write_file(path, content):
             except Exception:
                 # py_compile samo w sobie niedostępne — nie
                 # blokujemy zapisu z tego powodu.
+                pass
+
+            # Zaobserwowany realny problem: Gemini zapisał
+            # ~/agent/custom_tools/sumator.py bez TOOL_NAME/
+            # TOOL_DESCRIPTION/TOOL_PARAMETERS (kontrakt z
+            # MAIN_PROMPT), więc load_custom_tools() PO CICHU
+            # odrzucił plik (log "[CUSTOM_TOOL] ODRZUCONO...") —
+            # ale to zdarzenie żyło WYŁĄCZNIE w surowym logu
+            # terminala, nigdy w wyniku TEGO wywołania narzędzia.
+            # Task zgłosił się jako COMPLETED, a MAIN/zespół nigdy
+            # się nie dowiedzieli, że "nowe narzędzie" faktycznie
+            # nigdy nie zostało zarejestrowane. Walidujemy więc
+            # kontrakt OD RAZU przy zapisie do custom_tools/, tym
+            # samym mechanizmem co load_custom_tools(), i od razu
+            # rejestrujemy plik, jeśli przechodzi — bez czekania na
+            # "następną konsultację".
+            try:
+                if p.resolve().is_relative_to(
+                    CUSTOM_TOOLS_DIR.resolve()
+                ):
+
+                    tool_name, load_result = _load_one_custom_tool(p)
+
+                    if tool_name is None:
+
+                        result["custom_tool_rejected"] = load_result
+
+                        log(
+                            "CUSTOM_TOOL",
+                            "ODRZUCONO " + p.name + ": "
+                            + str(load_result)
+                        )
+
+                    else:
+
+                        CUSTOM_TOOLS[tool_name] = load_result
+
+                        try:
+                            _custom_tool_file_state[str(p)] = (
+                                p.stat().st_mtime
+                            )
+                        except Exception:
+                            pass
+
+                        result["custom_tool_registered"] = tool_name
+
+                        log(
+                            "CUSTOM_TOOL",
+                            "Załadowano nowe narzędzie: "
+                            + tool_name + " (" + p.name + ")"
+                        )
+
+            except Exception:
                 pass
 
         return result
@@ -8097,7 +8172,8 @@ CO POWINIEN ZROBIĆ MAIN:
                     for warning_key in (
                         "content_warning",
                         "compile_error",
-                        "blocked_fake_tool_invocation"
+                        "blocked_fake_tool_invocation",
+                        "custom_tool_rejected"
                     ):
 
                         if result.get(warning_key):
