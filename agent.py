@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v65
+AEL-MINI AUTONOMOUS AGENT v66
 
 ARCHITEKTURA:
 
@@ -821,7 +821,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v65")
+    print("             AEL-MINI AUTONOMOUS AGENT v66")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1892,12 +1892,30 @@ Dostajesz:
    podało konkretne "potwierdzone" liczby (wersje narzędzi), które
    kilka kroków wcześniej w tej samej rozmowie były zupełnie inne
    naprawdę zweryfikowane — czyli zmyślone, nie sprawdzone na nowo.
-2. AKTUALNY, ŚWIEŻO POBRANY stan Chrome i Androida — TO jest
-   prawdziwe źródło (dokładnie ta sama funkcja, z której korzysta
-   MAIN), nie deklaracja Gemini. Jeśli np. raport twierdzi "otwarto
-   kartę X", a w AKTUALNYM stanie Chrome/Androida nic takiego nie
-   widać — to rozbieżność, obniż ocenę i napisz to wprost w
-   uzasadnieniu.
+2. PUNKTY ZADAŃ — checklist zbudowany PRZEZ PYTHON, nie przez
+   deklarację: "zweryfikowany dowodem" oznacza, że Python SAM
+   potwierdził na dysku plik z warunku sukcesu. "zadeklarowany BEZ
+   dowodu" oznacza, że Gemini tak napisało, ale NIKT tego
+   niezależnie nie sprawdził — traktuj to jako niepewne, NIE jako
+   fakt, ale też NIE jako dowód porażki.
+
+3. AKTUALNY, ŚWIEŻO POBRANY stan Chrome i Androida — pokazuje TYLKO
+   to, co jest na ekranie W TEJ CHWILI. UWAGA: telefon naturalnie
+   PRZECHODZI DALEJ między krokami (użytkownik używa telefonu,
+   agent w kolejnym kroku otwiera inną aplikację, ekran gaśnie) —
+   jeżeli wcześniejszy krok dotyczył PRZEJŚCIOWEJ czynności (np.
+   "otwórz kalkulator i potwierdź wynik", "otwórz zegar i
+   potwierdź ekran"), to że ta aplikacja NIE jest już widoczna
+   TERAZ jest NORMALNE i NIE oznacza, że krok się nie wykonał —
+   NIE obniżaj za to oceny. Aktualny stan Chrome/Androida służy
+   WYŁĄCZNIE do sprawdzania rzeczy, które MAJĄ pozostać widoczne do
+   końca (np. finalna karta ma zostać otwarta, docelowy ekran ma
+   zostać osiągnięty) — nie do potwierdzania przejściowych kroków
+   sprzed kilku konsultacji, bo to strukturalnie fałszywy alarm
+   (zaobserwowany realny przypadek: użytkownik wyszedł z
+   kalkulatora po chwili, ocena postępu błędnie uznała to za
+   niewykonany krok, mimo że krok faktycznie się wykonał i miał
+   swój dowód w momencie wykonania).
 
 Na tej podstawie oceniasz, jaki procent CAŁEGO celu jest już
 FAKTYCZNIE zrealizowany — nie ile Gemini zadeklarowało.
@@ -1911,8 +1929,11 @@ Chrome/Androidzie dla czynności na ekranie) — nie samej deklaracji
 sukcesu w raporcie.
 
 Jeżeli w ostatnich zadaniach widzisz powtarzające się błędy bez
-postępu, albo rozbieżność między deklaracją a aktualnym stanem
-urządzenia — obniż ocenę, nawet jeśli poprzednio było wyżej.
+postępu, albo rozbieżność między deklaracją a czymś, co MIAŁO
+pozostać trwale widoczne/sprawdzalne (plik, karta, ekran końcowy) —
+obniż ocenę, nawet jeśli poprzednio było wyżej. Nie licz w to
+zniknięcia PRZEJŚCIOWEJ aplikacji z poprzedniego kroku (patrz punkt
+3 wyżej).
 
 Zwróć WYŁĄCZNIE JSON, bez żadnego dodatkowego tekstu:
 {
@@ -10119,6 +10140,11 @@ def estimate_progress(goal):
     # stan (te same funkcje, których używa MAIN każdy krok), żeby
     # ocena miała choć trochę oparcia w rzeczywistości, nie tylko
     # w tym, co ktoś inny zadeklarował.
+    checklist_summary = _checklist_summary_block()
+    checklist_block = (
+        "\n" + checklist_summary + "\n"
+    ) if checklist_summary else ""
+
     prompt = f"""
 CEL:
 {goal}
@@ -10126,9 +10152,10 @@ CEL:
 OSTATNIE ZADANIA (od najstarszego do najnowszego, WŁASNE raporty
 Gemini — traktuj je z rezerwą, mogą być niedokładne):
 {json.dumps(summaries, ensure_ascii=False, indent=2)}
-
-AKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (to jest prawdziwe źródło,
-nie deklaracja Gemini):
+{checklist_block}
+AKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (pokazuje TYLKO to co jest
+na ekranie TERAZ — patrz punkt 3 Twojego prompta systemowego o
+przejściowych czynnościach, zanim to wykorzystasz do oceny):
 
 AKTUALNY CHROME:
 {short(chrome_summary(), 1500)}
