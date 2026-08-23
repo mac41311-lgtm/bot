@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v56
+AEL-MINI AUTONOMOUS AGENT v57
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v56")
+    print("             AEL-MINI AUTONOMOUS AGENT v57")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12197,6 +12197,31 @@ def main():
         "wyczysc", "wyczyść", "czysc", "czyść", "clean"
     }
 
+    def _run_on_demand_cleanup():
+
+        before = (
+            list(QUEUE_DIR.glob("*.json"))
+            + list(RESULTS_DIR.glob("*.json"))
+        )
+
+        _cleanup_screenshots_silently()
+        maybe_clear_previous_session_data()
+        maybe_clear_generated_project_files()
+
+        if not before:
+            print(
+                "Brak danych do posprzątania (kolejka/wyniki już "
+                "puste) — zrzuty ekranu i tak sprzątnięte przy "
+                "okazji."
+            )
+
+        print(
+            "Sprzątanie zakończone. Zapisany CEL NIE został "
+            "usunięty (to celowe — możesz go wznowić) — Enter "
+            "wznowi go teraz, albo wpisz nowy cel."
+        )
+        print()
+
     try:
 
         while True:
@@ -12222,10 +12247,7 @@ def main():
                 ).strip()
 
                 if typed.lower() in _CLEAN_COMMAND_WORDS:
-                    _cleanup_screenshots_silently()
-                    maybe_clear_previous_session_data()
-                    maybe_clear_generated_project_files()
-                    print()
+                    _run_on_demand_cleanup()
                     continue
 
                 goal = typed if typed else saved_goal
@@ -12239,10 +12261,7 @@ def main():
                 ).strip()
 
                 if typed.lower() in _CLEAN_COMMAND_WORDS:
-                    _cleanup_screenshots_silently()
-                    maybe_clear_previous_session_data()
-                    maybe_clear_generated_project_files()
-                    print()
+                    _run_on_demand_cleanup()
                     continue
 
                 goal = typed
