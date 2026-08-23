@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v72
+AEL-MINI AUTONOMOUS AGENT v73
 
 ARCHITEKTURA:
 
@@ -837,7 +837,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v72")
+    print("             AEL-MINI AUTONOMOUS AGENT v73")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13247,6 +13247,26 @@ def _read_full_input(prompt):
     return "\n".join(lines)
 
 
+def _typed_goal_is_actually_new(typed, saved_goal):
+    """
+    Zaobserwowany realny problem: is_new_goal było dawniej ustawiane
+    na "cokolwiek wpisano" — więc ponowne WKLEJENIE/wpisanie
+    DOKŁADNIE TEGO SAMEGO celu (np. bo ktoś woli wkleić z notatnika
+    niż nacisnąć samo Enter) też liczyło się jako "nowy cel" i
+    wywoływało pytania o reset 9 sesji DeepSeek oraz wyczyszczenie
+    kolejki/wyników/checklisty — mimo że treść celu się NIE
+    zmieniła. Porównanie po normalizacji białych znaków odróżnia
+    faktycznie NOWY cel od zwykłego ponownego wklejenia tego samego
+    — tylko rzeczywista zmiana treści liczy się jako nowy cel.
+    """
+    if not typed:
+        return False
+    return (
+        _normalize_task_text(typed)
+        != _normalize_task_text(saved_goal)
+    )
+
+
 def main():
 
     banner()
@@ -13413,7 +13433,9 @@ def main():
                     continue
 
                 goal = typed if typed else saved_goal
-                is_new_goal = bool(typed)
+                is_new_goal = _typed_goal_is_actually_new(
+                    typed, saved_goal
+                )
 
             else:
 
