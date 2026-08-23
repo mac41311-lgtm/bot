@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v50
+AEL-MINI AUTONOMOUS AGENT v51
 
 ARCHITEKTURA:
 
@@ -791,7 +791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v50")
+    print("             AEL-MINI AUTONOMOUS AGENT v51")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11425,13 +11425,18 @@ Zwróć tylko JSON.
                     }
                 )
 
-                # Brak wykonawcy to trwały stan — nic tu nie
-                # pomoże samo wznowienie sesji.
-                try:
-                    GOAL_FILE.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
+                # Brak wykonawcy Gemini (np. wygasła/wyczerpana
+                # quota) to problem ZEWNĘTRZNY wobec samego celu —
+                # naprawia się go np. rotacją klucza, nie zmianą
+                # celu. Zaobserwowany realny problem: usuwanie
+                # GOAL_FILE tutaj zmuszało użytkownika do wklejania
+                # CAŁEGO wieloliniowego tekstu celu od nowa po
+                # KAŻDEJ takiej przerwie, mimo że chodziło o
+                # dokładnie ten sam test — a ponowne wklejenie tego
+                # samego tekstu jest odczytywane jako "NOWY cel",
+                # czyli dodatkowo resetuje 9 sesji DeepSeek (v46) bez
+                # potrzeby. Zostawiamy GOAL_FILE, żeby po naprawieniu
+                # klucza dało się po prostu wcisnąć Enter.
                 return
 
             alternative = deepseek(
@@ -11536,11 +11541,19 @@ Tylko JSON.
                 }
             )
 
-            try:
-                GOAL_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
-
+            # Zaobserwowany realny problem: FAILED tutaj bardzo
+            # często wynika z prawdziwego BUGA w agent.py (dokładnie
+            # jak w tej sesji naprawczej — chrome_open, kontrakt
+            # custom_tools, itd.), nie z tego, że CEL jest
+            # niewykonalny. Usuwanie GOAL_FILE zmuszało użytkownika
+            # do ręcznego wklejania całego, wieloliniowego tekstu
+            # celu od nowa po KAŻDEJ takiej porażce, żeby ponownie
+            # przetestować DOKŁADNIE to samo — a ponowne wklejenie
+            # tego samego tekstu jest odczytywane jako NOWY cel,
+            # więc dodatkowo resetowało 9 sesji DeepSeek (v46) bez
+            # potrzeby. Zostawiamy GOAL_FILE: po naprawieniu kodu
+            # wystarczy Enter, żeby wznowić DOKŁADNIE ten sam cel
+            # (i te same sesje zespołu).
             return
 
         # ------------------------------------------------------
