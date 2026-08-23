@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v55
+AEL-MINI AUTONOMOUS AGENT v56
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v55")
+    print("             AEL-MINI AUTONOMOUS AGENT v56")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10528,6 +10528,10 @@ _APK_GOAL_PATTERN = re.compile(
 )
 
 
+_APK_NEGATION_WINDOW_CHARS = 30
+_APK_NEGATION_WORDS = {"nie", "bez", "ani", "not", "no"}
+
+
 def _goal_needs_apk(goal):
     """
     Czy TEN KONKRETNY cel jest w ogóle o budowaniu apki/gry
@@ -10540,12 +10544,44 @@ def _goal_needs_apk(goal):
     tylko każe też potwierdzić APK, co nie zaszkodzi; fałszywy
     negatyw skutkowałby zaakceptowaniem DONE bez APK, co dla
     zwykłego skryptu/programu i tak jest poprawnym zachowaniem.
+
+    Zaobserwowany realny problem: goły keyword-match nie rozumie
+    przeczenia. Cel wprost piszący "To NIE jest gra ani aplikacja do
+    zbudowania, więc nie wymagaj pliku .apk" nadal zawiera słowa
+    "gra" i "apk" — pierwsza wersja tej funkcji uznawała to za
+    wymóg APK, DOKŁADNIE ODWROTNIE niż jawna treść celu. Skutek w
+    logu: MAIN poprawnie zdiagnozował błąd systemu weryfikacji, ale
+    zespół zamiast czekać na poprawkę, sam sobie "naprawił" problem
+    tworząc pusty, fałszywy `dummy.apk` tylko po to, żeby przejść
+    check — nie tego chcemy. Teraz dla KAŻDEGO trafienia słowa
+    kluczowego sprawdzamy kilka poprzedzających je słów pod kątem
+    przeczenia ("nie", "bez", "ani") — jeśli występuje, to trafienie
+    nie liczy się jako wymóg APK. Cel wymaga APK tylko, jeśli
+    istnieje przynajmniej JEDNO trafienie BEZ przeczenia w pobliżu.
     """
 
     if not goal:
         return False
 
-    return bool(_APK_GOAL_PATTERN.search(goal))
+    text = str(goal)
+
+    for match in _APK_GOAL_PATTERN.finditer(text):
+
+        window_start = max(0, match.start() - _APK_NEGATION_WINDOW_CHARS)
+        preceding_words = re.findall(
+            r"\w+",
+            text[window_start:match.start()].lower()
+        )
+
+        if any(
+            w in _APK_NEGATION_WORDS
+            for w in preceding_words[-4:]
+        ):
+            continue
+
+        return True
+
+    return False
 
 
 # Ścieżki w stylu "~/coś.rozszerzenie" wspomniane wprost w treści
