@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v64
+AEL-MINI AUTONOMOUS AGENT v65
 
 ARCHITEKTURA:
 
@@ -441,6 +441,13 @@ ADB_CONNECT_FILE = AGENT_DIR / "adb_connect.txt"
 # patrz _track_project_path()/maybe_clear_generated_project_files().
 PROJECT_DIRS_FILE = AGENT_DIR / "project_dirs.json"
 
+# Rejestr punktów (TASK-ów) bieżącego celu z ich statusem —
+# ZWERYFIKOWANY (Python sam potwierdził dowód, nie tylko deklarację
+# Gemini), ZADEKLAROWANY_BEZ_DOWODU, BLAD, W_TOKU. Patrz
+# _checklist_add()/_checklist_record_result()/_checklist_summary_block()
+# przy create_task()/run_next_task() i w konsultacji zespołu.
+PROGRESS_CHECKLIST_FILE = AGENT_DIR / "progress_checklist.json"
+
 # Gdzie run_agent() spodziewa się finalnego APK i FINAL_OK.txt —
 # używane wyłącznie do FIZYCZNEJ weryfikacji przed przyjęciem DONE.
 APK_OUTPUT_DIR = AGENT_DIR / "apk_output"
@@ -814,7 +821,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v64")
+    print("             AEL-MINI AUTONOMOUS AGENT v65")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -980,6 +987,16 @@ Twoim zadaniem jest:
 - analizować raporty,
 - zmieniać strategię,
 - nie powtarzać bez końca tej samej czynności.
+
+W kontekście dostajesz linię "PUNKTY ZADAŃ" — zwięzły, sprawdzony
+PRZEZ PYTHON (nie przez deklarację Gemini) rejestr dotychczasowych
+TASK-ów. "zweryfikowany dowodem" = Python sam potwierdził to na
+dysku. "zadeklarowany BEZ dowodu" = Gemini NAPISAŁO że zrobione, ale
+NIKT tego niezależnie nie sprawdził — traktuj to jako niepewne, NIE
+jako fakt. Jeżeli spróbujesz zlecić TASK identyczny z już
+zweryfikowanym punktem, zostanie automatycznie odrzucony ze statusem
+TASK_DUPLICATE_OF_VERIFIED_POINT — to nie błąd do naprawienia, to
+sygnał żeby zaproponować NASTĘPNY, inny krok.
 
 Nie twórz zadania typu:
 "kliknij X".
@@ -8909,6 +8926,181 @@ def _check_forbidden_task(task_text):
     return None
 
 
+# ============================================================
+# CHECKLIST PUNKTÓW CELU (progress_checklist.json)
+# ============================================================
+#
+# Zaobserwowany realny problem (log z 2026-08-23): Gemini w swoim
+# raporcie NAPISAŁ "Wynik dzialania 12+7 = 19 potwierdzony przez
+# android_state" i to zdanie trafiło do pliku przez zwykłe echo —
+# to była DEKLARACJA, nie dowód, nikt tego nie sprawdził niezależnie.
+# Kilka kroków później PROGRESS_ESTIMATOR (inna rola DeepSeek) sam
+# to zauważył: "brak fizycznych dowodów". Ten moduł ma dać zespołowi
+# ZWIĘZŁY, zawsze aktualny rejestr KTÓRE punkty (TASK-i) są faktycznie
+# zweryfikowane przez Python (nie tylko zadeklarowane), i strukturalnie
+# (nie tylko przez prośbę w prompcie) zablokować zlecenie punktu,
+# który już ma potwierdzony dowód — zamiast pozwalać zespołowi w kółko
+# wracać do tego samego.
+#
+# Weryfikacja dowodu jest CELOWO ograniczona do plików — to jedyny
+# fakt, który Python może sam, niezależnie od LLM, sprawdzić na dysku
+# (ten sam mechanizm co _extract_goal_mentioned_files/verify_final).
+# Nie próbujemy parsować dowolnej wartości z android_state/chrome —
+# to by wymagało zgadywania formatu i byłoby równie kruche jak to,
+# co ma zastąpić.
+
+def _normalize_task_text(text):
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
+
+
+def _load_progress_checklist():
+    data = read_json(PROGRESS_CHECKLIST_FILE, [])
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+def _save_progress_checklist(items):
+    write_json(PROGRESS_CHECKLIST_FILE, items)
+
+
+def _checklist_add(task_id, task, success_condition):
+    items = _load_progress_checklist()
+    items.append({
+        "task_id": task_id,
+        "task": task,
+        "success_condition": success_condition,
+        "status": "W_TOKU",
+        "created": datetime.now().isoformat(),
+        "evidence": ""
+    })
+    _save_progress_checklist(items)
+
+
+def _verify_success_condition_evidence(success_condition):
+    """
+    Próbuje NIEZALEŻNIE potwierdzić warunek sukcesu — na razie tylko
+    gdy odwołuje się do KONKRETNEGO pliku (ten sam wzorzec ścieżek co
+    _extract_goal_mentioned_files). Zwraca (True, opis_dowodu) albo
+    (False, "") gdy nie da się tego sprawdzić bez ufania samej
+    deklaracji Gemini.
+    """
+    for rel_path in _extract_goal_mentioned_files(success_condition):
+        try:
+            p = Path(rel_path).expanduser()
+        except Exception:
+            continue
+        if p.exists() and p.stat().st_size > 0:
+            return True, "plik " + rel_path + " istnieje i nie jest pusty"
+    return False, ""
+
+
+def _checklist_record_result(task_id, result):
+    if not isinstance(result, dict):
+        return
+
+    items = _load_progress_checklist()
+    changed = False
+
+    for item in items:
+
+        if item.get("task_id") != task_id:
+            continue
+
+        changed = True
+
+        if result.get("status") == "COMPLETED":
+            verified, evidence = _verify_success_condition_evidence(
+                item.get("success_condition", "")
+            )
+            if verified:
+                item["status"] = "ZWERYFIKOWANY"
+                item["evidence"] = evidence
+            else:
+                item["status"] = "ZADEKLAROWANY_BEZ_DOWODU"
+                item["evidence"] = ""
+        else:
+            item["status"] = "BLAD"
+
+        item["finished"] = datetime.now().isoformat()
+        break
+
+    if changed:
+        _save_progress_checklist(items)
+
+
+def _checklist_duplicate_message(task_text):
+    """
+    Zwraca gotowy komunikat blokady, jeżeli task_text to dokładne
+    powtórzenie punktu już ZWERYFIKOWANEGO dowodem z dysku — albo
+    None, gdy nie ma kolizji. Celowo TYLKO dokładne dopasowanie (po
+    normalizacji białych znaków/wielkości liter), nie fuzzy-matching
+    — żeby nie zablokować przez pomyłkę faktycznie innego zadania.
+    """
+    normalized = _normalize_task_text(task_text)
+
+    if not normalized:
+        return None
+
+    for item in _load_progress_checklist():
+
+        if item.get("status") != "ZWERYFIKOWANY":
+            continue
+
+        if _normalize_task_text(item.get("task", "")) == normalized:
+            return (
+                "Ten TASK jest IDENTYCZNY z punktem już "
+                "ZWERYFIKOWANYM dowodem z dysku (task_id="
+                + str(item.get("task_id", "?")) + ", dowód: "
+                + str(item.get("evidence", "")) + "). Nie powtarzaj "
+                "go — zaproponuj KOLEJNY, inny krok."
+            )
+
+    return None
+
+
+_CHECKLIST_STATUS_LABELS = {
+    "ZWERYFIKOWANY": "zweryfikowany dowodem",
+    "ZADEKLAROWANY_BEZ_DOWODU": "zadeklarowany przez Gemini, BEZ dowodu",
+    "BLAD": "zakończony błędem",
+    "W_TOKU": "w toku"
+}
+
+
+def _checklist_summary_block():
+    """
+    Zwięzłe podsumowanie checklisty do wstrzyknięcia w kontekst
+    zespołu — zero wywołań LLM, ten sam wzorzec co
+    _goal_progress_snapshot(). To jest odpowiedź na "ile punktów
+    zrobione" bez wysyłania pełnych logów: liczba + kilka ostatnich
+    pozycji z jawną etykietą, czy to dowód czy tylko deklaracja.
+    """
+    items = _load_progress_checklist()
+
+    if not items:
+        return ""
+
+    verified = sum(1 for i in items if i.get("status") == "ZWERYFIKOWANY")
+    unverified = sum(1 for i in items if i.get("status") == "ZADEKLAROWANY_BEZ_DOWODU")
+    failed = sum(1 for i in items if i.get("status") == "BLAD")
+    running = sum(1 for i in items if i.get("status") == "W_TOKU")
+
+    lines = [
+        "PUNKTY ZADAŃ (" + str(len(items)) + " łącznie): "
+        + str(verified) + " zweryfikowanych dowodem, "
+        + str(unverified) + " zadeklarowanych BEZ dowodu, "
+        + str(failed) + " błędów, " + str(running) + " w toku."
+    ]
+
+    for item in items[-5:]:
+        label = _CHECKLIST_STATUS_LABELS.get(
+            item.get("status"), str(item.get("status", "?"))
+        )
+        lines.append("- [" + label + "] " + short(item.get("task", ""), 100))
+
+    return "\n".join(lines)
+
+
 def create_task(
     task,
     success_condition,
@@ -8975,6 +9167,8 @@ def create_task(
         "QUEUE",
         "Dodano " + task_id
     )
+
+    _checklist_add(task_id, task, success_condition)
 
     return task_id
 
@@ -9045,6 +9239,8 @@ def run_next_task():
             ""
         )
     )
+
+    _checklist_record_result(task["task_id"], result)
 
     task["finished"] = (
         datetime.now().isoformat()
@@ -10157,6 +10353,9 @@ def consult_team(
     progress_snapshot = _goal_progress_snapshot(goal)
     progress_block = ("\n" + progress_snapshot + "\n") if progress_snapshot else ""
 
+    checklist_summary = _checklist_summary_block()
+    checklist_block = ("\n" + checklist_summary + "\n") if checklist_summary else ""
+
     # Fakty wspólne dla WSZYSTKICH ról — to jedyna część, która
     # faktycznie musi być identyczna, żeby zespół "rozumiał się
     # nawzajem" (patrz prośba użytkownika). Stan Chrome/Android
@@ -10168,7 +10367,7 @@ def consult_team(
     core_context = f"""
 CEL:
 {goal}
-{progress_block}
+{progress_block}{checklist_block}
 OSTATNI RAPORT:
 {_condense_last_result_for_team(last_result)}
 {tool_hint}
@@ -10414,6 +10613,11 @@ DONE_REJECTED_VERIFICATION_FAILED — TWOJE poprzednie DONE zostało
 
 TASK_BLOCKED_BY_POLICY — zadanie naruszało zakaz pobierania
   gotowej gry/APK. Zaproponuj INNE podejście (build od zera).
+
+TASK_DUPLICATE_OF_VERIFIED_POINT — proponowany TASK jest identyczny
+  z punktem, który checklist (patrz "PUNKTY ZADAŃ" w kontekście)
+  już ma jako ZWERYFIKOWANY dowodem z dysku. Pole "message" mówi
+  którym. NIE ponawiaj go — zaproponuj KOLEJNY, inny krok celu.
 
 COMPLETED — Gemini wykonał blok, pole "report" to jego raport.
   NIE oznacza automatycznie DONE całego projektu. Sprawdź raport.
@@ -11868,6 +12072,17 @@ Zwróć tylko JSON.
             # NOWY TASK
             # --------------------------------------------------
 
+            duplicate_msg = _checklist_duplicate_message(task_text)
+
+            if duplicate_msg:
+
+                last_result = {
+                    "status": "TASK_DUPLICATE_OF_VERIFIED_POINT",
+                    "message": duplicate_msg
+                }
+
+                continue
+
             task_id = create_task(
                 task=task_text,
                 success_condition=
@@ -12120,6 +12335,20 @@ Tylko JSON.
 
                 if task_text:
 
+                    duplicate_msg = _checklist_duplicate_message(
+                        task_text
+                    )
+
+                    if duplicate_msg:
+
+                        last_result = {
+                            "status":
+                                "TASK_DUPLICATE_OF_VERIFIED_POINT",
+                            "message": duplicate_msg
+                        }
+
+                        continue
+
                     alt_task_id = create_task(
                         task_text,
                         condition,
@@ -12321,7 +12550,8 @@ def maybe_clear_previous_session_data():
     for extra in (
         TOOL_ATTEMPTS_FILE,
         LAST_RESULT_FILE,
-        GEMINI_STATE_FILE
+        GEMINI_STATE_FILE,
+        PROGRESS_CHECKLIST_FILE
     ):
         try:
             extra.unlink(missing_ok=True)
@@ -12331,7 +12561,7 @@ def maybe_clear_previous_session_data():
     log(
         "MAIN",
         "Usunięto dane poprzedniej sesji (kolejka, wyniki, "
-        "licznik prób narzędzi, ostatni wynik)."
+        "licznik prób narzędzi, ostatni wynik, checklist punktów)."
     )
 
 
