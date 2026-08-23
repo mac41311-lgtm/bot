@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v73
+AEL-MINI AUTONOMOUS AGENT v74
 
 ARCHITEKTURA:
 
@@ -372,6 +372,20 @@ COMMAND_TIMEOUT = int(
     )
 )
 
+# Zaobserwowany realny problem: subprocess.run(..., shell=True) na
+# Termuksie domyślnie uruchamia /system/bin/sh (albo minimalny sh w
+# $PREFIX/bin), którego WBUDOWANE `echo` NIE obsługuje flagi `-e` —
+# `echo -e "a\nb"` wypisuje dosłownie "-e a\nb" (znak nowej linii
+# jako dwa znaki, nie prawdziwe przejście do nowej linii). To
+# rzeczywiście uszkodziło zapisywane pliki (dosłowny "-e " na
+# początku treści, powodujący SyntaxError). Bash OBSŁUGUJE `-e` w
+# swoim wbudowanym echo — Termux instaluje bash domyślnie, więc
+# wymuszamy go jako interpreter powłoki zamiast pozostawiać to
+# systemowemu /bin/sh. Jeśli bash nie jest dostępny (np. inne
+# środowisko), subprocess.run po prostu użyje domyślnego /bin/sh —
+# bez zmiany zachowania.
+_SHELL_EXECUTABLE = shutil.which("bash")
+
 CDP_HOST = os.environ.get(
     "CDP_HOST",
     "127.0.0.1"
@@ -489,12 +503,22 @@ CUSTOM_TOOLS_DIR.mkdir(
 
 # Gemini regularnie próbuje sam przetestować dopiero co napisane
 # narzędzie przez "python -c 'from agent.custom_tools.X import run'".
-# Bez tych dwóch plików __init__.py to ZAWSZE kończy się
-# ModuleNotFoundError: 'agent' is not a package — bo ~/agent i
-# ~/agent/custom_tools są zwykłymi katalogami, nie pakietami Pythona.
-# Samo narzędzie jest przy tym poprawnie napisane i już zarejestrowane
-# (patrz termux_write_file) — winny jest wyłącznie brak tych plików,
-# więc tworzymy je raz na starcie, żeby import faktycznie działał.
+# POPRAWKA v74: ta wcześniejsza wersja komentarza błędnie zakładała,
+# że winny jest tylko brak __init__.py — realny log z 2026-08-23
+# pokazał, że błąd "'agent' is not a package" wystąpił MIMO że te
+# pliki już istniały. Prawdziwa przyczyna: proces działa z katalogu
+# ~/agent jako CWD (patrz `~/agent $ python3 agent.py`), więc `-c`
+# dodaje CWD do sys.path — a ~/agent/agent.py (PLIK, sam bot) leży
+# TAM, gdzie Python szuka pakietu "agent". Trafia więc najpierw na
+# ten plik jako zwykły MODUŁ i już nigdy nie sprawdza ~/agent jako
+# KATALOGU-pakietu (do czego __init__.py w ogóle by się przydał) —
+# stąd "'agent' is not a package", niezależnie od __init__.py.
+# Ten import ZAWSZE zawiedzie z tego katalogu, więc od v74 jest
+# strukturalnie blokowany w execute_shell() (patrz
+# _CUSTOM_TOOL_SELF_TEST_IMPORT_PATTERN) zamiast liczyć na to, że
+# Gemini zapamięta, żeby go nie próbować. __init__.py zostają mimo
+# to na miejscu — nieszkodliwe i przydałyby się, gdyby kiedyś CWD
+# było inne.
 try:
     for _pkg_dir in (AGENT_DIR, CUSTOM_TOOLS_DIR):
         _init_file = _pkg_dir / "__init__.py"
@@ -837,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v73")
+    print("             AEL-MINI AUTONOMOUS AGENT v74")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1412,11 +1436,14 @@ Zasady:
 - Zapis narzędzia REJESTRUJE je NATYCHMIAST (już przy samym
   termux_write_file) — NIE każ Gemini "przetestować" go przez
   `python -c "from agent.custom_tools.X import run; ..."`. To
-  ZAWSZE się wywali (`ModuleNotFoundError: 'agent' is not a
-  package`), bo to import ścieżki modułu, nie sposób sprawdzenia
-  Twojego narzędzia. Żeby sprawdzić, czy działa, po prostu wywołaj
-  je jako zwykłe narzędzie w NASTĘPNEJ konsultacji (pojawi się na
-  liście dostępnych) — to jedyny sensowny test.
+  strukturalnie ZABLOKOWANE i ZAWSZE zawiedzie: `~/agent/agent.py`
+  (sam bot) leży dokładnie tam, gdzie Python szuka pakietu "agent",
+  więc trafia na ten plik jako zwykły moduł, zanim w ogóle
+  rozważyłby katalog jako pakiet — `ModuleNotFoundError: 'agent' is
+  not a package` niezależnie od czegokolwiek. Żeby sprawdzić, czy
+  działa, po prostu wywołaj je jako zwykłe narzędzie w NASTĘPNEJ
+  konsultacji (pojawi się na liście dostępnych) — to jedyny sensowny
+  test.
 
 ============================================================
 ZABRONIONE ZADANIA
@@ -4470,6 +4497,23 @@ def _fake_tool_invocation_error(tool_name):
     }
 
 
+# Zaobserwowany realny, wielokrotnie powtarzający się incydent:
+# Gemini próbuje "przetestować" dopiero co napisane narzędzie z
+# custom_tools/ przez `python -c "from agent.custom_tools.X import
+# run; ..."`. To NIGDY nie może zadziałać niezależnie od __init__.py
+# — `~/agent` zawiera PLIK `agent.py`, więc Python od razu traktuje
+# "agent" jako zwykły MODUŁ (ten plik), nie jako pakiet z
+# podkatalogami, i "agent.custom_tools" nie ma prawa się rozwiązać.
+# Prompt-only ostrzeżenie (MAIN_PROMPT) okazało się niewystarczające
+# — Gemini i tak próbowało tego kilka razy w jednym realnym
+# przebiegu, marnując pełne cykle TASK-u na identyczny,
+# przewidywalny błąd. Blokujemy to strukturalnie, z jasnym
+# wyjaśnieniem DLACZEGO i co zrobić zamiast tego.
+_CUSTOM_TOOL_SELF_TEST_IMPORT_PATTERN = re.compile(
+    r"from\s+agent\.custom_tools\.[\w.]+\s+import"
+)
+
+
 # ============================================================
 # SHELL
 # ============================================================
@@ -4484,6 +4528,24 @@ def execute_shell(command, timeout=None):
         return {
             "ok": False,
             "error": "Pusta komenda"
+        }
+
+    if _CUSTOM_TOOL_SELF_TEST_IMPORT_PATTERN.search(command):
+        return {
+            "ok": False,
+            "error": (
+                "Import 'from agent.custom_tools.X import ...' NIGDY "
+                "nie zadziała z tego katalogu — '~/agent' zawiera "
+                "PLIK agent.py, więc Python od razu traktuje 'agent' "
+                "jako zwykły moduł (ten plik), nie jako pakiet z "
+                "podkatalogami, niezależnie od __init__.py. Narzędzie "
+                "z custom_tools/ jest już zarejestrowane AUTOMATYCZNIE "
+                "od razu przy zapisie (termux_write_file) — wywołaj "
+                "je BEZPOŚREDNIO jako zwykłe narzędzie w NASTĘPNEJ "
+                "konsultacji, nie testuj go przez import w Pythonie."
+            ),
+            "command": command,
+            "blocked_by_safety_gate": True
         }
 
     fake_tool = _looks_like_fake_tool_shell_invocation(command)
@@ -4520,6 +4582,7 @@ def execute_shell(command, timeout=None):
         result = subprocess.run(
             command,
             shell=True,
+            executable=_SHELL_EXECUTABLE,
             capture_output=True,
             text=True,
             timeout=effective_timeout
