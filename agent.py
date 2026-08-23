@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v57
+AEL-MINI AUTONOMOUS AGENT v58
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v57")
+    print("             AEL-MINI AUTONOMOUS AGENT v58")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1206,6 +1206,13 @@ samym zadaniu — nie "zrób to w skrypcie".
 
 SHELL:
 - shell
+
+ZAOBSERWOWANY REALNY PROBLEM — `/tmp` W TERMUKSIE NIE DZIAŁA: to
+katalog systemowy Androida (root filesystem), NIE `$PREFIX/tmp` —
+zwykła aplikacja (czym jest Termux) nie ma do niego zapisu, próba
+zapisu kończy się "Permission denied". Jeśli TASK potrzebuje pliku
+tymczasowego, każ Gemini użyć `$HOME` (np. `~/tmp_cos.txt`, usunięty
+na końcu skryptu) albo `$TMPDIR` — nigdy gołego `/tmp/...`.
 
 Jeżeli zadanie wymaga:
 - katalogu,
