@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v62
+AEL-MINI AUTONOMOUS AGENT v63
 
 ARCHITEKTURA:
 
@@ -388,6 +388,12 @@ ANDROID_LIMIT = 8000
 CHROME_TEXT_LIMIT = 10000
 RESULT_LIMIT = 7000
 
+# Prefiks resource-id systemowego paska statusu/nawigacji Androida —
+# te elementy powtarzają się identycznie w KAŻDYM zrzucie UI niezależnie
+# od aktywnej aplikacji, więc android_summary() je pomija (patrz
+# _parse_hierarchy).
+_ANDROID_SYSTEMUI_RESOURCE_PREFIX = "com.android.systemui:"
+
 # Po ilu identycznych zadaniach (na poziomie decyzji MAIN)
 # wymuszamy zmianę strategii.
 REPEAT_LIMIT = 3
@@ -457,6 +463,22 @@ CUSTOM_TOOLS_DIR.mkdir(
     parents=True,
     exist_ok=True
 )
+
+# Gemini regularnie próbuje sam przetestować dopiero co napisane
+# narzędzie przez "python -c 'from agent.custom_tools.X import run'".
+# Bez tych dwóch plików __init__.py to ZAWSZE kończy się
+# ModuleNotFoundError: 'agent' is not a package — bo ~/agent i
+# ~/agent/custom_tools są zwykłymi katalogami, nie pakietami Pythona.
+# Samo narzędzie jest przy tym poprawnie napisane i już zarejestrowane
+# (patrz termux_write_file) — winny jest wyłącznie brak tych plików,
+# więc tworzymy je raz na starcie, żeby import faktycznie działał.
+try:
+    for _pkg_dir in (AGENT_DIR, CUSTOM_TOOLS_DIR):
+        _init_file = _pkg_dir / "__init__.py"
+        if not _init_file.exists():
+            _init_file.write_text("")
+except Exception:
+    pass
 
 # Wzorce zadań, które użytkownik jawnie zabronił (np. pobieranie
 # gotowej gry zamiast tworzenia jej od zera przez Gemini).
@@ -792,7 +814,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v62")
+    print("             AEL-MINI AUTONOMOUS AGENT v63")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1326,6 +1348,14 @@ Zasady:
   różnymi argumentami (np. "sprawdź rozmiar i typ pliku",
   "policz linie kodu w katalogu") — nie do jednorazowych operacji,
   te po prostu zleć przez zwykły shell.
+- Zapis narzędzia REJESTRUJE je NATYCHMIAST (już przy samym
+  termux_write_file) — NIE każ Gemini "przetestować" go przez
+  `python -c "from agent.custom_tools.X import run; ..."`. To
+  ZAWSZE się wywali (`ModuleNotFoundError: 'agent' is not a
+  package`), bo to import ścieżki modułu, nie sposób sprawdzenia
+  Twojego narzędzia. Żeby sprawdzić, czy działa, po prostu wywołaj
+  je jako zwykłe narzędzie w NASTĘPNEJ konsultacji (pojawi się na
+  liście dostępnych) — to jedyny sensowny test.
 
 ============================================================
 ZABRONIONE ZADANIA
@@ -2877,6 +2907,18 @@ def android_summary():
                 or resource
                 or clickable == "true"
                 or focusable == "true"
+            ):
+                continue
+
+            # Pasek statusu i pasek nawigacji (com.android.systemui)
+            # są identyczne w KAŻDYM kroku, niezależnie jaka aplikacja
+            # jest aktywna — to czysty szum zajmujący miejsce w limicie
+            # znaków, bez żadnej wartości diagnostycznej dla zespołu.
+            # Odfiltrowujemy je po prefiksie pakietu w resource-id
+            # (a nie po nazwie widgetu), więc działa dla KAŻDEJ
+            # aplikacji, nie tylko tych zaobserwowanych w logach.
+            if resource.startswith(
+                _ANDROID_SYSTEMUI_RESOURCE_PREFIX
             ):
                 continue
 
@@ -9985,6 +10027,86 @@ def print_progress_bar(step, percent, summary):
 _role_response_cache = {}
 
 
+def _condense_last_result_for_team(last_result, limit=2500):
+    """
+    Buduje ZWIĘZŁE, czytelne podsumowanie last_result zamiast
+    surowego short(json.dumps(last_result), 4500).
+
+    Poprzednie podejście obcinało zserializowany JSON od KOŃCA
+    łańcucha znaków (patrz short()). Problem: w słowniku
+    GEMINI_TOOL_ERROR klucz "tool_result" (zawierający m.in.
+    "stderr" — czyli zwykle FAKTYCZNY powód błędu) leży w JSON-ie
+    PO kluczach "tool"/"arguments", a samo "stdout" (do 6000 znaków
+    z execute_shell) leży PRZED "stderr". Przy dłuższym stdout
+    realny błąd bywał więc ucięty, zanim w ogóle dotarł do zespołu
+    — dużo tekstu, ale nie ten, który był diagnostycznie ważny.
+    Dodatkowo user prosił wprost o mniej surowych logów przy
+    zachowaniu wzajemnego zrozumienia ról.
+
+    Tutaj wyciągamy NAJPIERW to, co faktycznie tłumaczy, co się
+    stało (status, komunikat/błąd, stderr narzędzia), a dopiero
+    potem, jeśli zostało miejsce, resztę (stdout, pełny raport
+    Gemini).
+    """
+
+    if not isinstance(last_result, dict):
+        return short(
+            json.dumps(last_result, ensure_ascii=False),
+            limit
+        )
+
+    parts = [
+        "status=" + str(last_result.get("status", "?"))
+        + " ok=" + str(last_result.get("ok"))
+    ]
+
+    tool = last_result.get("tool")
+
+    if tool:
+        parts.append("narzędzie: " + str(tool))
+        args = last_result.get("arguments")
+        if args:
+            parts.append(
+                "argumenty: "
+                + short(json.dumps(args, ensure_ascii=False), 300)
+            )
+
+    message = last_result.get("message") or last_result.get("error")
+
+    if message:
+        parts.append("komunikat: " + short(str(message), 500))
+
+    tool_result = last_result.get("tool_result")
+
+    if isinstance(tool_result, dict):
+        tr_error = (
+            tool_result.get("error")
+            or tool_result.get("stderr")
+            or tool_result.get("stderr_partial")
+        )
+        if tr_error:
+            parts.append("błąd narzędzia: " + short(str(tr_error), 800))
+
+        tr_stdout = (
+            tool_result.get("stdout")
+            or tool_result.get("stdout_partial")
+        )
+        if tr_stdout and str(tr_stdout).strip():
+            parts.append("stdout: " + short(str(tr_stdout), 500))
+
+    report = last_result.get("report")
+
+    if report:
+        parts.append("raport Gemini: " + short(str(report), 1200))
+
+    tool_calls = last_result.get("tool_calls")
+
+    if tool_calls:
+        parts.append("liczba wywołań narzędzi: " + str(tool_calls))
+
+    return short("\n".join(parts), limit)
+
+
 def consult_team(
     goal,
     last_result,
@@ -10074,13 +10196,7 @@ CEL:
 {goal}
 {progress_block}
 OSTATNI RAPORT:
-{short(
-    json.dumps(
-        last_result,
-        ensure_ascii=False
-    ),
-    4500
-)}
+{_condense_last_result_for_team(last_result)}
 {tool_hint}
 
 AKTUALNY CHROME:
