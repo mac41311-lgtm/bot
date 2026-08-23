@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v60
+AEL-MINI AUTONOMOUS AGENT v61
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v60")
+    print("             AEL-MINI AUTONOMOUS AGENT v61")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1118,21 +1118,20 @@ urządzeniu, Termux jest tylko jedną z wielu):
   nazwie pakietu — np. zbudowaną i zainstalowaną grę, żeby ją
   faktycznie zobaczyć na ekranie, a nie tylko sprawdzić plik .apk)
 
-ZAOBSERWOWANY REALNY PROBLEM przy SZUKANIU nazwy pakietu: gołe `pm
-list packages` uruchomione w SAMYM Termuksie (przez `shell`/
-`termux_run`, NIE przez ADB) może NIE ZNALEŹĆ aplikacji, która
-FAKTYCZNIE jest zainstalowana i widoczna na ekranie użytkownika —
-np. Kalkulatora. Przyczyna: od Androida 11 obowiązuje "package
-visibility" — zwykła aplikacja (czym jest tu Termux) domyślnie widzi
-w PackageManagerze tylko ograniczony zestaw innych pakietów, nie
-wszystkie zainstalowane. `adb shell pm list packages` działa
-NIEZAWODNIE, bo — dokładnie jak przy screencap/dumpsys — wykonuje
-się jako uprzywilejowany użytkownik `shell`, który tego ograniczenia
-nie ma. Jeśli szukanie pakietu (`pm list packages | grep ...`)
-uruchomione bez ADB nic nie znajdzie, NIE oznacza to, że aplikacji
-nie ma na urządzeniu — zawsze powtórz to samo szukanie przez
-`adb shell pm list packages | grep -i <fraza>` zanim uznasz, że
-aplikacja nie istnieje.
+ZAOBSERWOWANY REALNY, POWTARZAJĄCY SIĘ PROBLEM przy SZUKANIU nazwy
+pakietu: gołe `pm list packages` w skrypcie bash (nawet gdy Gemini
+PAMIĘTA dodać `adb shell` — a w praktyce, wielokrotnie, ZAPOMINAŁO)
+może NIE ZNALEŹĆ aplikacji, która FAKTYCZNIE jest zainstalowana i
+widoczna na ekranie użytkownika — np. Kalkulatora czy Zegara.
+Przyczyna: od Androida 11 obowiązuje "package visibility" — zwykła
+aplikacja (czym jest tu Termux) domyślnie widzi w PackageManagerze
+tylko ograniczony zestaw innych pakietów. Ponieważ poleganie na
+pamiętaniu o `adb shell` w RĘCZNIE pisanym skrypcie okazało się
+NIEWYSTARCZAJĄCE — użyj zamiast tego bezpośrednio narzędzia
+`android_list_packages(filter_text)` — ono ZAWSZE, strukturalnie,
+przechodzi przez ADB, więc nie da się tu zapomnieć o niczym. Zawsze
+używaj TEGO narzędzia (nie pisz własnego `pm list packages` w
+skrypcie) do szukania nazwy pakietu PRZED android_launch_app.
 - android_run_in_new_window (uruchom komendę w NOWYM, widocznym
   oknie Termuksa — konkretna komenda, nie puste okno jak
   termux_start_second_session; do procesów, które mają być
@@ -3490,7 +3489,8 @@ def android_screenshot(path=None):
 def android_screenshot_ocr(path=None, lang=None):
     """
     Zrzut ekranu + NATYCHMIASTOWE rozpoznanie tekstu lokalnie przez
-    Tesseract OCR (pkg install tesseract-ocr w Termuksie) — ZERO
+    Tesseract OCR (pkg install tesseract w Termuksie — UWAGA: pakiet
+    nazywa się dokładnie "tesseract", NIE "tesseract-ocr") — ZERO
     wywołań do Gemini/innego modelu, zero kosztu limitu API,
     działa całkowicie offline na urządzeniu. Zwraca sam TEKST
     widoczny na ekranie (nie plik obrazu) — przydatne tam, gdzie
@@ -3517,9 +3517,18 @@ def android_screenshot_ocr(path=None, lang=None):
             "ok": False,
             "error": (
                 "Brak zainstalowanego 'tesseract' w Termuksie. "
-                "Zainstaluj: pkg install tesseract-ocr "
-                "(opcjonalnie dodatkowy pakiet języka, np. "
-                "tesseract-ocr-pol dla polskiego) i spróbuj ponownie."
+                "POPRAWNA nazwa pakietu to dokładnie 'tesseract' "
+                "(NIE 'tesseract-ocr' — takiego pakietu nie ma w "
+                "repozytorium Termux, próba jego instalacji zawsze "
+                "kończy się 'Unable to locate package'). Zainstaluj: "
+                "pkg install tesseract — angielski działa od razu, "
+                "bez dodatkowego pakietu językowego. Dla innych "
+                "języków (np. polskiego) NIE MA osobnego pakietu do "
+                "zainstalowania — trzeba ręcznie pobrać plik danych "
+                "językowych, np.: curl -o "
+                "$PREFIX/share/tessdata/pol.traineddata "
+                "https://raw.githubusercontent.com/tesseract-ocr/"
+                "tessdata/4.0.0/pol.traineddata"
             ),
             "path": target
         }
@@ -3606,6 +3615,51 @@ def android_launch_app(package):
             + result.get("stderr", ""),
             500
         )
+    }
+
+
+def android_list_packages(filter_text=None):
+    """
+    Lista zainstalowanych pakietów PRZEZ ADB — omija ograniczenie
+    "package visibility" (Android 11+), przez które gołe `pm list
+    packages` uruchomione w SAMYM Termuksie (zwykła aplikacja) widzi
+    tylko ograniczony podzbiór innych zainstalowanych aplikacji, nie
+    wszystkie.
+
+    Zaobserwowany realny, powtarzający się problem: Gemini
+    wielokrotnie pisał WŁASNY skrypt bash z gołym `pm list packages
+    | grep ...` (czasem pamiętając o dodaniu `adb shell`, czasem
+    zapominając — niezawodność promptu okazała się niewystarczająca,
+    jak przy innych podobnych przypadkach w tym projekcie), który
+    konsekwentnie nie znajdował aplikacji FAKTYCZNIE zainstalowanych
+    na urządzeniu (Kalkulator, Zegar) — zamiast czekać, aż model
+    zawsze pamięta o `adb shell`, to narzędzie robi to sam, za każdym
+    razem, strukturalnie.
+    """
+
+    command = "adb shell pm list packages"
+
+    if filter_text:
+        command += " | grep -i " + shlex.quote(str(filter_text))
+
+    result = execute_shell(command, timeout=20)
+
+    if not result.get("ok"):
+        return result
+
+    packages = []
+
+    for line in result.get("stdout", "").splitlines():
+
+        line = line.strip()
+
+        if line.startswith("package:"):
+            packages.append(line[len("package:"):])
+
+    return {
+        "ok": True,
+        "packages": packages,
+        "count": len(packages)
     }
 
 
@@ -4020,6 +4074,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
     "android_screenshot", "android_screenshot_ocr", "android_launch_app",
+    "android_list_packages",
     "android_run_in_new_window", "android_install_apk",
     "android_uninstall_app", "android_logcat",
 ]
@@ -5769,6 +5824,36 @@ def _gemini_tools_legacy():
                     "package": {"type": "string"}
                 },
                 "required": ["package"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_list_packages",
+            "description": (
+                "Wyszukaj nazwę pakietu zainstalowanej aplikacji "
+                "PRZEZ ADB (widzi WSZYSTKIE zainstalowane aplikacje, "
+                "w odróżnieniu od gołego 'pm list packages' w "
+                "skrypcie bash, które może nic nie znaleźć nawet "
+                "dla aplikacji faktycznie obecnej na urządzeniu — "
+                "ograniczenie systemowe Androida 11+). Używaj tego "
+                "PRZED android_launch_app, żeby ustalić dokładną "
+                "nazwę pakietu (np. Kalkulatora, Zegara) zamiast "
+                "zgadywać popularne nazwy typu com.android.calculator2 "
+                "— na wielu urządzeniach (OEM-owe ROM-y) są inne."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filter_text": {
+                        "type": "string",
+                        "description": (
+                            "Fragment nazwy do wyszukania, np. "
+                            "'calc' albo 'clock' (bez tego zwraca "
+                            "WSZYSTKIE zainstalowane pakiety)."
+                        )
+                    }
+                }
             }
         },
 
@@ -7686,6 +7771,25 @@ def _dispatch_tool_inner(
                 }
 
             return fn(package)
+
+        # Gemini: android_list_packages
+        # Python: android_list_packages
+        if name == "android_list_packages":
+
+            fn = globals().get(
+                "android_list_packages"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_list_packages()."
+                }
+
+            return fn(
+                args.get("filter_text")
+            )
 
         # Gemini: android_run_in_new_window
         # Python: android_run_in_new_window
