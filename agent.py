@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v53
+AEL-MINI AUTONOMOUS AGENT v54
 
 ARCHITEKTURA:
 
@@ -62,6 +62,7 @@ import re
 import select
 import shlex
 import shutil
+import hashlib
 import subprocess
 import traceback
 import uuid
@@ -791,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v53")
+    print("             AEL-MINI AUTONOMOUS AGENT v54")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1915,14 +1916,35 @@ def _load_session_state(name):
     return None
 
 
-def _save_session_state(name, session):
+def _prompt_hash(system_prompt):
+    return hashlib.sha256(
+        str(system_prompt).encode("utf-8")
+    ).hexdigest()
+
+
+def _save_session_state(name, session, prompt_hash=None):
+
+    data = {
+        "chat_session_id": session.chat_session_id,
+        "parent_message_id": session.parent_message_id
+    }
+
+    if prompt_hash is None:
+        # Zachowaj już zapisany hash, jeśli wołający go nie podał
+        # (np. zapisy z deepseek() po zwykłej turze rozmowy, gdzie
+        # prompt się nie zmienił) — bez tego kolejny zapis bez
+        # prompt_hash wyzerowałby wiedzę o tym, jaką wersję promptu
+        # sesja już dostała.
+        existing = read_json(session_state_file(name), {})
+        if isinstance(existing, dict):
+            prompt_hash = existing.get("prompt_hash")
+
+    if prompt_hash:
+        data["prompt_hash"] = prompt_hash
 
     write_json(
         session_state_file(name),
-        {
-            "chat_session_id": session.chat_session_id,
-            "parent_message_id": session.parent_message_id
-        }
+        data
     )
 
 
@@ -1951,10 +1973,11 @@ def start_session(name, system_prompt):
         if saved:
 
             # Wznawiamy — nadpisujemy ID świeżo utworzonej (i teraz
-            # porzuconej) sesji zapisanymi wcześniej. Pomijamy
-            # priming system_prompt: model już go dostał w tamtej
-            # rozmowie, ponowne wysłanie zmarnowałoby wiadomość i
-            # zaśmieciłoby historię duplikatem instrukcji roli.
+            # porzuconej) sesji zapisanymi wcześniej. Domyślnie
+            # pomijamy priming system_prompt: model już go dostał w
+            # tamtej rozmowie, ponowne wysłanie zmarnowałoby
+            # wiadomość i zaśmieciłoby historię duplikatem instrukcji
+            # roli.
             session.chat_session_id = saved["chat_session_id"]
             session.parent_message_id = saved.get(
                 "parent_message_id"
@@ -1962,11 +1985,53 @@ def start_session(name, system_prompt):
 
             _resume_unverified.add(name)
 
-            log(
-                "DEEPSEEK",
-                f"Sesja {name}: OK (wznowiona z poprzedniego "
-                "uruchomienia)"
-            )
+            # KRYTYCZNE — zaobserwowany realny problem: kod tego
+            # pliku dostaje poprawki promptów (np. v53 — wymuszenie
+            # `-p com.android.chrome` w `am start`) między
+            # uruchomieniami, ale sesja WZNOWIONA nigdy wcześniej nie
+            # dostawała zaktualizowanej treści — działała cały czas
+            # na promptcie sprzed wielu wersji, sprzed tego, gdy
+            # sesja została po raz pierwszy utworzona. Efekt widoczny
+            # w logu: MAIN dalej kazał robić `am start` BEZ pakietu,
+            # mimo że w kodzie od jednej wersji już tam jest `-p
+            # com.android.chrome`. Naprawiamy: jeśli hash aktualnej
+            # treści promptu różni się od tego zapisanego przy
+            # ostatnim priming/update (albo w ogóle go nie było —
+            # sesje sprzed wprowadzenia tego mechanizmu) — wysyłamy
+            # zaktualizowaną treść jako NOWĄ wiadomość w TEJ SAMEJ,
+            # ciągłej rozmowie (nie tworzymy nowej sesji, nie tracimy
+            # historii) i jawnie oznaczamy ją jako aktualizację, nie
+            # powtórkę.
+            current_hash = _prompt_hash(system_prompt)
+
+            if saved.get("prompt_hash") != current_hash:
+
+                session.send_message(
+                    "AKTUALIZACJA INSTRUKCJI ROLI (zastępuje "
+                    "poprzednią wersję instrukcji z tej rozmowy, "
+                    "reszta historii/ustaleń pozostaje ważna):\n\n"
+                    + system_prompt
+                )
+
+                _save_session_state(
+                    name,
+                    session,
+                    prompt_hash=current_hash
+                )
+
+                log(
+                    "DEEPSEEK",
+                    f"Sesja {name}: OK (wznowiona, instrukcje "
+                    "roli ZAKTUALIZOWANE do bieżącej wersji)"
+                )
+
+            else:
+
+                log(
+                    "DEEPSEEK",
+                    f"Sesja {name}: OK (wznowiona z poprzedniego "
+                    "uruchomienia)"
+                )
 
         else:
 
@@ -1975,7 +2040,11 @@ def start_session(name, system_prompt):
                 system_prompt
             )
 
-            _save_session_state(name, session)
+            _save_session_state(
+                name,
+                session,
+                prompt_hash=_prompt_hash(system_prompt)
+            )
 
             log(
                 "DEEPSEEK",
