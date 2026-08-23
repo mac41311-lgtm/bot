@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v59
+AEL-MINI AUTONOMOUS AGENT v60
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v59")
+    print("             AEL-MINI AUTONOMOUS AGENT v60")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9959,10 +9959,13 @@ def consult_team(
                 )
             )
 
+    progress_snapshot = _goal_progress_snapshot(goal)
+    progress_block = ("\n" + progress_snapshot + "\n") if progress_snapshot else ""
+
     context = f"""
 CEL:
 {goal}
-
+{progress_block}
 OSTATNI RAPORT:
 {short(
     json.dumps(
@@ -10643,6 +10646,119 @@ def _extract_goal_mentioned_files(goal):
     return seen
 
 
+# Wyciąga konkretną treść FINAL_OK.txt, jeśli CEL ją wprost cytuje
+# (np. `utworz plik FINAL_OK.txt z trescia "TEST_ZAKONCZONY"`) —
+# pozwala zweryfikować DOKŁADNIE to, co użytkownik ustalił w CELU,
+# zamiast jakiegoś nieznanego zespołowi, hardcoded tokenu.
+_FINAL_OK_CONTENT_PATTERN = re.compile(
+    r"FINAL_OK\.txt[^\"'\n]{0,40}[\"']([^\"'\n]{1,200})[\"']",
+    re.IGNORECASE
+)
+
+
+def _goal_progress_snapshot(goal):
+    """
+    Tani, LOKALNY (zero wywołań LLM) przegląd stanu faktycznego celu
+    — bezpośrednio z dysku, nie z pamięci rozmowy. Zaobserwowany
+    realny problem: zespół "gubi się" między krokami — powtarza już
+    zrobione rzeczy (v40) albo nie zauważa, że coś już istnieje,
+    mimo że PLANNER/CRITIC muszą to wywnioskować wyłącznie z historii
+    rozmowy, która przy długiej sesji robi się bardzo długa. Zamiast
+    wydłużać prompt o więcej historii (dokładnie czego NIE chcemy —
+    sekwencje mają zostać krótkie), dajemy im nowy, zawsze świeży,
+    kilkulinijkowy stan faktyczny na podstawie tych samych sprawdzeń,
+    których używa verify_final() — więc to, co widzą, jest DOKŁADNIE
+    tym, co realnie zadecyduje o DONE/FAILED, a nie osobną, mogącą się
+    rozjechać wersją prawdy.
+    """
+
+    lines = []
+
+    for rel_path in _extract_goal_mentioned_files(goal)[:6]:
+
+        try:
+            p = Path(rel_path).expanduser()
+        except Exception:
+            continue
+
+        if not p.exists():
+            lines.append("- " + rel_path + ": BRAK")
+            continue
+
+        try:
+            size = p.stat().st_size
+        except Exception:
+            size = 0
+
+        if size == 0:
+            lines.append("- " + rel_path + ": istnieje, ale PUSTY (0 B)")
+            continue
+
+        preview = ""
+
+        try:
+            preview = p.read_text(
+                encoding="utf-8",
+                errors="replace"
+            )[:80].replace("\n", " ")
+        except Exception:
+            pass
+
+        lines.append(
+            "- " + rel_path + ": istnieje (" + str(size) + " B)"
+            + (" — \"" + preview + "\"" if preview else "")
+        )
+
+    final_ok_seen = False
+
+    for candidate in (
+        HOME / "FINAL_OK.txt",
+        AGENT_DIR / "FINAL_OK.txt",
+        APK_OUTPUT_DIR / "FINAL_OK.txt"
+    ):
+
+        content = read_text(candidate).strip()
+
+        if content:
+            lines.append(
+                "- FINAL_OK.txt: istnieje (" + str(candidate) + ") — \""
+                + content[:60] + "\""
+            )
+            final_ok_seen = True
+            break
+
+    if not final_ok_seen:
+        lines.append("- FINAL_OK.txt: BRAK (nigdzie nie znaleziono)")
+
+    if CUSTOM_TOOLS:
+        lines.append(
+            "- Zarejestrowane custom_tools: "
+            + ", ".join(sorted(CUSTOM_TOOLS.keys()))
+        )
+
+    if not lines:
+        return ""
+
+    return (
+        "STAN FAKTYCZNY (sprawdzony TERAZ bezpośrednio na dysku, "
+        "nie z pamięci rozmowy — traktuj jako pewnik):\n"
+        + "\n".join(lines)
+    )
+
+
+def _expected_final_ok_content(goal):
+
+    if not goal:
+        return None
+
+    match = _FINAL_OK_CONTENT_PATTERN.search(str(goal))
+
+    if not match:
+        return None
+
+    return match.group(1).strip()
+
+
 def verify_final(goal=""):
     """
     Twarda, fizyczna weryfikacja przed zaakceptowaniem DONE.
@@ -10672,23 +10788,89 @@ def verify_final(goal=""):
     checks = []
 
     # --- 1. FINAL_OK.txt ------------------------------------
+    #
+    # Zaobserwowany realny, poważny bug: ten check wymagał treści
+    # DOKŁADNIE równej hardcoded FINAL_OK_TOKEN ("ANDROID_GAME_
+    # BUILD_OK") — stałej z czasów, gdy agent budował WYŁĄCZNIE gry
+    # Android. Ten token NIGDY nie jest komunikowany zespołowi w
+    # żadnym prompcie (MAIN_PROMPT każe użyć treści "ustalonej z
+    # użytkownikiem", czyli tego, co faktycznie mówi CEL — np.
+    # "TEST_ZAKONCZONY"), więc żaden uniwersalny (nie-growy) cel nie
+    # mógł go NAPRAWDĘ spełnić. A mimo to DONE bywało akceptowane —
+    # bo GDZIEŚ z dawnej, historycznej sesji budowania gry zostawał
+    # stary, POPRAWNY co do tokenu plik w APK_OUTPUT_DIR, który po
+    # cichu satysfakcjonował TEN check dla zupełnie NIEPOWIĄZANEGO,
+    # późniejszego celu — podczas gdy prawdziwy FINAL_OK.txt tego
+    # celu (zwykle pod ~/FINAL_OK.txt, ścieżka spoza dotychczasowych
+    # kandydatów) był całkowicie ignorowany. Potwierdzone
+    # eksperymentalnie: DONE_ok=True nawet gdy jedynym pasującym
+    # plikiem był ten stary, niepowiązany z bieżącym celem.
+    #
+    # Naprawiono: dodano ~/FINAL_OK.txt (realnie używana ścieżka) do
+    # kandydatów; wymagamy TREŚCI wskazanej wprost w CELU (jeśli
+    # CEL cytuje konkretny napis przy "FINAL_OK.txt", np. w
+    # cudzysłowie) albo dowolnej niepustej treści, gdy CEL tego nie
+    # precyzuje; i — kluczowe — plik musi być ŚWIEŻY (zapisany PO
+    # rozpoczęciu BIEŻĄCEGO celu, nie starszy niż GOAL_FILE), żeby
+    # stary plik z zupełnie innego, wcześniejszego celu nie mógł już
+    # nigdy po cichu "pożyczyć" swojej ważności nowemu zadaniu.
+
+    expected_final_ok_content = _expected_final_ok_content(goal)
 
     final_ok_candidates = [
+        HOME / "FINAL_OK.txt",
         AGENT_DIR / "FINAL_OK.txt",
         APK_OUTPUT_DIR / "FINAL_OK.txt",
     ]
 
+    try:
+        goal_started_at = GOAL_FILE.stat().st_mtime
+    except Exception:
+        goal_started_at = 0.0
+
     final_ok_found = False
     final_ok_path = None
+    final_ok_reject_reason = "Nie znaleziono pliku FINAL_OK.txt."
 
     for candidate in final_ok_candidates:
 
+        if not candidate.exists():
+            continue
+
         content = read_text(candidate).strip()
 
-        if content == FINAL_OK_TOKEN:
-            final_ok_found = True
-            final_ok_path = candidate
-            break
+        if not content:
+            final_ok_reject_reason = str(candidate) + " istnieje, ale jest pusty."
+            continue
+
+        try:
+            is_stale = candidate.stat().st_mtime < goal_started_at
+        except Exception:
+            is_stale = False
+
+        if is_stale:
+            final_ok_reject_reason = (
+                str(candidate) + " istnieje, ale jest STARSZY niż "
+                "bieżący cel — to prawdopodobnie pozostałość po "
+                "wcześniejszym, niepowiązanym zadaniu, nie dowód "
+                "ukończenia TEGO celu."
+            )
+            continue
+
+        if (
+            expected_final_ok_content is not None
+            and content != expected_final_ok_content
+        ):
+            final_ok_reject_reason = (
+                str(candidate) + " istnieje, ale treść ('" + content
+                + "') nie zgadza się z tą wskazaną w CELU ('"
+                + expected_final_ok_content + "')."
+            )
+            continue
+
+        final_ok_found = True
+        final_ok_path = candidate
+        break
 
     checks.append({
         "check": "FINAL_OK.txt",
@@ -10697,9 +10879,7 @@ def verify_final(goal=""):
         "detail": (
             str(final_ok_path)
             if final_ok_found
-            else "Nie znaleziono pliku z treścią dokładnie '"
-            + FINAL_OK_TOKEN + "' w: "
-            + ", ".join(str(c) for c in final_ok_candidates)
+            else final_ok_reject_reason
         )
     })
 
