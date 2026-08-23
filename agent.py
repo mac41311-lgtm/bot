@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v66
+AEL-MINI AUTONOMOUS AGENT v67
 
 ARCHITEKTURA:
 
@@ -821,7 +821,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v66")
+    print("             AEL-MINI AUTONOMOUS AGENT v67")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -997,6 +997,19 @@ jako fakt. Jeżeli spróbujesz zlecić TASK identyczny z już
 zweryfikowanym punktem, zostanie automatycznie odrzucony ze statusem
 TASK_DUPLICATE_OF_VERIFIED_POINT — to nie błąd do naprawienia, to
 sygnał żeby zaproponować NASTĘPNY, inny krok.
+
+Jeżeli PUNKTY ZADAŃ pokazuje sekcję "NIEDOKOŃCZONE (błąd, WYMAGAJĄ
+PONOWIENIA)" — to punkty z CELU, które zawiodły i NIGDY nie zostały
+skończone. Zaobserwowany realny problem: zespół po porażce jednego
+punktu (np. "otwórz kalkulator i potwierdź wynik") po prostu szedł
+dalej do kolejnych punktów celu, a porzucony punkt nigdy nie wracał
+— pod koniec sesji cel wyglądał na "prawie gotowy", mimo że jeden z
+jego wymaganych kroków nigdy się nie wykonał. PRIORYTETOWO ZLEĆ
+PONOWNĄ PRÓBĘ takiego punktu (innym podejściem niż to, co zawiodło),
+ZANIM przejdziesz do zupełnie nowej, jeszcze nietkniętej części celu
+— chyba że dany punkt jest już od dawna, wielokrotnie niemożliwy do
+wykonania i lepiej to zgłosić użytkownikowi niż próbować w
+nieskończoność.
 
 Nie twórz zadania typu:
 "kliknij X".
@@ -9095,6 +9108,17 @@ def _checklist_summary_block():
     _goal_progress_snapshot(). To jest odpowiedź na "ile punktów
     zrobione" bez wysyłania pełnych logów: liczba + kilka ostatnich
     pozycji z jawną etykietą, czy to dowód czy tylko deklaracja.
+
+    Zaobserwowany realny problem (log z 2026-08-23, 16:40-17:07):
+    krok "kalkulator" zawiódł (BLAD) na 2. TASKu z ~15, ale skoro
+    wcześniejsza wersja pokazywała tylko items[-5:] (5 NAJNOWSZYCH
+    wpisów), ten porzucony punkt wypadł z widoku po kilku kolejnych
+    TASKach — MAIN/PLANNER przestali go w ogóle widzieć w kontekście
+    i przez pozostałe ~40 minut sesji nigdy do niego nie wrócili,
+    zamiast tego zespół po prostu szedł dalej do nowych punktów.
+    Błędy (BLAD) są więc TERAZ pokazywane ZAWSZE, niezależnie od
+    tego, jak dawno powstały — dopóki się nie pojawi ich naprawiony
+    odpowiednik.
     """
     items = _load_progress_checklist()
 
@@ -9103,21 +9127,35 @@ def _checklist_summary_block():
 
     verified = sum(1 for i in items if i.get("status") == "ZWERYFIKOWANY")
     unverified = sum(1 for i in items if i.get("status") == "ZADEKLAROWANY_BEZ_DOWODU")
-    failed = sum(1 for i in items if i.get("status") == "BLAD")
+    failed_items = [i for i in items if i.get("status") == "BLAD"]
     running = sum(1 for i in items if i.get("status") == "W_TOKU")
 
     lines = [
         "PUNKTY ZADAŃ (" + str(len(items)) + " łącznie): "
         + str(verified) + " zweryfikowanych dowodem, "
         + str(unverified) + " zadeklarowanych BEZ dowodu, "
-        + str(failed) + " błędów, " + str(running) + " w toku."
+        + str(len(failed_items)) + " błędów, " + str(running) + " w toku."
     ]
 
-    for item in items[-5:]:
-        label = _CHECKLIST_STATUS_LABELS.get(
-            item.get("status"), str(item.get("status", "?"))
+    if failed_items:
+        lines.append(
+            "⚠️ NIEDOKOŃCZONE (błąd, WYMAGAJĄ PONOWIENIA — nie "
+            "porzucaj ich na rzecz nowych punktów):"
         )
-        lines.append("- [" + label + "] " + short(item.get("task", ""), 100))
+        for item in failed_items[-5:]:
+            lines.append("- " + short(item.get("task", ""), 100))
+
+    recent_other = [
+        i for i in items[-5:] if i.get("status") != "BLAD"
+    ]
+
+    if recent_other:
+        lines.append("Ostatnie inne punkty:")
+        for item in recent_other:
+            label = _CHECKLIST_STATUS_LABELS.get(
+                item.get("status"), str(item.get("status", "?"))
+            )
+            lines.append("- [" + label + "] " + short(item.get("task", ""), 100))
 
     return "\n".join(lines)
 
