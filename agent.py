@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v68
+AEL-MINI AUTONOMOUS AGENT v69
 
 ARCHITEKTURA:
 
@@ -837,7 +837,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v68")
+    print("             AEL-MINI AUTONOMOUS AGENT v69")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1006,8 +1006,11 @@ Twoim zadaniem jest:
 
 W kontekście dostajesz linię "PUNKTY ZADAŃ" — zwięzły, sprawdzony
 PRZEZ PYTHON (nie przez deklarację Gemini) rejestr dotychczasowych
-TASK-ów. "zweryfikowany dowodem" = Python sam potwierdził to na
-dysku. "zadeklarowany BEZ dowodu" = Gemini NAPISAŁO że zrobione, ale
+TASK-ów. "zweryfikowany dowodem" = Python sam potwierdził to
+niezależnie — plik na dysku ISTNIEJE, ALBO w trakcie zadania
+android_assert_text_visible faktycznie zwrócił found=true dla
+tekstu wymienionego w warunku sukcesu (nie sama proza raportu).
+"zadeklarowany BEZ dowodu" = Gemini NAPISAŁO że zrobione, ale
 NIKT tego niezależnie nie sprawdził — traktuj to jako niepewne, NIE
 jako fakt. Jeżeli spróbujesz zlecić TASK identyczny z już
 zweryfikowanym punktem, zostanie automatycznie odrzucony ze statusem
@@ -1935,9 +1938,12 @@ Dostajesz:
    naprawdę zweryfikowane — czyli zmyślone, nie sprawdzone na nowo.
 2. PUNKTY ZADAŃ — checklist zbudowany PRZEZ PYTHON, nie przez
    deklarację: "zweryfikowany dowodem" oznacza, że Python SAM
-   potwierdził na dysku plik z warunku sukcesu. "zadeklarowany BEZ
-   dowodu" oznacza, że Gemini tak napisało, ale NIKT tego
-   niezależnie nie sprawdził — traktuj to jako niepewne, NIE jako
+   potwierdził to niezależnie — plik z warunku sukcesu istnieje na
+   dysku, ALBO android_assert_text_visible faktycznie zwrócił
+   found=true dla tekstu z tego warunku W TRAKCIE zadania (nie sama
+   proza raportu Gemini). "zadeklarowany BEZ dowodu" oznacza, że
+   Gemini tak napisało, ale NIKT tego niezależnie nie sprawdził —
+   traktuj to jako niepewne, NIE jako
    fakt, ale też NIE jako dowód porażki.
 
 3. AKTUALNY, ŚWIEŻO POBRANY stan Chrome i Androida — pokazuje TYLKO
@@ -8589,6 +8595,23 @@ CO POWINIEN ZROBIĆ MAIN:
     # (np. ścieżka QUOTA_EXHAUSTED).
     collected_warnings = []
 
+    # PEŁNA lista wywołanych narzędzi w TYM zadaniu (nazwa + ok) —
+    # wcześniej zapisywana była tylko ICH LICZBA (tool_calls), więc
+    # nie dało się sprawdzić, CZY konkretne narzędzie weryfikujące
+    # faktycznie zostało użyte, zanim raport napisał "potwierdzone".
+    # To jest ta "większa zmiana strukturalna", o którą poprosił
+    # użytkownik — checklist (patrz _checklist_record_result) używa
+    # tego teraz do odróżnienia realnie sprawdzonego faktu od samej
+    # deklaracji Gemini w tekście raportu.
+    collected_tool_trace = []
+
+    # Konkretne fragmenty tekstu, które android_assert_text_visible
+    # NIEZALEŻNIE potwierdził jako widoczne na ekranie w TRAKCIE tego
+    # zadania (found=True) — to jedyny rodzaj dowodu stanu urządzenia,
+    # jaki uznajemy za "zweryfikowany", bo to jednoznaczny wynik
+    # narzędzia, nie interpretacja dużego zrzutu przez Gemini.
+    collected_confirmed_texts = []
+
     try:
         interaction = client.interactions.create(
             model=GEMINI_MODEL,
@@ -8719,7 +8742,9 @@ CO POWINIEN ZROBIĆ MAIN:
                     ),
                     "tool_calls": tool_calls,
                     "interaction_id": interaction_id,
-                    "tool_warnings": collected_warnings
+                    "tool_warnings": collected_warnings,
+                    "tool_trace": collected_tool_trace,
+                    "confirmed_texts": collected_confirmed_texts
                 }
 
             # ------------------------------------------------
@@ -8884,6 +8909,29 @@ CO POWINIEN ZROBIĆ MAIN:
                                 )
                             )
 
+                collected_tool_trace.append({
+                    "tool": name,
+                    "ok": (
+                        result.get("ok")
+                        if isinstance(result, dict) else None
+                    )
+                })
+
+                if (
+                    name == "android_assert_text_visible"
+                    and isinstance(result, dict)
+                    and result.get("ok") is True
+                    and result.get("found") is True
+                ):
+                    confirmed_text = str(
+                        result.get("text", "")
+                    ).strip()
+
+                    if len(confirmed_text) >= 2:
+                        collected_confirmed_texts.append(
+                            confirmed_text
+                        )
+
                 # --------------------------------------------
                 # KRYTYCZNA ZASADA:
                 #
@@ -8920,7 +8968,9 @@ CO POWINIEN ZROBIĆ MAIN:
                             "MAIN / DeepSeek musi przygotować następny TASK lub PATCH."
                         ),
                         "interaction_id": interaction_id,
-                        "tool_warnings": collected_warnings
+                        "tool_warnings": collected_warnings,
+                        "tool_trace": collected_tool_trace,
+                        "confirmed_texts": collected_confirmed_texts
                     }
 
                     log(
@@ -8982,7 +9032,9 @@ CO POWINIEN ZROBIĆ MAIN:
                         "interaction_id."
                     ),
                     "tool_calls": tool_calls,
-                    "tool_warnings": collected_warnings
+                    "tool_warnings": collected_warnings,
+                    "tool_trace": collected_tool_trace,
+                    "confirmed_texts": collected_confirmed_texts
                 }
 
             # ------------------------------------------------
@@ -9027,7 +9079,9 @@ CO POWINIEN ZROBIĆ MAIN:
             ),
             "tool_calls": tool_calls,
             "interaction_id": interaction_id,
-            "tool_warnings": collected_warnings
+            "tool_warnings": collected_warnings,
+            "tool_trace": collected_tool_trace,
+            "confirmed_texts": collected_confirmed_texts
         }
 
     # ========================================================
@@ -9098,7 +9152,9 @@ CO POWINIEN ZROBIĆ MAIN:
                     error_text,
                     3000
                 ),
-                "tool_warnings": collected_warnings
+                "tool_warnings": collected_warnings,
+                "tool_trace": collected_tool_trace,
+                "confirmed_texts": collected_confirmed_texts
             }
 
         return {
@@ -9109,7 +9165,9 @@ CO POWINIEN ZROBIĆ MAIN:
                 error_text,
                 3000
             ),
-            "tool_warnings": collected_warnings
+            "tool_warnings": collected_warnings,
+            "tool_trace": collected_tool_trace,
+            "confirmed_texts": collected_confirmed_texts
         }
 
 
@@ -9192,18 +9250,32 @@ def _checklist_add(task_id, task, success_condition):
         "success_condition": success_condition,
         "status": "W_TOKU",
         "created": datetime.now().isoformat(),
-        "evidence": ""
+        "evidence": "",
+        "tool_trace": []
     })
     _save_progress_checklist(items)
 
 
-def _verify_success_condition_evidence(success_condition):
+def _verify_success_condition_evidence(success_condition, confirmed_texts=None):
     """
-    Próbuje NIEZALEŻNIE potwierdzić warunek sukcesu — na razie tylko
-    gdy odwołuje się do KONKRETNEGO pliku (ten sam wzorzec ścieżek co
-    _extract_goal_mentioned_files). Zwraca (True, opis_dowodu) albo
-    (False, "") gdy nie da się tego sprawdzić bez ufania samej
-    deklaracji Gemini.
+    Próbuje NIEZALEŻNIE potwierdzić warunek sukcesu, w kolejności:
+
+    1. Plik wprost wymieniony w warunku (ten sam wzorzec ścieżek co
+       _extract_goal_mentioned_files) — sprawdzany BEZPOŚREDNIO na
+       dysku przez Python, niezależnie od tego, co Gemini deklaruje.
+
+    2. Tekst na ekranie — TYLKO jeśli w TRAKCIE TEGO SAMEGO zadania
+       narzędzie android_assert_text_visible faktycznie zwróciło
+       found=True dla fragmentu, który pojawia się też w treści
+       warunku sukcesu (confirmed_texts, patrz gemini_execute_task).
+       To jest sedno tej poprawki: wcześniej dowolna deklaracja typu
+       "wynik 19 potwierdzony przez android_state" w raporcie Gemini
+       była nie do odróżnienia od realnego sprawdzenia — teraz liczy
+       się WYŁĄCZNIE jednoznaczny wynik narzędzia weryfikującego,
+       faktycznie wywołanego w tym zadaniu, nie proza raportu.
+
+    Zwraca (True, opis_dowodu) albo (False, "") gdy nie da się tego
+    sprawdzić bez ufania samej deklaracji Gemini.
     """
     for rel_path in _extract_goal_mentioned_files(success_condition):
         try:
@@ -9212,6 +9284,17 @@ def _verify_success_condition_evidence(success_condition):
             continue
         if p.exists() and p.stat().st_size > 0:
             return True, "plik " + rel_path + " istnieje i nie jest pusty"
+
+    condition_lower = str(success_condition or "").lower()
+
+    for confirmed_text in (confirmed_texts or []):
+        needle = str(confirmed_text).strip()
+        if len(needle) >= 2 and needle.lower() in condition_lower:
+            return True, (
+                "android_assert_text_visible potwierdził tekst '"
+                + needle + "' faktycznie widoczny na ekranie"
+            )
+
     return False, ""
 
 
@@ -9229,9 +9312,12 @@ def _checklist_record_result(task_id, result):
 
         changed = True
 
+        item["tool_trace"] = result.get("tool_trace", [])
+
         if result.get("status") == "COMPLETED":
             verified, evidence = _verify_success_condition_evidence(
-                item.get("success_condition", "")
+                item.get("success_condition", ""),
+                result.get("confirmed_texts", [])
             )
             if verified:
                 item["status"] = "ZWERYFIKOWANY"
