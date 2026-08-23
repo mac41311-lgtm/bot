@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v70
+AEL-MINI AUTONOMOUS AGENT v71
 
 ARCHITEKTURA:
 
@@ -837,7 +837,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v70")
+    print("             AEL-MINI AUTONOMOUS AGENT v71")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2547,7 +2547,26 @@ def deepseek(name, message):
                             + str(diag_error)
                         )
 
-                text = getattr(response, "text", None)
+                # Użytkownik potwierdził wprost (2026-08-23): w
+                # przeglądarce chat.deepseek.com każda odpowiedź ma
+                # zwijany panel "Thought for N seconds" z rozumowaniem
+                # modelu, ODDZIELNY od właściwej odpowiedzi — zwykłe
+                # kopiowanie NIE obejmuje tego panelu. Skoro to, co
+                # faktycznie łapiemy przez response.text, i tak
+                # zawiera to rozumowanie (bez literalnego nagłówka
+                # "Thought for..." — sprawdzone na przesłanych
+                # transkryptach), a DeepSeek API konwencjonalnie
+                # rozdziela to na pola "content" (właściwa odpowiedź)
+                # i "reasoning_content" (rozumowanie) — spróbuj
+                # NAJPIERW "content": jeśli opendeek faktycznie
+                # udostępnia je osobno, to od razu naprawia problem u
+                # źródła zamiast obcinać tekst domysłem. Jeśli tego
+                # atrybutu nie ma (stary/inny opendeek), zachowanie
+                # jest DOKŁADNIE takie jak wcześniej — zero regresji.
+                text = getattr(response, "content", None)
+
+                if not text:
+                    text = getattr(response, "text", None)
 
                 if not text:
                     text = str(response)
