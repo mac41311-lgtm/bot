@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v74
+AEL-MINI AUTONOMOUS AGENT v75
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v74")
+    print("             AEL-MINI AUTONOMOUS AGENT v75")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2448,18 +2448,262 @@ def _deepseek_pace(name):
         _deepseek_last_send[account] = time.time()
 
 
-# Zaobserwowany realny problem (log/transkrypty z 2026-08-23): treść
-# faktycznie zwracana przez response.text czasem zawiera na początku
-# długi fragment po angielsku, wyglądający jak rozumowanie modelu
-# ("The user is asking...", "Let me think..."), ZANIM pojawi się
-# właściwa, krótka odpowiedź po polsku — widoczne to jest wprost w
-# treści wysyłanej dalej do innych ról (np. w "PLAN PLANNERA:").
-# Nie wiadomo jeszcze, czy opendeek eksponuje to rozumowanie w
-# OSOBNYM polu (które dałoby się po prostu pominąć), czy to po
-# prostu styl odpowiedzi samego modelu wymieszany z treścią —
-# ten log (jednorazowo, przy pierwszym realnym wywołaniu) ma to
-# rozstrzygnąć, zanim spróbujemy cokolwiek automatycznie obcinać.
-_response_attrs_logged = False
+# ------------------------------------------------------------
+# EKSPERYMENT v75 (2026-08-23, NIEPOTWIERDZONY na prawdziwym
+# koncie) — próba obsługi przycisku "Continue" znanego z
+# chat.deepseek.com, dla odpowiedzi uciętych przez limit długości.
+#
+# Fakty potwierdzone czytaniem realnego źródła biblioteki opendeep
+# (opendeep/models.py, ChatSession.send_message):
+#   1) payload żądania ZAWSZE ma pole "action" (domyślnie None) —
+#      istnieje w API, biblioteka po prostu nigdy go nie ustawia
+#      na nic innego.
+#   2) pętla SSE dostaje od serwera osobne zdarzenia z
+#      p == "response/status", ale JAWNIE JE ODRZUCA:
+#      `if current_patch_target == "response/status": continue`
+#      — czyli status odpowiedzi (który najpewniej mówi, czy
+#      odpowiedź się skończyła normalnie czy została ucięta)
+#      dociera do klienta, tylko biblioteka go wyrzuca.
+#   3) biblioteka NIE MA żadnego mechanizmu kontynuacji — to nie
+#      jest "wyłączona opcja", jej po prostu nie zaimplementowano.
+#
+# Domysł (NIEPOTWIERDZONY): wysłanie kolejnego żądania z tym samym
+# parent_message_id (bez przesuwania go dalej) i "action": "continue"
+# dokończy poprzednią, ucięta odpowiedź, tak jak przycisk w
+# przeglądarce. Nazwa pola jest pewna, WARTOŚĆ jest zgadywana.
+#
+# Ta funkcja odtwarza wyłącznie minimalny fragment send_message()
+# (te same atrybuty sesji, ten sam POW), żeby dodatkowo przechwycić
+# i zalogować odrzucaną wartość statusu — realny dowód z produkcji
+# zamiast dalszego zgadywania. Każdy błąd (inna wersja opendeep,
+# zmieniony moduł pow, HTTP error) jest łapany wyżej i powoduje
+# ciche zejście do zwykłego session.send_message() — zero ryzyka
+# regresji dla normalnych, nieuciętych odpowiedzi.
+# ------------------------------------------------------------
+
+_TRUNCATION_STATUS_HINTS = (
+    "trunc", "length", "limit", "incomplete", "cut", "max_token",
+)
+
+
+def _deepseek_raw_post_with_action(session, prompt, action):
+
+    from opendeep.config import config as _ods_config
+    from opendeep.pow import DeepSeekPOW
+
+    model = session.model
+
+    payload = {
+        "chat_session_id": session.chat_session_id,
+        "parent_message_id": session.parent_message_id,
+        "prompt": prompt,
+        "ref_file_ids": [],
+        "thinking_enabled": session.thinking_enabled,
+        "search_enabled": session.search_enabled,
+        "action": action,
+        "preempt": False,
+        "model_type": (
+            "expert"
+            if model.model_name == "deepseek-expert"
+            else "default"
+        ),
+    }
+
+    headers = model._get_headers()
+
+    try:
+        pow_solver = DeepSeekPOW()
+
+        pow_resp = model.session.post(
+            _ods_config.base_url + "/chat/create_pow_challenge",
+            headers=headers,
+            json={"target_path": "/api/v0/chat/completion"},
+        )
+
+        if pow_resp.ok:
+            challenge_data = (
+                pow_resp.json()
+                .get("data", {})
+                .get("biz_data", {})
+                .get("challenge")
+            )
+            if challenge_data:
+                headers["x-ds-pow-response"] = (
+                    pow_solver.solve_challenge(challenge_data)
+                )
+    except Exception:
+        pass
+
+    response = model.session.post(
+        _ods_config.base_url + "/chat/completion",
+        headers=headers,
+        json=payload,
+        stream=True,
+    )
+    response.raise_for_status()
+
+    if "text/event-stream" not in response.headers.get(
+        "Content-Type", ""
+    ):
+        raise RuntimeError(
+            "Unexpected Content-Type: "
+            + response.headers.get("Content-Type", "")
+        )
+
+    full_text = ""
+    status_seen = None
+    current_patch_target = "response/content"
+    current_fragment_type = "RESPONSE"
+
+    for line in response.iter_lines():
+
+        if not line:
+            continue
+
+        decoded_line = (
+            line.decode("utf-8")
+            if isinstance(line, bytes)
+            else line
+        )
+
+        if not decoded_line.startswith("data: "):
+            continue
+        if decoded_line == "data: [DONE]":
+            continue
+
+        try:
+            raw_data = decoded_line[6:].strip()
+
+            if not raw_data:
+                continue
+
+            data = json.loads(raw_data)
+            content = ""
+
+            if "response_message_id" in data:
+                session.parent_message_id = (
+                    data["response_message_id"]
+                )
+            elif (
+                "v" in data
+                and isinstance(data["v"], dict)
+                and "response" in data["v"]
+                and "message_id" in data["v"]["response"]
+            ):
+                session.parent_message_id = (
+                    data["v"]["response"]["message_id"]
+                )
+
+            if "choices" in data:
+                choices = data.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content", "")
+
+            elif "v" in data:
+
+                if "p" in data:
+                    current_patch_target = data["p"]
+
+                val = data["v"]
+
+                if isinstance(val, dict) and "response" in val:
+                    fragments = val["response"].get(
+                        "fragments", []
+                    )
+                    if fragments:
+                        current_fragment_type = fragments[0].get(
+                            "type", "RESPONSE"
+                        )
+                        if current_fragment_type != "THINK":
+                            content = fragments[0].get(
+                                "content", ""
+                            )
+
+                elif (
+                    isinstance(val, list)
+                    and current_patch_target
+                    == "response/fragments"
+                ):
+                    for frag in val:
+                        if isinstance(frag, dict):
+                            frag_type = frag.get(
+                                "type", "RESPONSE"
+                            )
+                            if frag_type != "THINK":
+                                content = frag.get("content", "")
+                            current_fragment_type = frag_type
+
+                elif isinstance(val, str):
+                    if current_patch_target == "response/status":
+                        # Dokladnie to pole opendeek zawsze
+                        # odrzuca (patrz komentarz nad funkcja) —
+                        # tu je przechwytujemy zamiast wyrzucac.
+                        status_seen = val
+                        continue
+                    if current_fragment_type != "THINK":
+                        content = val
+
+            if content:
+                full_text += content
+
+        except json.JSONDecodeError:
+            continue
+
+    return full_text, status_seen
+
+
+def _deepseek_looks_truncated(text, status):
+
+    if status:
+        lowered = str(status).lower()
+        if any(
+            hint in lowered
+            for hint in _TRUNCATION_STATUS_HINTS
+        ):
+            return True, "status=" + repr(status)
+
+    stripped = (text or "").rstrip()
+
+    if (
+        len(stripped) > 3000
+        and stripped
+        and stripped[-1] not in ".!?\"')]}`”"
+    ):
+        return True, (
+            "dlugosc/koncowka tekstu (status=" + repr(status) + ")"
+        )
+
+    return False, None
+
+
+def _deepseek_send_experimental(name, session, prompt, action=None):
+    """
+    Wysyla wiadomosc uzywajac wlasnej, minimalnej kopii logiki
+    send_message() (patrz komentarz wyzej) zeby dodatkowo dostac
+    status odpowiedzi. Jesli cokolwiek tu zawiedzie, wraca do
+    zwyklego session.send_message() — dokladnie taki wynik jak
+    przed tym eksperymentem.
+    """
+
+    try:
+        return _deepseek_raw_post_with_action(
+            session, prompt, action
+        )
+    except Exception as e:
+        log(
+            "DEEPSEEK",
+            name + ": EKSPERYMENT (przechwytywanie statusu) nie "
+            "zadzialal, wracam do zwyklego send_message: "
+            + str(e)
+        )
+        response = session.send_message(prompt)
+        text = (
+            getattr(response, "content", None)
+            or getattr(response, "text", None)
+            or str(response)
+        )
+        return text, None
 
 
 def deepseek(name, message):
@@ -2527,76 +2771,81 @@ def deepseek(name, message):
                 _deepseek_pace(name)
                 _activate_account_for_role(name)
 
-                response = session.send_message(message)
+                # DIAGNOSTYKA z v70-72 (jednorazowy dir(response) +
+                # test "content" przed "text") juz rozstrzygnela
+                # sprawe rozumowania: potwierdzone czytaniem realnego
+                # zrodla opendeep, ze reasoning jest strukturalnie
+                # oddzielony od content i NIGDY nie trafia do .text —
+                # wyciek widziany w recznie kopiowanych transkryptach
+                # z przegladarki byl artefaktem kopiowania, nie bledem
+                # tego kodu. Od v75 send_message() biblioteki jest
+                # zastapiony wlasna kopia (patrz
+                # _deepseek_send_experimental) zeby dodatkowo
+                # przechwycic status odpowiedzi, ktory biblioteka
+                # zawsze odrzucala — eksperyment obslugi "Continue".
+                text, status = _deepseek_send_experimental(
+                    name, session, message
+                )
 
-                global _response_attrs_logged
+                if status:
+                    log(
+                        "DEEPSEEK",
+                        name + ": EKSPERYMENT — przechwycony "
+                        "status odpowiedzi (wczesniej biblioteka go "
+                        "odrzucala): " + short(str(status), 200)
+                    )
 
-                if not _response_attrs_logged:
+                truncated, reason = _deepseek_looks_truncated(
+                    text, status
+                )
 
-                    _response_attrs_logged = True
+                if truncated:
+
+                    log(
+                        "DEEPSEEK",
+                        name + ": EKSPERYMENT — odpowiedz wyglada "
+                        "na ucieta (" + str(reason) + "), probuje "
+                        "action='continue'..."
+                    )
 
                     try:
-                        attrs = [
-                            a for a in dir(response)
-                            if not a.startswith("_")
-                        ]
-
-                        log(
-                            "DEEPSEEK",
-                            "DIAGNOSTYKA (jednorazowo): atrybuty "
-                            "obiektu response: " + ", ".join(attrs)
+                        continue_text, continue_status = (
+                            _deepseek_send_experimental(
+                                name, session, "", action="continue"
+                            )
                         )
 
-                        for candidate in attrs:
+                        if continue_text:
+                            text = text + continue_text
+                            log(
+                                "DEEPSEEK",
+                                name + ": EKSPERYMENT — 'continue' "
+                                "zwrocil dodatkowe "
+                                + str(len(continue_text))
+                                + " znakow, doklejone do "
+                                "odpowiedzi."
+                            )
+                        else:
+                            log(
+                                "DEEPSEEK",
+                                name + ": EKSPERYMENT — 'continue' "
+                                "nie zwrocil dodatkowego tekstu "
+                                "(status=" + str(continue_status)
+                                + ")."
+                            )
 
-                            lowered = candidate.lower()
-
-                            if (
-                                "reason" in lowered
-                                or "think" in lowered
-                                or "cot" in lowered
-                            ):
-                                value = getattr(
-                                    response, candidate, None
-                                )
-
-                                log(
-                                    "DEEPSEEK",
-                                    "DIAGNOSTYKA: response."
-                                    + candidate + " = "
-                                    + short(str(value), 500)
-                                )
-
-                    except Exception as diag_error:
+                    except Exception as continue_error:
                         log(
                             "DEEPSEEK",
-                            "DIAGNOSTYKA nieudana (pomijam): "
-                            + str(diag_error)
+                            name + ": EKSPERYMENT — probe "
+                            "'continue' zakonczyl blad ("
+                            + str(continue_error) + "), zostaje "
+                            "oryginalna (mozliwe ze ucieta) "
+                            "odpowiedz."
                         )
 
-                # Użytkownik potwierdził wprost (2026-08-23): w
-                # przeglądarce chat.deepseek.com każda odpowiedź ma
-                # zwijany panel "Thought for N seconds" z rozumowaniem
-                # modelu, ODDZIELNY od właściwej odpowiedzi — zwykłe
-                # kopiowanie NIE obejmuje tego panelu. Skoro to, co
-                # faktycznie łapiemy przez response.text, i tak
-                # zawiera to rozumowanie (bez literalnego nagłówka
-                # "Thought for..." — sprawdzone na przesłanych
-                # transkryptach), a DeepSeek API konwencjonalnie
-                # rozdziela to na pola "content" (właściwa odpowiedź)
-                # i "reasoning_content" (rozumowanie) — spróbuj
-                # NAJPIERW "content": jeśli opendeek faktycznie
-                # udostępnia je osobno, to od razu naprawia problem u
-                # źródła zamiast obcinać tekst domysłem. Jeśli tego
-                # atrybutu nie ma (stary/inny opendeek), zachowanie
-                # jest DOKŁADNIE takie jak wcześniej — zero regresji.
-                text = getattr(response, "content", None)
-
                 if not text:
-                    text = getattr(response, "text", None)
-
-                if not text:
-                    text = str(response)
+                    text = ""
 
                 # Wcześniej log pokazywał TYLKO długość odpowiedzi —
                 # nie dało się stąd stwierdzić, czy na początku
