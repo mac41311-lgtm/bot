@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v75
+AEL-MINI AUTONOMOUS AGENT v76
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v75")
+    print("             AEL-MINI AUTONOMOUS AGENT v76")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2698,11 +2698,22 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
             + str(e)
         )
         response = session.send_message(prompt)
-        text = (
-            getattr(response, "content", None)
-            or getattr(response, "text", None)
-            or str(response)
+
+        # BUG znaleziony w realnym logu (2026-08-23, dwa razy w
+        # jednym uruchomieniu dla MAIN): `or` traktuje legalny
+        # PUSTY string "" tak samo jak brak atrybutu, wiec kiedy
+        # model faktycznie zwrocil pusta tresc, kod lecial dalej az
+        # do str(response) i wysylal literalne
+        # "<GenerateContentResponse text=''...>" do parsera JSON —
+        # marnujac caly cykl na "Niepoprawny JSON. Naprawiam.".
+        # Uzyj wiec None (nie falsy) jako sygnalu "atrybutu w ogole
+        # nie ma", zeby legalna pusta odpowiedz zostala pusta.
+        content = getattr(response, "content", None)
+        text = content if content is not None else (
+            getattr(response, "text", None)
         )
+        if text is None:
+            text = str(response)
         return text, None
 
 
