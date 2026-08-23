@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v54
+AEL-MINI AUTONOMOUS AGENT v55
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v54")
+    print("             AEL-MINI AUTONOMOUS AGENT v55")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12151,36 +12151,68 @@ def main():
 
     saved_goal = read_text(GOAL_FILE).strip()
 
+    # Słowo-klucz "wyczysc" na tym prompcie odpala sprzątanie NA
+    # ŻĄDANIE, niezależnie od tego, czy zaraz potem podasz nowy cel,
+    # czy wznowisz stary — bez tego jedyne momenty sprzątania to
+    # start NOWEGO celu (v46-v47) i zamknięcie programu (screenshoty,
+    # v50). Po sprzątnięciu program wraca do tego samego pytania o
+    # cel, nie kończy działania.
+    _CLEAN_COMMAND_WORDS = {
+        "wyczysc", "wyczyść", "czysc", "czyść", "clean"
+    }
+
     try:
 
-        if saved_goal:
+        while True:
 
-            print(
-                "Wykryto niedokończoną sesję:"
-            )
-            print(
-                "  " + short(saved_goal, 300)
-            )
-            print(
-                "Enter = wznów ten cel. Albo wpisz nowy cel, "
-                "żeby go zastąpić."
-            )
-            print()
+            if saved_goal:
 
-            typed = _read_full_input(
-                "CEL AGENTA [Enter = wznów] > "
-            ).strip()
+                print(
+                    "Wykryto niedokończoną sesję:"
+                )
+                print(
+                    "  " + short(saved_goal, 300)
+                )
+                print(
+                    "Enter = wznów ten cel. Albo wpisz nowy cel, "
+                    "żeby go zastąpić. Albo wpisz 'wyczysc', żeby "
+                    "posprzątać wygenerowane pliki bez podawania "
+                    "celu."
+                )
+                print()
 
-            goal = typed if typed else saved_goal
-            is_new_goal = bool(typed)
+                typed = _read_full_input(
+                    "CEL AGENTA [Enter = wznów] > "
+                ).strip()
 
-        else:
+                if typed.lower() in _CLEAN_COMMAND_WORDS:
+                    _cleanup_screenshots_silently()
+                    maybe_clear_previous_session_data()
+                    maybe_clear_generated_project_files()
+                    print()
+                    continue
 
-            goal = _read_full_input(
-                "Podaj CEL AGENTA > "
-            ).strip()
+                goal = typed if typed else saved_goal
+                is_new_goal = bool(typed)
 
-            is_new_goal = True
+            else:
+
+                typed = _read_full_input(
+                    "Podaj CEL AGENTA (albo 'wyczysc' żeby "
+                    "posprzątać) > "
+                ).strip()
+
+                if typed.lower() in _CLEAN_COMMAND_WORDS:
+                    _cleanup_screenshots_silently()
+                    maybe_clear_previous_session_data()
+                    maybe_clear_generated_project_files()
+                    print()
+                    continue
+
+                goal = typed
+                is_new_goal = True
+
+            break
 
     except KeyboardInterrupt:
 
