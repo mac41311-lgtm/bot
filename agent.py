@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v51
+AEL-MINI AUTONOMOUS AGENT v52
 
 ARCHITEKTURA:
 
@@ -791,7 +791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v51")
+    print("             AEL-MINI AUTONOMOUS AGENT v52")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1152,6 +1152,18 @@ faktycznie tam jest". Rób zrzut ekranu WYŁĄCZNIE gdy cel wprost
 wymaga potwierdzenia własnej grafiki/gry (SurfaceView/OpenGL/
 Canvas), której android_state nie pokaże w ogóle — nie rób go
 rutynowo "na wszelki wypadek" przy każdym otwarciu apki/karty.
+
+ZAOBSERWOWANY REALNY PROBLEM z `am start -a VIEW -d <url>`: w tym
+wdrożeniu ta komenda otwiera adres na ekranie telefonu, ale
+NOWA karta bardzo często NIE pojawia się w `chrome_tabs()` — CDP
+dalej widzi tylko starą, pustą kartę. Jeśli po `am start` + kilku
+sekundach `chrome_tabs`/`chrome_inspect` DALEJ nie pokazuje nowego
+URL — NIE próbuj tego w kółko (to marnowanie kroków na coś, co się
+prawdopodobnie nie zmieni). Zamiast tego użyj `android_screenshot_ocr`
+(darmowe, lokalne, zero limitu) — jeśli w rozpoznanym tekście jest
+nazwa/treść oczekiwanej strony (np. "Wikipedia"), to WYSTARCZAJĄCY
+dowód, że strona faktycznie się otworzyła, niezależnie od tego, co
+pokazuje CDP.
 
 Jeżeli mimo to potrzebujesz `dumpsys`/`uiautomator dump` z poziomu
 skryptu bash: NIGDY nie uruchamiaj ich gołych w Termuksie —
@@ -3278,6 +3290,24 @@ def _cleanup_screenshots_silently():
                     removed += 1
                 except Exception:
                     pass
+    except Exception:
+        pass
+
+    # Resztki sprzed wprowadzenia tego mechanizmu (v50) albo z
+    # procesów zabitych PRZED zarejestrowaniem ścieżki w
+    # _screenshot_paths_this_run — Gemini konsekwentnie nazywa
+    # zrzuty z prefiksem "screenshot" (zgodnie z przykładami w
+    # promptach), np. screenshot_krok3.png, screenshot_wikipedia.png,
+    # screenshot_ustawienia.png. Sprzątamy je też, TYLKO na
+    # najwyższym poziomie $HOME (nie rekurencyjnie — nie ruszamy
+    # katalogów projektu).
+    try:
+        for p in HOME.glob("screenshot*.png"):
+            try:
+                p.unlink()
+                removed += 1
+            except Exception:
+                pass
     except Exception:
         pass
 
