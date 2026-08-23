@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v63
+AEL-MINI AUTONOMOUS AGENT v64
 
 ARCHITEKTURA:
 
@@ -814,7 +814,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v63")
+    print("             AEL-MINI AUTONOMOUS AGENT v64")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8226,107 +8226,73 @@ def gemini_execute_task(task_id, task, success_condition=''):
     # PROMPT
     # ========================================================
 
+    # UWAGA: ten prompt jest wysyłany OD NOWA przy KAŻDYM TASK-u
+    # (Interactions API nie ma tu odpowiednika trwałej sesji
+    # DeepSeek/opendeep z system_prompt raz na start) — to
+    # bezpośredni koszt tokenów Gemini na każde zadanie. Poniższa
+    # treść jest celowo zwięzła (bez naddatku pustych linii/
+    # powtórzeń), ale KAŻDA zasada niżej wynika z realnego,
+    # zaobserwowanego incydentu (patrz komentarze w kodzie przy
+    # poszczególnych narzędziach) — skracaj dalej ostrożnie, nie
+    # usuwaj konkretów.
     prompt = f"""
-Jesteś wykonawcą autonomicznego agenta.
+Jesteś wykonawcą autonomicznego agenta. DeepSeek to mózg, Ty
+wykonujesz REALNIE jego zadania dostępnymi narzędziami (Termux,
+shell, zapis plików, Android/uiautomator2, Chrome/CDP jeśli
+dostępny).
 
-DeepSeek jest głównym mózgiem.
-Ty jesteś wykonawcą.
-
-Twoim zadaniem jest REALNIE wykonać poniższe zadanie
-za pomocą dostępnych narzędzi.
-
-NIE pytaj użytkownika o zgodę.
-NIE kończ po samym zaplanowaniu.
+NIE pytaj użytkownika o zgodę. NIE kończ po samym zaplanowaniu.
 NIE zgłaszaj sukcesu bez sprawdzenia rezultatu.
-
-Masz dostęp do:
-
-- Termux
-- shell
-- zapisu plików
-- Android/uiautomator2
-- Chrome/CDP, jeżeli jest dostępny
 
 ZASADY:
 
-1. Jeżeli trzeba UTWORZYĆ NOWY plik (albo mały plik):
-   użyj termux_write_file.
+1. Nowy/mały plik: termux_write_file. Fragment DUŻEGO już
+   istniejącego pliku (np. poprawka błędu w kodzie gry):
+   termux_patch_file (search/replace) — NIE przepisuj całego pliku
+   przez termux_write_file, to marnuje tokeny i ryzykuje literówkę
+   w części, której nie musiałeś dotykać (najpierw termux_read_file,
+   żeby skopiować dokładny fragment do 'search'). NIGDY
+   `sed -i 'N,Md'` ani inne usuwanie/zamiana PO NUMERZE LINII w
+   plikach projektu (build.gradle, kod gry itp.) — realny przypadek:
+   `sed -i '10,12d'` urwał środek bloku
+   `allprojects {{ repositories {{ ... }} }}` i zepsuł build na kilka
+   kolejnych kroków. Numery linii są kruche, termux_patch_file
+   dopasowuje po TREŚCI i nie ma tego problemu.
 
-   Jeżeli trzeba ZMIENIĆ FRAGMENT JUŻ ISTNIEJĄCEGO, dużego pliku
-   (np. poprawka błędu w kodzie gry): użyj termux_patch_file
-   (search/replace), NIE przepisuj całego pliku przez
-   termux_write_file — to marnuje tokeny i ryzykuje literówkę przy
-   przepisywaniu reszty, której nie musiałeś dotykać. Najpierw
-   termux_read_file, żeby skopiować dokładny fragment do 'search'.
+2. Krótka komenda: termux_run. Długi proces: termux_run_background.
 
-   NIGDY nie używaj `sed -i 'N,Md'` ani innego usuwania/zamiany PO
-   NUMERZE LINII do edycji plików projektu (build.gradle, kod gry
-   itp.) — zaobserwowany realny przypadek: `sed -i '10,12d'` urwał
-   środek bloku `allprojects {{ repositories {{ ... }} }}`, zostawiając
-   uszkodzony plik, który psuł build przez kilka kolejnych kroków.
-   Numery linii są kruche — jedna wcześniejsza zmiana i usuwasz
-   coś innego niż zamierzałeś. termux_patch_file (dopasowanie po
-   TREŚCI, nie numerze linii) nie ma tego problemu.
+3. Po uruchomieniu programu/serwera/aplikacji: sprawdź, czy
+   faktycznie działa — nie zgłaszaj sukcesu na słowo.
 
-2. Jeżeli trzeba wykonać krótką komendę:
-   użyj termux_run.
+4. Błąd narzędzia: NIE NAPRAWIAJ GO SAM. Zatrzymaj TASK, zachowaj
+   dokładny błąd, zwróć go do MAIN — to on decyduje o zmianie
+   strategii, przygotowuje PATCH i następny TASK. Nie powtarzaj tej
+   samej czynności po błędzie bez nowego TASK/PATCH od MAIN.
 
-3. Jeżeli trzeba uruchomić długi proces:
-   użyj termux_run_background.
+5. Po każdym udanym działaniu sprawdź faktyczny rezultat.
 
-4. Jeżeli uruchamiasz program, serwer albo aplikację:
-   sprawdź czy rzeczywiście działa.
+6. Monitorując proces w tle (termux_check_process /
+   termux_read_file na log_file): max 2-3 sprawdzenia w TYM
+   zadaniu. Jeśli nadal działa, zakończ raport z PID i ścieżką do
+   log_file — NIE zapętlaj się aż do wyczerpania limitu narzędzi,
+   MAIN utworzy kolejny TASK sprawdzający ten sam proces później.
 
-5. Jeżeli narzędzie zwróci błąd:
-   NIE NAPRAWIAJ GO SAMODZIELNIE.
+7. NIGDY nie zapisuj plików w /tmp — to katalog systemu Android,
+   Termux (zwykła aplikacja) nie ma tam praw zapisu ("Permission
+   denied"). Użyj $HOME (~) albo $PREFIX/tmp, np. "echo OK > ~/x.txt"
+   zamiast "echo OK > /tmp/x.txt".
 
-   Natychmiast:
-   - zatrzymaj bieżący TASK,
-   - zachowaj dokładny błąd,
-   - zwróć go do MAIN.
+8. Nie wiesz jak kontynuować (typowo: nie wiesz jaki fragment podać
+   jako 'search' w termux_patch_file)? Najpierw termux_read_file.
+   Jeśli to nie wystarczy, ask_deepseek — krótka podpowiedź, potem
+   kontynuujesz TEN SAM TASK. Limitowane do kilku razy na zadanie,
+   nie zastępuj tym zwykłego czytania plików.
 
-   MAIN / DeepSeek jest odpowiedzialny za:
-   - analizę błędu,
-   - decyzję o zmianie strategii,
-   - przygotowanie PATCHA,
-   - przygotowanie następnego TASK-u.
-
-6. Nie wykonuj tej samej czynności ponownie po błędzie,
-   chyba że MAIN dostarczy nowy TASK lub PATCH.
-
-7. Po każdym udanym działaniu sprawdź faktyczny rezultat.
-
-8. Jeżeli monitorujesz proces uruchomiony przez
-   termux_run_background (termux_check_process /
-   termux_read_file na log_file): wykonaj NAJWYŻEJ 2-3 takie
-   sprawdzenia w TYM zadaniu. Jeżeli proces nadal działa,
-   ZAKOŃCZ raport stwierdzeniem, że instalacja/build nadal trwa
-   w tle, podaj PID i ścieżkę do log_file — NIE zapętlaj się w
-   sprawdzaniu aż do wyczerpania limitu narzędzi. MAIN utworzy
-   kolejny TASK sprawdzający ten sam proces później.
-
-9. NIGDY nie zapisuj plików w /tmp — to katalog systemu Android,
-   Termux (jako zwykła aplikacja) nie ma tam praw zapisu
-   ("Permission denied"). Pliki tymczasowe zapisuj w $HOME (~)
-   albo w $PREFIX/tmp (czyli
-   /data/data/com.termux/files/usr/tmp), np. zamiast
-   "echo OK > /tmp/x.txt" użyj "echo OK > ~/x.txt".
-
-10. Jeżeli w trakcie zadania NIE JESTEŚ PEWIEN jak kontynuować
-    (typowy przypadek: masz zrobić poprawkę przez
-    termux_patch_file, ale nie wiesz dokładnie jaki fragment
-    podać jako 'search') — NAJPIERW spróbuj sam ustalić to przez
-    termux_read_file. Jeśli to nie wystarczy, użyj ask_deepseek —
-    dostaniesz krótką podpowiedź i możesz kontynuować TEN SAM
-    TASK, zamiast kończyć go błędem. Limitowane do kilku razy na
-    zadanie — nie zastępuj tym normalnego czytania plików.
-
-11. Do usuwania plików/katalogów UŻYWAJ termux_delete, NIE `rm`
-    przez shell/termux_run. Obie ścieżki wymagają potwierdzenia
-    operatora w terminalu, ale termux_delete jest czytelniejsze
-    (operator widzi konkretną ścieżkę, nie surową komendę). Jeżeli
-    operator odmówi — NIE próbuj obejść tego inną komendą ani
-    innym sformułowaniem, zakończ zadanie i zgłoś odmowę do MAIN.
+9. Usuwanie plików/katalogów: termux_delete, NIE `rm` przez
+   shell/termux_run (obie wymagają potwierdzenia operatora, ale
+   termux_delete pokazuje konkretną ścieżkę zamiast surowej
+   komendy). Operator odmówił? Koniec zadania, zgłoś odmowę do
+   MAIN — nie próbuj obejść tego inną komendą ani sformułowaniem.
 
 ============================================================
 WARUNEK SUKCESU:
@@ -10191,20 +10157,82 @@ def consult_team(
     progress_snapshot = _goal_progress_snapshot(goal)
     progress_block = ("\n" + progress_snapshot + "\n") if progress_snapshot else ""
 
-    context = f"""
+    # Fakty wspólne dla WSZYSTKICH ról — to jedyna część, która
+    # faktycznie musi być identyczna, żeby zespół "rozumiał się
+    # nawzajem" (patrz prośba użytkownika). Stan Chrome/Android
+    # NIE wchodzi tu już na sztywno — każda rola dostaje TYLKO ten
+    # fragment stanu, który faktycznie dotyczy jej roli (patrz
+    # _ROLE_CONTEXT_BLOCKS niżej). Wcześniej RESEARCHER i BROWSER
+    # dostawały bajt-w-bajt ten sam pełny blok (CEL + raport +
+    # Chrome + Android) — czysty spam bez różnicowania ról.
+    core_context = f"""
 CEL:
 {goal}
 {progress_block}
 OSTATNI RAPORT:
 {_condense_last_result_for_team(last_result)}
 {tool_hint}
-
-AKTUALNY CHROME:
-{short(chrome_summary(), 2000)}
-
-AKTUALNY ANDROID:
-{short(android_summary(), 2000)}
 """
+
+    chrome_block = (
+        "\nAKTUALNY CHROME:\n"
+        + short(chrome_summary(), 2000)
+        + "\n"
+    )
+
+    android_block = (
+        "\nAKTUALNY ANDROID:\n"
+        + short(android_summary(), 2000)
+        + "\n"
+    )
+
+    # Krótkie przypomnienie roli DOPISANE DO WIADOMOŚCI (nie tylko
+    # do stałego system_prompt sesji) — użytkownik prosił wprost,
+    # żeby każda rola wiedziała, że ma INNĄ rolę niż pozostałe, nie
+    # tylko dostawała identyczny zrzut faktów.
+    _ROLE_FOCUS_REMINDER = {
+        "RESEARCHER": (
+            "TWOJA ROLA: RESEARCHER. Szukaj w sieci KONKRETNEJ "
+            "przyczyny/rozwiązania problemu poniżej. Nie planuj "
+            "kolejnego kroku (to PLANNER) i nie oceniaj planu (to "
+            "CRITIC)."
+        ),
+        "PLANNER": (
+            "TWOJA ROLA: PLANNER. Zaproponuj JEDEN konkretny "
+            "następny krok na podstawie stanu i ustaleń RESEARCHERA "
+            "poniżej. Nie szukaj w sieci (to RESEARCHER) i nie "
+            "oceniaj własnego planu (to CRITIC)."
+        ),
+        "BROWSER": (
+            "TWOJA ROLA: BROWSER. Oceń WYŁĄCZNIE stan przeglądarki "
+            "Chrome poniżej — czy karty/adresy mają sens względem "
+            "celu. Nie komentuj stanu Androida ani nie planuj "
+            "kroków spoza przeglądarki."
+        ),
+        "ANDROID_GAME_ENGINEER": (
+            "TWOJA ROLA: ANDROID_GAME_ENGINEER. Dostarcz konkretny "
+            "kod/rozwiązanie techniczne na podstawie planu PLANNERA "
+            "i ustaleń RESEARCHERA poniżej."
+        ),
+        "CRITIC": (
+            "TWOJA ROLA: CRITIC. Oceń KRYTYCZNIE plan PLANNERA "
+            "poniżej (ryzyka, błędy, brakujące dowody) — nie twórz "
+            "nowego planu od zera."
+        ),
+    }
+
+    def _team_context(role_name, include_chrome=False, include_android=False, extra=""):
+        pieces = [
+            _ROLE_FOCUS_REMINDER.get(role_name, ""),
+            core_context
+        ]
+        if include_chrome:
+            pieces.append(chrome_block)
+        if include_android:
+            pieces.append(android_block)
+        if extra:
+            pieces.append(extra)
+        return "\n".join(p for p in pieces if p)
 
     # Role odpytywane PO KOLEI — jedno realne połączenie do
     # opendeep na raz. CRITIC i ANDROID_GAME_ENGINEER dostają
@@ -10231,12 +10259,14 @@ AKTUALNY ANDROID:
 
     if consult_researcher:
 
+        researcher_context = _team_context("RESEARCHER")
+
         results["RESEARCHER"] = researcher_web_search(
             deepseek(
                 "RESEARCHER",
-                context
+                researcher_context
             ),
-            context
+            researcher_context
         )
 
         _role_response_cache["RESEARCHER"] = results["RESEARCHER"]
@@ -10263,15 +10293,19 @@ AKTUALNY ANDROID:
 
     results["PLANNER"] = deepseek(
         "PLANNER",
-        context
-        + "\n\nINFO RESEARCHER:\n" + researcher_out
+        _team_context(
+            "PLANNER",
+            include_chrome=True,
+            include_android=True,
+            extra="\nINFO RESEARCHER:\n" + researcher_out
+        )
     )
 
     if consult_browser:
 
         results["BROWSER"] = deepseek(
             "BROWSER",
-            context
+            _team_context("BROWSER", include_chrome=True)
         )
 
         _role_response_cache["BROWSER"] = results["BROWSER"]
@@ -10298,15 +10332,24 @@ AKTUALNY ANDROID:
 
     results["ANDROID_GAME_ENGINEER"] = deepseek(
         "ANDROID_GAME_ENGINEER",
-        context
-        + "\n\nPLAN PLANNERA:\n" + planner_out
-        + "\n\nINFO RESEARCHER:\n" + researcher_out
+        _team_context(
+            "ANDROID_GAME_ENGINEER",
+            include_android=True,
+            extra=(
+                "\nPLAN PLANNERA:\n" + planner_out
+                + "\nINFO RESEARCHER:\n" + researcher_out
+            )
+        )
     )
 
     results["CRITIC"] = deepseek(
         "CRITIC",
-        context
-        + "\n\nPLAN PLANNERA:\n" + planner_out
+        _team_context(
+            "CRITIC",
+            include_chrome=True,
+            include_android=True,
+            extra="\nPLAN PLANNERA:\n" + planner_out
+        )
     )
 
     return {
