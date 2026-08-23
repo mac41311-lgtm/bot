@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v58
+AEL-MINI AUTONOMOUS AGENT v59
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v58")
+    print("             AEL-MINI AUTONOMOUS AGENT v59")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1117,6 +1117,22 @@ urządzeniu, Termux jest tylko jedną z wielu):
 - android_launch_app (otwórz DOWOLNĄ zainstalowaną aplikację po
   nazwie pakietu — np. zbudowaną i zainstalowaną grę, żeby ją
   faktycznie zobaczyć na ekranie, a nie tylko sprawdzić plik .apk)
+
+ZAOBSERWOWANY REALNY PROBLEM przy SZUKANIU nazwy pakietu: gołe `pm
+list packages` uruchomione w SAMYM Termuksie (przez `shell`/
+`termux_run`, NIE przez ADB) może NIE ZNALEŹĆ aplikacji, która
+FAKTYCZNIE jest zainstalowana i widoczna na ekranie użytkownika —
+np. Kalkulatora. Przyczyna: od Androida 11 obowiązuje "package
+visibility" — zwykła aplikacja (czym jest tu Termux) domyślnie widzi
+w PackageManagerze tylko ograniczony zestaw innych pakietów, nie
+wszystkie zainstalowane. `adb shell pm list packages` działa
+NIEZAWODNIE, bo — dokładnie jak przy screencap/dumpsys — wykonuje
+się jako uprzywilejowany użytkownik `shell`, który tego ograniczenia
+nie ma. Jeśli szukanie pakietu (`pm list packages | grep ...`)
+uruchomione bez ADB nic nie znajdzie, NIE oznacza to, że aplikacji
+nie ma na urządzeniu — zawsze powtórz to samo szukanie przez
+`adb shell pm list packages | grep -i <fraza>` zanim uznasz, że
+aplikacja nie istnieje.
 - android_run_in_new_window (uruchom komendę w NOWYM, widocznym
   oknie Termuksa — konkretna komenda, nie puste okno jak
   termux_start_second_session; do procesów, które mają być
