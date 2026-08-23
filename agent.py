@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v67
+AEL-MINI AUTONOMOUS AGENT v68
 
 ARCHITEKTURA:
 
@@ -393,6 +393,22 @@ RESULT_LIMIT = 7000
 # od aktywnej aplikacji, więc android_summary() je pomija (patrz
 # _parse_hierarchy).
 _ANDROID_SYSTEMUI_RESOURCE_PREFIX = "com.android.systemui:"
+
+# Generyczne, puste, nieklikalne kontenery frameworka Android/
+# AppCompat, które android_summary() pomija (patrz _parse_hierarchy)
+# — te same nazwy wracają w niemal KAŻDEJ aplikacji, nie tylko w
+# systemowym UI, bez żadnej treści/interaktywności.
+_ANDROID_GENERIC_CONTAINER_IDS = {
+    "action_bar_root",
+    "content",
+    "coordinator",
+    "root_view",
+    "view_pager",
+    "decor_content_parent",
+    "contentPanel",
+    "customPanel",
+    "frame",
+}
 
 # Po ilu identycznych zadaniach (na poziomie decyzji MAIN)
 # wymuszamy zmianę strategii.
@@ -821,7 +837,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v67")
+    print("             AEL-MINI AUTONOMOUS AGENT v68")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1215,7 +1231,19 @@ tekst) i chrome_tabs/chrome_inspect (stan ISTNIEJĄCEJ karty Chrome
 jako tekst) to JEDYNE i WYSTARCZAJĄCE dowody dla "co jest na
 ekranie/w przeglądarce" — są już częścią kontekstu każdego kroku,
 nic nie kosztują i, co ważniejsze, TY (Gemini) faktycznie je
-czytasz i na ich podstawie działasz. android_screenshot NIE jest
+czytasz i na ich podstawie działasz.
+
+KRYTYCZNE — potwierdzanie KONKRETNEGO wyniku/wartości (np. "wynik
+działania to 19", "ekran pokazuje Zapisano"): NIE czytaj w tym celu
+całego android_state i nie oceniaj "na oko", czy to tam jest —
+zaobserwowany realny problem: takie potwierdzenia w raportach
+("wynik 19 potwierdzony przez android_state") okazywały się SAMĄ
+DEKLARACJĄ po pobieżnym przejrzeniu długiego zrzutu, nie faktycznym
+sprawdzeniem. Użyj zamiast tego android_assert_text_visible("19") —
+zwraca jednoznaczne found=true/false, więc Twoje potwierdzenie jest
+FAKTYCZNYM dowodem, nie interpretacją.
+
+android_screenshot NIE jest
 tu potrzebny — to obraz PNG, którego treści nikt (ani Ty, ani
 zespół DeepSeek) nie analizuje, więc sam plik potwierdza tylko
 "narzędzie się wykonało", a nie "to, co powinno być widoczne,
@@ -2978,6 +3006,25 @@ def android_summary():
                     "/"
                 )[-1]
 
+            # Generyczne kontenery frameworka Androida/AppCompat
+            # (action_bar_root, content, coordinator, root_view,
+            # view_pager...) pojawiają się identycznie w PRAWIE
+            # KAŻDEJ aplikacji, nie tylko w systemowym UI — nie mają
+            # własnego tekstu/opisu i nie da się w nie kliknąć, więc
+            # niosą zero informacji diagnostycznej, a w logach z tej
+            # sesji naprawczej zajmowały większość każdego zrzutu
+            # android_state. Pomijamy je TYLKO gdy faktycznie puste i
+            # nieinteraktywne — jeśli kiedykolwiek mają realny tekst/
+            # opis albo są klikalne/fokusowalne, zostają widoczne.
+            if (
+                resource in _ANDROID_GENERIC_CONTAINER_IDS
+                and not text
+                and not desc
+                and clickable != "true"
+                and focusable != "true"
+            ):
+                continue
+
             label = (
                 text
                 or desc
@@ -3044,6 +3091,55 @@ def android_summary():
                 + str(e)
             )
 
+
+def android_assert_text_visible(text):
+    """
+    Sprawdza JEDNOZNACZNIE, czy podany fragment tekstu jest
+    GDZIEKOLWIEK widoczny na aktualnym ekranie — zamiast zmuszać
+    Gemini do samodzielnej interpretacji długiego, czasem obciętego
+    zrzutu android_summary().
+
+    Zaobserwowany realny problem: raporty typu "wynik 19 potwierdzony
+    przez android_state" okazywały się w praktyce SAMĄ DEKLARACJĄ
+    Gemini po przejrzeniu dużego, obciętego zrzutu UI — nikt (ani
+    Python, ani Gemini w jednoznaczny sposób) nie sprawdzał, czy "19"
+    faktycznie się w nim znajduje. To narzędzie daje krótki,
+    jednoznaczny fakt (found=True/False) zamiast wymagać interpretacji.
+
+    Ograniczenie: korzysta z tego samego android_summary(), które
+    obcina zrzut przy ANDROID_LIMIT znaków — fragment tekstu bardzo
+    daleko w bardzo rozbudowanym drzewie UI może więc nie zostać
+    znaleziony mimo że faktycznie jest na ekranie. To ten sam limit,
+    z którym i tak muszą żyć MAIN/PLANNER/CRITIC czytający ten sam
+    zrzut ręcznie — nie jest to nowa wada.
+    """
+
+    needle = str(text or "").strip()
+
+    if not needle:
+        return {
+            "ok": False,
+            "error": "Pusty tekst do sprawdzenia."
+        }
+
+    summary = android_summary()
+
+    if summary == "Android niedostępny." or summary.startswith(
+        "Android state error:"
+    ):
+        return {
+            "ok": False,
+            "error": summary
+        }
+
+    found = needle.lower() in summary.lower()
+
+    return {
+        "ok": True,
+        "action": "assert_text_visible",
+        "text": needle,
+        "found": found
+    }
 
 
 def android_click_text(text):
@@ -3664,6 +3760,21 @@ def android_screenshot_ocr(path=None, lang=None):
         }
 
 
+# Pakiety już pomyślnie uruchomione w BIEŻĄCYM celu (patrz
+# android_launch_app niżej) — zaobserwowany realny problem: zespół
+# potrafił kilkukrotnie kazać Gemini otworzyć i "potwierdzić" TĘ SAMĄ
+# aplikację (np. Zegar) w różnych krokach tego samego celu, bo za
+# każdym razem TASK był sformułowany innymi słowami, więc dokładne
+# dopasowanie tekstu w _checklist_duplicate_message() tego nie
+# łapało. Śledzimy więc powtórki po nazwie PAKIETU — jedynym
+# stabilnym, ustrukturyzowanym identyfikatorze, jaki tu w ogóle mamy
+# (argument narzędzia, nie wolny tekst TASK-u) — i dajemy o tym znać
+# jako miękkie ostrzeżenie (nie blokadę: czasem faktyczna ponowna
+# próba jest uzasadniona, np. po awarii). Czyszczone razem z resztą
+# stanu celu w maybe_restart_team_sessions_for_new_goal().
+_confirmed_app_launches = {}
+
+
 def android_launch_app(package):
     """
     Uruchamia zainstalowaną aplikację po nazwie pakietu przez
@@ -3699,7 +3810,26 @@ def android_launch_app(package):
         and "Events injected: 1" in result.get("stdout", "")
     )
 
-    return {
+    already_launched_note = ""
+
+    if started:
+
+        prior = _confirmed_app_launches.get(package)
+
+        if prior:
+            already_launched_note = (
+                "Ta aplikacja (" + package + ") była już pomyślnie "
+                "otwarta i potwierdzona wcześniej W TYM SAMYM CELU "
+                "(pierwszy raz: " + prior + "). Jeśli to nie jest "
+                "faktycznie potrzebne (np. wcześniejsza sesja z tą "
+                "aplikacją padła), NIE otwieraj i nie potwierdzaj "
+                "jej ponownie — to marnuje cały cykl TASK-u na coś "
+                "już zrobionego."
+            )
+
+        _confirmed_app_launches[package] = datetime.now().isoformat()
+
+    output = {
         "ok": started,
         "action": "launch_app",
         "package": package,
@@ -3709,6 +3839,11 @@ def android_launch_app(package):
             500
         )
     }
+
+    if already_launched_note:
+        output["already_launched_note"] = already_launched_note
+
+    return output
 
 
 def android_list_packages(filter_text=None):
@@ -4170,7 +4305,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
     "android_screenshot", "android_screenshot_ocr", "android_launch_app",
-    "android_list_packages",
+    "android_list_packages", "android_assert_text_visible",
     "android_run_in_new_window", "android_install_apk",
     "android_uninstall_app", "android_logcat",
 ]
@@ -5950,6 +6085,36 @@ def _gemini_tools_legacy():
                         )
                     }
                 }
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_assert_text_visible",
+            "description": (
+                "Sprawdź JEDNOZNACZNIE, czy podany fragment tekstu "
+                "(np. wynik działania '19', nazwa ekranu 'Alarm') "
+                "jest GDZIEKOLWIEK widoczny na aktualnym ekranie — "
+                "zwraca krótkie true/false zamiast zmuszać Cię do "
+                "samodzielnego czytania i interpretowania całego, "
+                "długiego zrzutu android_state. UŻYWAJ TEGO do "
+                "potwierdzania konkretnych wyników/wartości zamiast "
+                "wołać android_state i oceniać 'na oko' — to jedyny "
+                "sposób, żeby Twoje potwierdzenie było FAKTYCZNYM "
+                "dowodem, nie tylko Twoją deklaracją."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": (
+                            "Dokładny fragment tekstu do wyszukania "
+                            "na ekranie, np. '19' albo 'Zapisano'."
+                        )
+                    }
+                },
+                "required": ["text"]
             }
         },
 
@@ -7887,6 +8052,26 @@ def _dispatch_tool_inner(
                 args.get("filter_text")
             )
 
+        # Gemini: android_assert_text_visible
+        # Python: android_assert_text_visible
+        if name == "android_assert_text_visible":
+
+            fn = globals().get(
+                "android_assert_text_visible"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji "
+                        "android_assert_text_visible()."
+                }
+
+            return fn(
+                args.get("text")
+            )
+
         # Gemini: android_run_in_new_window
         # Python: android_run_in_new_window
         if name == "android_run_in_new_window":
@@ -8685,7 +8870,8 @@ CO POWINIEN ZROBIĆ MAIN:
                         "content_warning",
                         "compile_error",
                         "blocked_fake_tool_invocation",
-                        "custom_tool_rejected"
+                        "custom_tool_rejected",
+                        "already_launched_note"
                     ):
 
                         if result.get(warning_key):
@@ -12550,6 +12736,12 @@ def maybe_restart_team_sessions_for_new_goal():
         _clear_session_state(name)
 
     init_team()
+
+    # Nowy, niepowiązany cel nie powinien dziedziczyć "już otwarte w
+    # tym celu" ostrzeżeń o aplikacjach z POPRZEDNIEGO celu — inaczej
+    # android_launch_app fałszywie ostrzegałby o powtórce, mimo że to
+    # w istocie pierwsze uruchomienie w kontekście nowego celu.
+    _confirmed_app_launches.clear()
 
     log(
         "DEEPSEEK",
