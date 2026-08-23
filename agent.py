@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v47
+AEL-MINI AUTONOMOUS AGENT v48
 
 ARCHITEKTURA:
 
@@ -60,11 +60,13 @@ import json
 import time
 import re
 import select
+import shlex
 import shutil
 import subprocess
 import traceback
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 from web_search import web_search
 from datetime import datetime
 
@@ -789,7 +791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v47")
+    print("             AEL-MINI AUTONOMOUS AGENT v48")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4131,6 +4133,19 @@ def find_tab(
             if needle in value:
                 return tab
 
+    # Zaobserwowany realny problem: chrome_open/chrome_click/
+    # chrome_type mają tab_id/contains jako OPCJONALNE parametry w
+    # schemacie narzędzia (gemini_tools()) — Gemini w praktyce
+    # prawie zawsze woła je z SAMYM url/text, bez tab_id/contains
+    # (nie zna z góry opaque tab_id, a rzadko podaje contains, gdy
+    # nic go o tym nie uprzedza). Bez tej reguły find_tab(None,
+    # None) zwracał None BEZWARUNKOWO, więc chrome_open zawodziło
+    # ZAWSZE — nawet gdy istniała dokładnie jedna, oczywista karta
+    # do użycia ("[831] Nowa karta"). Gdy jest dokładnie jedna
+    # karta, nie ma żadnej niejednoznaczności — użyj jej.
+    if not tab_id and not contains and len(tabs) == 1:
+        return tabs[0]
+
     return None
 
 
@@ -4438,14 +4453,71 @@ def chrome_open(
     )
 
     # WAŻNE:
-    # NIE TWORZYMY NOWEJ KARTY.
+    # NIE TWORZYMY NOWEJ KARTY przez CDP (/json/new nie jest
+    # używane — patrz komentarz przy CDP_403). Ale zamiast od razu
+    # poddawać się, gdy nie ma pasującej karty CDP, próbujemy
+    # NATYWNEJ drogi Androida (am start -a VIEW -d <url>) — to
+    # dokładnie ta sama komenda, którą MAIN_PROMPT każe zespołowi
+    # wykonać RĘCZNIE jako obejście; robimy to tu automatycznie, bo
+    # zaobserwowany realny problem to zespół WIEDZĄCY o tym
+    # obejściu, ale nie wykonujący go konsekwentnie za każdym razem
+    # (chrome_open zawodził 4x pod rząd zamiast raz przełączyć się
+    # na am start).
     if tab is None:
 
+        fallback = execute_shell(
+            "am start -a android.intent.action.VIEW -d "
+            + shlex.quote(str(url))
+        )
+
+        if not fallback.get("ok"):
+
+            return {
+                "ok": False,
+                "error": (
+                    "Nie znaleziono istniejącej karty CDP, a "
+                    "próba otwarcia przez 'am start' też się nie "
+                    "powiodła: "
+                    + str(fallback.get("error", fallback))
+                ),
+                "fallback_attempted": "am_start"
+            }
+
+        time.sleep(2.0)
+
+        domain = ""
+
+        try:
+            domain = urlparse(str(url)).netloc
+        except Exception:
+            pass
+
+        tab = (
+            find_tab(None, domain or None)
+            or find_tab(None, None)
+        )
+
+        if tab is None:
+
+            return {
+                "ok": False,
+                "error": (
+                    "Wysłano intencję 'am start' dla adresu, ale "
+                    "nadal brak widocznej karty CDP (domyślna "
+                    "przeglądarka mogła nie być Chrome, albo CDP "
+                    "jeszcze nie zaindeksowało nowej karty — "
+                    "sprawdź android_state, żeby potwierdzić, co "
+                    "faktycznie jest na ekranie)."
+                ),
+                "fallback_attempted": "am_start"
+            }
+
         return {
-            "ok": False,
-            "error":
-                "Nie znaleziono istniejącej karty. "
-                "Nowe karty są zablokowane."
+            "ok": True,
+            "tab_id": tab["id"],
+            "url": tab["url"],
+            "title": tab["title"],
+            "method": "am_start_fallback"
         }
 
     ws = cdp_connect(tab)
