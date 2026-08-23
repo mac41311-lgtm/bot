@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v71
+AEL-MINI AUTONOMOUS AGENT v72
 
 ARCHITEKTURA:
 
@@ -837,7 +837,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v71")
+    print("             AEL-MINI AUTONOMOUS AGENT v72")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2571,11 +2571,21 @@ def deepseek(name, message):
                 if not text:
                     text = str(response)
 
+                # Wcześniej log pokazywał TYLKO długość odpowiedzi —
+                # nie dało się stąd stwierdzić, czy na początku
+                # faktycznie przechwyconego tekstu jest wyciekniete
+                # rozumowanie (widziane dotąd tylko w ręcznie
+                # skopiowanych transkryptach z przeglądarki, nigdy
+                # bezpośrednio w tym, co naprawdę odbiera Python).
+                # Podgląd początku KAŻDEJ odpowiedzi wprost w logu
+                # terminala rozstrzyga to ostatecznie, bez kolejnej
+                # rundy ręcznego kopiowania z chat.deepseek.com.
                 log(
                     "DEEPSEEK",
                     f"{name}: "
                     + str(len(text))
-                    + " znaków"
+                    + " znaków | początek: "
+                    + short(text, 150).replace("\n", " ")
                 )
 
                 health = _get_health(_account_of(name))
