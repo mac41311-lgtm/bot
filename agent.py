@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v69
+AEL-MINI AUTONOMOUS AGENT v70
 
 ARCHITEKTURA:
 
@@ -837,7 +837,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v69")
+    print("             AEL-MINI AUTONOMOUS AGENT v70")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2421,6 +2421,20 @@ def _deepseek_pace(name):
         _deepseek_last_send[account] = time.time()
 
 
+# Zaobserwowany realny problem (log/transkrypty z 2026-08-23): treść
+# faktycznie zwracana przez response.text czasem zawiera na początku
+# długi fragment po angielsku, wyglądający jak rozumowanie modelu
+# ("The user is asking...", "Let me think..."), ZANIM pojawi się
+# właściwa, krótka odpowiedź po polsku — widoczne to jest wprost w
+# treści wysyłanej dalej do innych ról (np. w "PLAN PLANNERA:").
+# Nie wiadomo jeszcze, czy opendeek eksponuje to rozumowanie w
+# OSOBNYM polu (które dałoby się po prostu pominąć), czy to po
+# prostu styl odpowiedzi samego modelu wymieszany z treścią —
+# ten log (jednorazowo, przy pierwszym realnym wywołaniu) ma to
+# rozstrzygnąć, zanim spróbujemy cokolwiek automatycznie obcinać.
+_response_attrs_logged = False
+
+
 def deepseek(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
@@ -2487,6 +2501,51 @@ def deepseek(name, message):
                 _activate_account_for_role(name)
 
                 response = session.send_message(message)
+
+                global _response_attrs_logged
+
+                if not _response_attrs_logged:
+
+                    _response_attrs_logged = True
+
+                    try:
+                        attrs = [
+                            a for a in dir(response)
+                            if not a.startswith("_")
+                        ]
+
+                        log(
+                            "DEEPSEEK",
+                            "DIAGNOSTYKA (jednorazowo): atrybuty "
+                            "obiektu response: " + ", ".join(attrs)
+                        )
+
+                        for candidate in attrs:
+
+                            lowered = candidate.lower()
+
+                            if (
+                                "reason" in lowered
+                                or "think" in lowered
+                                or "cot" in lowered
+                            ):
+                                value = getattr(
+                                    response, candidate, None
+                                )
+
+                                log(
+                                    "DEEPSEEK",
+                                    "DIAGNOSTYKA: response."
+                                    + candidate + " = "
+                                    + short(str(value), 500)
+                                )
+
+                    except Exception as diag_error:
+                        log(
+                            "DEEPSEEK",
+                            "DIAGNOSTYKA nieudana (pomijam): "
+                            + str(diag_error)
+                        )
 
                 text = getattr(response, "text", None)
 
@@ -11051,6 +11110,56 @@ FAILED:
 # PARSE JSON
 # ============================================================
 
+def _extract_last_balanced_json_object(text):
+    """
+    Znajduje OSTATNI, poprawnie zbalansowany obiekt JSON {...},
+    skanując WSTECZ od końca tekstu i licząc głębokość nawiasów.
+
+    Zaobserwowany realny problem: DeepSeek czasem poprzedza właściwą
+    odpowiedź długim fragmentem własnego rozumowania (po angielsku,
+    zanim przejdzie do krótkiej, właściwej odpowiedzi) — a taki
+    fragment potrafi zawierać przykładowe '{'/'}' (np. tłumacząc
+    format JSON albo cytując fragment kodu). Naiwne dopasowanie
+    "pierwszy '{' w całym tekście .. ostatni '}'" łapało wtedy
+    niepoprawną, za szeroką parę nawiasów i psuło parsowanie mimo że
+    właściwy, poprawny obiekt JSON był obecny na końcu tekstu — stąd
+    powtarzające się w logach "Niepoprawny JSON. Naprawiam." Szukanie
+    WSTECZ od ostatniego '}' poprawnie trafia na OSTATNI kompletny
+    obiekt, niezależnie od tego, co poprzedza go w tekście.
+    """
+
+    depth = 0
+    end = None
+    start = None
+
+    for i in range(len(text) - 1, -1, -1):
+
+        ch = text[i]
+
+        if ch == "}":
+            if end is None:
+                end = i
+            depth += 1
+
+        elif ch == "{":
+            depth -= 1
+            if depth == 0 and end is not None:
+                start = i
+                break
+
+    if start is None or end is None:
+        return None
+
+    try:
+        obj = json.loads(text[start:end + 1])
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    return None
+
+
 def parse_json(text):
 
     if not text:
@@ -11096,28 +11205,10 @@ def parse_json(text):
         except Exception:
             pass
 
-    start = text.find("{")
-    end = text.rfind("}")
+    obj = _extract_last_balanced_json_object(text)
 
-    if (
-        start >= 0
-        and end > start
-    ):
-
-        try:
-
-            obj = json.loads(
-                text[start:end + 1]
-            )
-
-            if isinstance(
-                obj,
-                dict
-            ):
-                return obj
-
-        except Exception:
-            pass
+    if obj is not None:
+        return obj
 
     return None
 
