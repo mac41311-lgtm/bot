@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v61
+AEL-MINI AUTONOMOUS AGENT v62
 
 ARCHITEKTURA:
 
@@ -792,7 +792,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v61")
+    print("             AEL-MINI AUTONOMOUS AGENT v62")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4015,25 +4015,28 @@ def _confirm_destructive_action(description):
         print("⚠️  AGENT CHCE WYKONAĆ OPERACJĘ USUWANIA:")
         print("   " + str(description))
 
-        # Zaobserwowany realny incydent: użytkownik wpisał "t" na
-        # PIERWSZE z trzech pytań pod rząd (nowy cel -> reset sesji
-        # -> usunięcie danych sesji -> usunięcie plików projektu),
-        # a mimo to program odczytał to jako odmowę — kolejne dwa
-        # "t" (identyczny mechanizm) zadziałały poprawnie. Winny:
-        # _read_full_input() dla promptu CELU tuż wcześniej robi
-        # nieblokujący drenaż stdin (select z timeout=0) — jeśli
-        # reszta wklejonego tekstu (typowo końcowa pusta linia ze
-        # schowka) dotarła do bufora O UŁAMEK SEKUNDY ZA PÓŹNO na
-        # ten drenaż, zostaje w buforze i to ONA, nie prawdziwe "t"
-        # użytkownika, odpowiada na TO pytanie. Użytkownik fizycznie
-        # nie mógł zareagować na pytanie, którego jeszcze nie
-        # widział — więc każda treść już czekająca w buforze PRZED
-        # wydrukowaniem pytania jest odrzucana w ciszy, zanim
-        # zapytamy o prawdziwą odpowiedź.
+        # Zaobserwowany realny incydent (POWTÓRZONY mimo wcześniejszej
+        # łatki v49): użytkownik wpisał "t" na pytanie o reset sesji,
+        # terminal POKAZAŁ "t", a program mimo to odczytał to jako
+        # odmowę. Pierwsza próba naprawy (v49) drenowała bufor przez
+        # `sys.stdin.readline()` w pętli — ale readline() BLOKUJE,
+        # jeśli w buforze czeka NIEDOKOŃCZONY fragment (bez znaku
+        # nowej linii, np. resztka wklejonego tekstu, której
+        # użytkownik jeszcze nie "zamknął" enterem) — w tym stanie
+        # KOLEJNE znaki, które użytkownik dopiero co wpisuje (prawdziwe
+        # "t" + Enter), doklejają się do TEGO SAMEGO niedokończonego
+        # fragmentu w buforze terminala, więc readline() zwraca
+        # "resztka+t" zamiast samego "t" — terminal nadal POKAZUJE
+        # wpisane "t" (lokalne echo terminala, niezależne od tego, co
+        # faktycznie odczytał proces), ale porównanie z "t" już nie
+        # przechodzi. Naprawione właściwym, atomowym narzędziem
+        # systemowym do tego dokładnie przypadku: termios.tcflush()
+        # kasuje WSZYSTKO, co czeka w buforze wejściowym terminala,
+        # na poziomie kernela — bez ryzyka blokady na niedokończonej
+        # linii, w przeciwieństwie do ręcznego drenażu przez readline().
         try:
-            while select.select([sys.stdin], [], [], 0)[0]:
-                if not sys.stdin.readline():
-                    break
+            import termios
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
         except Exception:
             pass
 
