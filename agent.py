@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v84
+AEL-MINI AUTONOMOUS AGENT v85
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v84")
+    print("             AEL-MINI AUTONOMOUS AGENT v85")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3517,9 +3517,77 @@ def android_assert_text_visible(text):
     }
 
 
+# Zaobserwowany realny przypadek (2026-08-24): android_click("+")
+# w kalkulatorze (com.coloros.calculator) zawiodł, a odpowiedź
+# clickable_nearby jawnie pokazała, że przycisk operatora ma
+# etykietę "Dodaj" (spolszczoną), nie symbol "+". Zamiast liczyć na
+# to, że DeepSeek/Gemini zauważy podpowiedź i spróbuje ponownie
+# (co w tym logu NIE nastąpiło — zamiast tego zespół zmarnował
+# kolejną pełną rundę konsultacji + WEB_SEARCH, zanim przypadkiem
+# trafił na inne podejście), spróbuj znanych, spolszczonych
+# odpowiedników AUTOMATYCZNIE, zanim w ogóle zgłosisz błąd.
+_ANDROID_CLICK_TEXT_SYNONYMS = {
+    "+": ["Dodaj", "Plus"],
+    "-": ["Odejmij", "Minus"],
+    "−": ["Odejmij", "Minus"],
+    "*": ["Pomnóż", "Razy", "×"],
+    "x": ["Pomnóż", "Razy", "×"],
+    "×": ["Pomnóż", "Razy"],
+    "/": ["Podziel", "÷"],
+    "÷": ["Podziel"],
+    "=": ["Równa się", "Oblicz", "Wynik"],
+    "c": ["Wymaż", "Wyczyść", "Kasuj", "AC", "CE"],
+    "ac": ["Wymaż", "Wyczyść", "Kasuj"],
+    "clear": ["Wymaż", "Wyczyść", "Kasuj"],
+    "del": ["Backspace", "Usuń", "Wymaż"],
+    "backspace": ["Usuń", "Wymaż"],
+}
+
+
 def android_click_text(text):
     """
-    Inteligentne kliknięcie elementu Android.
+    Inteligentne kliknięcie elementu Android — próbuje podanego
+    tekstu, a jeśli to znany symbol/skrót matematyczny (+, -, *, /,
+    =, c...), automatycznie próbuje też znanych spolszczonych
+    odpowiedników (patrz _ANDROID_CLICK_TEXT_SYNONYMS) ZANIM
+    zgłosi błąd — bez czekania na to, że wywołujący zauważy i
+    powtórzy próbę z podpowiedzi clickable_nearby.
+    """
+
+    target_text = str(text)
+
+    candidates = [target_text]
+
+    for synonym in _ANDROID_CLICK_TEXT_SYNONYMS.get(
+        target_text.strip().lower(), []
+    ):
+        if synonym not in candidates:
+            candidates.append(synonym)
+
+    result = None
+    tried = []
+
+    for candidate in candidates:
+
+        result = _android_click_single_text(candidate)
+        tried.append(candidate)
+
+        if result.get("ok"):
+            if candidate != target_text:
+                result["matched_via_synonym_of"] = target_text
+            return result
+
+    if result is not None and len(tried) > 1:
+        result["tried_synonyms"] = tried
+
+    return result
+
+
+def _android_click_single_text(text):
+    """
+    Jedna próba kliknięcia elementu Android po DOKŁADNIE podanym
+    tekście (bez prób synonimów — tym zajmuje się android_click_text
+    powyżej).
 
     Kolejność:
     1. text
