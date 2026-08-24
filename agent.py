@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v83
+AEL-MINI AUTONOMOUS AGENT v84
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v83")
+    print("             AEL-MINI AUTONOMOUS AGENT v84")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10162,6 +10162,75 @@ def _checklist_record_result(task_id, result):
         _save_progress_checklist(items)
 
 
+def _success_condition_already_satisfied_message(task_text, success_condition):
+    """
+    Zaobserwowany realny problem (log 2026-08-24, ~10 minut, 6
+    kolejnych krokow): MAIN wielokrotnie tworzyl NOWE TASKi typu
+    "zweryfikuj czy plik X istnieje" dla pliku, ktory Python moze
+    sprawdzic SAM i NATYCHMIAST, bez angazowania w ogole Gemini ani
+    zespolu DeepSeek — a mimo to caly zespol (PLANNER/CRITIC/MAIN/
+    Gemini) w kolko przechodzil przez pelny cykl konsultacji tylko
+    po to, zeby ponownie potwierdzic to, co bylo prawda juz wczesniej.
+    Uzytkownik trafnie to nazwal: system "za bardzo skupia sie na
+    dowodach, nie rozwiazywaniu problemu".
+
+    Jesli WSZYSTKIE pliki wymienione w warunku sukcesu NOWEGO taska
+    (rozpoznawane tym samym wzorcem co _verify_success_condition_
+    evidence) juz istnieja i nie sa puste W TEJ CHWILI, nie ma sensu
+    tworzyc taska ani angazowac Gemini — Python juz zna odpowiedz.
+    Od razu zapisuje ten punkt jako ZWERYFIKOWANY w checkliscie (co
+    dodatkowo pozwoli _checklist_duplicate_message zlapac identyczne
+    powtorzenia w przyszlosci) i zwraca gotowy komunikat zamiast
+    None. Zwraca None, gdy trzeba faktycznie cos wykonac (brak
+    wymienionych plikow, albo ktorys jeszcze nie istnieje/jest pusty).
+    """
+
+    files = _extract_goal_mentioned_files(success_condition)
+
+    if not files:
+        return None
+
+    evidence_parts = []
+
+    for rel_path in files:
+        try:
+            p = Path(rel_path).expanduser()
+        except Exception:
+            return None
+        if not (p.exists() and p.stat().st_size > 0):
+            return None
+        evidence_parts.append(
+            rel_path + " (" + str(p.stat().st_size) + " B)"
+        )
+
+    evidence = "już na dysku: " + ", ".join(evidence_parts)
+
+    items = _load_progress_checklist()
+    items.append({
+        "task_id": (
+            "auto_precheck_"
+            + datetime.now().strftime("%Y%m%d%H%M%S%f")
+        ),
+        "task": task_text,
+        "success_condition": success_condition,
+        "status": "ZWERYFIKOWANY",
+        "created": datetime.now().isoformat(),
+        "finished": datetime.now().isoformat(),
+        "evidence": evidence,
+        "tool_trace": []
+    })
+    _save_progress_checklist(items)
+
+    return (
+        "Wszystkie pliki wymienione w warunku sukcesu JUŻ ISTNIEJĄ "
+        "i nie są puste W TEJ CHWILI (sprawdzone bezpośrednio na "
+        "dysku, bez angażowania Gemini): " + evidence + ". Ten "
+        "punkt jest już faktycznie spełniony — zaproponuj NASTĘPNY, "
+        "faktycznie jeszcze niezrobiony krok zamiast tworzenia "
+        "taska tylko po to, żeby ponownie to potwierdzić."
+    )
+
+
 def _checklist_duplicate_message(task_text):
     """
     Zwraca gotowy komunikat blokady, jeżeli task_text to dokładne
@@ -13279,6 +13348,21 @@ Zwróć tylko JSON.
 
                 continue
 
+            already_satisfied_msg = (
+                _success_condition_already_satisfied_message(
+                    task_text, success_condition
+                )
+            )
+
+            if already_satisfied_msg:
+
+                last_result = {
+                    "status": "TASK_ALREADY_SATISFIED_ON_DISK",
+                    "message": already_satisfied_msg
+                }
+
+                continue
+
             task_id = create_task(
                 task=task_text,
                 success_condition=
@@ -13541,6 +13625,22 @@ Tylko JSON.
                             "status":
                                 "TASK_DUPLICATE_OF_VERIFIED_POINT",
                             "message": duplicate_msg
+                        }
+
+                        continue
+
+                    already_satisfied_msg = (
+                        _success_condition_already_satisfied_message(
+                            task_text, condition
+                        )
+                    )
+
+                    if already_satisfied_msg:
+
+                        last_result = {
+                            "status":
+                                "TASK_ALREADY_SATISFIED_ON_DISK",
+                            "message": already_satisfied_msg
                         }
 
                         continue
