@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v91
+AEL-MINI AUTONOMOUS AGENT v92
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v91")
+    print("             AEL-MINI AUTONOMOUS AGENT v92")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -888,7 +888,7 @@ def banner():
 # WAŻNE: podział NIE jest po liczbie ról (4 vs 5) — to była pierwsza,
 # błędna wersja. consult_team() pyta role z bardzo różną
 # częstotliwością:
-#   - MAIN, PLANNER, CRITIC, ANDROID_GAME_ENGINEER — KAŻDY krok
+#   - MAIN, PLANNER, CRITIC, ENGINEER — KAŻDY krok
 #     (waga ~1.0 każda),
 #   - RESEARCHER — co ~3. krok + świeży błąd narzędzia (waga ~0.4),
 #   - BROWSER — co ~3. krok (waga ~0.33),
@@ -907,7 +907,7 @@ _ROLE_ACCOUNT = {
     "PROGRESS_ESTIMATOR": 1,
 
     "PLANNER": 2,
-    "ANDROID_GAME_ENGINEER": 2,
+    "ENGINEER": 2,
     "BROWSER": 2,
     "CODE_REVIEWER": 2,
     "CODE_FIXER": 2,
@@ -1082,15 +1082,13 @@ TASK:
 OBOWIĄZKOWE: write_engineer_code_to
 ============================================================
 
-Uwaga o nazwie: rola "ANDROID_GAME_ENGINEER" nazywa się tak
-historycznie, ale w praktyce jest to Twój specjalista TECHNICZNY
-od budowy DOWOLNEGO projektu — gry, aplikacji Android, skryptu,
-narzędzia CLI, automatyzacji, strony itd. — dostosowuje swoje
-rady do aktualnego CELU, nie tylko do gier. Poniższe zasady
-dotyczą jej kodu niezależnie od rodzaju projektu.
+ENGINEER to Twój specjalista TECHNICZNY od budowy DOWOLNEGO
+projektu — gry, aplikacji Android, skryptu, narzędzia CLI,
+automatyzacji, strony itd., zależnie od aktualnego CELU. Poniższe
+zasady dotyczą jego kodu niezależnie od rodzaju projektu.
 
 To NIE jest opcja do rozważenia — to TWÓJ OBOWIĄZEK w konkretnej
-sytuacji: jeżeli ANDROID_GAME_ENGINEER podał w swojej odpowiedzi
+sytuacji: jeżeli ENGINEER podał w swojej odpowiedzi
 gotowy blok kodu (sekcja "POLECENIE / KOD:", wewnątrz ```...```),
 A Twój TASK dotyczy ZAPISANIA tego kodu do pliku — MASZ UŻYĆ pola
 "write_engineer_code_to" z docelową ścieżką (np.
@@ -1103,7 +1101,7 @@ liczenie, że Gemini sam go napisze/odtworzy przez termux_write_file.
 To marnuje limit Gemini (którego brakuje) i wprowadza błędy
 przepisywania — dokładnie to, czego ten mechanizm ma unikać. Jeżeli
 zauważysz, że ostatni TASK kazał Gemini samodzielnie napisać duży
-plik, mimo że ANDROID_GAME_ENGINEER miał gotowy kod — to był błąd,
+plik, mimo że ENGINEER miał gotowy kod — to był błąd,
 napraw podejście w następnym TASKu.
 
 Kiedy używasz write_engineer_code_to, pole "task" ma dotyczyć
@@ -1112,9 +1110,9 @@ WYŁĄCZNIE uruchomienia i przetestowania już zapisanego pliku (np.
 błędem"), NIE jego tworzenia — plik już tam będzie, zanim Gemini
 zacznie pracować.
 
-Jeżeli w ostatniej odpowiedzi ANDROID_GAME_ENGINEER NIE MA bloku
+Jeżeli w ostatniej odpowiedzi ENGINEER NIE MA bloku
 kodu (```...```), pole zostanie odrzucone z jasnym błędem — nie
-zgaduj, poproś ANDROID_GAME_ENGINEER o konkretny kod albo zrób
+zgaduj, poproś ENGINEER o konkretny kod albo zrób
 zwykły TASK bez tego pola (dozwolone tylko gdy naprawdę nie ma
 gotowego kodu do zapisania).
 
@@ -1123,11 +1121,11 @@ UWAGA — write_engineer_code_to NADPISUJE CAŁY PLIK
 ============================================================
 
 write_engineer_code_to zastępuje CAŁĄ zawartość pliku blokiem kodu
-ANDROID_GAME_ENGINEER. To bezpieczne TYLKO gdy ten blok to PEŁNA,
+ENGINEER. To bezpieczne TYLKO gdy ten blok to PEŁNA,
 kompletna zawartość pliku (np. pierwszy zapis nowego pliku, albo
-ANDROID_GAME_ENGINEER świadomie podał cały plik od nowa).
+ENGINEER świadomie podał cały plik od nowa).
 
-NIE UŻYWAJ write_engineer_code_to, jeżeli ANDROID_GAME_ENGINEER
+NIE UŻYWAJ write_engineer_code_to, jeżeli ENGINEER
 podał tylko FRAGMENT/POPRAWKĘ istniejącego pliku (np. "zmień tę
 jedną funkcję") — nadpisałbyś resztę pliku tym fragmentem i
 zniszczył wszystko inne. Do poprawek fragmentu istniejącego pliku
@@ -1441,8 +1439,8 @@ realizuje DOWOLNY cel techniczny zlecony przez użytkownika: może
 to być gra Android, zwykła aplikacja Android, skrypt Pythona,
 narzędzie CLI, automatyzacja, strona/serwer, scraper, cokolwiek
 da się zbudować i uruchomić przez Termux, ADB/Android albo
-Chrome. NIE zakładaj z góry, że cel dotyczy gry — rozpoznaj to
-z treści CELU, który dostajesz w każdej wiadomości.
+Chrome. Rozpoznaj o co dokładnie chodzi z treści CELU, który
+dostajesz w każdej wiadomości.
 
 Dostajesz: cel, ostatni wynik, stan systemu. Twoje zadanie to
 wybrać JEDEN konkretny, realistyczny następny krok — nie więcej niż
@@ -1514,8 +1512,7 @@ RESEARCHER_PROMPT = """
 Jesteś RESEARCHEREM w uniwersalnym agencie działającym w
 Termux/Android. Cel bieżącego projektu może być dowolny — gra,
 aplikacja Android, skrypt, narzędzie CLI, automatyzacja, strona,
-serwer, integracja z API — rozpoznaj go z treści CELU zamiast
-zakładać z góry, że chodzi o grę.
+serwer, integracja z API — rozpoznaj go z treści CELU.
 
 Twoja specjalizacja dopasowuje się do aktualnego celu: biblioteki i
 frameworki dostępne w Termux dla danej technologii (pygame, kivy,
@@ -1539,8 +1536,8 @@ maksymalnie 5 zdań.
 CRITIC_PROMPT = """
 Jesteś CRITIC w uniwersalnym autonomicznym agencie — cel projektu
 może być dowolny (gra Android, aplikacja, skrypt, narzędzie CLI,
-automatyzacja, strona, serwer), rozpoznaj go z treści CELU zamiast
-zakładać z góry, że chodzi o grę. Twoja rola to złapać błędy
+automatyzacja, strona, serwer), rozpoznaj go z treści CELU. Twoja
+rola to złapać błędy
 logiczne, zanim MAIN wyśle zadanie do Gemini — poniższe punkty
 warto sprawdzać za każdym razem:
 
@@ -1693,19 +1690,17 @@ Odpowiadaj krótko i konkretnie.
 """
 
 
-ANDROID_GAME_ENGINEER_PROMPT = """
+ENGINEER_PROMPT = """
 Jesteś głównym INŻYNIEREM TECHNICZNYM autonomicznego agenta
-działającego w Termux/Android. Nazwa roli "ANDROID GAME ENGINEER"
-jest historyczna — Twoja faktyczna rola jest SZERSZA: budujesz
-KAŻDY rodzaj projektu, o jaki poprosi użytkownik — nie tylko gry
-Android, ale też zwykłe aplikacje Android, skrypty Pythona,
-narzędzia CLI, automatyzację, scrapery, serwery, integracje z API,
-strony itd. ZAWSZE najpierw rozpoznaj z treści CELU, jakiego
+działającego w Termux/Android. Budujesz KAŻDY rodzaj projektu, o
+jaki poprosi użytkownik — grę Android, zwykłą aplikację Android,
+skrypt Pythona, narzędzie CLI, automatyzację, scraper, serwer,
+integrację z API, stronę itd. Rozpoznaj z treści CELU, jakiego
 rodzaju projekt budujesz, i dostosuj do tego swoje rady — sekcje
 poniżej dotyczące gier/APK/Gradle stosuj TYLKO gdy cel faktycznie
-jest o budowie gry lub aplikacji Android; dla innych celów je
-pomiń i opieraj się na ogólnej wiedzy inżynierskiej (Python, shell,
-biblioteki, API, formaty plików itd.).
+jest o budowie gry lub aplikacji Android; dla innych celów opieraj
+się na ogólnej wiedzy inżynierskiej (Python, shell, biblioteki,
+API, formaty plików itd.).
 
 Dostajesz aktualny stan projektu i raport ostatniego zadania.
 
@@ -1901,7 +1896,7 @@ PROGRESS_ESTIMATOR_PROMPT = """
 Jesteś PROGRESS_ESTIMATOR — oceniasz procentowy postęp realizacji
 DOWOLNEGO celu autonomicznego agenta (gra/aplikacja Android,
 skrypt, narzędzie CLI, automatyzacja, strona itd. — rozpoznaj
-rodzaj celu z jego treści, nie zakładaj z góry, że to gra).
+rodzaj celu z jego treści).
 
 Dostajesz:
 1. Listę kilku ostatnio wykonanych zadań (status, skrócony
@@ -1979,7 +1974,7 @@ def session_state_file(name):
     }
 
     # Fallback dla ról bez dedykowanego pliku stanu
-    # (CODE_REVIEWER, CODE_FIXER, ANDROID_GAME_ENGINEER).
+    # (CODE_REVIEWER, CODE_FIXER, ENGINEER).
     return mapping.get(
         name,
         STATE_DIR / (name.lower() + ".json")
@@ -2217,8 +2212,8 @@ def start_session(name, system_prompt):
 def init_team():
 
     # 7 sesji — 5 oryginalnych + CODE_REVIEWER + CODE_FIXER
-    # + 1 nowa: ANDROID_GAME_ENGINEER (specjalista od budowania
-    # gier w Termux — kluczowy dla tego konkretnego projektu).
+    # + 1 nowa: ENGINEER (specjalista TECHNICZNY od budowy
+    # dowolnego projektu, jaki poprosi użytkownik).
 
     start_session(
         "MAIN",
@@ -2256,8 +2251,8 @@ def init_team():
     )
 
     start_session(
-        "ANDROID_GAME_ENGINEER",
-        ANDROID_GAME_ENGINEER_PROMPT
+        "ENGINEER",
+        ENGINEER_PROMPT
     )
 
     start_session(
@@ -2294,7 +2289,7 @@ def _get_session_lock(name):
 #
 # Realny przypadek: od kroku 2 do ręcznego przerwania (Ctrl+C) w
 # kroku 8 (~4 minuty, ~90 zapytań) KAŻDA sesja — MAIN, PLANNER,
-# RESEARCHER, BROWSER, ANDROID_GAME_ENGINEER, CRITIC — failowała
+# RESEARCHER, BROWSER, ENGINEER, CRITIC — failowała
 # z "invalid message id", restart sesji NIE POMAGAŁ (świeżo
 # zrestartowana sesja failowała na PIERWSZEJ wiadomości), a mimo
 # to agent brnął dalej przez kolejne kroki, próbując wszystkie
@@ -2724,8 +2719,8 @@ def deepseek(name, message):
                 "BROWSER": BROWSER_PROMPT,
                 "CODE_REVIEWER": CODE_REVIEWER_PROMPT,
                 "CODE_FIXER": CODE_FIXER_PROMPT,
-                "ANDROID_GAME_ENGINEER":
-                    ANDROID_GAME_ENGINEER_PROMPT,
+                "ENGINEER":
+                    ENGINEER_PROMPT,
                 "PROGRESS_ESTIMATOR":
                     PROGRESS_ESTIMATOR_PROMPT,
             }
@@ -2896,8 +2891,8 @@ def deepseek(name, message):
                         "BROWSER": BROWSER_PROMPT,
                         "CODE_REVIEWER": CODE_REVIEWER_PROMPT,
                         "CODE_FIXER": CODE_FIXER_PROMPT,
-                        "ANDROID_GAME_ENGINEER":
-                            ANDROID_GAME_ENGINEER_PROMPT,
+                        "ENGINEER":
+                            ENGINEER_PROMPT,
                         "PROGRESS_ESTIMATOR":
                             PROGRESS_ESTIMATOR_PROMPT,
                     }
@@ -10966,7 +10961,7 @@ def extract_code_block(text):
     """
     Wyciąga zawartość PIERWSZEGO bloku ```...``` z tekstu.
 
-    ANDROID_GAME_ENGINEER_PROMPT każe zwracać kod w sekcji
+    ENGINEER_PROMPT każe zwracać kod w sekcji
     "POLECENIE / KOD:" wewnątrz dokładnie takiego bloku — ta
     funkcja pozwala Pythonowi wyciąć ten kod i zapisać go
     bezpośrednio do pliku (patrz write_engineer_code_to w
@@ -11004,7 +10999,7 @@ def _looks_like_shell_script(code, target_path):
     Wykrywa, czy blok kodu wygląda jak SKRYPT POWŁOKI (komendy do
     URUCHOMIENIA), a nie treść pliku do zapisania 1:1.
 
-    Zaobserwowany realny przypadek: ANDROID_GAME_ENGINEER podał w
+    Zaobserwowany realny przypadek: ENGINEER podał w
     bloku "POLECENIE / KOD" komendę w stylu
     `cat > plik << 'EOF' ... EOF` (czyli: "uruchom to, żeby
     zapisać plik"), a write_engineer_code_to zapisało ten skrypt
@@ -11851,7 +11846,7 @@ def consult_team(
     realne obciążenie tego mechanizmu (i tak nieprzeznaczonego do
     automatyzacji w tym tempie) — czyli de facto spam.
 
-    Dlatego PLANNER, CRITIC i ANDROID_GAME_ENGINEER (te trzy
+    Dlatego PLANNER, CRITIC i ENGINEER (te trzy
     bezpośrednio napędzają decyzję MAIN) są pytane na KAŻDYM kroku,
     ale RESEARCHER i BROWSER — które w praktyce rzadko mają coś
     nowego do powiedzenia z kroku na krok — tylko co 3. krok, plus
@@ -11863,7 +11858,7 @@ def consult_team(
 
     KOLEJNOŚĆ (jak w ludzkim zespole — najpierw ustal fakty, potem
     planuj na ich podstawie, nie odwrotnie): RESEARCHER -> PLANNER
-    -> BROWSER -> ANDROID_GAME_ENGINEER -> CRITIC -> (MAIN, poza tą
+    -> BROWSER -> ENGINEER -> CRITIC -> (MAIN, poza tą
     funkcją). Wcześniej PLANNER planował PRZED RESEARCHEREM, więc
     świeże ustalenia trafiały dopiero do NASTĘPNEGO kroku — o krok
     za późno na to, żeby faktycznie wpłynąć na plan, którego
@@ -11984,8 +11979,8 @@ OSTATNI RAPORT:
             "celu. Nie komentuj stanu Androida ani nie planuj "
             "kroków spoza przeglądarki."
         ),
-        "ANDROID_GAME_ENGINEER": (
-            "TWOJA ROLA: ANDROID_GAME_ENGINEER. Dostarcz konkretny "
+        "ENGINEER": (
+            "TWOJA ROLA: ENGINEER. Dostarcz konkretny "
             "kod/rozwiązanie techniczne na podstawie planu PLANNERA "
             "i ustaleń RESEARCHERA poniżej."
         ),
@@ -12014,7 +12009,7 @@ OSTATNI RAPORT:
         return "\n".join(p for p in pieces if p)
 
     # Role odpytywane PO KOLEI — jedno realne połączenie do
-    # opendeep na raz. CRITIC i ANDROID_GAME_ENGINEER dostają
+    # opendeep na raz. CRITIC i ENGINEER dostają
     # dodatkowo wyjście PLANNERA/RESEARCHERA, więc muszą i tak
     # czekać, aż tamci skończą.
 
@@ -12115,10 +12110,10 @@ OSTATNI RAPORT:
 
     planner_out = short(results.get("PLANNER", ""), 2000)
 
-    results["ANDROID_GAME_ENGINEER"] = deepseek(
-        "ANDROID_GAME_ENGINEER",
+    results["ENGINEER"] = deepseek(
+        "ENGINEER",
         _team_context(
-            "ANDROID_GAME_ENGINEER",
+            "ENGINEER",
             include_android=goal_needs_android,
             extra=(
                 "\nPLAN PLANNERA:\n" + planner_out
@@ -12138,13 +12133,13 @@ OSTATNI RAPORT:
     return {
         "planner":   short(results.get("PLANNER", ""), 4000),
         "researcher": short(results.get("RESEARCHER", ""), 4000),
-        "engineer":  short(results.get("ANDROID_GAME_ENGINEER", ""), 4000),
-        # Pełna, nieskrócona odpowiedź ANDROID_GAME_ENGINEER — NIE
+        "engineer":  short(results.get("ENGINEER", ""), 4000),
+        # Pełna, nieskrócona odpowiedź ENGINEER — NIE
         # trafia do prompta MAIN (żeby nie pompować mu kontekstu),
         # ale run_agent() jej potrzebuje w całości, żeby wyciąć z
         # niej blok kodu przy write_engineer_code_to (patrz
         # extract_code_block() / obsługa TASK w run_agent()).
-        "engineer_full": results.get("ANDROID_GAME_ENGINEER", ""),
+        "engineer_full": results.get("ENGINEER", ""),
         "critic":    short(results.get("CRITIC", ""), 4000),
         "browser":   short(results.get("BROWSER", ""), 2000),
     }
@@ -12305,7 +12300,7 @@ INTERPRETACJA STATUSU
 PLANNER:
 {team['planner']}
 
-ANDROID_GAME_ENGINEER:
+ENGINEER:
 {team['engineer']}
 
 RESEARCHER:
@@ -12328,7 +12323,7 @@ ZASADY DECYZJI:
   Agent sprawdzi to sam i sam rozpozna, czy APK jest wymagany.
 - EXECUTED = Gemini skończył TASK, NIE = cel projektu zakończony.
 - Jeżeli CRITIC mówi BLOKUJ — weź to poważnie i zmień podejście.
-- OBOWIĄZKOWE: jeżeli ANDROID_GAME_ENGINEER powyżej podał gotowy
+- OBOWIĄZKOWE: jeżeli ENGINEER powyżej podał gotowy
   blok kodu, a Twój TASK ma go zapisać do pliku — MUSISZ użyć
   "write_engineer_code_to" (ścieżka pliku) zamiast opisywać kod
   słownie w "task". Nie jest to opcja do rozważenia. Wtedy "task"
@@ -13628,10 +13623,10 @@ Zwróć tylko JSON.
                 continue
 
             # --------------------------------------------------
-            # ZAPIS KODU ANDROID_GAME_ENGINEER BEZ UDZIAŁU GEMINI
+            # ZAPIS KODU ENGINEER BEZ UDZIAŁU GEMINI
             #
             # Jeżeli MAIN zdecydował, że gotowy blok kodu z
-            # bieżącej odpowiedzi ANDROID_GAME_ENGINEER ma trafić
+            # bieżącej odpowiedzi ENGINEER ma trafić
             # do pliku 1:1 — robi to Python, TERAZ, zanim TASK
             # w ogóle trafi do Gemini. Gemini dostaje wtedy zadanie
             # WYŁĄCZNIE uruchomienia/testowania, nigdy przepisania
@@ -13656,11 +13651,11 @@ Zwróć tylko JSON.
                             "ENGINEER_CODE_MISSING",
                         "message": (
                             "MAIN poprosił o zapisanie kodu "
-                            "ANDROID_GAME_ENGINEER do "
+                            "ENGINEER do "
                             + write_target
                             + ", ale w jego ostatniej odpowiedzi "
                             "nie znaleziono bloku kodu (```...```). "
-                            "Zapytaj ANDROID_GAME_ENGINEER "
+                            "Zapytaj ENGINEER "
                             "ponownie o konkretny kod w bloku, albo "
                             "utwórz zwykły TASK bez "
                             "write_engineer_code_to."
@@ -13691,7 +13686,7 @@ Zwróć tylko JSON.
                             "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
                         "message": (
                             "write_engineer_code_to ODRZUCONE: "
-                            "blok kodu od ANDROID_GAME_ENGINEER "
+                            "blok kodu od ENGINEER "
                             "wygląda jak SKRYPT POWŁOKI (zawiera "
                             "np. 'cat > plik << EOF' albo "
                             "podstawienie $(...)), nie treść "
@@ -13703,7 +13698,7 @@ Zwróć tylko JSON.
                             "Gemini uruchomić go przez termux_run, "
                             "NIE używaj write_engineer_code_to. "
                             "Jeżeli to miała być treść pliku — "
-                            "poproś ANDROID_GAME_ENGINEER o czysty "
+                            "poproś ENGINEER o czysty "
                             "kod pliku, bez komend powłoki wokół "
                             "niego."
                         )
@@ -13715,7 +13710,7 @@ Zwróć tylko JSON.
                 # BEZPIECZEŃSTWO: write_engineer_code_to NADPISUJE
                 # cały plik. Jeżeli plik już istnieje i jest sporo
                 # większy niż nowy blok kodu, to prawie na pewno
-                # oznacza, że ANDROID_GAME_ENGINEER podał tylko
+                # oznacza, że ENGINEER podał tylko
                 # FRAGMENT/poprawkę, a nie cały plik od nowa —
                 # nadpisanie zniszczyłoby resztę. Odmawiamy zamiast
                 # zgadywać; prompt sam w sobie to tylko sugestia dla
@@ -13747,7 +13742,7 @@ Zwróć tylko JSON.
                                 "plik " + str(target_path)
                                 + " ma już " + str(existing_size)
                                 + "B, a nowy blok kodu od "
-                                "ANDROID_GAME_ENGINEER ma tylko "
+                                "ENGINEER ma tylko "
                                 + str(new_size) + "B (mniej niż "
                                 "40% obecnego rozmiaru). To wygląda "
                                 "na FRAGMENT/poprawkę, nie cały "
@@ -13755,7 +13750,7 @@ Zwróć tylko JSON.
                                 "resztę. Jeżeli to naprawdę cała "
                                 "nowa zawartość pliku, zmień "
                                 "podejście (np. poproś "
-                                "ANDROID_GAME_ENGINEER o "
+                                "ENGINEER o "
                                 "potwierdzenie że plik ma być "
                                 "krótszy). Jeżeli to poprawka "
                                 "fragmentu — utwórz zwykły TASK z "
@@ -13781,7 +13776,7 @@ Zwróć tylko JSON.
 
                     log(
                         "MAIN",
-                        "Zapisano kod ANDROID_GAME_ENGINEER "
+                        "Zapisano kod ENGINEER "
                         "bezpośrednio do "
                         + str(target_path)
                         + " ("
@@ -14265,7 +14260,7 @@ def maybe_restart_team_sessions_for_new_goal():
     if not _confirm_destructive_action(
         "RESET 9 SESJI DEEPSEEK (MAIN, PLANNER, RESEARCHER, "
         "CRITIC, BROWSER, CODE_REVIEWER, CODE_FIXER, "
-        "ANDROID_GAME_ENGINEER, PROGRESS_ESTIMATOR) — nowy cel "
+        "ENGINEER, PROGRESS_ESTIMATOR) — nowy cel "
         "dostanie zespół bez kontekstu poprzedniego, "
         "niepowiązanego celu (świeży system_prompt dla każdej roli)"
     ):
