@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v94
+AEL-MINI AUTONOMOUS AGENT v95
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v94")
+    print("             AEL-MINI AUTONOMOUS AGENT v95")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1092,7 +1092,7 @@ zasady dotyczą jego kodu niezależnie od rodzaju projektu.
 
 To NIE jest opcja do rozważenia — to TWÓJ OBOWIĄZEK w konkretnej
 sytuacji: jeżeli ENGINEER podał w swojej odpowiedzi
-gotowy blok kodu (sekcja "POLECENIE / KOD:", wewnątrz ```...```),
+gotowy blok kodu (wewnątrz ```...```),
 A Twój TASK dotyczy ZAPISANIA tego kodu do pliku — MASZ UŻYĆ pola
 "write_engineer_code_to" z docelową ścieżką (np.
 "/data/data/com.termux/files/home/game3d/game.py"). Python zapisze
@@ -1493,21 +1493,13 @@ który zrobi zrzut") — czysty shell (mkdir, zapis pliku, sprawdzenie
 wersji, curl) nadal możesz łączyć w jeden skrypt, te konkretne
 narzędzia nie.
 
-Format odpowiedzi:
-
-AKTUALNY STAN:
-(jeden akapit — co faktycznie istnieje na urządzeniu)
-
-PLAN (max 3 kroki):
-1. ...
-2. ...
-3. ...
-
-NASTĘPNY KROK (konkretne polecenie/plik):
-...
-
-WARUNEK SUKCESU TEGO KROKU:
-(jak Gemini ma sprawdzić, że krok się udał)
+Odpowiadaj naturalnie, tak zwięźle jak się da — nie musisz za
+każdym razem wypełniać identycznego szablonu punkt po punkcie.
+Jeśli stan urządzenia jest oczywisty z poprzedniej rozmowy, nie
+opisuj go od nowa, po prostu przejdź do planu. W odpowiedzi ma się
+jednak zawsze dać jednoznacznie znaleźć: plan (max 3 kroki),
+KONKRETNY następny krok (polecenie albo plik) i jak Gemini ma
+sprawdzić, że ten krok się udał.
 """
 
 
@@ -1889,21 +1881,14 @@ Poprawna procedura:
    systemowy `gradle`, żeby wersja była deterministyczna i nie
    zależała od tego, co akurat zaktualizował `pkg`.
 
-Odpowiedź:
-
-AKTUALNY ETAP BUDOWY:
-...
-
-NASTĘPNY KONKRETNY KROK:
-...
-
-POLECENIE / KOD:
-```
-...
-```
-
-POTENCJALNE PROBLEMY:
-...
+Odpowiadaj naturalnie, tak zwięźle jak się da — nie musisz za
+każdym razem wypełniać identycznego szablonu. Powiedz na jakim
+etapie jesteście i co konkretnie robić dalej; o realnych zagrożeniach
+wspomnij tylko gdy faktycznie jakieś widzisz, nie na siłę. Jedyny
+twardy wymóg formalny: gdy dajesz gotowy kod albo polecenie do
+uruchomienia, ZAWSZE umieść je w bloku ```...``` (stąd Python
+wycina je bezpośrednio do pliku — bez tego blok zostanie
+zignorowany).
 """
 
 
@@ -10976,8 +10961,8 @@ def extract_code_block(text):
     """
     Wyciąga zawartość PIERWSZEGO bloku ```...``` z tekstu.
 
-    ENGINEER_PROMPT każe zwracać kod w sekcji
-    "POLECENIE / KOD:" wewnątrz dokładnie takiego bloku — ta
+    ENGINEER_PROMPT każe zwracać gotowy kod/polecenie zawsze
+    wewnątrz dokładnie takiego bloku — ta
     funkcja pozwala Pythonowi wyciąć ten kod i zapisać go
     bezpośrednio do pliku (patrz write_engineer_code_to w
     run_agent()), zamiast zmuszać Gemini do przepisywania go od
