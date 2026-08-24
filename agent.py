@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v85
+AEL-MINI AUTONOMOUS AGENT v86
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v85")
+    print("             AEL-MINI AUTONOMOUS AGENT v86")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4042,6 +4042,86 @@ def android_set_clipboard(text):
         }
 
 
+def android_paste_text(text, target_text):
+    """
+    Technika "ustaw schowek -> przytrzymaj -> Wklej" jako JEDNA
+    atomowa operacja, zamiast trzech osobnych narzędzi, które
+    dotąd trzeba było poprawnie złożyć samodzielnie — zaobserwowany
+    realny przypadek: przy ręcznym składaniu tych kroków system
+    pomylił kolejność / kliknął złą opcję z wyskakującego menu
+    (np. "Udostępnij" zamiast "Wklej"). Ta funkcja robi wszystkie
+    trzy kroki po kolei i jednoznacznie zgłasza, na którym dokładnie
+    kroku coś poszło nie tak, zamiast zostawiać to zgadywaniu.
+
+    Args:
+        text: tekst do wklejenia (np. "15+27").
+        target_text: aktualnie widoczny tekst pola, które trzeba
+            przytrzymać, żeby wywołać menu z opcją "Wklej" (np. "0"
+            dla pustego wyświetlacza kalkulatora, albo poprzednio
+            wpisana wartość).
+    """
+
+    clipboard_result = android_set_clipboard(text)
+
+    if not clipboard_result.get("ok"):
+        return {
+            "ok": False,
+            "action": "paste_text",
+            "step": "set_clipboard",
+            "error": (
+                "Nie udało się ustawić schowka: "
+                + str(clipboard_result.get("error"))
+            )
+        }
+
+    long_click_result = android_long_click_text(target_text)
+
+    if not long_click_result.get("ok"):
+        return {
+            "ok": False,
+            "action": "paste_text",
+            "step": "long_click",
+            "error": (
+                "Nie udało się przytrzymać elementu '"
+                + str(target_text) + "': "
+                + str(long_click_result.get("error"))
+            ),
+            "long_click_result": long_click_result
+        }
+
+    time.sleep(0.4)
+
+    paste_click_result = android_click_text("Wklej")
+
+    if not paste_click_result.get("ok"):
+
+        try:
+            android_press("back")
+        except Exception:
+            pass
+
+        return {
+            "ok": False,
+            "action": "paste_text",
+            "step": "click_paste",
+            "error": (
+                "Menu kontekstowe nie pokazało opcji 'Wklej' (schowek "
+                "może być pusty, albo ten element jednak nie jest "
+                "wklejalny): " + str(paste_click_result.get("error"))
+            ),
+            "clickable_nearby": paste_click_result.get(
+                "clickable_nearby"
+            )
+        }
+
+    return {
+        "ok": True,
+        "action": "paste_text",
+        "text": str(text),
+        "target_text": str(target_text)
+    }
+
+
 def android_tap(x, y):
 
     if android_device is None:
@@ -5005,7 +5085,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "chrome_type",
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
-    "android_long_click", "android_set_clipboard",
+    "android_long_click", "android_set_clipboard", "android_paste_text",
     "android_screenshot", "android_screenshot_ocr", "android_launch_app",
     "android_list_packages", "android_assert_text_visible",
     "android_run_in_new_window", "android_install_apk",
@@ -6695,12 +6775,12 @@ def _gemini_tools_legacy():
             "name": "android_set_clipboard",
             "description": (
                 "Ustaw systemowy schowek Androida na podany tekst. "
-                "Używaj razem z android_long_click + android_click"
-                "(\"Wklej\") jako alternatywy dla klikania pojedynczych "
-                "przycisków na ekranach bez edytowalnego pola "
-                "tekstowego (np. niektóre kalkulatory) — ustaw schowek "
-                "PRZED przytrzymaniem elementu, bo opcja 'Wklej' w "
-                "menu pojawia się tylko gdy schowek nie jest pusty."
+                "Zwykle NIE wołaj tego osobno — użyj od razu "
+                "android_paste_text, które robi to razem z resztą "
+                "kroków w jednym, niezawodnym wywołaniu. Ten tzw. "
+                "surowy krok zostaw sobie tylko na sytuacje, gdy "
+                "faktycznie potrzebujesz kontroli nad każdym krokiem "
+                "z osobna."
             ),
             "parameters": {
                 "type": "object",
@@ -6708,6 +6788,33 @@ def _gemini_tools_legacy():
                     "text": {"type": "string"}
                 },
                 "required": ["text"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_paste_text",
+            "description": (
+                "Wklej tekst na ekran bez pola tekstowego do zwykłego "
+                "wpisywania (np. niektóre kalkulatory) w JEDNYM, "
+                "niezawodnym kroku: ustawia schowek, przytrzymuje "
+                "pole (target_text — aktualnie widoczny tekst tego "
+                "pola, np. \"0\" dla pustego wyświetlacza), klika "
+                "WYŁĄCZNIE 'Wklej' z wyskakującego menu (nigdy "
+                "'Udostępnij'/'Wyślij do urządzenia' — to inna "
+                "opcja) i zwraca jasną informację, na którym kroku "
+                "coś ewentualnie poszło nie tak. To PIERWSZY WYBÓR "
+                "zamiast ręcznego składania android_set_clipboard + "
+                "android_long_click + android_click(\"Wklej\") "
+                "osobno — mniej okazji do pomyłki."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "target_text": {"type": "string"}
+                },
+                "required": ["text", "target_text"]
             }
         },
 
@@ -8719,6 +8826,35 @@ def _dispatch_tool_inner(
 
             return fn(text)
 
+        # Gemini: android_paste_text
+        # Python: android_paste_text
+        if name == "android_paste_text":
+
+            fn = globals().get(
+                "android_paste_text"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_paste_text()."
+                }
+
+            text = args.get("text")
+            target_text = args.get("target_text")
+
+            if text is None or target_text is None:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_paste_text wymaga text i "
+                        "target_text.",
+                    "arguments": args
+                }
+
+            return fn(text, target_text)
+
         # Gemini: android_type
         # Python: android_type
         if name == "android_type":
@@ -9326,6 +9462,108 @@ def gemini_execute_task(task_id, task, success_condition=''):
     # zaobserwowanego incydentu (patrz komentarze w kodzie przy
     # poszczególnych narzędziach) — skracaj dalej ostrożnie, nie
     # usuwaj konkretów.
+    #
+    # ADAPTACYJNA DŁUGOŚĆ (2026-08-24, na wyraźną prośbę
+    # użytkownika — "dynamiczne skracanie/rozszerzanie instrukcji
+    # zależnie od sytuacji"): dwie najdłuższe reguły (interakcja z
+    # ekranem Androida, monitorowanie procesu w tle) dotyczą wąskiej
+    # klasy zadań — reszta zadań (Termux/pliki/shell) nie potrzebuje
+    # ich pełnej, wielozdaniowej treści za każdym razem. Zamiast
+    # usuwać te reguły, POKAZUJEMY PEŁNĄ WERSJĘ tylko gdy treść TASK-u
+    #/warunku sukcesu faktycznie o tym mówi, a w pozostałych
+    # przypadkach krótki, jednozdaniowy wskaźnik — pełne detale są
+    # i tak zawsze dostępne w opisach poszczególnych narzędzi
+    # (gemini_tools()), więc nic nie znika, tylko nie jest powtarzane
+    # w każdej wiadomości bez potrzeby.
+    _task_haystack = (
+        str(task or "") + " " + str(success_condition or "")
+    ).lower()
+
+    _android_task_relevant = any(
+        kw in _task_haystack for kw in (
+            "android", "kalkulator", "zegar", "kalendarz",
+            "aplikacj", "kliknij", "klikni", "wpisz", "przycisk",
+            "ekran", "telefon", "chrome", "karta przegl", "otwórz",
+            "otworz", "assert_text_visible", "android_click",
+            "android_type", "android_tap", "android_press",
+            "android_long_click", "android_paste_text", "wklej",
+            "schowek",
+        )
+    )
+
+    _background_task_relevant = any(
+        kw in _task_haystack for kw in (
+            "serwer", "w tle", "background", "proces", "monitoruj",
+            "nasłuchuj", "nasluchuj", "port", "daemon",
+        )
+    )
+
+    if _android_task_relevant:
+        rule_6_block = """6. android_type wymaga, żeby na ekranie było FAKTYCZNIE skupione
+   EDYTOWALNE pole tekstowe — działa dobrze w wyszukiwarkach,
+   formularzach, notatkach. Wiele kalkulatorów i klawiatur
+   numerycznych to zwykłe PRZYCISKI bez żadnego pola tekstowego —
+   android_type może wtedy nie trafić nigdzie (wpisany tekst
+   pojawia się na chwilę i znika, ekran zostaje pusty). Zaobserwowany
+   realny przypadek: użytkownik patrzył na ekran na żywo — po
+   android_type w kalkulatorze cyfry mignęły i zniknęły, kalkulator
+   został pusty. Jeśli po android_type + krótkim odczekaniu
+   android_assert_text_visible na WPISANYM tekście (nie na wyniku)
+   zwraca found=false, albo od razu widzisz, że ekran ma same
+   przyciski bez pola tekstowego — NIE próbuj android_type ponownie
+   w kółko. Zamiast tego kliknij KAŻDY przycisk osobno przez
+   android_click po jego tekście (np. "1", "5", "+", "2", "7", "=").
+   Jeśli po android_type na ekranie pojawi się systemowe menu
+   zaznaczania/udostępniania Androida (przycisk "Udostępnij",
+   "Wyślij do urządzenia", Bluetooth, e-mail — zaobserwowany realny
+   przypadek na żywym ekranie), to jednoznaczny sygnał, że tekst
+   próbował się ZAZNACZYĆ zamiast wpisać: android_press('back')
+   żeby to natychmiast zamknąć, NIE klikaj niczego w tym menu.
+
+   To samo zaznaczanie daje DODATKOWĄ, alternatywną drogę wpisania
+   tekstu zamiast klikania każdego przycisku osobno — zaobserwowany
+   realny przypadek: użytkownik ręcznie przytrzymał pole na ekranie
+   kalkulatora i zobaczył opcje "Wklej" i "Wybierz wszystko", czyli
+   pole JEST selekcjonowalne mimo że nie przyjmuje zwykłego
+   wpisywania. Jeśli klikanie pojedynczych przycisków jest
+   niepraktyczne (długi tekst), użyj od razu android_paste_text(text,
+   target_text) — to JEDNO wywołanie robi cały ciąg (ustaw schowek ->
+   przytrzymaj -> kliknij "Wklej") i jasno mówi, na którym kroku coś
+   ewentualnie zawiodło, zamiast ręcznego składania trzech osobnych
+   narzędzi, gdzie łatwo pomylić kolejność albo kliknąć złą opcję z
+   menu (np. "Udostępnij" zamiast "Wklej"). target_text to aktualnie
+   widoczny tekst pola, które trzeba przytrzymać (np. "0" dla pustego
+   wyświetlacza). Jeśli android_paste_text zwróci błąd — wróć do
+   klikania pojedynczych przycisków.
+
+   Niezależnie od metody: android_type/android_click same z siebie
+   NIE zatwierdzają akcji — to jak wypełnienie formularza bez
+   wciśnięcia Enter. Jeśli zadanie wymaga WYNIKU jakiejś akcji
+   (obliczenie, wyszukiwanie, wysłanie formularza), po wpisaniu
+   ZAWSZE wykonaj krok zatwierdzający właściwy dla tej aplikacji
+   (android_press z KEYCODE_ENTER, kliknięcie "=" / przycisku
+   wyszukiwania/wysyłania przez android_click) i dopiero POTEM
+   sprawdzaj rezultat."""
+    else:
+        rule_6_block = """6. Ekran/aplikacje Android (gdyby jednak okazały się potrzebne w
+   tym zadaniu): android_type działa tylko z prawdziwym, skupionym
+   polem tekstowym, a samo wpisanie/kliknięcie NIE zatwierdza akcji
+   (potrzeba Enter/"="/przycisku). Pełne szczegóły, znane pułapki i
+   alternatywy (klikanie przycisków, android_paste_text) są opisane
+   przy tych narzędziach — sięgnij po nie, jeśli faktycznie z nich
+   korzystasz."""
+
+    if _background_task_relevant:
+        rule_7_block = """7. Monitorując proces w tle (termux_check_process /
+   termux_read_file na log_file): max 2-3 sprawdzenia w TYM
+   zadaniu. Jeśli nadal działa, zakończ raport z PID i ścieżką do
+   log_file — NIE zapętlaj się aż do wyczerpania limitu narzędzi,
+   MAIN utworzy kolejny TASK sprawdzający ten sam proces później."""
+    else:
+        rule_7_block = """7. Proces w tle (gdyby jednak był potrzebny): max 2-3 sprawdzenia
+   w tym zadaniu, potem zostaw PID/log_file kolejnemu TASK-owi —
+   nie zapętlaj się aż do wyczerpania limitu narzędzi."""
+
     prompt = f"""
 Jesteś wykonawcą autonomicznego agenta. DeepSeek to mózg, Ty
 wykonujesz REALNIE jego zadania dostępnymi narzędziami (Termux,
@@ -9362,57 +9600,9 @@ ZASADY:
 
 5. Po każdym udanym działaniu sprawdź faktyczny rezultat.
 
-6. android_type wymaga, żeby na ekranie było FAKTYCZNIE skupione
-   EDYTOWALNE pole tekstowe — działa dobrze w wyszukiwarkach,
-   formularzach, notatkach. Wiele kalkulatorów i klawiatur
-   numerycznych to zwykłe PRZYCISKI bez żadnego pola tekstowego —
-   android_type może wtedy nie trafić nigdzie (wpisany tekst
-   pojawia się na chwilę i znika, ekran zostaje pusty). Zaobserwowany
-   realny przypadek: użytkownik patrzył na ekran na żywo — po
-   android_type w kalkulatorze cyfry mignęły i zniknęły, kalkulator
-   został pusty. Jeśli po android_type + krótkim odczekaniu
-   android_assert_text_visible na WPISANYM tekście (nie na wyniku)
-   zwraca found=false, albo od razu widzisz, że ekran ma same
-   przyciski bez pola tekstowego — NIE próbuj android_type ponownie
-   w kółko. Zamiast tego kliknij KAŻDY przycisk osobno przez
-   android_click po jego tekście (np. "1", "5", "+", "2", "7", "=").
-   Jeśli po android_type na ekranie pojawi się systemowe menu
-   zaznaczania/udostępniania Androida (przycisk "Udostępnij",
-   "Wyślij do urządzenia", Bluetooth, e-mail — zaobserwowany realny
-   przypadek na żywym ekranie), to jednoznaczny sygnał, że tekst
-   próbował się ZAZNACZYĆ zamiast wpisać: android_press('back')
-   żeby to natychmiast zamknąć, NIE klikaj niczego w tym menu.
+{rule_6_block}
 
-   To samo zaznaczanie daje DODATKOWĄ, alternatywną drogę wpisania
-   tekstu zamiast klikania każdego przycisku osobno — zaobserwowany
-   realny przypadek: użytkownik ręcznie przytrzymał pole na ekranie
-   kalkulatora i zobaczył opcje "Wklej" i "Wybierz wszystko", czyli
-   pole JEST selekcjonowalne mimo że nie przyjmuje zwykłego
-   wpisywania. Jeśli klikanie pojedynczych przycisków jest
-   niepraktyczne (długi tekst), spróbuj: android_set_clipboard(pełny
-   tekst) -> android_long_click na aktualnie widocznym tekście tego
-   pola -> android_click("Wklej") z wyskakującego menu. Klikaj
-   WYŁĄCZNIE "Wklej" — "Udostępnij"/"Wyślij do urządzenia" w tym
-   samym menu to zupełnie inna, niechciana opcja. Jeśli po
-   android_long_click nie pojawi się żadne menu, albo "Wklej" nie
-   jest w nim widoczne (schowek może być pusty, jeśli
-   android_set_clipboard zawiodło) — wróć do klikania pojedynczych
-   przycisków.
-
-   Niezależnie od metody: android_type/android_click same z siebie
-   NIE zatwierdzają akcji — to jak wypełnienie formularza bez
-   wciśnięcia Enter. Jeśli zadanie wymaga WYNIKU jakiejś akcji
-   (obliczenie, wyszukiwanie, wysłanie formularza), po wpisaniu
-   ZAWSZE wykonaj krok zatwierdzający właściwy dla tej aplikacji
-   (android_press z KEYCODE_ENTER, kliknięcie "=" / przycisku
-   wyszukiwania/wysyłania przez android_click) i dopiero POTEM
-   sprawdzaj rezultat.
-
-7. Monitorując proces w tle (termux_check_process /
-   termux_read_file na log_file): max 2-3 sprawdzenia w TYM
-   zadaniu. Jeśli nadal działa, zakończ raport z PID i ścieżką do
-   log_file — NIE zapętlaj się aż do wyczerpania limitu narzędzi,
-   MAIN utworzy kolejny TASK sprawdzający ten sam proces później.
+{rule_7_block}
 
 8. NIGDY nie zapisuj plików w /tmp — to katalog systemu Android,
    Termux (zwykła aplikacja) nie ma tam praw zapisu ("Permission
