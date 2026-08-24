@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v78
+AEL-MINI AUTONOMOUS AGENT v79
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v78")
+    print("             AEL-MINI AUTONOMOUS AGENT v79")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8918,28 +8918,41 @@ ZASADY:
 
 5. Po każdym udanym działaniu sprawdź faktyczny rezultat.
 
-6. Monitorując proces w tle (termux_check_process /
+6. android_type WPISUJE tekst do pola, ale go NIE zatwierdza —
+   dokładnie jak wpisanie czegoś w formularzu bez wciśnięcia Enter.
+   Zaobserwowany realny przypadek: wpisano działanie w kalkulatorze
+   (android_type), od razu wywołano android_assert_text_visible na
+   spodziewanym wyniku bez żadnego zatwierdzenia — obliczenie mogło
+   się w ogóle nie wykonać. Jeśli zadanie wymaga WYNIKU jakiejś
+   akcji (obliczenie, wyszukiwanie, wysłanie formularza), po
+   wpisaniu ZAWSZE wykonaj krok zatwierdzający właściwy dla tej
+   aplikacji (android_press z KEYCODE_ENTER, kliknięcie "=" / przycisku
+   wyszukiwania/wysyłania przez android_click) i dopiero POTEM
+   sprawdzaj rezultat — samo wpisanie nie jest równoznaczne z
+   wykonaniem.
+
+7. Monitorując proces w tle (termux_check_process /
    termux_read_file na log_file): max 2-3 sprawdzenia w TYM
    zadaniu. Jeśli nadal działa, zakończ raport z PID i ścieżką do
    log_file — NIE zapętlaj się aż do wyczerpania limitu narzędzi,
    MAIN utworzy kolejny TASK sprawdzający ten sam proces później.
 
-7. NIGDY nie zapisuj plików w /tmp — to katalog systemu Android,
+8. NIGDY nie zapisuj plików w /tmp — to katalog systemu Android,
    Termux (zwykła aplikacja) nie ma tam praw zapisu ("Permission
    denied"). Użyj $HOME (~) albo $PREFIX/tmp, np. "echo OK > ~/x.txt"
    zamiast "echo OK > /tmp/x.txt".
 
-8. Nie wiesz jak kontynuować (typowo: nie wiesz jaki fragment podać
+9. Nie wiesz jak kontynuować (typowo: nie wiesz jaki fragment podać
    jako 'search' w termux_patch_file)? Najpierw termux_read_file.
    Jeśli to nie wystarczy, ask_deepseek — krótka podpowiedź, potem
    kontynuujesz TEN SAM TASK. Limitowane do kilku razy na zadanie,
    nie zastępuj tym zwykłego czytania plików.
 
-9. Usuwanie plików/katalogów: termux_delete, NIE `rm` przez
-   shell/termux_run (obie wymagają potwierdzenia operatora, ale
-   termux_delete pokazuje konkretną ścieżkę zamiast surowej
-   komendy). Operator odmówił? Koniec zadania, zgłoś odmowę do
-   MAIN — nie próbuj obejść tego inną komendą ani sformułowaniem.
+10. Usuwanie plików/katalogów: termux_delete, NIE `rm` przez
+    shell/termux_run (obie wymagają potwierdzenia operatora, ale
+    termux_delete pokazuje konkretną ścieżkę zamiast surowej
+    komendy). Operator odmówił? Koniec zadania, zgłoś odmowę do
+    MAIN — nie próbuj obejść tego inną komendą ani sformułowaniem.
 
 ============================================================
 WARUNEK SUKCESU:
