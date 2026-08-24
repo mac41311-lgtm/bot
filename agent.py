@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v80
+AEL-MINI AUTONOMOUS AGENT v81
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v80")
+    print("             AEL-MINI AUTONOMOUS AGENT v81")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3640,6 +3640,19 @@ def android_click_text(text):
     # 4/5. XML FALLBACK
     # --------------------------------------------------------
 
+    # Zaobserwowany realny problem: gdy szukany tekst nie istnieje
+    # (albo nie istnieje DOKŁADNIE tak, jak spodziewał się
+    # DeepSeek/Gemini — np. etykieta jest na kontenerze, a nie na
+    # klikalnym elemencie), błąd "Nie znaleziono elementu" nie daje
+    # ŻADNEJ wskazówki co dalej. W realnym logu to kosztowało 3
+    # dodatkowe kroki: osobny android_state, osobny pełny zrzut
+    # hierarchii do pliku, osobna analiza RESEARCHERA — zanim ktoś
+    # w ogóle zobaczył, jakie klikalne elementy FAKTYCZNIE są na
+    # ekranie. Zbieramy je od razu przy tym samym przejściu przez
+    # XML, żeby błąd sam podpowiadał, czego szukać.
+    clickable_candidates = []
+    seen_candidates = set()
+
     try:
         import xml.etree.ElementTree as ET
 
@@ -3658,6 +3671,18 @@ def android_click_text(text):
             clickable = attrs.get("clickable", "false")
             enabled = attrs.get("enabled", "true")
             bounds = attrs.get("bounds", "")
+
+            candidate_label = node_text or node_desc
+
+            if (
+                clickable == "true"
+                and enabled == "true"
+                and candidate_label
+                and candidate_label not in seen_candidates
+                and len(clickable_candidates) < 25
+            ):
+                seen_candidates.add(candidate_label)
+                clickable_candidates.append(candidate_label)
 
             matched = (
                 node_text == target
@@ -3717,12 +3742,26 @@ def android_click_text(text):
     # FAIL
     # --------------------------------------------------------
 
-    return {
+    result = {
         "ok": False,
         "action": "click_text",
         "text": target,
         "error": "Nie znaleziono elementu ani jego współrzędnych."
     }
+
+    if clickable_candidates:
+        result["clickable_nearby"] = clickable_candidates
+        result["hint"] = (
+            "Szukany tekst '" + target + "' nie pasuje do ŻADNEGO "
+            "klikalnego elementu. Powyzej sa etykiety WSZYSTKICH "
+            "aktualnie klikalnych elementow na ekranie (clickable_"
+            "nearby) - wybierz z nich najblizszy zamiar zamiast "
+            "ponawiac ten sam nieudany tekst albo robic dodatkowy "
+            "android_state/zrzut hierarchii tylko po to, zeby to "
+            "sprawdzic."
+        )
+
+    return result
 
 
 def android_tap(x, y):
@@ -4199,7 +4238,16 @@ def android_launch_app(package):
                 "faktycznie potrzebne (np. wcześniejsza sesja z tą "
                 "aplikacją padła), NIE otwieraj i nie potwierdzaj "
                 "jej ponownie — to marnuje cały cykl TASK-u na coś "
-                "już zrobionego."
+                "już zrobionego. UWAGA: jeśli byłeś W TRAKCIE "
+                "interakcji z tą aplikacją (np. wpisane, ale jeszcze "
+                "niezatwierdzone dane), ponowne uruchomienie MOŻE "
+                "zresetować jej stan do początkowego — zaobserwowany "
+                "realny przypadek: wpisane cyfry w kalkulatorze "
+                "zniknęły (wrócił do '0') po ponownym "
+                "android_launch_app tego samego pakietu. Jeśli "
+                "podejrzewasz, że apka jest po prostu w tle (nie "
+                "zamknięta), sprawdź najpierw android_state zamiast "
+                "od razu relaunchować."
             )
 
         _confirmed_app_launches[package] = datetime.now().isoformat()
