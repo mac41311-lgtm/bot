@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v92
+AEL-MINI AUTONOMOUS AGENT v93
 
 ARCHITEKTURA:
 
@@ -66,6 +66,9 @@ import hashlib
 import subprocess
 import traceback
 import uuid
+import html
+import urllib.request
+import urllib.error
 from pathlib import Path
 from urllib.parse import urlparse
 from web_search import web_search
@@ -861,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v92")
+    print("             AEL-MINI AUTONOMOUS AGENT v93")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1521,14 +1524,26 @@ Node do innych zadań), błędy budowania (Android SDK/Gradle w
 Termux, ale też pip/npm/kompilacja gdzie indziej) oraz komendy
 apt/pip/npm/gradle działające bez roota w Termux.
 
-Kiedy potrzebujesz świeżej informacji z internetu, wypisz jedną
-linię:
-WEB_SEARCH: <precyzyjne zapytanie po angielsku>
+Masz dwa sposoby na sprawdzenie czegoś w internecie SAMODZIELNIE
+— bez pośrednictwa Gemini/telefonu, wykonuje je bezpośrednio Python
+i od razu przekazuje Ci wynik w tej samej rozmowie:
+
+- Gdy dopiero SZUKASZ informacji/rozwiązania i nie masz konkretnego
+  adresu, wypisz jedną linię:
+  WEB_SEARCH: <precyzyjne zapytanie po angielsku>
+  Dostaniesz listę wyników (tytuły/linki/skróty), jak z wyszukiwarki.
+
+- Gdy znasz już KONKRETNY adres strony i chcesz przeczytać jej
+  treść (np. link z wyników wyszukiwania, dokumentacja, konkretna
+  strona wspomniana w celu), wypisz jedną linię:
+  WEB_FETCH: <pełny adres URL>
+  Dostaniesz rzeczywistą treść tej strony (tekst, bez znaczników
+  HTML) — nie zgaduj treści strony z samego adresu czy tytułu.
 
 Odpowiadaj na podstawie tego, co faktycznie wiesz albo co zwróciło
-wyszukiwanie — jeśli czegoś nie jesteś pewien, powiedz to wprost
-zamiast zgadywać. Jeśli właśnie dostałeś wyniki wyszukiwania, nie
-proś o to samo zapytanie jeszcze raz. Trzymaj odpowiedź krótką —
+wyszukiwanie/pobranie strony — jeśli czegoś nie jesteś pewien,
+powiedz to wprost zamiast zgadywać. Jeśli właśnie dostałeś wynik,
+nie proś o to samo jeszcze raz. Trzymaj odpowiedź krótką —
 maksymalnie 5 zdań.
 """
 
@@ -11373,118 +11388,274 @@ dlaczego. To poprawna, akceptowalna odpowiedź.
 
 
 # ============================================================
-# RESEARCHER WEB SEARCH
+# RESEARCHER WEB SEARCH / WEB FETCH
 # ============================================================
+
+# Kilka bloków HTML, których i tak nikt nie chce czytać jako
+# "treść strony" — usuwane W CAŁOŚCI (razem z zawartością) przed
+# ściągnięciem tagów, żeby np. kod JS nie wleciał w wynikowy tekst.
+_HTML_STRIP_BLOCK_TAGS = re.compile(
+    r"(?is)<(script|style|noscript)[^>]*>.*?</\1>"
+)
+_HTML_COMMENT = re.compile(r"(?s)<!--.*?-->")
+_HTML_ANY_TAG = re.compile(r"(?s)<[^>]+>")
+_HTML_TITLE_TAG = re.compile(r"(?is)<title[^>]*>(.*?)</title>")
+_HTML_CHARSET = re.compile(r"charset=([\w-]+)", re.IGNORECASE)
+
+
+def _fetch_url_text(url, max_bytes=400000, max_chars=4000):
+    """
+    Pobiera stronę www BEZPOŚREDNIO przez Python (urllib, moduł
+    standardowy — bez dodatkowych zależności), bez pośrednictwa
+    Gemini/Chrome/telefonu. To osobna droga od chrome_tabs/
+    chrome_inspect (które czytają kartę OTWARTĄ w Chrome na
+    telefonie) — tu RESEARCHER prosi o URL, którego nikt nie musi
+    mieć otwartego na ekranie.
+
+    Zwraca zwykły tekst (tagi HTML odarte, encje odkodowane), nie
+    surowy HTML — DeepSeek nie musi parsować znaczników.
+    """
+
+    url = str(url or "").strip().strip("<>\"'")
+
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        url = "https://" + url
+
+    try:
+
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; AEL-MINI-agent/1.0; "
+                    "+termux)"
+                )
+            }
+        )
+
+        with urllib.request.urlopen(request, timeout=15) as response:
+
+            content_type = response.headers.get("Content-Type", "")
+
+            if (
+                content_type
+                and "text" not in content_type
+                and "html" not in content_type
+                and "json" not in content_type
+                and "xml" not in content_type
+            ):
+                return {
+                    "ok": False,
+                    "url": url,
+                    "error": (
+                        "Content-Type '" + content_type + "' nie "
+                        "wygląda na stronę tekstową (obraz/plik "
+                        "binarny?) — pomijam pobieranie treści."
+                    )
+                }
+
+            raw = response.read(max_bytes)
+            final_url = response.geturl()
+
+    except urllib.error.HTTPError as e:
+
+        return {
+            "ok": False,
+            "url": url,
+            "error": "HTTP " + str(e.code) + ": " + str(e.reason)
+        }
+
+    except Exception as e:
+
+        return {
+            "ok": False,
+            "url": url,
+            "error": type(e).__name__ + ": " + str(e)
+        }
+
+    charset_match = _HTML_CHARSET.search(content_type or "")
+    charset = charset_match.group(1) if charset_match else "utf-8"
+
+    try:
+        page = raw.decode(charset, errors="replace")
+    except Exception:
+        page = raw.decode("utf-8", errors="replace")
+
+    title_match = _HTML_TITLE_TAG.search(page)
+    title = (
+        html.unescape(title_match.group(1)).strip()
+        if title_match else ""
+    )
+
+    body = _HTML_STRIP_BLOCK_TAGS.sub(" ", page)
+    body = _HTML_COMMENT.sub(" ", body)
+    body = _HTML_ANY_TAG.sub(" ", body)
+    body = html.unescape(body)
+    body = re.sub(r"[ \t]+", " ", body)
+    body = re.sub(r"\n\s*\n+", "\n", body)
+    body = "\n".join(
+        line.strip() for line in body.splitlines() if line.strip()
+    )
+
+    return {
+        "ok": True,
+        "url": final_url,
+        "title": short(title, 200),
+        "text": short(body, max_chars)
+    }
+
 
 def researcher_web_search(
     researcher_response,
     original_context
 ):
     """
-    Pozwala RESEARCHEROWI zażądać wyszukania informacji
-    przez istniejący moduł web_search.py.
+    Pozwala RESEARCHEROWI zażądać jednej z dwóch rzeczy, sam
+    wykonywanych przez Python (nie przez Gemini/telefon):
 
-    RESEARCHER nie wykonuje narzędzia bezpośrednio.
-    Python wykonuje search i przekazuje wyniki z powrotem
-    do tej samej sesji RESEARCHER.
+    - WEB_SEARCH: <zapytanie> — wyszukiwanie w sieci przez moduł
+      web_search.py (zwraca listę wyników — tytuły/linki/skróty,
+      jak wyszukiwarka).
+    - WEB_FETCH: <url> — pobranie TREŚCI konkretnej strony
+      bezpośrednio przez Python (patrz _fetch_url_text), gdy
+      RESEARCHER już wie, którą stronę chce przeczytać, a nie
+      dopiero jej szuka. Nie wymaga otwartej karty w Chrome na
+      telefonie — to inna droga niż chrome_tabs/chrome_inspect.
+
+    RESEARCHER nie wykonuje żadnego z nich bezpośrednio. Python
+    wykonuje wybraną akcję i przekazuje wynik z powrotem do TEJ
+    SAMEJ sesji RESEARCHER.
     """
 
     text = str(researcher_response or "").strip()
 
-    match = re.search(
+    fetch_match = re.search(
+        r"WEB_FETCH\s*:\s*(\S+)",
+        text,
+        re.IGNORECASE
+    )
+
+    search_match = re.search(
         r"WEB_SEARCH\s*:\s*(.+)",
         text,
         re.IGNORECASE
     )
 
-    if not match:
-        return text
+    if fetch_match:
 
-    query = match.group(1).strip()
+        action = "WEB FETCH"
+        query = fetch_match.group(1).strip().strip('"\'')
 
-    # Usuń ewentualne przypadkowe cudzysłowy.
-    if (
-        len(query) >= 2
-        and query[0] in ('"', "'")
-        and query[-1] == query[0]
-    ):
-        query = query[1:-1].strip()
-
-    if not query:
-        return text
-
-    log(
-        "RESEARCHER",
-        "WEB SEARCH -> " + query
-    )
-
-    try:
-
-        result = web_search(
-            query,
-            max_results=5
-        )
-
-    except Exception as e:
+        if not query:
+            return text
 
         log(
             "RESEARCHER",
-            "WEB SEARCH ERROR: "
-            + type(e).__name__
-            + ": "
-            + str(e)
+            "WEB FETCH -> " + query
         )
 
-        search_data = {
-            "ok": False,
-            "query": query,
-            "results": [],
-            "error":
-                type(e).__name__
+        action_data = _fetch_url_text(query)
+
+        log(
+            "RESEARCHER",
+            "WEB FETCH RESULT: "
+            + (
+                "OK (" + str(len(action_data.get("text", ""))) + " znaków)"
+                if action_data.get("ok")
+                else "BŁĄD: " + str(action_data.get("error"))
+            )
+        )
+
+    elif search_match:
+
+        action = "WEB SEARCH"
+        query = search_match.group(1).strip()
+
+        # Usuń ewentualne przypadkowe cudzysłowy.
+        if (
+            len(query) >= 2
+            and query[0] in ('"', "'")
+            and query[-1] == query[0]
+        ):
+            query = query[1:-1].strip()
+
+        if not query:
+            return text
+
+        log(
+            "RESEARCHER",
+            "WEB SEARCH -> " + query
+        )
+
+        try:
+
+            action_data = web_search(
+                query,
+                max_results=5
+            )
+
+        except Exception as e:
+
+            log(
+                "RESEARCHER",
+                "WEB SEARCH ERROR: "
+                + type(e).__name__
                 + ": "
                 + str(e)
-        }
+            )
 
-    else:
+            action_data = {
+                "ok": False,
+                "query": query,
+                "results": [],
+                "error":
+                    type(e).__name__
+                    + ": "
+                    + str(e)
+            }
 
-        search_data = result
+        else:
 
-        log(
-            "RESEARCHER",
-            "WEB SEARCH RESULT: "
-            + str(
-                search_data.get(
-                    "count",
-                    len(
-                        search_data.get(
-                            "results",
-                            []
+            log(
+                "RESEARCHER",
+                "WEB SEARCH RESULT: "
+                + str(
+                    action_data.get(
+                        "count",
+                        len(
+                            action_data.get(
+                                "results",
+                                []
+                            )
                         )
                     )
                 )
             )
-        )
+
+    else:
+
+        return text
 
     # ========================================================
-    # PRZEKAZANIE WYNIKÓW DO TEJ SAMEJ SESJI RESEARCHER
+    # PRZEKAZANIE WYNIKU DO TEJ SAMEJ SESJI RESEARCHER
     # ========================================================
 
     followup = f"""
-WEB SEARCH RESULT.
+{action} RESULT.
 
-To są wyniki rzeczywistego wyszukiwania
-wykonanego przez moduł web_search.py.
+To jest rzeczywisty wynik {"pobrania strony" if fetch_match else "wyszukiwania"}
+wykonanego przez Python (nie przez Ciebie, nie przez Gemini).
 
 Nie wykonuj żadnych innych narzędzi.
 
-Przeanalizuj WYŁĄCZNIE poniższe wyniki.
+Przeanalizuj WYŁĄCZNIE poniższy wynik.
 
-QUERY:
+{"URL" if fetch_match else "QUERY"}:
 {query}
 
-RESULTS:
+RESULT:
 {json.dumps(
-    search_data,
+    action_data,
     ensure_ascii=False,
     indent=2
 )}
@@ -11495,11 +11666,11 @@ ORYGINALNY KONTEKST:
 Teraz przygotuj finalną odpowiedź RESEARCHER-a.
 
 Nie wymyślaj faktów.
-Jeżeli wyników nie wystarcza do potwierdzenia informacji,
+Jeżeli wyniku nie wystarcza do potwierdzenia informacji,
 powiedz to wyraźnie.
 
-Nie zwracaj ponownie WEB_SEARCH, chyba że naprawdę
-potrzebne jest kolejne wyszukiwanie.
+Nie zwracaj ponownie WEB_SEARCH/WEB_FETCH, chyba że naprawdę
+potrzebna jest kolejna akcja.
 """
 
     try:
@@ -11513,7 +11684,7 @@ potrzebne jest kolejne wyszukiwanie.
 
         log(
             "RESEARCHER",
-            "WEB SEARCH FOLLOWUP ERROR: "
+            action + " FOLLOWUP ERROR: "
             + type(e).__name__
             + ": "
             + str(e)
@@ -11521,9 +11692,9 @@ potrzebne jest kolejne wyszukiwanie.
 
         return (
             text
-            + "\n\nWEB SEARCH RESULT:\n"
+            + "\n\n" + action + " RESULT:\n"
             + json.dumps(
-                search_data,
+                action_data,
                 ensure_ascii=False,
                 indent=2
             )
