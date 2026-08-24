@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v89
+AEL-MINI AUTONOMOUS AGENT v90
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v89")
+    print("             AEL-MINI AUTONOMOUS AGENT v90")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12727,11 +12727,26 @@ def _goal_needs_apk(goal):
 # celu (np. "zapisz plik ~/raport_systemowy.txt").
 _GOAL_FILE_PATH_PATTERN = re.compile(r"~[\w./\-]+\.\w+")
 
+# Granica "klauzuli" wokół ścieżki pliku, w której szukamy sygnału
+# "ten plik ma CELOWO nie istnieć" — patrz _extract_goal_mentioned_files.
+# Zatrzymujemy się na przecinku/średniku/nowej linii, żeby sygnał przy
+# JEDNYM pliku w zdaniu nie "przeciekał" na SĄSIEDNI plik wymieniony
+# w tym samym zdaniu, ale w innej klauzuli (np. "Napisz skrypt
+# (~/a.py), ktory CELOWO czyta ~/b.txt" — sygnał dotyczy tylko b.txt).
+_GOAL_FILE_CLAUSE_BOUNDARY_PATTERN = re.compile(r"[,;\n]")
+
+_GOAL_FILE_NONEXISTENCE_MARKERS = (
+    "celowo", "nieistnieje", "nie istnieje", "oczekiwany błąd",
+    "oczekiwany blad", "spodziewany błąd", "spodziewany blad",
+    "wynik to błąd", "wynik to blad", "intentionally", "does not exist",
+    "doesn't exist", "not exist",
+)
+
 
 def _extract_goal_mentioned_files(goal):
     """
-    Wyciąga z treści CELU ścieżki plików, które użytkownik wprost
-    wymienił (np. "~/raport_systemowy.txt"). To pozwala sprawdzić
+    Wyciąga z treści CELU/warunku sukcesu ścieżki plików wprost
+    wymienionych (np. "~/raport_systemowy.txt"). To pozwala sprawdzić
     NIEZALEŻNIE OD TEGO, CO DEKLARUJE GEMINI/MAIN — bezpośrednio na
     dysku — czy te konkretne pliki faktycznie istnieją i nie są
     puste, zamiast ufać samej prozie w raporcie ("plik zapisany",
@@ -12745,16 +12760,62 @@ def _extract_goal_mentioned_files(goal):
     twardo sprawdza, że deklarowane pliki NAPRAWDĘ ISTNIEJĄ i mają
     jakąkolwiek zawartość — najbardziej podstawowy, ale całkowicie
     niezależny od LLM fakt do zweryfikowania.
+
+    Zaobserwowany w produkcji realny problem (log v73): cel opisywał
+    krok testujący obsługę błędu — "spróbuj CELOWO odczytać plik
+    ~/nieistnieje_v73.txt — oczekiwany wynik to błąd (CELOWE)". Ten
+    plik ma z definicji NIGDY nie powstać. Pierwsza wersja tej
+    funkcji łapała KAŻDĄ ścieżkę pasującą do wzorca "~/coś.rozsz",
+    więc uznawała ten celowo nieistniejący plik za wymagany dowód —
+    check "Pliki wymienione w treści CELU" był wtedy niemożliwy do
+    spełnienia w ogóle, a DONE odrzucane w nieskończoność mimo
+    faktycznego ukończenia całego celu (zespół DeepSeek w tym czasie,
+    nie znając prawdziwej przyczyny, sam zmyślał niepowiązane
+    diagnozy typu "plik raportu jest ucięty w połowie zdania").
+    Ta sama funkcja jest też używana dla success_condition
+    pojedynczego TASKa (patrz _verify_success_condition_evidence),
+    gdzie pliki zwykle NIE są poprzedzone czasownikiem zapisu (np.
+    "Plik ~/wynik.txt istnieje i ma treść 'OK'") — dlatego zamiast
+    wymagać jakiegoś konkretnego czasownika w pobliżu (co złamałoby
+    ten drugi przypadek), wycinamy tylko te ścieżki, przy których
+    tekst WPROST sygnalizuje, że mają CELOWO nie istnieć (patrz
+    _GOAL_FILE_NONEXISTENCE_MARKERS) — domyślnie plik nadal jest
+    wymagany, wykluczamy go tylko przy jawnym sygnale przeciwnym.
     """
 
     if not goal:
         return []
 
+    text = str(goal)
+    text_lower = text.lower()
     seen = []
 
-    for match in _GOAL_FILE_PATH_PATTERN.findall(goal):
-        if match not in seen:
-            seen.append(match)
+    for match in _GOAL_FILE_PATH_PATTERN.finditer(text):
+
+        boundary_before = None
+        for boundary_match in _GOAL_FILE_CLAUSE_BOUNDARY_PATTERN.finditer(
+            text, 0, match.start()
+        ):
+            boundary_before = boundary_match.end()
+        window_start = boundary_before if boundary_before is not None else 0
+
+        boundary_after = _GOAL_FILE_CLAUSE_BOUNDARY_PATTERN.search(
+            text, match.end()
+        )
+        window_end = boundary_after.start() if boundary_after else len(text)
+
+        window = text_lower[window_start:window_end]
+
+        expected_to_not_exist = any(
+            marker in window
+            for marker in _GOAL_FILE_NONEXISTENCE_MARKERS
+        )
+
+        if expected_to_not_exist:
+            continue
+
+        if match.group(0) not in seen:
+            seen.append(match.group(0))
 
     return seen
 
