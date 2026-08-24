@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v81
+AEL-MINI AUTONOMOUS AGENT v82
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v81")
+    print("             AEL-MINI AUTONOMOUS AGENT v82")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6396,9 +6396,16 @@ def _gemini_tools_legacy():
                 "tekstowe — jeśli go nie ma (np. wiele kalkulatorów i "
                 "klawiatur numerycznych to zwykłe PRZYCISKI bez żadnego "
                 "pola tekstowego), tekst może nie trafić NIGDZIE albo "
-                "zniknąć bez efektu. Dla takich ekranów użyj zamiast "
-                "tego android_click po tekście KAŻDEGO przycisku z "
-                "osobna (np. \"1\", \"5\", \"+\", \"2\", \"7\", \"=\")."
+                "zniknąć bez efektu, ALBO wywołać systemowe menu "
+                "zaznaczania/udostępniania Androida (przycisk "
+                "'Udostępnij', 'Wyślij do urządzenia', Bluetooth, "
+                "e-mail — zaobserwowany realny przypadek: użytkownik "
+                "zobaczył to na żywo na ekranie). Jeśli to się stanie, "
+                "NATYCHMIAST android_press('back') żeby to zamknąć — "
+                "NIE próbuj klikać niczego w tym menu. Dla ekranów bez "
+                "prawdziwego pola tekstowego użyj zamiast android_type "
+                "narzędzia android_click po tekście KAŻDEGO przycisku "
+                "z osobna (np. \"1\", \"5\", \"+\", \"2\", \"7\", \"=\")."
             ),
             "parameters": {
                 "type": "object",
@@ -8990,6 +8997,13 @@ ZASADY:
    przyciski bez pola tekstowego — NIE próbuj android_type ponownie
    w kółko. Zamiast tego kliknij KAŻDY przycisk osobno przez
    android_click po jego tekście (np. "1", "5", "+", "2", "7", "=").
+   Jeśli po android_type na ekranie pojawi się systemowe menu
+   zaznaczania/udostępniania Androida (przycisk "Udostępnij",
+   "Wyślij do urządzenia", Bluetooth, e-mail — zaobserwowany realny
+   przypadek na żywym ekranie), to jednoznaczny sygnał, że tekst
+   próbował się ZAZNACZYĆ zamiast wpisać: android_press('back')
+   żeby to natychmiast zamknąć, NIE klikaj niczego w tym menu, i
+   przejdź na klikanie przycisków jak wyżej.
 
    Niezależnie od metody: android_type/android_click same z siebie
    NIE zatwierdzają akcji — to jak wypełnienie formularza bez
