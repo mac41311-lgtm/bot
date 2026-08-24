@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v95
+AEL-MINI AUTONOMOUS AGENT v96
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v95")
+    print("             AEL-MINI AUTONOMOUS AGENT v96")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13162,6 +13162,40 @@ _FINAL_OK_CONTENT_PATTERN = re.compile(
 )
 
 
+def _head_tail_preview(text, head_chars=150, tail_chars=150):
+    """
+    Podgląd treści pliku dla _goal_progress_snapshot() — POCZĄTEK i
+    KONIEC, nie tylko początek, z jawnym oznaczeniem, że coś zostało
+    pominięte.
+
+    Zaobserwowany realny problem (log 2026-08-24, test "uniwersalny",
+    KROK 4-7): poprzednia wersja pokazywała WYŁĄCZNIE pierwsze 80
+    znaków pliku, bez żadnego oznaczenia obcięcia. Punkt 1 zapisywał
+    do tego samego pliku długi zrzut `ls -la` jako PIERWSZą rzecz, a
+    punkt 6 (zdanie o stronie z RESEARCHERA) było DOPISywane na
+    KONIEC tego samego pliku w kolejnym kroku — podgląd 80 znaków od
+    początku nigdy nie sięgał do tego zdania. Efekt: CRITIC widział
+    tylko "total 7902\ndrwx------...", nigdy dowodu na punkt 6, i
+    blokował TEN SAM krok 4 razy z rzędu jako "brak rzeczywistego
+    wywołania RESEARCHERA", mimo że fizycznie było już zrobione —
+    zespół stał w miejscu, paląc wiadomości DeepSeeka na coś, co już
+    było gotowe. Pliki uzupełniane kolejnymi TASKami (`>>` w shellu)
+    mają najświeższy dowód na KOŃCU, więc pokazujemy oba krańce.
+    """
+
+    text = text.replace("\n", " ")
+
+    if len(text) <= head_chars + tail_chars:
+        return "\"" + text + "\""
+
+    omitted = len(text) - head_chars - tail_chars
+
+    return (
+        "\"" + text[:head_chars] + "\" ... (pominięto " + str(omitted)
+        + " znaków w środku) ... \"" + text[-tail_chars:] + "\""
+    )
+
+
 def _goal_progress_snapshot(goal):
     """
     Tani, LOKALNY (zero wywołań LLM) przegląd stanu faktycznego celu
@@ -13203,16 +13237,15 @@ def _goal_progress_snapshot(goal):
         preview = ""
 
         try:
-            preview = p.read_text(
-                encoding="utf-8",
-                errors="replace"
-            )[:80].replace("\n", " ")
+            preview = _head_tail_preview(
+                p.read_text(encoding="utf-8", errors="replace")
+            )
         except Exception:
             pass
 
         lines.append(
             "- " + rel_path + ": istnieje (" + str(size) + " B)"
-            + (" — \"" + preview + "\"" if preview else "")
+            + (" — " + preview if preview else "")
         )
 
     final_ok_seen = False
@@ -13237,9 +13270,50 @@ def _goal_progress_snapshot(goal):
         lines.append("- FINAL_OK.txt: BRAK (nigdzie nie znaleziono)")
 
     if CUSTOM_TOOLS:
+
+        # Zaobserwowany realny problem (ten sam log co _head_tail_
+        # preview): custom_tools/ CELOWO przetrwa między celami (to
+        # trwałe narzędzia, nie dane jednorazowe — patrz komentarz
+        # przy cleanupie). Gdy CEL każe "stwórz NOWE narzędzie X", a
+        # X akurat istnieje z zupełnie INNEGO, wcześniejszego celu,
+        # sama nazwa w tej liście nie mówi zespołowi, czy to
+        # faktycznie świeże, czy stary, niepowiązany plik — PLANNER
+        # rozsądnie chciał go użyć, CRITIC równie rozsądnie się nie
+        # zgadzał (bo cel dosłownie mówił "nowe"), i krok wracał w
+        # kółko. Znacznik "z tego celu"/"sprzed tego celu" (po dacie
+        # modyfikacji pliku narzędzia względem startu BIEŻĄCEGO celu
+        # — ten sam mechanizm co świeżość FINAL_OK.txt w
+        # verify_final()) daje obu rolom tę samą, jednoznaczną
+        # odpowiedź zamiast zgadywania.
+        try:
+            goal_started_at = GOAL_FILE.stat().st_mtime
+        except Exception:
+            goal_started_at = 0.0
+
+        tool_notes = []
+
+        for tool_name in sorted(CUSTOM_TOOLS.keys()):
+
+            source_file = CUSTOM_TOOLS[tool_name].get("source_file")
+
+            try:
+                is_fresh = (
+                    source_file
+                    and Path(source_file).stat().st_mtime
+                    >= goal_started_at
+                )
+            except Exception:
+                is_fresh = None
+
+            if is_fresh is True:
+                tool_notes.append(tool_name + " (z tego celu)")
+            elif is_fresh is False:
+                tool_notes.append(tool_name + " (sprzed tego celu)")
+            else:
+                tool_notes.append(tool_name)
+
         lines.append(
-            "- Zarejestrowane custom_tools: "
-            + ", ".join(sorted(CUSTOM_TOOLS.keys()))
+            "- Zarejestrowane custom_tools: " + ", ".join(tool_notes)
         )
 
     if not lines:
