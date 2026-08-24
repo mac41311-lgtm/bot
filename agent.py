@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v88
+AEL-MINI AUTONOMOUS AGENT v89
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v88")
+    print("             AEL-MINI AUTONOMOUS AGENT v89")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11609,6 +11609,34 @@ def estimate_progress(goal):
         "\n" + checklist_summary + "\n"
     ) if checklist_summary else ""
 
+    # Ten sam mechanizm adaptacyjnej treści co w consult_team()/
+    # main_decide() (v87/v88) — świeży stan Chrome/Androida tylko
+    # gdy CEL faktycznie ich dotyczy, zamiast zawsze marnować ~3000
+    # znaków na ocenę postępu celu, który nie ma nic wspólnego z
+    # przeglądarką ani ekranem telefonu.
+    device_state_block = ""
+
+    if _goal_mentions_chrome(goal) or _goal_mentions_android(goal):
+
+        device_state_block = (
+            "\nAKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (pokazuje "
+            "TYLKO to co jest na ekranie TERAZ — patrz punkt 3 "
+            "Twojego prompta systemowego o przejściowych "
+            "czynnościach, zanim to wykorzystasz do oceny):\n"
+        )
+
+        if _goal_mentions_chrome(goal):
+            device_state_block += (
+                "\nAKTUALNY CHROME:\n"
+                + short(chrome_summary(), 1500) + "\n"
+            )
+
+        if _goal_mentions_android(goal):
+            device_state_block += (
+                "\nAKTUALNY ANDROID:\n"
+                + short(android_summary(), 1500) + "\n"
+            )
+
     prompt = f"""
 CEL:
 {goal}
@@ -11617,16 +11645,7 @@ OSTATNIE ZADANIA (od najstarszego do najnowszego, WŁASNE raporty
 Gemini — traktuj je z rezerwą, mogą być niedokładne):
 {json.dumps(summaries, ensure_ascii=False, indent=2)}
 {checklist_block}
-AKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (pokazuje TYLKO to co jest
-na ekranie TERAZ — patrz punkt 3 Twojego prompta systemowego o
-przejściowych czynnościach, zanim to wykorzystasz do oceny):
-
-AKTUALNY CHROME:
-{short(chrome_summary(), 1500)}
-
-AKTUALNY ANDROID:
-{short(android_summary(), 1500)}
-
+{device_state_block}
 Zwróć WYŁĄCZNIE JSON zgodnie z formatem z Twojego prompta
 systemowego.
 """
