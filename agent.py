@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v79
+AEL-MINI AUTONOMOUS AGENT v80
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v79")
+    print("             AEL-MINI AUTONOMOUS AGENT v80")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6341,7 +6341,17 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "android_type",
-            "description": "Wpisz tekst do aktywnego pola Androida.",
+            "description": (
+                "Wpisz tekst do aktywnego, EDYTOWALNEGO pola tekstowego "
+                "(np. pasek wyszukiwania, pole formularza, notatka). "
+                "Wymaga, żeby na ekranie faktycznie było skupione pole "
+                "tekstowe — jeśli go nie ma (np. wiele kalkulatorów i "
+                "klawiatur numerycznych to zwykłe PRZYCISKI bez żadnego "
+                "pola tekstowego), tekst może nie trafić NIGDZIE albo "
+                "zniknąć bez efektu. Dla takich ekranów użyj zamiast "
+                "tego android_click po tekście KAŻDEGO przycisku z "
+                "osobna (np. \"1\", \"5\", \"+\", \"2\", \"7\", \"=\")."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -8918,18 +8928,29 @@ ZASADY:
 
 5. Po każdym udanym działaniu sprawdź faktyczny rezultat.
 
-6. android_type WPISUJE tekst do pola, ale go NIE zatwierdza —
-   dokładnie jak wpisanie czegoś w formularzu bez wciśnięcia Enter.
-   Zaobserwowany realny przypadek: wpisano działanie w kalkulatorze
-   (android_type), od razu wywołano android_assert_text_visible na
-   spodziewanym wyniku bez żadnego zatwierdzenia — obliczenie mogło
-   się w ogóle nie wykonać. Jeśli zadanie wymaga WYNIKU jakiejś
-   akcji (obliczenie, wyszukiwanie, wysłanie formularza), po
-   wpisaniu ZAWSZE wykonaj krok zatwierdzający właściwy dla tej
-   aplikacji (android_press z KEYCODE_ENTER, kliknięcie "=" / przycisku
+6. android_type wymaga, żeby na ekranie było FAKTYCZNIE skupione
+   EDYTOWALNE pole tekstowe — działa dobrze w wyszukiwarkach,
+   formularzach, notatkach. Wiele kalkulatorów i klawiatur
+   numerycznych to zwykłe PRZYCISKI bez żadnego pola tekstowego —
+   android_type może wtedy nie trafić nigdzie (wpisany tekst
+   pojawia się na chwilę i znika, ekran zostaje pusty). Zaobserwowany
+   realny przypadek: użytkownik patrzył na ekran na żywo — po
+   android_type w kalkulatorze cyfry mignęły i zniknęły, kalkulator
+   został pusty. Jeśli po android_type + krótkim odczekaniu
+   android_assert_text_visible na WPISANYM tekście (nie na wyniku)
+   zwraca found=false, albo od razu widzisz, że ekran ma same
+   przyciski bez pola tekstowego — NIE próbuj android_type ponownie
+   w kółko. Zamiast tego kliknij KAŻDY przycisk osobno przez
+   android_click po jego tekście (np. "1", "5", "+", "2", "7", "=").
+
+   Niezależnie od metody: android_type/android_click same z siebie
+   NIE zatwierdzają akcji — to jak wypełnienie formularza bez
+   wciśnięcia Enter. Jeśli zadanie wymaga WYNIKU jakiejś akcji
+   (obliczenie, wyszukiwanie, wysłanie formularza), po wpisaniu
+   ZAWSZE wykonaj krok zatwierdzający właściwy dla tej aplikacji
+   (android_press z KEYCODE_ENTER, kliknięcie "=" / przycisku
    wyszukiwania/wysyłania przez android_click) i dopiero POTEM
-   sprawdzaj rezultat — samo wpisanie nie jest równoznaczne z
-   wykonaniem.
+   sprawdzaj rezultat.
 
 7. Monitorując proces w tle (termux_check_process /
    termux_read_file na log_file): max 2-3 sprawdzenia w TYM
