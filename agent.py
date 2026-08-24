@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v90
+AEL-MINI AUTONOMOUS AGENT v91
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v90")
+    print("             AEL-MINI AUTONOMOUS AGENT v91")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11580,13 +11580,17 @@ def _recent_task_summaries(n=8):
     return summaries
 
 
-def estimate_progress(goal):
+def estimate_progress(goal, chrome_text=None, android_text=None):
     """
     Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
     podstawie kilku ostatnio zakończonych zadań. Zwraca None, jeśli
     nie ma jeszcze żadnej historii albo odpowiedź nie sparsowała
     się do sensownego JSON — nigdy nie przerywa głównej pętli
     agenta z tego powodu.
+
+    chrome_text/android_text (opcjonalne) — patrz consult_team():
+    pozwala run_agent() przekazać JUŻ pobrany w tym kroku stan
+    zamiast tej funkcji odpytującej urządzenie po raz kolejny.
     """
 
     summaries = _recent_task_summaries(8)
@@ -11628,13 +11632,21 @@ def estimate_progress(goal):
         if _goal_mentions_chrome(goal):
             device_state_block += (
                 "\nAKTUALNY CHROME:\n"
-                + short(chrome_summary(), 1500) + "\n"
+                + short(
+                    chrome_text if chrome_text is not None
+                    else chrome_summary(),
+                    1500
+                ) + "\n"
             )
 
         if _goal_mentions_android(goal):
             device_state_block += (
                 "\nAKTUALNY ANDROID:\n"
-                + short(android_summary(), 1500) + "\n"
+                + short(
+                    android_text if android_text is not None
+                    else android_summary(),
+                    1500
+                ) + "\n"
             )
 
     prompt = f"""
@@ -11816,7 +11828,9 @@ def _goal_mentions_chrome(goal):
 def consult_team(
     goal,
     last_result,
-    step=1
+    step=1,
+    chrome_text=None,
+    android_text=None
 ):
     """
     Konsultuje role SEKWENCYJNIE, nie na każdym kroku wszystkie.
@@ -11854,6 +11868,18 @@ def consult_team(
     świeże ustalenia trafiały dopiero do NASTĘPNEGO kroku — o krok
     za późno na to, żeby faktycznie wpłynąć na plan, którego
     dotyczyły.
+
+    chrome_text/android_text (opcjonalne, 2026-08-24): run_agent()
+    pobiera świeży stan Chrome/Androida RAZ na krok (do logu [STATE])
+    i przekazuje TE SAME napisy tutaj, zamiast każdej funkcji
+    (consult_team/main_decide/estimate_progress) osobno odpytującej
+    urządzenie o dokładnie ten sam stan — realny, zaobserwowany
+    problem: to były do 4 NIEZALEŻNYCH, żywych zapytań ADB/CDP na
+    jeden krok agenta, mierzalnie spowalniających pętlę bez żadnej
+    korzyści (stan i tak nie zmienia się między nimi w obrębie tego
+    samego kroku). Gdy nie podano (np. wywołanie bezpośrednio, jak w
+    testach), funkcja sama pyta urządzenie — zachowanie identyczne
+    jak wcześniej.
     """
 
     tool_hint = ""
@@ -11919,13 +11945,19 @@ OSTATNI RAPORT:
 
     chrome_block = (
         "\nAKTUALNY CHROME:\n"
-        + short(chrome_summary(), 2000)
+        + short(
+            chrome_text if chrome_text is not None else chrome_summary(),
+            2000
+        )
         + "\n"
     )
 
     android_block = (
         "\nAKTUALNY ANDROID:\n"
-        + short(android_summary(), 2000)
+        + short(
+            android_text if android_text is not None else android_summary(),
+            2000
+        )
         + "\n"
     )
 
@@ -11959,8 +11991,12 @@ OSTATNI RAPORT:
         ),
         "CRITIC": (
             "TWOJA ROLA: CRITIC. Oceń KRYTYCZNIE plan PLANNERA "
-            "poniżej (ryzyka, błędy, brakujące dowody) — nie twórz "
-            "nowego planu od zera."
+            "poniżej (ryzyka, błędy, brakujące dowody) na podstawie "
+            "STANU FAKTYCZNEGO/checklisty powyżej — nie twórz "
+            "nowego planu od zera. Surowego zrzutu ekranu Chrome/"
+            "Androida celowo NIE dostajesz — PLANNER już go użył do "
+            "ułożenia planu poniżej; Twoja praca to ocena LOGIKI i "
+            "DOWODÓW, nie ponowne odczytywanie ekranu."
         ),
     }
 
@@ -12095,8 +12131,6 @@ OSTATNI RAPORT:
         "CRITIC",
         _team_context(
             "CRITIC",
-            include_chrome=goal_needs_chrome,
-            include_android=goal_needs_android,
             extra="\nPLAN PLANNERA:\n" + planner_out
         )
     )
@@ -12124,7 +12158,9 @@ def main_decide(
     goal,
     step,
     team,
-    last_result
+    last_result,
+    chrome_text=None,
+    android_text=None
 ):
 
     # ADAPTACYJNA TREŚĆ (2026-08-24, kontynuacja v86/v87 — teraz w
@@ -12221,14 +12257,23 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
     # Ten sam mechanizm co w consult_team()/gemini_execute_task() —
     # zrzuty stanu Chrome/Android tylko wtedy, gdy CEL faktycznie
     # ich dotyczy, zamiast zawsze, niezależnie od typu celu.
+    # chrome_text/android_text (opcjonalne) — patrz konsult_team():
+    # run_agent() pobiera stan RAZ na krok i przekazuje go tutaj,
+    # zamiast MAIN pytającego urządzenie NIEZALEŻNIE o dokładnie to
+    # samo, co PLANNER/CRITIC już przed chwilą dostali.
     chrome_block = (
-        "\nAKTUALNE KARTY CHROME:\n" + chrome_summary() + "\n"
+        "\nAKTUALNE KARTY CHROME:\n"
+        + (chrome_text if chrome_text is not None else chrome_summary())
+        + "\n"
         if _goal_mentions_chrome(goal) else ""
     )
 
     android_block = (
         "\nAKTUALNY ANDROID:\n"
-        + short(android_summary(), 3500) + "\n"
+        + short(
+            android_text if android_text is not None else android_summary(),
+            3500
+        ) + "\n"
         if _goal_mentions_android(goal) else ""
     )
 
@@ -13311,11 +13356,20 @@ def run_agent(goal):
         # Stan
         # ------------------------------------------------------
 
+        # Pobrane RAZ na krok i przekazywane dalej do
+        # estimate_progress()/consult_team()/main_decide() — patrz
+        # komentarz w consult_team() o chrome_text/android_text.
+        # Wcześniej każda z tych 3 funkcji pytała urządzenie o
+        # DOKŁADNIE ten sam stan osobno (do 4 żywych zapytań ADB/CDP
+        # na jeden krok agenta).
+        step_chrome_text = chrome_summary()
+        step_android_text = android_summary()
+
         log(
             "STATE",
             "Chrome: "
             + short(
-                chrome_summary(),
+                step_chrome_text,
                 900
             )
         )
@@ -13324,7 +13378,7 @@ def run_agent(goal):
             "STATE",
             "Android: "
             + short(
-                android_summary(),
+                step_android_text,
                 900
             )
         )
@@ -13339,7 +13393,9 @@ def run_agent(goal):
         if step % 5 == 0:
 
             try:
-                progress = estimate_progress(goal)
+                progress = estimate_progress(
+                    goal, step_chrome_text, step_android_text
+                )
 
                 if progress:
                     print_progress_bar(
@@ -13366,7 +13422,9 @@ def run_agent(goal):
         team = consult_team(
             goal,
             last_result,
-            step
+            step,
+            step_chrome_text,
+            step_android_text
         )
 
         # ------------------------------------------------------
@@ -13377,7 +13435,9 @@ def run_agent(goal):
             goal,
             step,
             team,
-            last_result
+            last_result,
+            step_chrome_text,
+            step_android_text
         )
 
         decision = parse_json(raw)
