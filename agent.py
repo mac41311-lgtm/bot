@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v86
+AEL-MINI AUTONOMOUS AGENT v87
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v86")
+    print("             AEL-MINI AUTONOMOUS AGENT v87")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11936,12 +11936,46 @@ OSTATNI RAPORT:
         and last_result.get("status") == "GEMINI_TOOL_ERROR"
     )
 
+    # ADAPTACYJNA TREŚĆ (2026-08-24, na wyraźną prośbę użytkownika —
+    # kontynuacja tego samego pomysłu co adaptacyjna długość promptu
+    # Gemini z v86, tym razem po stronie zespołu DeepSeek). Wcześniej
+    # PLANNER/CRITIC/ANDROID_GAME_ENGINEER dostawały PEŁNY, ~2000-
+    # znakowy zrzut stanu Chrome I Androida przy KAŻDEJ konsultacji,
+    # bez względu na to, czy CEL ma cokolwiek wspólnego z przeglądarką
+    # albo ekranem telefonu (np. cel "napisz skrypt parsujący CSV" i
+    # tak dostawał ten sam szum co cel dotyczący klikania w aplikacji).
+    # Sprawdzane raz na CAŁY cel (nie na krok), bo cel się nie zmienia
+    # w trakcie sesji — jeśli okaże się fałszywie ujemne (cel jednak
+    # dotyczy Androida/Chrome, ale nie użył żadnego z tych słów), i
+    # tak nie jest to strata: PLANNER wciąż widzi CEL w core_context i
+    # może samodzielnie poprosić o więcej stanu przez zwykły TASK.
+    _goal_lower = str(goal or "").lower()
+
+    _goal_mentions_android = any(
+        kw in _goal_lower for kw in (
+            "android", "kalkulator", "zegar", "kalendarz",
+            "aplikacj", "kliknij", "klikni", "wpisz", "przycisk",
+            "ekran", "telefon", "urządzeni", "urzadzeni", "apk",
+            "gra", "gry", "grę", "gre",
+        )
+    )
+
+    _goal_mentions_chrome = any(
+        kw in _goal_lower for kw in (
+            "chrome", "przeglądark", "przegladark", "karta", "kart",
+            "stron", "url", "http", "www.", "wyszukiwark", "google",
+        )
+    )
+
     consult_researcher = (
         (step % 3 == 1)
         or fresh_tool_error
     )
 
-    consult_browser = (step % 3 == 1)
+    consult_browser = (
+        _goal_mentions_chrome
+        and (step % 3 == 1)
+    )
 
     # RESEARCHER PRZED PLANNEREM — żeby świeże ustalenia (gdy w
     # ogóle konsultowane w tym kroku) mogły od razu wpłynąć na plan
@@ -11985,8 +12019,8 @@ OSTATNI RAPORT:
         "PLANNER",
         _team_context(
             "PLANNER",
-            include_chrome=True,
-            include_android=True,
+            include_chrome=_goal_mentions_chrome,
+            include_android=_goal_mentions_android,
             extra="\nINFO RESEARCHER:\n" + researcher_out
         )
     )
@@ -12024,7 +12058,7 @@ OSTATNI RAPORT:
         "ANDROID_GAME_ENGINEER",
         _team_context(
             "ANDROID_GAME_ENGINEER",
-            include_android=True,
+            include_android=_goal_mentions_android,
             extra=(
                 "\nPLAN PLANNERA:\n" + planner_out
                 + "\nINFO RESEARCHER:\n" + researcher_out
@@ -12036,8 +12070,8 @@ OSTATNI RAPORT:
         "CRITIC",
         _team_context(
             "CRITIC",
-            include_chrome=True,
-            include_android=True,
+            include_chrome=_goal_mentions_chrome,
+            include_android=_goal_mentions_android,
             extra="\nPLAN PLANNERA:\n" + planner_out
         )
     )
