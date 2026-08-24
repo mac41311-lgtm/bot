@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v87
+AEL-MINI AUTONOMOUS AGENT v88
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v87")
+    print("             AEL-MINI AUTONOMOUS AGENT v88")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11760,6 +11760,40 @@ def _condense_last_result_for_team(last_result, limit=2500):
     return short("\n".join(parts), limit)
 
 
+# ADAPTACYJNA TREŚĆ (2026-08-24, na wyraźną prośbę użytkownika —
+# "dynamiczne skracanie/rozszerzanie instrukcji zależnie od
+# sytuacji", rozszerzone stopniowo na cały zespół DeepSeek).
+# Wspólne dla consult_team() i main_decide(): czy CEL (stały przez
+# całą sesję, więc liczony raz na wywołanie, nie per-token) w ogóle
+# dotyczy Androida/telefonu albo Chrome/przeglądarki — jeśli nie,
+# nie ma sensu wysyłać do każdej roli/MAIN-a wielotysięcznych
+# zrzutów stanu, których treść jest dla tego celu kompletnie
+# nieistotna. Fałszywie ujemne dopasowanie nie jest stratą: CEL
+# nadal jest widoczny w pełni, więc rola może samodzielnie poprosić
+# o więcej stanu przez zwykły TASK, jeśli faktycznie się okaże
+# potrzebny.
+_GOAL_ANDROID_KEYWORDS = (
+    "android", "kalkulator", "zegar", "kalendarz", "aplikacj",
+    "kliknij", "klikni", "wpisz", "przycisk", "ekran", "telefon",
+    "urządzeni", "urzadzeni", "apk", "gra", "gry", "grę", "gre",
+)
+
+_GOAL_CHROME_KEYWORDS = (
+    "chrome", "przeglądark", "przegladark", "karta", "kart",
+    "stron", "url", "http", "www.", "wyszukiwark", "google",
+)
+
+
+def _goal_mentions_android(goal):
+    goal_lower = str(goal or "").lower()
+    return any(kw in goal_lower for kw in _GOAL_ANDROID_KEYWORDS)
+
+
+def _goal_mentions_chrome(goal):
+    goal_lower = str(goal or "").lower()
+    return any(kw in goal_lower for kw in _GOAL_CHROME_KEYWORDS)
+
+
 def consult_team(
     goal,
     last_result,
@@ -11936,36 +11970,8 @@ OSTATNI RAPORT:
         and last_result.get("status") == "GEMINI_TOOL_ERROR"
     )
 
-    # ADAPTACYJNA TREŚĆ (2026-08-24, na wyraźną prośbę użytkownika —
-    # kontynuacja tego samego pomysłu co adaptacyjna długość promptu
-    # Gemini z v86, tym razem po stronie zespołu DeepSeek). Wcześniej
-    # PLANNER/CRITIC/ANDROID_GAME_ENGINEER dostawały PEŁNY, ~2000-
-    # znakowy zrzut stanu Chrome I Androida przy KAŻDEJ konsultacji,
-    # bez względu na to, czy CEL ma cokolwiek wspólnego z przeglądarką
-    # albo ekranem telefonu (np. cel "napisz skrypt parsujący CSV" i
-    # tak dostawał ten sam szum co cel dotyczący klikania w aplikacji).
-    # Sprawdzane raz na CAŁY cel (nie na krok), bo cel się nie zmienia
-    # w trakcie sesji — jeśli okaże się fałszywie ujemne (cel jednak
-    # dotyczy Androida/Chrome, ale nie użył żadnego z tych słów), i
-    # tak nie jest to strata: PLANNER wciąż widzi CEL w core_context i
-    # może samodzielnie poprosić o więcej stanu przez zwykły TASK.
-    _goal_lower = str(goal or "").lower()
-
-    _goal_mentions_android = any(
-        kw in _goal_lower for kw in (
-            "android", "kalkulator", "zegar", "kalendarz",
-            "aplikacj", "kliknij", "klikni", "wpisz", "przycisk",
-            "ekran", "telefon", "urządzeni", "urzadzeni", "apk",
-            "gra", "gry", "grę", "gre",
-        )
-    )
-
-    _goal_mentions_chrome = any(
-        kw in _goal_lower for kw in (
-            "chrome", "przeglądark", "przegladark", "karta", "kart",
-            "stron", "url", "http", "www.", "wyszukiwark", "google",
-        )
-    )
+    goal_needs_android = _goal_mentions_android(goal)
+    goal_needs_chrome = _goal_mentions_chrome(goal)
 
     consult_researcher = (
         (step % 3 == 1)
@@ -11973,7 +11979,7 @@ OSTATNI RAPORT:
     )
 
     consult_browser = (
-        _goal_mentions_chrome
+        goal_needs_chrome
         and (step % 3 == 1)
     )
 
@@ -12019,8 +12025,8 @@ OSTATNI RAPORT:
         "PLANNER",
         _team_context(
             "PLANNER",
-            include_chrome=_goal_mentions_chrome,
-            include_android=_goal_mentions_android,
+            include_chrome=goal_needs_chrome,
+            include_android=goal_needs_android,
             extra="\nINFO RESEARCHER:\n" + researcher_out
         )
     )
@@ -12058,7 +12064,7 @@ OSTATNI RAPORT:
         "ANDROID_GAME_ENGINEER",
         _team_context(
             "ANDROID_GAME_ENGINEER",
-            include_android=_goal_mentions_android,
+            include_android=goal_needs_android,
             extra=(
                 "\nPLAN PLANNERA:\n" + planner_out
                 + "\nINFO RESEARCHER:\n" + researcher_out
@@ -12070,8 +12076,8 @@ OSTATNI RAPORT:
         "CRITIC",
         _team_context(
             "CRITIC",
-            include_chrome=_goal_mentions_chrome,
-            include_android=_goal_mentions_android,
+            include_chrome=goal_needs_chrome,
+            include_android=goal_needs_android,
             extra="\nPLAN PLANNERA:\n" + planner_out
         )
     )
@@ -12102,6 +12108,111 @@ def main_decide(
     last_result
 ):
 
+    # ADAPTACYJNA TREŚĆ (2026-08-24, kontynuacja v86/v87 — teraz w
+    # samym MAIN-ie). Wcześniej MAIN dostawał wyjaśnienie WSZYSTKICH
+    # 7 możliwych statusów przy KAŻDEJ decyzji, niezależnie od tego,
+    # który status faktycznie wystąpił w TYM konkretnym OSTATNIM
+    # WYNIKU (99% czasu to COMPLETED — reszta wyjaśnień to wtedy
+    # czysty, nieużywany balast). Pokazujemy teraz wyjaśnienie
+    # WYŁĄCZNIE dla statusu, który faktycznie jest w last_result
+    # (plus zawsze krótkie COMPLETED jako punkt odniesienia, chyba
+    # że to właśnie ono wystąpiło — wtedy nie ma sensu dublować).
+    _status_explanations = {
+        "GEMINI_TOOL_ERROR": (
+            'GEMINI_TOOL_ERROR — Gemini próbował użyć narzędzia i się nie\n'
+            '  powiodło. Pole "tool" mówi co, "arguments" jak, "tool_result"\n'
+            '  dlaczego. Jeżeli "attempt_count" >= 2, agent już skonsultował\n'
+            '  CODE_REVIEWERA — sprawdź "code_review". Nie powtarzaj tej samej\n'
+            '  komendy. Zmień podejście lub narzędzie.'
+        ),
+        "TOOL_LIMIT": (
+            'TOOL_LIMIT — Gemini wyczerpał limit wywołań narzędzi (zbyt\n'
+            '  skomplikowane zadanie). Podziel TASK na mniejsze kroki.'
+        ),
+        "DONE_REJECTED_VERIFICATION_FAILED": (
+            'DONE_REJECTED_VERIFICATION_FAILED — TWOJE poprzednie DONE zostało\n'
+            '  odrzucone fizyczną weryfikacją. Pole "checks" mówi CO dokładnie\n'
+            '  brakuje. Utwórz TASK który uzupełni KONKRETNIE brakujące dowody.\n'
+            '  NIE zwracaj ponownie DONE — poczekaj na kolejny raport.'
+        ),
+        "TASK_BLOCKED_BY_POLICY": (
+            'TASK_BLOCKED_BY_POLICY — zadanie naruszało zakaz pobierania\n'
+            '  gotowej gry/APK. Zaproponuj INNE podejście (build od zera).'
+        ),
+        "TASK_DUPLICATE_OF_VERIFIED_POINT": (
+            'TASK_DUPLICATE_OF_VERIFIED_POINT — proponowany TASK jest identyczny\n'
+            '  z punktem, który checklist (patrz "PUNKTY ZADAŃ" w kontekście)\n'
+            '  już ma jako ZWERYFIKOWANY dowodem z dysku. Pole "message" mówi\n'
+            '  którym. NIE ponawiaj go — zaproponuj KOLEJNY, inny krok celu.'
+        ),
+        "TASK_ALREADY_SATISFIED_ON_DISK": (
+            'TASK_ALREADY_SATISFIED_ON_DISK — proponowany TASK sprawdzał coś,\n'
+            '  co Python już potwierdził bezpośrednio na dysku (patrz\n'
+            '  "message"). Nie twórz go ponownie — zaproponuj NASTĘPNY,\n'
+            '  faktycznie jeszcze niezrobiony krok.'
+        ),
+        "COMPLETED": (
+            'COMPLETED — Gemini wykonał blok, pole "report" to jego raport.\n'
+            '  NIE oznacza automatycznie DONE całego projektu. Sprawdź raport.'
+        ),
+    }
+
+    _current_status = (
+        last_result.get("status")
+        if isinstance(last_result, dict) else None
+    )
+
+    _statuses_to_explain = []
+
+    if _current_status in _status_explanations:
+        _statuses_to_explain.append(_current_status)
+
+    if "COMPLETED" not in _statuses_to_explain:
+        _statuses_to_explain.append("COMPLETED")
+
+    status_interpretation_block = "\n\n".join(
+        _status_explanations[s] for s in _statuses_to_explain
+    )
+
+    _last_result_is_error = (
+        isinstance(last_result, dict)
+        and (
+            last_result.get("ok") is False
+            or last_result.get("status") == "GEMINI_TOOL_ERROR"
+        )
+    )
+
+    repair_rule_block = (
+        """============================================================
+ZASADA NAPRAWY PO BŁĘDZIE
+============================================================
+
+Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
+
+1. NIE zwracaj DONE.
+2. Przeczytaj dokładnie: tool, arguments, tool_result, error.
+3. Zmień strategię — nie powtarzaj identycznej komendy.
+4. Jeżeli błąd to Timeout — zleć tę samą operację przez
+   termux_run_background z monitorowaniem procesu.
+5. Utwórz konkretny TASK z MIERZALNYM warunkiem sukcesu.
+"""
+        if _last_result_is_error else ""
+    )
+
+    # Ten sam mechanizm co w consult_team()/gemini_execute_task() —
+    # zrzuty stanu Chrome/Android tylko wtedy, gdy CEL faktycznie
+    # ich dotyczy, zamiast zawsze, niezależnie od typu celu.
+    chrome_block = (
+        "\nAKTUALNE KARTY CHROME:\n" + chrome_summary() + "\n"
+        if _goal_mentions_chrome(goal) else ""
+    )
+
+    android_block = (
+        "\nAKTUALNY ANDROID:\n"
+        + short(android_summary(), 3500) + "\n"
+        if _goal_mentions_android(goal) else ""
+    )
+
     prompt = f"""
 CEL AGENTA:
 {goal}
@@ -12119,47 +12230,12 @@ OSTATNI WYNIK:
 )}
 
 ============================================================
-INTERPRETACJA STATUSÓW
+INTERPRETACJA STATUSU
 ============================================================
 
-GEMINI_TOOL_ERROR — Gemini próbował użyć narzędzia i się nie
-  powiodło. Pole "tool" mówi co, "arguments" jak, "tool_result"
-  dlaczego. Jeżeli "attempt_count" >= 2, agent już skonsultował
-  CODE_REVIEWERA — sprawdź "code_review". Nie powtarzaj tej samej
-  komendy. Zmień podejście lub narzędzie.
+{status_interpretation_block}
 
-TOOL_LIMIT — Gemini wyczerpał limit wywołań narzędzi (zbyt
-  skomplikowane zadanie). Podziel TASK na mniejsze kroki.
-
-DONE_REJECTED_VERIFICATION_FAILED — TWOJE poprzednie DONE zostało
-  odrzucone fizyczną weryfikacją. Pole "checks" mówi CO dokładnie
-  brakuje. Utwórz TASK który uzupełni KONKRETNIE brakujące dowody.
-  NIE zwracaj ponownie DONE — poczekaj na kolejny raport.
-
-TASK_BLOCKED_BY_POLICY — zadanie naruszało zakaz pobierania
-  gotowej gry/APK. Zaproponuj INNE podejście (build od zera).
-
-TASK_DUPLICATE_OF_VERIFIED_POINT — proponowany TASK jest identyczny
-  z punktem, który checklist (patrz "PUNKTY ZADAŃ" w kontekście)
-  już ma jako ZWERYFIKOWANY dowodem z dysku. Pole "message" mówi
-  którym. NIE ponawiaj go — zaproponuj KOLEJNY, inny krok celu.
-
-COMPLETED — Gemini wykonał blok, pole "report" to jego raport.
-  NIE oznacza automatycznie DONE całego projektu. Sprawdź raport.
-
-============================================================
-ZASADA NAPRAWY PO BŁĘDZIE
-============================================================
-
-Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
-
-1. NIE zwracaj DONE.
-2. Przeczytaj dokładnie: tool, arguments, tool_result, error.
-3. Zmień strategię — nie powtarzaj identycznej komendy.
-4. Jeżeli błąd to Timeout — zleć tę samą operację przez
-   termux_run_background z monitorowaniem procesu.
-5. Utwórz konkretny TASK z MIERZALNYM warunkiem sukcesu.
-
+{repair_rule_block}
 ============================================================
 
 PLANNER:
@@ -12176,16 +12252,7 @@ CRITIC:
 
 BROWSER:
 {team['browser']}
-
-AKTUALNE KARTY CHROME:
-{chrome_summary()}
-
-AKTUALNY ANDROID:
-{short(
-    android_summary(),
-    3500
-)}
-
+{chrome_block}{android_block}
 ZASADY DECYZJI:
 - Nie powtarzaj tego samego kroku po raz trzeci.
 - TASK ma być JEDNYM konkretnym blokiem (nie ogólnym "zrób grę"
