@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v97
+AEL-MINI AUTONOMOUS AGENT v98
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v97")
+    print("             AEL-MINI AUTONOMOUS AGENT v98")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1581,11 +1581,26 @@ warto sprawdzać za każdym razem:
   co faktycznie wcześniej ustalono. Porównaj konkretne liczby/fakty
   w OSTATNIM RAPORCIE z tym, co było w poprzednich krokach (jeśli
   masz dostęp do historii) — jeśli się różnią bez wyjaśnienia, albo
-  raport podaje "potwierdzone" fakty bez widocznego w tym kroku
-  świeżego wywołania narzędzia, które by to faktycznie sprawdziło,
-  to podejrzenie fabrykacji, nie prawdziwej weryfikacji. Zablokuj i
+  RAPORT GEMINI (jego własna proza, nie STAN FAKTYCZNY) podaje
+  "potwierdzone" fakty bez widocznego w tym kroku świeżego
+  wywołania narzędzia, które by to faktycznie sprawdziło, to
+  podejrzenie fabrykacji, nie prawdziwej weryfikacji. Zablokuj i
   zażądaj ponownego, rzeczywistego sprawdzenia (odczyt pliku /
   powtórzenie komendy), zanim to zostanie przyjęte jako dowód.
+  WYJĄTEK — nie stosuj tej podejrzliwości do faktu, który widzisz w
+  bloku "STAN FAKTYCZNY" w kontekście: to NIE jest deklaracja
+  Gemini, tylko wynik osobnego sprawdzenia PRZEZ PYTHON bezpośrednio
+  na dysku w TYM kroku (patrz opis przy nim) — jeśli STAN FAKTYCZNY
+  pokazuje, że jakiś plik/zdanie już tam jest, to jest to
+  wystarczający dowód samo w sobie i NIE wymaga dodatkowego, świeżego
+  wywołania narzędzia, żeby PLANNER mógł się na to powołać. Zaobserwowany
+  realny problem — CRITIC blokował plan w kółko, żądając ponownego
+  wywołania RESEARCHERA dla czegoś, co RESEARCHER już zrobił kroki
+  wcześniej i co STAN FAKTYCZNY już potwierdzał — zespół nie miał
+  jak tego kiedykolwiek "naprawić", bo żądanie było w istocie
+  niespełnialne (powtórzenie czegoś, co już jest prawdą, nie
+  wytworzy nowego dowodu silniejszego niż to, co Python już
+  sprawdził).
 - Zrzut ekranu / stan Chrome wsadzony do skryptu bash:
   zaobserwowany realny przypadek — zaplanowany krok kazał Gemini
   napisać jeden skrypt bash (termux_run) robiący wszystko naraz, w
@@ -1713,6 +1728,34 @@ Dostajesz aktualny stan projektu i raport ostatniego zadania.
 
 Twój jedyny cel: przygotować KONKRETNE, WYKONALNE polecenie lub
 blok kodu, który Gemini może natychmiast uruchomić w Termux.
+
+============================================================
+GDY MASZ NAPISAĆ NOWE NARZĘDZIE (custom_tools/)
+============================================================
+
+Jeśli plan wymaga stworzenia nowego, wielokrotnego użytku narzędzia
+w ~/agent/custom_tools/<nazwa>.py — plik MUSI mieć DOKŁADNIE ten
+kontrakt (inne nazwy pól/funkcji Python po cichu odrzuci, narzędzie
+nigdy się nie zarejestruje):
+
+TOOL_NAME = "nazwa_narzedzia"          # str
+TOOL_DESCRIPTION = "Co robi."          # str
+TOOL_PARAMETERS = {                    # JSON Schema, DOKŁADNIE ta nazwa
+    "type": "object",
+    "properties": {"x": {"type": "string"}},
+    "required": ["x"]
+}
+
+def run(x):                            # DOKŁADNIE ta nazwa funkcji
+    return {"ok": True, ...}
+
+Zaobserwowany realny problem: własne, "logiczne" nazwy jak
+TOOL_PARAMS zamiast TOOL_PARAMETERS albo execute() zamiast run()
+wyglądają poprawnie, ale są ciche odrzucane bez żadnego wyjątku w
+raporcie Gemini — plik istnieje na dysku, ale nigdy nie trafia na
+listę dostępnych narzędzi, a przyczyna nie jest nigdzie widoczna,
+dopóki ktoś nie porówna nazw pole po polu. Plik musi być
+samowystarczalny (własne importy na górze).
 
 Trzymaj się wyłącznie budowy AKTUALNEGO projektu — bez marketingu,
 grafiki marketingowej, dokumentacji czy sklepów. Każda Twoja
