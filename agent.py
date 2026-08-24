@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v93
+AEL-MINI AUTONOMOUS AGENT v94
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v93")
+    print("             AEL-MINI AUTONOMOUS AGENT v94")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12320,13 +12320,19 @@ OSTATNI RAPORT:
 # MAIN DECISION
 # ============================================================
 
+_MAIN_ASK_ALLOWED_ROLES = (
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER"
+)
+
+
 def main_decide(
     goal,
     step,
     team,
     last_result,
     chrome_text=None,
-    android_text=None
+    android_text=None,
+    asked_followup=None
 ):
 
     # ADAPTACYJNA TREŚĆ (2026-08-24, kontynuacja v86/v87 — teraz w
@@ -12443,6 +12449,51 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
         if _goal_mentions_android(goal) else ""
     )
 
+    # ASK (2026-08-24, na wyraźną prośbę użytkownika — role mają się
+    # komunikować "jak człowiek", wołając się po imieniu zamiast
+    # sztywnego, zawsze identycznego okrążenia). Zamiast w pełni
+    # swobodnego grafu ("każdy pyta każdego" — realne ryzyko pętli
+    # i spamu wiadomości do DeepSeeka, które już raz popsuło sesje
+    # błędem "invalid message id"), MAIN dostaje JEDNO, ograniczone
+    # do RAZY NA KROK prawo zadania KONKRETNEJ roli DODATKOWEGO,
+    # celowego pytania — nie zamiennik konsultacji zespołu (którą
+    # już dostał wyżej), tylko dopytanie o coś, czego z tamtych
+    # odpowiedzi zabrakło. Po odpowiedzi MUSI podjąć decyzję —
+    # asked_followup != None sygnalizuje, że limit już wykorzystany.
+    if asked_followup:
+
+        ask_block = f"""
+============================================================
+ODPOWIEDŹ NA TWOJE DODATKOWE PYTANIE
+============================================================
+
+Zapytałeś {asked_followup['role']}:
+{asked_followup['question']}
+
+Odpowiedź:
+{short(str(asked_followup['answer']), 2000)}
+
+Wykorzystałeś już swoje jedno pytanie w tym kroku — TERAZ MUSISZ
+zwrócić TASK, DONE albo FAILED. ASK jest w tym wywołaniu
+ZABRONIONE.
+"""
+        ask_contract_block = ""
+
+    else:
+
+        ask_block = ""
+        ask_contract_block = f"""
+ASK (opcjonalne, NAJWYŻEJ RAZ na krok — nie zamiast konsultacji
+zespołu powyżej, tylko dodatkowe, KONKRETNE pytanie do JEDNEJ
+roli, gdy z odpowiedzi zespołu powyżej brakuje Ci czegoś
+konkretnego do podjęcia decyzji):
+{{
+  "type": "ASK",
+  "ask_role": "jedna z: {", ".join(_MAIN_ASK_ALLOWED_ROLES)}",
+  "ask_question": "krótkie, konkretne pytanie — nie ogólne 'co dalej'"
+}}
+"""
+
     prompt = f"""
 CEL AGENTA:
 {goal}
@@ -12483,6 +12534,7 @@ CRITIC:
 BROWSER:
 {team['browser']}
 {chrome_block}{android_block}
+{ask_block}
 ZASADY DECYZJI:
 - Nie powtarzaj tego samego kroku po raz trzeci.
 - TASK ma być JEDNYM konkretnym blokiem (nie ogólnym "zrób grę"
@@ -12524,12 +12576,96 @@ FAILED:
   "type": "FAILED",
   "reason": "..."
 }}
-"""
+{ask_contract_block}"""
 
     return deepseek(
         "MAIN",
         prompt
     )
+
+
+def _handle_main_ask(
+    decision,
+    goal,
+    step,
+    team,
+    last_result,
+    chrome_text,
+    android_text
+):
+    """
+    Obsługuje decyzję MAIN typu ASK (patrz komentarz przy
+    ask_contract_block w main_decide()) — wysyła pytanie do
+    JEDNEJ, konkretnej roli, wraca z odpowiedzią do MAIN i wymusza
+    kolejną decyzję (z asked_followup ustawionym — ASK jest w niej
+    zablokowane, patrz main_decide()).
+
+    Zwraca sparsowaną, ostateczną decyzję (TASK/DONE/FAILED) albo
+    None, gdy pytanie było nieprawidłowe (zła rola / puste pytanie)
+    albo MAIN spróbował zapytać DRUGI raz w tym samym kroku mimo
+    limitu — w obu przypadkach wywołujący potraktuje to dokładnie
+    tak samo jak niepoprawny JSON (istniejący mechanizm naprawy).
+    """
+
+    ask_role = str(decision.get("ask_role", "")).strip().upper()
+    ask_question = str(decision.get("ask_question", "")).strip()
+
+    if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
+
+        log(
+            "MAIN",
+            "ASK odrzucone (nieprawidłowa rola '" + ask_role
+            + "' lub puste pytanie) — traktuję jak brak decyzji."
+        )
+
+        return None
+
+    log(
+        "MAIN",
+        "ASK -> " + ask_role + ": " + short(ask_question, 300)
+    )
+
+    answer = deepseek(
+        ask_role,
+        "MAIN ma do Ciebie DODATKOWE, KONKRETNE pytanie — nie "
+        "kolejną pełną konsultację, tylko jedną, precyzyjną rzecz "
+        "do doprecyzowania. Odpowiedz krótko i wyłącznie na nie:\n\n"
+        + ask_question
+    )
+
+    log(
+        "MAIN",
+        ask_role + " ODPOWIEDŹ NA PYTANIE MAIN: "
+        + short(str(answer), 300)
+    )
+
+    raw = main_decide(
+        goal,
+        step,
+        team,
+        last_result,
+        chrome_text,
+        android_text,
+        asked_followup={
+            "role": ask_role,
+            "question": ask_question,
+            "answer": answer
+        }
+    )
+
+    decision = parse_json(raw)
+
+    if isinstance(decision, dict) and decision.get("type") == "ASK":
+
+        log(
+            "MAIN",
+            "ASK ponownie mimo wykorzystanego limitu 1/krok — "
+            "ignoruję, wymuszam standardową naprawę JSON."
+        )
+
+        return None
+
+    return decision
 
 
 # ============================================================
@@ -13608,6 +13744,17 @@ def run_agent(goal):
 
         decision = parse_json(raw)
 
+        if isinstance(decision, dict) and decision.get("type") == "ASK":
+
+            decision = _handle_main_ask(
+                decision,
+                goal,
+                step,
+                team,
+                last_result,
+                step_chrome_text,
+                step_android_text
+            )
 
         if decision is not None:
 
