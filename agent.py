@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v96
+AEL-MINI AUTONOMOUS AGENT v97
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v96")
+    print("             AEL-MINI AUTONOMOUS AGENT v97")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14861,6 +14861,87 @@ def maybe_clear_generated_project_files():
     write_json(PROJECT_DIRS_FILE, remaining)
 
 
+def maybe_clear_custom_tools():
+    """
+    OSOBNE, opt-in pytanie od maybe_clear_generated_project_files().
+
+    Zaobserwowany realny problem (log 2026-08-24, test "uniwersalny"):
+    narzędzia w custom_tools/ NIGDY nie pojawiają się na liście do
+    skasowania przy 'wyczysc'/nowym celu — cały ~/agent/ (gdzie
+    fizycznie leży custom_tools/) jest wykluczony ze śledzenia
+    _track_project_path(), bo w tym samym katalogu leżą agent.py i
+    klucze API, których TA lista nigdy nie może dotknąć. Efekt
+    uboczny: użytkownik, widząc ogólne pytanie o "wygenerowane pliki
+    projektu", rozsądnie zakładał, że obejmuje to WSZYSTKO — a
+    narzędzie z zupełnie innego, dawnego celu (np. mnoznik.py) wciąż
+    tam było i kolidowało z nowym celem każącym "stwórz NOWE
+    narzędzie" o tej samej nazwie (patrz _goal_progress_snapshot —
+    v96 dodał tam oznaczenie "z tego celu"/"sprzed tego celu"
+    właśnie z tego powodu).
+
+    Custom_tools są jednak CELOWO pomyślane jako trwały, wielokrotnego
+    użytku zestaw (patrz MAIN_PROMPT — mają być wywoływane WIELOKROTNIE
+    z różnymi argumentami w przyszłych celach), więc nie czyścimy ich
+    automatycznie razem z resztą — pytamy o to OSOBNO, jawnie, z pełną
+    listą, żeby to była świadoma decyzja, nie przypadkowa strata
+    przydatnego narzędzia przy zwykłym sprzątaniu.
+    """
+
+    try:
+        tool_files = sorted(
+            p for p in CUSTOM_TOOLS_DIR.glob("*.py")
+            if p.name != "__init__.py"
+        )
+    except Exception:
+        tool_files = []
+
+    if not tool_files:
+        return
+
+    print()
+    print(
+        "Zarejestrowane narzędzia niestandardowe (custom_tools/ — "
+        "TRWAŁE, NIE objęte zwykłym sprzątaniem powyżej):"
+    )
+
+    for p in tool_files:
+        try:
+            size = p.stat().st_size
+        except Exception:
+            size = "?"
+        print("  - " + str(p) + " (" + str(size) + " B)")
+
+    confirm_message = (
+        "USUNIĘCIE NARZĘDZI NIESTANDARDOWYCH powyżej (custom_tools/) "
+        "— to OSOBNA decyzja od zwykłego sprzątania: te narzędzia są "
+        "pomyślane jako trwałe, do wielokrotnego użytku w przyszłych "
+        "celach, nie jednorazowe dane projektu"
+    )
+
+    if not _confirm_destructive_action(confirm_message):
+        log(
+            "MAIN",
+            "Zachowano narzędzia niestandardowe (custom_tools/)."
+        )
+        return
+
+    for p in tool_files:
+
+        try:
+            p.unlink()
+            log(
+                "MAIN",
+                "Usunięto narzędzie niestandardowe: " + str(p)
+            )
+        except Exception as e:
+            log(
+                "MAIN",
+                "Nie udało się usunąć " + str(p) + ": " + str(e)
+            )
+
+    load_custom_tools()
+
+
 def prompt_adb_target():
     """
     Pyta przy starcie programu o adres bezprzewodowego ADB
@@ -15099,6 +15180,7 @@ def main():
         _cleanup_screenshots_silently()
         maybe_clear_previous_session_data()
         maybe_clear_generated_project_files()
+        maybe_clear_custom_tools()
 
         if not before:
             print(
