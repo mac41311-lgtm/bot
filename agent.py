@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v82
+AEL-MINI AUTONOMOUS AGENT v83
 
 ARCHITEKTURA:
 
@@ -861,7 +861,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v82")
+    print("             AEL-MINI AUTONOMOUS AGENT v83")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3764,6 +3764,216 @@ def android_click_text(text):
     return result
 
 
+def android_long_click_text(text):
+    """
+    Długie przytrzymanie elementu Android po tekście —
+    zaobserwowany realny przypadek: użytkownik ręcznie przytrzymał
+    palcem pole z wpisanymi cyframi na ekranie kalkulatora bez
+    zwykłego pola tekstowego i zobaczył systemowe menu z opcjami
+    "Wklej" i "Wybierz wszystko" — czyli to pole JEST selekcjonowalne
+    mimo że android_type nie mógł do niego nic wpisać wprost. Dla
+    takich ekranów alternatywą dla klikania pojedynczych przycisków
+    jest: android_set_clipboard(pełny tekst) -> android_long_click
+    na aktualnie widocznym tekście pola -> android_click("Wklej") z
+    wyskakującego menu (NIGDY "Udostępnij"/"Wyślij do urządzenia" z
+    tego samego menu — to inna opcja, prowadzi do udostępniania, nie
+    wklejania).
+
+    Kolejność dopasowania identyczna jak w android_click_text: text,
+    textContains, content-desc, XML -> bounds -> long_click na
+    współrzędnych.
+    """
+
+    global android_device
+
+    if android_device is None:
+        if not init_android():
+            return {
+                "ok": False,
+                "action": "long_click_text",
+                "text": text,
+                "error": "Android niedostępny."
+            }
+
+    target = str(text)
+
+    try:
+        obj = android_device(text=target)
+
+        if obj.exists:
+            obj.long_click()
+
+            return {
+                "ok": True,
+                "action": "long_click_text",
+                "text": target,
+                "method": "text"
+            }
+    except Exception:
+        pass
+
+    try:
+        obj = android_device(textContains=target)
+
+        if obj.exists:
+            obj.long_click()
+
+            return {
+                "ok": True,
+                "action": "long_click_text",
+                "text": target,
+                "method": "textContains"
+            }
+    except Exception:
+        pass
+
+    try:
+        obj = android_device(description=target)
+
+        if obj.exists:
+            try:
+                obj.long_click()
+
+                return {
+                    "ok": True,
+                    "action": "long_click_text",
+                    "text": target,
+                    "method": "content-desc"
+                }
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    visible_texts_nearby = []
+    seen_texts = set()
+
+    try:
+        import xml.etree.ElementTree as ET
+
+        xml_data = android_device.dump_hierarchy(
+            compressed=False
+        )
+
+        root = ET.fromstring(xml_data)
+
+        for node in root.iter("node"):
+
+            attrs = node.attrib
+
+            node_text = attrs.get("text", "").strip()
+            node_desc = attrs.get("content-desc", "").strip()
+            enabled = attrs.get("enabled", "true")
+            bounds = attrs.get("bounds", "")
+
+            candidate_label = node_text or node_desc
+
+            if (
+                candidate_label
+                and candidate_label not in seen_texts
+                and len(visible_texts_nearby) < 25
+            ):
+                seen_texts.add(candidate_label)
+                visible_texts_nearby.append(candidate_label)
+
+            matched = (
+                node_text == target
+                or node_desc == target
+                or target in node_text
+                or target in node_desc
+            )
+
+            if not matched:
+                continue
+
+            if enabled != "true":
+                continue
+
+            if not bounds:
+                continue
+
+            match = re.match(
+                r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
+                bounds
+            )
+
+            if not match:
+                continue
+
+            left = int(match.group(1))
+            top = int(match.group(2))
+            right = int(match.group(3))
+            bottom = int(match.group(4))
+
+            x = (left + right) // 2
+            y = (top + bottom) // 2
+
+            try:
+                android_device.long_click(x, y)
+
+                return {
+                    "ok": True,
+                    "action": "long_click_text",
+                    "text": target,
+                    "method": "xml-bounds",
+                    "x": x,
+                    "y": y,
+                    "bounds": bounds
+                }
+
+            except Exception:
+                continue
+
+    except Exception:
+        pass
+
+    result = {
+        "ok": False,
+        "action": "long_click_text",
+        "text": target,
+        "error": "Nie znaleziono elementu ani jego współrzędnych."
+    }
+
+    if visible_texts_nearby:
+        result["visible_texts_nearby"] = visible_texts_nearby
+
+    return result
+
+
+def android_set_clipboard(text):
+    """
+    Ustawia systemowy schowek Androida (uiautomator2:
+    device.set_clipboard()) — potrzebne do techniki
+    ustaw-schowek -> długie przytrzymanie -> "Wklej" jako
+    alternatywy dla klikania pojedynczych przycisków na ekranach
+    bez zwykłego, edytowalnego pola tekstowego (patrz
+    android_long_click_text).
+    """
+
+    if android_device is None:
+        return {
+            "ok": False,
+            "error": "Android niedostępny"
+        }
+
+    try:
+
+        android_device.set_clipboard(str(text))
+
+        return {
+            "ok": True,
+            "action": "set_clipboard",
+            "text": str(text)
+        }
+
+    except Exception as e:
+
+        return {
+            "ok": False,
+            "error": str(e)
+        }
+
+
 def android_tap(x, y):
 
     if android_device is None:
@@ -4727,6 +4937,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "chrome_type",
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
+    "android_long_click", "android_set_clipboard",
     "android_screenshot", "android_screenshot_ocr", "android_launch_app",
     "android_list_packages", "android_assert_text_visible",
     "android_run_in_new_window", "android_install_apk",
@@ -6383,6 +6594,52 @@ def _gemini_tools_legacy():
                     "y": {"type": "integer"}
                 },
                 "required": ["x", "y"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_long_click",
+            "description": (
+                "Długie przytrzymanie elementu Androida po tekście "
+                "(np. 1-2 sekundy). Używaj do wywołania systemowego "
+                "menu zaznaczania/wklejania na polach, które nie mają "
+                "zwykłej klawiatury do wpisywania, ale reagują na "
+                "przytrzymanie (zaobserwowany realny przypadek: "
+                "wyświetlacz kalkulatora bez pola tekstowego pokazał "
+                "po przytrzymaniu opcje 'Wklej' i 'Wybierz wszystko'). "
+                "Po otwarciu tego menu kliknij WYŁĄCZNIE 'Wklej' "
+                "(android_click) — nigdy 'Udostępnij'/'Wyślij do "
+                "urządzenia' z tego samego menu, to inna, niechciana "
+                "opcja. Zobacz też android_set_clipboard."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "android_set_clipboard",
+            "description": (
+                "Ustaw systemowy schowek Androida na podany tekst. "
+                "Używaj razem z android_long_click + android_click"
+                "(\"Wklej\") jako alternatywy dla klikania pojedynczych "
+                "przycisków na ekranach bez edytowalnego pola "
+                "tekstowego (np. niektóre kalkulatory) — ustaw schowek "
+                "PRZED przytrzymaniem elementu, bo opcja 'Wklej' w "
+                "menu pojawia się tylko gdy schowek nie jest pusty."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"]
             }
         },
 
@@ -8340,6 +8597,60 @@ def _dispatch_tool_inner(
                 int(y)
             )
 
+        # Gemini: android_long_click
+        # Python: android_long_click_text
+        if name == "android_long_click":
+
+            fn = globals().get(
+                "android_long_click_text"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_long_click_text()."
+                }
+
+            text = args.get("text")
+
+            if text is None:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_long_click wymaga text.",
+                    "arguments": args
+                }
+
+            return fn(text)
+
+        # Gemini: android_set_clipboard
+        # Python: android_set_clipboard
+        if name == "android_set_clipboard":
+
+            fn = globals().get(
+                "android_set_clipboard"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji android_set_clipboard()."
+                }
+
+            text = args.get("text")
+
+            if text is None:
+                return {
+                    "ok": False,
+                    "error":
+                        "android_set_clipboard wymaga text.",
+                    "arguments": args
+                }
+
+            return fn(text)
+
         # Gemini: android_type
         # Python: android_type
         if name == "android_type":
@@ -9002,8 +9313,23 @@ ZASADY:
    "Wyślij do urządzenia", Bluetooth, e-mail — zaobserwowany realny
    przypadek na żywym ekranie), to jednoznaczny sygnał, że tekst
    próbował się ZAZNACZYĆ zamiast wpisać: android_press('back')
-   żeby to natychmiast zamknąć, NIE klikaj niczego w tym menu, i
-   przejdź na klikanie przycisków jak wyżej.
+   żeby to natychmiast zamknąć, NIE klikaj niczego w tym menu.
+
+   To samo zaznaczanie daje DODATKOWĄ, alternatywną drogę wpisania
+   tekstu zamiast klikania każdego przycisku osobno — zaobserwowany
+   realny przypadek: użytkownik ręcznie przytrzymał pole na ekranie
+   kalkulatora i zobaczył opcje "Wklej" i "Wybierz wszystko", czyli
+   pole JEST selekcjonowalne mimo że nie przyjmuje zwykłego
+   wpisywania. Jeśli klikanie pojedynczych przycisków jest
+   niepraktyczne (długi tekst), spróbuj: android_set_clipboard(pełny
+   tekst) -> android_long_click na aktualnie widocznym tekście tego
+   pola -> android_click("Wklej") z wyskakującego menu. Klikaj
+   WYŁĄCZNIE "Wklej" — "Udostępnij"/"Wyślij do urządzenia" w tym
+   samym menu to zupełnie inna, niechciana opcja. Jeśli po
+   android_long_click nie pojawi się żadne menu, albo "Wklej" nie
+   jest w nim widoczne (schowek może być pusty, jeśli
+   android_set_clipboard zawiodło) — wróć do klikania pojedynczych
+   przycisków.
 
    Niezależnie od metody: android_type/android_click same z siebie
    NIE zatwierdzają akcji — to jak wypełnienie formularza bez
