@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v111
+AEL-MINI AUTONOMOUS AGENT v112
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v111")
+    print("             AEL-MINI AUTONOMOUS AGENT v112")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15632,6 +15632,28 @@ def main():
     # ----------------------------------------------------------
 
     agent_wake_lock()
+
+    # ----------------------------------------------------------
+    # Uprawnienia Termux:API — PRZED załadowaniem DeepSeek/Gemini,
+    # żeby ewentualne braki (aparat, mikrofon, lokalizacja, kontakty,
+    # powiadomienia) wyszły na jaw na samym starcie, a nie w środku
+    # autonomicznej sesji. Opcjonalne — Enter/puste pomija.
+    # ----------------------------------------------------------
+
+    try:
+
+        typed_perm_check = input(
+            "Sprawdzić/aktywować uprawnienia Termux:API przed "
+            "startem? [t/N] > "
+        ).strip().lower()
+
+    except (EOFError, KeyboardInterrupt):
+
+        print()
+        typed_perm_check = ""
+
+    if typed_perm_check in ("t", "tak", "y", "yes"):
+        _run_permission_bootstrap()
 
     # ----------------------------------------------------------
     # DeepSeek
