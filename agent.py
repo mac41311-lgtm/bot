@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v102
+AEL-MINI AUTONOMOUS AGENT v103
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v102")
+    print("             AEL-MINI AUTONOMOUS AGENT v103")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2886,6 +2886,66 @@ def deepseek(name, message):
 
                 if not text:
                     text = ""
+
+                # Zaobserwowany realny problem (log 2026-08-25):
+                # CRITIC zwrócił odpowiedź o DŁUGOŚCI 0 — nie "wygląda
+                # na uciętą" (ten warunek wymaga >3000 znaków, patrz
+                # _deepseek_looks_truncated), więc powyższy mechanizm
+                # 'continue' się nie uruchamiał — po prostu pusty
+                # tekst szedł dalej jako "opinia CRITIC-a" bez żadnej
+                # treści, MAIN nie miał żadnego realnego przeglądu
+                # tego kroku, a nikt się o tym nie dowiedział poza
+                # "0 znaków" w logu. Traktujemy to jak osobny
+                # przypadek od "ucięte" — jedno ponowienie TEGO
+                # SAMEGO pytania, zanim cokolwiek zwrócimy dalej.
+                if not text.strip():
+
+                    log(
+                        "DEEPSEEK",
+                        name + ": odpowiedź PUSTA — ponawiam raz tym "
+                        "samym pytaniem, zanim to pójdzie dalej jako "
+                        "'opinia' tej roli."
+                    )
+
+                    try:
+
+                        retry_text, retry_status = (
+                            _deepseek_send_experimental(
+                                name, session, message
+                            )
+                        )
+
+                        if retry_text and retry_text.strip():
+
+                            text = retry_text
+
+                            log(
+                                "DEEPSEEK",
+                                name + ": ponowienie po pustej "
+                                "odpowiedzi zwróciło "
+                                + str(len(text)) + " znaków."
+                            )
+
+                        else:
+
+                            log(
+                                "DEEPSEEK",
+                                name + ": ponowienie po pustej "
+                                "odpowiedzi TEŻ puste (status="
+                                + str(retry_status) + ") — zostaje "
+                                "pusty tekst, wywołujący musi to "
+                                "obsłużyć."
+                            )
+
+                    except Exception as retry_error:
+
+                        log(
+                            "DEEPSEEK",
+                            name + ": ponowienie po pustej "
+                            "odpowiedzi zakończyło się błędem ("
+                            + str(retry_error) + ") — zostaje pusty "
+                            "tekst."
+                        )
 
                 # Wcześniej log pokazywał TYLKO długość odpowiedzi —
                 # nie dało się stąd stwierdzić, czy na początku
