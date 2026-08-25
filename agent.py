@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v109
+AEL-MINI AUTONOMOUS AGENT v110
 
 ARCHITEKTURA:
 
@@ -891,7 +891,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v109")
+    print("             AEL-MINI AUTONOMOUS AGENT v110")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1842,6 +1842,39 @@ raporcie Gemini — plik istnieje na dysku, ale nigdy nie trafia na
 listę dostępnych narzędzi, a przyczyna nie jest nigdzie widoczna,
 dopóki ktoś nie porówna nazw pole po polu. Plik musi być
 samowystarczalny (własne importy na górze).
+
+============================================================
+KOMENDY termux-api MOGĄ ZWRÓCIĆ returncode 0 MIMO BŁĘDU
+============================================================
+
+Zaobserwowany realny przypadek: skrypt wywołał
+`termux-telephony-call "$NUM" && ... && echo SUKCES > wynik.txt`.
+Cała komenda zwróciła `returncode: 0`, a mimo to
+`termux-telephony-call` W OGÓLE nie zadzwonił — jego własny stdout
+zawierał `{"error": "Please grant the following permission..."}`.
+Wynik: plik z fałszywym "SUKCES" mimo realnego niepowodzenia,
+złapane dopiero później przez inną rolę.
+
+Powód: wiele komend termux-api (termux-telephony-call,
+termux-camera-photo, termux-microphone-record, termux-location,
+termux-contact-list itd.) komunikuje się z apką Termux:API przez
+IPC i zwraca kod wyjścia 0 po prostu za to, że DOSTAŁO odpowiedź —
+NIEZALEŻNIE od tego, czy ta odpowiedź to sukces czy JSON z kluczem
+"error". Samo `&&`/kod wyjścia NIE wystarcza jako dowód sukcesu dla
+tych komend.
+
+Dlatego każdy skrypt, który wywołuje komendę termux-api zwracającą
+JSON, MUSI przechwycić jej wyjście do zmiennej i sprawdzić, czy
+zawiera `"error"`, PRZED zadeklarowaniem sukcesu — np.:
+
+RESULT=$(termux-telephony-call "$NUM")
+if echo "$RESULT" | grep -q '"error"'; then
+    echo "BLAD: $RESULT" > wynik_bledu.txt
+    exit 1
+fi
+
+Nigdy nie pisz "SUKCES"/nie zapisuj pliku-dowodu za samym `&&` po
+takiej komendzie bez tego sprawdzenia treści JSON.
 
 Trzymaj się wyłącznie budowy AKTUALNEGO projektu — bez marketingu,
 grafiki marketingowej, dokumentacji czy sklepów. Każda Twoja
