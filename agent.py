@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v112
+AEL-MINI AUTONOMOUS AGENT v113
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v112")
+    print("             AEL-MINI AUTONOMOUS AGENT v113")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15077,42 +15077,40 @@ Tylko JSON.
 
 def maybe_restart_team_sessions_for_new_goal():
     """
-    Gdy użytkownik zaczyna NOWY cel (nie wznawia poprzedniego przez
-    Enter), pyta czy zresetować 9 sesji DeepSeek zespołu.
+    Pyta, czy wyczyścić trwały stan 9 sesji DeepSeek zespołu PRZED
+    ich załadowaniem (init_team()) — samo czyszczenie plików stanu,
+    BEZ wołania init_team() (to robi main(), RAZ, zaraz po tej
+    funkcji, niezależnie od odpowiedzi — dzięki temu sesje są
+    ładowane dokładnie raz, nigdy dwa razy pod rząd: wznów, a potem
+    ewentualnie wyczyść-i-wznów-ponownie).
 
-    init_team() jest wołane RAZ, na starcie programu, ZANIM
-    użytkownik w ogóle zdąży wpisać cel — więc wszystkie sesje są
-    już wznowione (v31) ze STARĄ historią rozmowy, zanim wiadomo,
-    czy to ten sam cel, czy zupełnie inny. Bez tej funkcji: nowy,
-    niepowiązany cel dostaje zespół, który w tle wciąż "pamięta"
-    fakty/ustalenia z POPRZEDNIEGO projektu — a to dokładnie ten
-    rodzaj mieszania kontekstu, który CRITIC ma wyłapywać jako
-    podejrzenie fabrykacji (v36), tylko że tu źródłem nie jest
-    konfabulacja Gemini, tylko realna, stara historia czatu.
-
-    Ten sam cel wznawiany przez Enter (is_new_goal=False) NIE woła
-    tej funkcji — tam ciągłość starych sesji jest pożądana i to
-    właśnie po to v31 w ogóle powstało.
+    Od v113 pytana JAWNIE, na samym starcie programu, PRZED
+    init_deepseek()/init_team() — a nie automatycznie tylko wtedy,
+    gdy typed cel różni się od zapisanego. Wcześniej (v31-v112):
+    init_team() ładowało 9 sesji ZE STARĄ historią bez pytania, a
+    dopiero PO wpisaniu nowego, innego celu ta funkcja kasowała je
+    i ładowała drugi raz — dwa pełne rundy inicjalizacji DeepSeek za
+    każdym razem, gdy cel się zmieniał. Teraz to jedno, jawne
+    pytanie na starcie, niezależne od tego, jaki cel użytkownik
+    poda później.
     """
 
     if not _confirm_destructive_action(
         "RESET 9 SESJI DEEPSEEK (MAIN, PLANNER, RESEARCHER, "
         "CRITIC, BROWSER, CODE_REVIEWER, CODE_FIXER, "
-        "ENGINEER, PROGRESS_ESTIMATOR) — nowy cel "
-        "dostanie zespół bez kontekstu poprzedniego, "
-        "niepowiązanego celu (świeży system_prompt dla każdej roli)"
+        "ENGINEER, PROGRESS_ESTIMATOR) — zespół zacznie od zera, "
+        "bez pamięci poprzedniej rozmowy (świeży system_prompt dla "
+        "każdej roli)"
     ):
         log(
             "DEEPSEEK",
-            "Zachowano stare sesje zespołu mimo nowego celu "
-            "(użytkownik odmówił resetu)."
+            "Zachowano stare sesje zespołu (użytkownik odmówił "
+            "resetu)."
         )
         return
 
     for name in _ROLE_ACCOUNT:
         _clear_session_state(name)
-
-    init_team()
 
     # Nowy, niepowiązany cel nie powinien dziedziczyć "już otwarte w
     # tym celu" ostrzeżeń o aplikacjach z POPRZEDNIEGO celu — inaczej
@@ -15122,23 +15120,24 @@ def maybe_restart_team_sessions_for_new_goal():
 
     log(
         "DEEPSEEK",
-        "Zresetowano 9 sesji zespołu — nowy cel zaczyna się bez "
-        "kontekstu poprzedniego."
+        "Wyczyszczono stan 9 sesji zespołu — załadują się od zera "
+        "(bez kontekstu poprzedniej rozmowy)."
     )
 
 
 def maybe_clear_previous_session_data():
     """
-    Gdy użytkownik zaczyna NOWY cel (nie wznawia poprzedniego),
-    pyta czy usunąć dane poprzedniej sesji: kolejkę zadań, zapisane
+    Wołane na SAMYM STARCIE programu (v113), przed init_team(),
+    niezależnie od tego, jaki cel użytkownik później poda — pyta
+    czy usunąć dane poprzedniej sesji: kolejkę zadań, zapisane
     wyniki, licznik powtarzających się porażek narzędzi, ostatni
-    wynik.
+    wynik. Wcześniej (v31-v112) pytane dopiero PO wpisaniu celu, i
+    tylko gdy różnił się od zapisanego.
 
     Bez tego: jeśli poprzednia sesja padła z zadaniem w stanie
-    PENDING w kolejce, a użytkownik startuje zupełnie INNY cel,
-    run_agent() na pierwszym kroku podjąłby i wykonał to stare
-    zadanie — dotyczące poprzedniego, niepowiązanego celu — zanim
-    w ogóle skonsultowałby nowy.
+    PENDING w kolejce, run_agent() na pierwszym kroku podjąłby i
+    wykonał to stare zadanie — dotyczące poprzedniego, niepowiązanego
+    celu — zanim w ogóle skonsultowałby nowy.
 
     Nie dotyka custom_tools/ (to trwałe, celowo dodane narzędzia,
     nie dane sesji) ani samego GOAL_FILE (to obsługiwane osobno,
@@ -15499,26 +15498,6 @@ def _read_full_input(prompt):
     return "\n".join(lines)
 
 
-def _typed_goal_is_actually_new(typed, saved_goal):
-    """
-    Zaobserwowany realny problem: is_new_goal było dawniej ustawiane
-    na "cokolwiek wpisano" — więc ponowne WKLEJENIE/wpisanie
-    DOKŁADNIE TEGO SAMEGO celu (np. bo ktoś woli wkleić z notatnika
-    niż nacisnąć samo Enter) też liczyło się jako "nowy cel" i
-    wywoływało pytania o reset 9 sesji DeepSeek oraz wyczyszczenie
-    kolejki/wyników/checklisty — mimo że treść celu się NIE
-    zmieniła. Porównanie po normalizacji białych znaków odróżnia
-    faktycznie NOWY cel od zwykłego ponownego wklejenia tego samego
-    — tylko rzeczywista zmiana treści liczy się jako nowy cel.
-    """
-    if not typed:
-        return False
-    return (
-        _normalize_task_text(typed)
-        != _normalize_task_text(saved_goal)
-    )
-
-
 _PERMISSION_TEST_COMMAND_WORDS = {
     "uprawnienia", "uprawnienie", "permissions"
 }
@@ -15661,6 +15640,22 @@ def main():
 
     if not init_deepseek():
         sys.exit(1)
+
+    # ----------------------------------------------------------
+    # Sprzątanie/reset — PRZED załadowaniem sesji zespołu (v113),
+    # zamiast (jak wcześniej, v31-v112) automatycznie tylko wtedy,
+    # gdy wpisany cel różni się od zapisanego. Jedno jawne pytanie
+    # na starcie, niezależnie od tego, jaki cel zapadnie później —
+    # dzięki temu init_team() poniżej ładuje sesje dokładnie RAZ
+    # (świeże, jeśli zresetowano stan powyżej, wznowione w
+    # przeciwnym razie), zamiast wznawiać stare i ewentualnie zaraz
+    # potem kasować je i wznawiać drugi raz.
+    # ----------------------------------------------------------
+
+    maybe_clear_previous_session_data()
+    maybe_clear_generated_project_files()
+    maybe_clear_custom_tools()
+    maybe_restart_team_sessions_for_new_goal()
 
     init_team()
 
@@ -15807,9 +15802,6 @@ def main():
                     continue
 
                 goal = typed if typed else saved_goal
-                is_new_goal = _typed_goal_is_actually_new(
-                    typed, saved_goal
-                )
 
             else:
 
@@ -15828,7 +15820,6 @@ def main():
                     continue
 
                 goal = typed
-                is_new_goal = True
 
             break
 
@@ -15844,11 +15835,6 @@ def main():
         )
 
         return
-
-    if is_new_goal:
-        maybe_restart_team_sessions_for_new_goal()
-        maybe_clear_previous_session_data()
-        maybe_clear_generated_project_files()
 
     print()
 
