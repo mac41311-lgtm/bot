@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v114
+AEL-MINI AUTONOMOUS AGENT v115
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v114")
+    print("             AEL-MINI AUTONOMOUS AGENT v115")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1764,6 +1764,20 @@ warto sprawdzać za każdym razem:
   narzędzia Gemini — zablokuj i zażądaj rozbicia na osobny krok z
   bezpośrednim wywołaniem (android_screenshot / chrome_tabs /
   chrome_open / android_launch_app), nie przez shell/termux_run.
+- Mylenie WŁASNEGO procesu agenta z celem/osobą z CELU:
+  zaobserwowany realny przypadek — cel mówił o zadzwonieniu do
+  konkretnej osoby, `ps aux | grep -i <imię>` nic nie znalazło, a
+  zespół zaczął zamiast tego analizować `python3 agent.py` (czyli
+  WŁASNY, aktualnie działający proces tego agenta — ten sam PID,
+  który wykonuje ten cel) jako rzekomy "interfejs komunikacyjny"
+  osoby z celu, aż w końcu odczytał treść WŁASNEGO kodu źródłowego
+  (`/proc/<PID>/cwd/agent.py`) jako dowód. To jest ślepy zaułek —
+  proces agenta NIGDY nie jest osobą/kontaktem/aplikacją z CELU, to
+  Twój własny, uruchomiony program. Jeśli krok proponuje analizę
+  procesu, którego PID/argv/cwd odpowiada plikowi `agent.py` —
+  zablokuj i zażądaj innego podejścia do znalezienia właściwego
+  celu (kontakty telefonu, zainstalowane aplikacje, dokumentacja
+  narzędzia), nie dalszej analizy własnego procesu.
 
 Format:
 
@@ -5599,6 +5613,17 @@ def execute_shell(command, timeout=None):
 # CHROME
 # ============================================================
 
+# Zaobserwowany realny problem: gdy CDP raz się zepsuje w trakcie
+# celu (np. karta Chrome nawiguje gdzie indziej/proces pada),
+# chrome_summary() wywoływane RAZ NA KROK i tak zawsze próbuje
+# ensure_chrome_cdp_forward() od nowa z pełnymi 3 próbami x 1s
+# przerwy — kilka sekund straconych na każdym KOLEJNYM kroku, mimo
+# że wynik ("Brak dostępnych kart Chrome/CDP") jest z góry znany.
+# Licznik porażek z rzędu ogranicza liczbę prób po 2. porażce,
+# zamiast przestać próbować całkowicie — telefon może w
+# międzyczasie odzyskać CDP (np. użytkownik ręcznie otworzy kartę).
+_CDP_CONSECUTIVE_FAILURES = 0
+
 
 def ensure_chrome_cdp_forward(retries=3):
     """
@@ -5617,12 +5642,22 @@ def ensure_chrome_cdp_forward(retries=3):
     response") jest zwykle jednorazowym zacięciem, nie trwałą
     awarią. Dlatego cały blok forward+request jest powtarzany do
     `retries` razy z krótką przerwą, zamiast poddawać się od razu.
+
+    Po 2 porażkach Z RZĘDU liczba prób jest ograniczana do 1 (bez
+    utraty samej zdolności do wykrycia powrotu CDP) — patrz
+    _CDP_CONSECUTIVE_FAILURES powyżej.
     """
+
+    global _CDP_CONSECUTIVE_FAILURES
+
+    if _CDP_CONSECUTIVE_FAILURES >= 2:
+        retries = 1
 
     device = find_adb()
 
     if not device:
         log("CHROME", "ADB: brak urządzenia")
+        _CDP_CONSECUTIVE_FAILURES += 1
         return False
 
     log("CHROME", f"ADB device: {device}")
@@ -5690,6 +5725,8 @@ def ensure_chrome_cdp_forward(retries=3):
                 + str(info.get("Browser", "Chrome"))
             )
 
+            _CDP_CONSECUTIVE_FAILURES = 0
+
             return True
 
         except Exception as e:
@@ -5715,6 +5752,8 @@ def ensure_chrome_cdp_forward(retries=3):
         "CHROME",
         f"CDP AUTO ERROR (po {retries} próbach): {last_error}"
     )
+
+    _CDP_CONSECUTIVE_FAILURES += 1
 
     return False
 
