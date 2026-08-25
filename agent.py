@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v106
+AEL-MINI AUTONOMOUS AGENT v107
 
 ARCHITEKTURA:
 
@@ -891,7 +891,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v106")
+    print("             AEL-MINI AUTONOMOUS AGENT v107")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1179,6 +1179,10 @@ FAILED:
   "reason": "..."
 }
 
+UWAGA: SecurityException/"Permission Denial" NIE jest sam w sobie
+powodem do FAILED — patrz niżej sekcja o `adb shell pm grant`, samo
+uprawnienie zazwyczaj da się nadać bez użytkownika.
+
 Zwracaj tylko JSON.
 
 
@@ -1256,6 +1260,28 @@ skrypcie) do szukania nazwy pakietu PRZED android_launch_app.
   oknie Termuksa — konkretna komenda, nie puste okno jak
   termux_start_second_session; do procesów, które mają być
   widoczne osobno od głównego logu, np. serwer albo długi build)
+
+ZAOBSERWOWANY REALNY PRZYPADEK — SecurityException/"Permission
+Denial" (np. ACTION_CALL wymaga CALL_PHONE, termux-contact-list/
+content query wymaga READ_CONTACTS): MAIN zwrócił FAILED z
+uzasadnieniem "wymaga ręcznej interwencji użytkownika: nadania
+uprawnień". To NIEPRAWDA — agent ma już połączenie ADB do TEGO
+SAMEGO urządzenia (to samo, którego używają narzędzia android_*).
+To połączenie pozwala SAMEMU nadać dowolnej aplikacji (Termux,
+Termux:API) standardowe uprawnienie w tle, bez żadnego dialogu i
+bez użytkownika:
+
+  adb shell pm grant <nazwa.pakietu> android.permission.NAZWA
+
+np. `adb shell pm grant com.termux.api android.permission.READ_CONTACTS`
+albo `... android.permission.CALL_PHONE`. ZANIM zwrócisz FAILED z
+powodu SecurityException/"Permission Denial" DLA JAKIEJKOLWIEK
+aplikacji, zleć NAJPIERW zwykłym TASKiem (shell/termux_run) próbę
+nadania brakującego uprawnienia tą komendą, a dopiero potem
+ponowienie tej samej operacji. Dopiero jeśli samo `pm grant`
+zwróci błąd (uprawnienie nie istnieje / jest uprawnieniem
+specjalnym typu "signature", którego adb shell nie może nadać) —
+to jest faktyczna, nie do obejścia bariera i FAILED jest zasadny.
 
 CHROME:
 - chrome_tabs
