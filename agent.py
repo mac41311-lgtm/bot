@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v107
+AEL-MINI AUTONOMOUS AGENT v108
 
 ARCHITEKTURA:
 
@@ -891,7 +891,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v107")
+    print("             AEL-MINI AUTONOMOUS AGENT v108")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1282,6 +1282,24 @@ ponowienie tej samej operacji. Dopiero jeśli samo `pm grant`
 zwróci błąd (uprawnienie nie istnieje / jest uprawnieniem
 specjalnym typu "signature", którego adb shell nie może nadać) —
 to jest faktyczna, nie do obejścia bariera i FAILED jest zasadny.
+
+ZASTRZEŻENIE (zaobserwowane na realnym urządzeniu, ROM ColorOS/
+Realme): `pm grant` przez adb shell MOŻE zwrócić
+`java.lang.SecurityException: ... Neither user 2000 nor current
+process has android.permission.GRANT_RUNTIME_PERMISSIONS` — to
+NIE jest błąd konkretnego uprawnienia ani literówka w nazwie,
+tylko blokada na poziomie CAŁEGO urządzenia/ROM-u: adb shell na
+tym telefonie w ogóle nie ma prawa nadawać ŻADNYCH uprawnień
+(często wymaga osobnego przełącznika w Opcjach dewelopera, np.
+"Debugowanie USB (ustawienia zabezpieczeń)" na ColorOS, którego
+Gemini/DeepSeek NIE może sam włączyć). Jeśli zobaczysz DOKŁADNIE
+ten komunikat ("GRANT_RUNTIME_PERMISSIONS") — NIE próbuj `pm
+grant` ponownie dla INNYCH nazw uprawnień w tym samym celu, to
+tylko powtórzy tę samą porażkę. To jest właśnie ten rzadki,
+faktycznie nie do obejścia przypadek — zwróć FAILED z jasnym
+opisem, że wymaga to ręcznego przełącznika w Opcjach dewelopera
+lub ręcznego nadania uprawnienia w Ustawieniach > Aplikacje >
+(nazwa aplikacji) > Uprawnienia.
 
 CHROME:
 - chrome_tabs
