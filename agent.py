@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v100
+AEL-MINI AUTONOMOUS AGENT v101
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v100")
+    print("             AEL-MINI AUTONOMOUS AGENT v101")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3576,6 +3576,7 @@ _ANDROID_CLICK_TEXT_SYNONYMS = {
     "=": ["Równa się", "Oblicz", "Wynik"],
     "c": ["Wymaż", "Wyczyść", "Kasuj", "AC", "CE"],
     "ac": ["Wymaż", "Wyczyść", "Kasuj"],
+    "ce": ["Wymaż", "Wyczyść", "Kasuj", "AC"],
     "clear": ["Wymaż", "Wyczyść", "Kasuj"],
     "del": ["Backspace", "Usuń", "Wymaż"],
     "backspace": ["Usuń", "Wymaż"],
