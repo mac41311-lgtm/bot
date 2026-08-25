@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v98
+AEL-MINI AUTONOMOUS AGENT v99
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v98")
+    print("             AEL-MINI AUTONOMOUS AGENT v99")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6466,12 +6466,29 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "termux_write_file",
-            "description": "Zapisz plik bezpośrednio w Termuxie. Używaj do dużego kodu.",
+            "description": (
+                "Zapisz plik bezpośrednio w Termuxie. Używaj do dużego "
+                "kodu. UWAGA: domyślnie (append=false/pominięte) "
+                "NADPISUJE cały plik — jeśli plik już ma treść z "
+                "wcześniejszych kroków TEGO SAMEGO celu (np. wspólny "
+                "raport, do którego kolejne punkty dopisują dowody), "
+                "użyj append=true, żeby dopisać na koniec zamiast "
+                "skasować to, co już tam jest."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "content": {"type": "string"}
+                    "content": {"type": "string"},
+                    "append": {
+                        "type": "boolean",
+                        "description": (
+                            "true = dopisz na koniec pliku, nie "
+                            "ruszając istniejącej treści. false/"
+                            "pominięte = nadpisz cały plik (domyślne, "
+                            "jak dotychczas)."
+                        )
+                    }
                 },
                 "required": ["path", "content"]
             }
@@ -7357,7 +7374,23 @@ def termux_ls(path="."):
         }
 
 
-def termux_write_file(path, content):
+def termux_write_file(path, content, append=False):
+    """
+    append (opcjonalny, domyślnie False — zachowuje dotychczasowe
+    zachowanie): False = nadpisz cały plik (jak zawsze); True =
+    dopisz na koniec, nie ruszając istniejącej treści.
+
+    Zaobserwowany realny problem (log 2026-08-25): cel wymagał
+    zapisywania dowodów DLA KOLEJNYCH punktów do TEGO SAMEGO pliku w
+    osobnych krokach. Jeden z kroków wywołał termux_write_file bez
+    żadnej opcji dopisywania (bo jej po prostu nie było) — nadpisał
+    plik nową, krótką treścią, kasując po cichu dowód poprzedniego
+    punktu zapisany kilka kroków wcześniej. PLANNER zauważył to
+    dopiero w NASTĘPNYM kroku i musiał odtwarzać utracone dane —
+    to nie był błąd DeepSeeka, tylko brak narzędzia w Pythonie,
+    które w ogóle umożliwiałoby bezpieczne dopisywanie.
+    """
+
     try:
         p = Path(str(path)).expanduser()
 
@@ -7370,20 +7403,58 @@ def termux_write_file(path, content):
             content if content is not None else ""
         )
 
-        p.write_text(
-            data,
-            encoding="utf-8"
-        )
+        previous_size = None
+
+        if p.exists():
+            try:
+                previous_size = p.stat().st_size
+            except Exception:
+                previous_size = None
+
+        if append and p.exists():
+
+            with p.open("a", encoding="utf-8") as f:
+                f.write(data)
+
+            new_size = p.stat().st_size
+
+        else:
+
+            p.write_text(
+                data,
+                encoding="utf-8"
+            )
+
+            new_size = len(data.encode("utf-8"))
 
         _track_project_path(p)
 
         result = {
             "ok": True,
             "path": str(p),
-            "bytes": len(
-                data.encode("utf-8")
-            )
+            "bytes": new_size
         }
+
+        # Sygnał ostrzegawczy zamiast cichej utraty danych: nadpisanie
+        # (nie dopisanie) pliku, który miał już niebagatelną zawartość,
+        # nowszą treścią WYRAŹNIE mniejszą niż poprzednia, to mocny
+        # sygnał przypadkowego skasowania wcześniejszego dowodu, a nie
+        # celowej podmiany — MAIN/PLANNER dowiadują się o tym OD RAZU
+        # w tym samym kroku, nie kilka kroków później przez detektywistykę.
+        if (
+            not append
+            and previous_size is not None
+            and previous_size > 200
+            and new_size < previous_size * 0.5
+        ):
+            result["warning"] = (
+                "UWAGA: ten zapis NADPISAŁ istniejący plik (miał "
+                + str(previous_size) + " B, teraz ma " + str(new_size)
+                + " B) — jeśli zawierał dowody z wcześniejszych kroków "
+                "tego samego celu, mogły zostać właśnie SKASOWANE. "
+                "Jeśli chodziło o DOPISANIE, użyj append=true zamiast "
+                "nadpisywania całego pliku."
+            )
 
         # Niespójność naprawiona: termux_patch_file od dawna
         # sprawdza py_compile po każdej edycji .py i zwraca
@@ -8654,7 +8725,8 @@ def _dispatch_tool_inner(
         if name == "termux_write_file":
             return termux_write_file(
                 args.get("path"),
-                args.get("content", "")
+                args.get("content", ""),
+                bool(args.get("append", False))
             )
 
         if name == "termux_read_file":
