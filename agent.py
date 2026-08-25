@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v99
+AEL-MINI AUTONOMOUS AGENT v100
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v99")
+    print("             AEL-MINI AUTONOMOUS AGENT v100")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10551,12 +10551,34 @@ def _success_condition_already_satisfied_message(task_text, success_condition):
     powtorzenia w przyszlosci) i zwraca gotowy komunikat zamiast
     None. Zwraca None, gdy trzeba faktycznie cos wykonac (brak
     wymienionych plikow, albo ktorys jeszcze nie istnieje/jest pusty).
+
+    Zaobserwowany realny problem (log 2026-08-25, "uniwersalny2",
+    KROK 7-10): cel budował JEDEN wspólny plik (test_uniwersalny2.txt)
+    przez WIELE różnych punktów (1, 6, 7, i próbę 4). Skoro punkty
+    1/6/7 już go zapisały, plik istniał i był niepusty — więc TA
+    funkcja krótko spinała KAŻDY kolejny TASK wspominający ten sam
+    plik jako "już spełniony", W TYM punkt 4 (użycie narzędzia
+    potęgowania), który w ogóle jeszcze nie był zrobiony. Sama
+    obecność pliku nic nie mówi o tym, czy zawiera TREŚĆ potrzebną
+    akurat TEMU zadaniu — a ta funkcja tego nie ocenia (nie ma jak,
+    bez kolejnego modelu). Efekt: zespół nie mógł w ogóle zlecić
+    Gemini uzupełnienia punktu 4, bo Python sam, z góry, uznawał to
+    za zbędne — 4 kroki zmarnowane na obchodzenie własnej blokady.
+    Naprawione: jeśli ten sam plik jest już wymieniony w INNYM
+    (o innej treści task) zweryfikowanym punkcie checklisty — czyli
+    to potwierdzony, współdzielony/rosnący plik — nie stosujemy tego
+    skrótu; TASK ma faktycznie się wykonać i zostać zweryfikowany
+    normalnie po fakcie, nie z góry odrzucony na podstawie samej
+    obecności pliku.
     """
 
     files = _extract_goal_mentioned_files(success_condition)
 
     if not files:
         return None
+
+    normalized_task = _normalize_task_text(task_text)
+    checklist_items = _load_progress_checklist()
 
     evidence_parts = []
 
@@ -10567,6 +10589,23 @@ def _success_condition_already_satisfied_message(task_text, success_condition):
             return None
         if not (p.exists() and p.stat().st_size > 0):
             return None
+
+        for item in checklist_items:
+
+            if item.get("status") != "ZWERYFIKOWANY":
+                continue
+
+            if _normalize_task_text(item.get("task", "")) == normalized_task:
+                continue
+
+            if rel_path in _extract_goal_mentioned_files(
+                item.get("success_condition", "")
+            ):
+                # Plik współdzielony przez inny, już zweryfikowany
+                # (ale INNY) punkt — sama jego obecność nie dowodzi
+                # niczego o TYM zadaniu. Niech się faktycznie wykona.
+                return None
+
         evidence_parts.append(
             rel_path + " (" + str(p.stat().st_size) + " B)"
         )
