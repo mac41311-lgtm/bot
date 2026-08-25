@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v113
+AEL-MINI AUTONOMOUS AGENT v114
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v113")
+    print("             AEL-MINI AUTONOMOUS AGENT v114")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11448,6 +11448,38 @@ def _looks_like_shell_script(code, target_path):
     return bool(_SHELL_SCRIPT_MARKERS.search(code or ""))
 
 
+_PYTHON_SCRIPT_MARKERS = re.compile(
+    r"^\s*import\s+\S+\s*$|^\s*from\s+\S+\s+import\b|^\s*def\s+\w+\s*\(",
+    re.MULTILINE
+)
+
+
+def _looks_like_python_script(code, target_path):
+    """
+    Lustrzane odbicie _looks_like_shell_script(): wykrywa, czy blok
+    kodu wygląda jak PYTHON, a docelowa ścieżka to .sh — czyli
+    zostanie zapisany 1:1, a potem uruchomiony przez `bash`, co dla
+    prawdziwego kodu Pythona kończy się wyłącznie błędami składni.
+
+    Zaobserwowany realny przypadek: ENGINEER podał kod zaczynający
+    się od `import android` / `droid = android.Android()` (styl
+    Android Scripting Layer), write_engineer_code_to zapisało to
+    1:1 do check_voice_call_output.sh, a TASK uruchomił je przez
+    `bash ~/check_voice_call_output.sh` — "import: command not
+    found" na każdej linii z importem, "syntax error" na pierwszym
+    wywołaniu funkcji ze składnią Pythona. Cały krok (konsultacja
+    zespołu + TASK) poszedł na marne, mimo że niezgodność była
+    wykrywalna od razu, samą treścią bloku kodu.
+    """
+
+    suffix = Path(str(target_path)).suffix.lower()
+
+    if suffix != ".sh":
+        return False
+
+    return bool(_PYTHON_SCRIPT_MARKERS.search(code or ""))
+
+
 def apply_patch_from_fixer_text(fixer_text):
     """
     Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
@@ -14539,6 +14571,44 @@ Zwróć tylko JSON.
                             "poproś ENGINEER o czysty "
                             "kod pliku, bez komend powłoki wokół "
                             "niego."
+                        )
+                    }
+
+                    continue
+
+                # --------------------------------------------------
+                # BEZPIECZEŃSTWO: lustrzane odbicie powyższego —
+                # blok kodu wygląda jak PYTHON, a cel to .sh, więc
+                # zostanie uruchomiony przez `bash` i posypie się
+                # samymi błędami składni ("import: command not
+                # found" itp.). Zaobserwowane naprawdę.
+                # --------------------------------------------------
+
+                if _looks_like_python_script(
+                    engineer_code,
+                    target_path
+                ):
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_LOOKS_LIKE_PYTHON_SCRIPT",
+                        "message": (
+                            "write_engineer_code_to ODRZUCONE: "
+                            "blok kodu od ENGINEER "
+                            "wygląda jak PYTHON (zawiera "
+                            "'import ...'/'from ... import'/"
+                            "'def ...(' itp.), a docelowa ścieżka "
+                            "to " + str(target_path) + " (.sh). "
+                            "Uruchomienie tego przez `bash` zwróci "
+                            "wyłącznie błędy składni ('import: "
+                            "command not found' i podobne), nie "
+                            "prawdziwy wynik. Jeżeli kod ma być "
+                            "Pythonem — zmień docelową ścieżkę na "
+                            ".py i każ Gemini uruchomić go przez "
+                            "`python3 plik.py`, nie `bash plik.py`. "
+                            "Jeżeli to miał być czysty Bash — "
+                            "poproś ENGINEER o kod bez składni "
+                            "Pythona."
                         )
                     }
 
