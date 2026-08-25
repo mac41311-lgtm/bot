@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v110
+AEL-MINI AUTONOMOUS AGENT v111
 
 ARCHITEKTURA:
 
@@ -743,7 +743,6 @@ def write_json(path, value):
 # — własny katalog agenta (klucze API, kod, kolejka) i typowe
 # ukryte pliki konfiguracyjne Termuksa.
 _PROJECT_TRACKING_EXCLUDED_NAMES = {
-    AGENT_DIR.name,
     TOKEN_FILE.name,
     TOKEN_FILE_2.name,
     ".termux",
@@ -754,10 +753,46 @@ _PROJECT_TRACKING_EXCLUDED_NAMES = {
     ".shortcuts",
 }
 
+# Zaobserwowany realny problem: $HOME/agent (AGENT_DIR) to JEDNOCZEŚNIE
+# katalog programu agenta (agent.py, state/, queue/, results/,
+# custom_tools/, current_goal.txt — nigdy nie do usunięcia) I
+# sankcjonowana lokalizacja dla plików-DOWODÓW wygenerowanych PRZEZ CEL
+# (patrz verify_final() — AGENT_DIR / "FINAL_OK.txt" to jedna z 3
+# akceptowanych ścieżek). Wcześniej CAŁY katalog "agent" był wykluczony
+# z śledzenia jednym wpisem w _PROJECT_TRACKING_EXCLUDED_NAMES — więc
+# pliki takie jak ~/agent/FINAL_OK.txt czy ~/agent/rozmowa_z_beata.txt
+# NIGDY nie trafiały do PROJECT_DIRS_FILE i przetrwały KAŻDE 'wyczysc'
+# bezterminowo, zaśmiecając kolejne, niepowiązane cele (dokładnie
+# przypadek z loga: "FINAL_OK.txt był pozostałością po niepowiązanym
+# zadaniu" — plik istniał od dawna, bo cleanup nigdy go nie widział).
+# Naprawa: wewnątrz AGENT_DIR patrzymy o JEDEN poziom głębiej — chronimy
+# tylko KONKRETNE, znane pliki/katalogi programu, a wszystko inne (np.
+# luźne pliki-dowody zapisane bezpośrednio w ~/agent/) faktycznie
+# śledzimy do sprzątnięcia.
+_AGENT_DIR_PROTECTED_SECOND_LEVEL_NAMES = {
+    STATE_DIR.name,
+    QUEUE_DIR.name,
+    RESULTS_DIR.name,
+    MEMORY_DIR.name,
+    CUSTOM_TOOLS_DIR.name,
+    APK_OUTPUT_DIR.name,
+    GEMINI_KEYS_DIR.name,
+    GEMINI_KEY_FILE.name,
+    LAST_RESULT_FILE.name,
+    EVENTS_LOG_FILE.name,
+    GOAL_FILE.name,
+    ADB_CONNECT_FILE.name,
+    PROJECT_DIRS_FILE.name,
+    PROGRESS_CHECKLIST_FILE.name,
+    "screenshots",
+}
+
 
 def _track_project_path(path):
     """
-    Zapisuje top-level katalog/plik pod $HOME, w którym Gemini
+    Zapisuje top-level katalog/plik pod $HOME (albo, dla ścieżek
+    wewnątrz $HOME/agent, plik/katalog jeden poziom głębiej — patrz
+    _AGENT_DIR_PROTECTED_SECOND_LEVEL_NAMES powyżej), w którym Gemini
     właśnie coś zapisał, do PROJECT_DIRS_FILE — jedyny sposób,
     żeby przy kolejnym NOWYM celu wiedzieć, co właściwie zostało
     wygenerowane w POPRZEDNIEJ sesji (nazwa katalogu projektu jest
@@ -793,7 +828,34 @@ def _track_project_path(path):
         if top_level_name.startswith("."):
             return
 
-        top_level_path = str(home / top_level_name)
+        if top_level_name == AGENT_DIR.name:
+
+            if len(relative.parts) < 2:
+                # Sam katalog "agent" (nie powinno się zdarzyć w
+                # praktyce) — nic konkretnego do śledzenia.
+                return
+
+            second_level_name = relative.parts[1]
+
+            if (
+                second_level_name
+                in _AGENT_DIR_PROTECTED_SECOND_LEVEL_NAMES
+            ):
+                return
+
+            if second_level_name.startswith("."):
+                return
+
+            if second_level_name.startswith("agent.py"):
+                # Sam skrypt agenta i jego kopie zapasowe
+                # (agent.py.bak_YYYYMMDD_HHMMSS z CODE_FIXERA).
+                return
+
+            top_level_path = str(AGENT_DIR / second_level_name)
+
+        else:
+
+            top_level_path = str(home / top_level_name)
 
         tracked = read_json(PROJECT_DIRS_FILE, [])
 
@@ -891,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v110")
+    print("             AEL-MINI AUTONOMOUS AGENT v111")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
