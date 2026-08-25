@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v108
+AEL-MINI AUTONOMOUS AGENT v109
 
 ARCHITEKTURA:
 
@@ -891,7 +891,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v108")
+    print("             AEL-MINI AUTONOMOUS AGENT v109")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15424,6 +15424,99 @@ def _typed_goal_is_actually_new(typed, saved_goal):
     )
 
 
+_PERMISSION_TEST_COMMAND_WORDS = {
+    "uprawnienia", "uprawnienie", "permissions"
+}
+
+
+def _run_permission_bootstrap():
+    """
+    Na żądanie użytkownika (komenda 'uprawnienia' na prompcie CELU)
+    odpala po kolei serię PRAWDZIWYCH komend termux-api, żeby
+    wywołać naturalne okienka Androida "Zezwól/Odmów" dla
+    WSZYSTKICH uprawnień, których agent może potrzebować w trakcie
+    działania — zamiast trafiać na nie pojedynczo, w środku
+    autonomicznej sesji, kiedy nikt nie stoi przy telefonie, żeby
+    kliknąć.
+
+    Zaobserwowany realny przypadek: użytkownik ręcznie odkrywał to
+    krok po kroku w rozmowie z asystentem (kontakty, potem osobno
+    bateria/DuraSpeed/Autostart w Ustawieniach systemu, potem
+    lokalizacja/aparat/mikrofon/powiadomienia) — ta funkcja robi
+    komplet jedną komendą.
+
+    CELOWO NIE testuje termux-telephony-call — to naprawdę
+    zadzwoniłoby do kogoś. To uprawnienie (CALL_PHONE) i tak
+    zapyta samo przy pierwszej prawdziwej próbie połączenia
+    zrobionej przez agenta w trakcie realizacji celu.
+    """
+
+    print()
+    print(
+        "Uruchamiam po kolei prawdziwe komendy termux-api, żeby "
+        "wywołać okienka Androida z prośbą o zgodę — dla KAŻDEGO "
+        "pojawiającego się okienka wybierz 'Zezwól'/'Allow' na "
+        "telefonie. NIE testuję termux-telephony-call (to naprawdę "
+        "dzwoni) — to uprawnienie zapyta samo przy pierwszej "
+        "prawdziwej próbie połączenia w trakcie celu."
+    )
+    print()
+
+    photo_path = str(HOME / ".agent_perm_test_photo.jpg")
+    audio_path = str(HOME / ".agent_perm_test_audio.wav")
+
+    checks = (
+        ("termux-battery-status", "bateria (kontrolne — nie wymaga zgody)"),
+        ("termux-location -p network -r once", "lokalizacja"),
+        ("termux-camera-photo -c 0 " + photo_path, "aparat"),
+        (
+            "termux-microphone-record -f " + audio_path + " -l 2",
+            "mikrofon"
+        ),
+        ("termux-call-log -l 1", "historia połączeń"),
+        ("termux-contact-list", "kontakty"),
+        (
+            "termux-telephony-deviceinfo",
+            "telefonia/sieć (BEZ dzwonienia)"
+        ),
+        (
+            "termux-notification -t 'Test agenta' "
+            "-c 'To tylko test uprawnien.'",
+            "powiadomienia"
+        ),
+    )
+
+    for command, label in checks:
+
+        print("-> " + label + " (" + command.split()[0] + ")")
+
+        result = execute_shell(command, timeout=15)
+
+        if result.get("ok"):
+            print("   OK")
+        else:
+            print(
+                "   Błąd/timeout — jeśli okienko o zgodę się "
+                "pojawiło i kliknąłeś 'Zezwól', uruchom całą "
+                "komendę 'uprawnienia' jeszcze raz."
+            )
+
+    for cleanup_path in (photo_path, audio_path):
+        try:
+            Path(cleanup_path).unlink()
+        except Exception:
+            pass
+
+    print()
+    print(
+        "Test uprawnień zakończony. Jeśli któreś okienko się nie "
+        "pojawiło mimo błędu — sprawdź ręcznie w Ustawieniach > "
+        "Aplikacje > Termux:API > Uprawnienia (a baterię/Autostart/"
+        "DuraSpeed w systemowych ustawieniach baterii)."
+    )
+    print()
+
+
 def main():
 
     banner()
@@ -15578,7 +15671,9 @@ def main():
                     "Enter = wznów ten cel. Albo wpisz nowy cel, "
                     "żeby go zastąpić. Albo wpisz 'wyczysc', żeby "
                     "posprzątać wygenerowane pliki bez podawania "
-                    "celu."
+                    "celu. Albo wpisz 'uprawnienia', żeby przetestować/"
+                    "aktywować uprawnienia Termux:API (aparat, "
+                    "mikrofon, lokalizacja, kontakty, powiadomienia)."
                 )
                 print()
 
@@ -15590,6 +15685,10 @@ def main():
                     _run_on_demand_cleanup()
                     continue
 
+                if typed.lower() in _PERMISSION_TEST_COMMAND_WORDS:
+                    _run_permission_bootstrap()
+                    continue
+
                 goal = typed if typed else saved_goal
                 is_new_goal = _typed_goal_is_actually_new(
                     typed, saved_goal
@@ -15599,11 +15698,16 @@ def main():
 
                 typed = _read_full_input(
                     "Podaj CEL AGENTA (albo 'wyczysc' żeby "
-                    "posprzątać) > "
+                    "posprzątać, albo 'uprawnienia' żeby przetestować "
+                    "uprawnienia Termux:API) > "
                 ).strip()
 
                 if typed.lower() in _CLEAN_COMMAND_WORDS:
                     _run_on_demand_cleanup()
+                    continue
+
+                if typed.lower() in _PERMISSION_TEST_COMMAND_WORDS:
+                    _run_permission_bootstrap()
                     continue
 
                 goal = typed
