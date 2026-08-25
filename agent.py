@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v105
+AEL-MINI AUTONOMOUS AGENT v106
 
 ARCHITEKTURA:
 
@@ -569,6 +569,14 @@ FORBIDDEN_TASK_PATTERNS = (
 # Komendy pasujące do tych fraz są z góry uznawane za
 # długotrwałe i automatycznie idą w tło (termux_run_background)
 # zamiast czekać na COMMAND_TIMEOUT.
+#
+# Zaobserwowany realny przypadek: brakowało "pkg install" (mimo że
+# "apt install" już tu było) — a to WŁAŚNIE "pkg" jest natywnym,
+# najczęściej używanym w Termuxie poleceniem instalacji pakietów
+# (apt jest pod spodem, ale ENGINEER prawie zawsze pisze "pkg
+# install"). Efekt: "pkg install ..." leciało SYNCHRONICZNIE i
+# ginęło na COMMAND_TIMEOUT (returncode 124) w trakcie testowania
+# mirrorów Termuksa, zamiast automatycznie przejść w tło.
 LONG_RUNNING_HINTS = (
     "gradle",
     "gradlew",
@@ -584,6 +592,9 @@ LONG_RUNNING_HINTS = (
     "apt-get install",
     "apt-get upgrade",
     "apt update",
+    "pkg install",
+    "pkg upgrade",
+    "pkg update",
     "git clone",
     "curl -o",
     "curl -O",
@@ -880,7 +891,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v105")
+    print("             AEL-MINI AUTONOMOUS AGENT v106")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
