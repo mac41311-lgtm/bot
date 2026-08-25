@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v104
+AEL-MINI AUTONOMOUS AGENT v105
 
 ARCHITEKTURA:
 
@@ -438,6 +438,17 @@ REPEAT_LIMIT = 3
 # (dotyczy konkretnego wywołania, nie tylko podobnej treści TASK-u).
 TOOL_REPEAT_LIMIT = 2
 
+# Po ilu porażkach Z RZĘDU TEGO SAMEGO narzędzia — ale za KAŻDYM
+# razem z INNYMI argumentami (dlatego TOOL_REPEAT_LIMIT/CODE_REVIEWER
+# nigdy się nie uruchamia — sygnatura (tool, arguments) jest za
+# każdym razem inna) — podpowiadamy PLANNEROWI/ENGINEEROWI, żeby
+# rozważyli napisanie realnego narzędzia w custom_tools/ zamiast
+# kolejnej pojedynczej komendy powłoki. Zaobserwowany realny
+# przypadek: kolejne, coraz to inne warianty `grep`/`strings` na
+# tym samym pliku kontaktów, żadne nie identyczne, więc licznik
+# (tool, arguments) zawsze zaczynał liczyć od nowa.
+GENERIC_TOOL_FAILURE_STREAK_LIMIT = 3
+
 # ============================================================
 # NOWE ŚCIEŻKI / PLIKI (naprawa + weryfikacja)
 # ============================================================
@@ -449,6 +460,11 @@ EVENTS_LOG_FILE = AGENT_DIR / "agent_events.jsonl"
 # Trwały licznik powtarzających się porażek tego samego
 # (narzędzie, argumenty) — przeżywa restart agenta.
 TOOL_ATTEMPTS_FILE = STATE_DIR / "tool_attempts.json"
+
+# Trwały licznik porażek Z RZĘDU TEGO SAMEGO narzędzia,
+# NIEZALEŻNIE od dokładnych argumentów (patrz
+# GENERIC_TOOL_FAILURE_STREAK_LIMIT powyżej).
+TOOL_FAILURE_STREAK_FILE = STATE_DIR / "tool_failure_streak.json"
 
 # Zapamiętany, niedokończony cel — pozwala wznowić sesję po
 # Ctrl+C zamiast zaczynać rozmowę od zera.
@@ -864,7 +880,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v104")
+    print("             AEL-MINI AUTONOMOUS AGENT v105")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10996,6 +11012,12 @@ def run_next_task():
 
         result["attempt_count"] = attempt_count
 
+        generic_streak = record_generic_tool_failure_streak(
+            result.get("tool")
+        )
+
+        result["generic_failure_streak"] = generic_streak
+
         if attempt_count >= TOOL_REPEAT_LIMIT:
 
             log(
@@ -11040,9 +11062,27 @@ def run_next_task():
                 "konsultuje CODE_REVIEWERA."
             )
 
+            if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
+
+                result["hint"] += (
+                    " DODATKOWO: narzędzie '" + str(result.get("tool"))
+                    + "' zawiodło już " + str(generic_streak) + "x z "
+                    "rzędu w tym celu — za każdym razem z INNYMI "
+                    "argumentami (dlatego to NIE jest jeszcze "
+                    "automatyczna eskalacja do CODE_REVIEWERA powyżej). "
+                    "Jeśli to zadanie wymaga faktycznej logiki "
+                    "(parsowanie, dopasowywanie danych, obsługa "
+                    "wariantów), rozważ napisanie NARZĘDZIA w "
+                    "custom_tools/ zamiast kolejnej pojedynczej "
+                    "komendy powłoki — patrz kontrakt custom_tools w "
+                    "promptcie ENGINEER."
+                )
+
     elif result.get("ok"):
 
         task["status"] = "EXECUTED"
+
+        reset_generic_tool_failure_streak()
 
     elif (
         result.get("status")
@@ -13104,6 +13144,38 @@ def reset_tool_attempts(tool, arguments):
 
     except Exception:
         pass
+
+
+def record_generic_tool_failure_streak(tool):
+    """
+    Zlicza porażki Z RZĘDU TEGO SAMEGO narzędzia, niezależnie od
+    dokładnych argumentów — w odróżnieniu od record_tool_attempt()
+    (który wymaga IDENTYCZNYCH argumentów, więc nigdy nie złapie
+    zespołu próbującego kolejnych, coraz to innych wariantów tej
+    samej w gruncie rzeczy czynności, np. `grep`/`strings` z innym
+    wzorcem za każdym razem na tym samym pliku).
+    """
+
+    data = read_json(TOOL_FAILURE_STREAK_FILE, {})
+
+    if data.get("tool") == tool:
+        streak = data.get("streak", 0) + 1
+    else:
+        streak = 1
+
+    write_json(TOOL_FAILURE_STREAK_FILE, {"tool": tool, "streak": streak})
+
+    return streak
+
+
+def reset_generic_tool_failure_streak():
+    """
+    Zeruje serię porażek z rzędu — wywoływane po KAŻDYM udanym
+    zakończeniu TASK-u (dowolnym narzędziem), bo seria dotyczy
+    kolejnych, nieprzerwanych porażek, nie porażek w ogóle.
+    """
+
+    write_json(TOOL_FAILURE_STREAK_FILE, {"tool": None, "streak": 0})
 
 
 # ============================================================
