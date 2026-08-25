@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v116
+AEL-MINI AUTONOMOUS AGENT v117
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v116")
+    print("             AEL-MINI AUTONOMOUS AGENT v117")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -997,6 +997,7 @@ _ROLE_ACCOUNT = {
     "CRITIC": 1,
     "RESEARCHER": 1,
     "PROGRESS_ESTIMATOR": 1,
+    "WOJTEK": 1,
 
     "PLANNER": 2,
     "ENGINEER": 2,
@@ -2199,6 +2200,40 @@ Zwróć WYŁĄCZNIE JSON, bez żadnego dodatkowego tekstu:
 """
 
 
+WOJTEK_PROMPT = """
+Nazywasz się Wojtek. Jesteś pomysłowym, doświadczonym człowiekiem,
+do którego ktoś przychodzi z zadaniem do rozwiązania — tak, jakbyś
+odpowiadał znajomemu, który prosi Cię o radę.
+
+Nie znasz żadnych szczegółów technicznych środowiska, w którym to
+zadanie ostatecznie zostanie wykonane — i to jest w porządku, bo
+Twoja rola to WYŁĄCZNIE swobodne myślenie, nie wykonanie. Ktoś inny
+później przełoży Twoje pomysły na konkretne działania.
+
+Dostajesz TYLKO opis celu — bez żadnego kontekstu narzędziowego,
+logów błędów czy stanu technicznego. Na tej podstawie, jak człowiek
+zastanawiający się nad problemem, zaproponuj:
+
+- czy istnieje gotowe rozwiązanie (aplikacja, usługa, strona,
+  biblioteka), które załatwia sprawę bez robienia czegokolwiek od
+  zera — jeśli tak, wymień je z nazwy;
+- ogólne podejścia/strategie do rozwiązania problemu, o których
+  ktoś skupiony na szczegółach technicznych mógłby nie pomyśleć;
+- pytania, które warto sobie zadać, żeby lepiej zrozumieć, o co
+  naprawdę chodzi w zadaniu;
+- alternatywne interpretacje celu, jeśli jest niejednoznaczny.
+
+NIE pisz kodu, poleceń, skryptów ani komend terminala — to nie Twoja
+rola i nie masz z tym żadnej styczności. Myśl jak człowiek, który zna
+świat aplikacji i technologii z użytkowej strony, a nie jak
+programista czy administrator systemu.
+
+Odpowiadaj krótko i konkretnie, po polsku, zwykłym tekstem — bez
+formatowania JSON, bez sztywnych sekcji. Kilka zdań lub kilka
+punktów wystarczy.
+"""
+
+
 # ============================================================
 # SESJE DEEPSEEK
 # ============================================================
@@ -2498,6 +2533,11 @@ def init_team():
     start_session(
         "PROGRESS_ESTIMATOR",
         PROGRESS_ESTIMATOR_PROMPT
+    )
+
+    start_session(
+        "WOJTEK",
+        WOJTEK_PROMPT
     )
 
     log(
@@ -2963,6 +3003,8 @@ def deepseek(name, message):
                     ENGINEER_PROMPT,
                 "PROGRESS_ESTIMATOR":
                     PROGRESS_ESTIMATOR_PROMPT,
+                "WOJTEK":
+                    WOJTEK_PROMPT,
             }
 
             prompt = prompt_map.get(name)
@@ -3195,6 +3237,8 @@ def deepseek(name, message):
                             ENGINEER_PROMPT,
                         "PROGRESS_ESTIMATOR":
                             PROGRESS_ESTIMATOR_PROMPT,
+                        "WOJTEK":
+                            WOJTEK_PROMPT,
                     }
 
                     prompt = prompt_map.get(name)
@@ -12691,6 +12735,53 @@ OSTATNI RAPORT:
         and (step % 3 == 1)
     )
 
+    # WOJTEK to jedyna rola, która NIE dostaje core_context (bez
+    # STAN FAKTYCZNY/checklisty/tool_hint/szczegółów technicznych)
+    # — użytkownik chciał kogoś, kto myśli o CELU jak zwykły
+    # człowiek, bez wiedzy o Termuxie/Androidzie/Chrome/narzędziach,
+    # więc dostaje WYŁĄCZNIE sam opis celu. Pytany tak samo rzadko
+    # jak RESEARCHER (oszczędzanie limitu/sesji) — to rola
+    # dodatkowa/inspiracyjna, nie krytyczna dla decyzji MAIN.
+    consult_wojtek = (
+        (step % 3 == 1)
+        or fresh_tool_error
+    )
+
+    if consult_wojtek:
+
+        wojtek_context = (
+            "Oto zadanie, nad którym ktoś aktualnie pracuje:\n\n"
+            + goal
+            + "\n\nPodziel się swoimi pomysłami."
+        )
+
+        results["WOJTEK"] = deepseek(
+            "WOJTEK",
+            wojtek_context
+        )
+
+        _role_response_cache["WOJTEK"] = results["WOJTEK"]
+
+    else:
+
+        log(
+            "DEEPSEEK",
+            "WOJTEK pominięty w tym kroku "
+            "(oszczędzanie limitu/sesji) — "
+            "użyta ostatnia znana odpowiedź."
+        )
+
+        results["WOJTEK"] = (
+            "[NIEAKTUALNE — WOJTEK nie był pytany w tym kroku, "
+            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            + _role_response_cache.get(
+                "WOJTEK",
+                "(WOJTEK nie był jeszcze konsultowany.)"
+            )
+        )
+
+    wojtek_out = short(results.get("WOJTEK", ""), 1500)
+
     # RESEARCHER PRZED PLANNEREM — żeby świeże ustalenia (gdy w
     # ogóle konsultowane w tym kroku) mogły od razu wpłynąć na plan
     # z TEGO SAMEGO kroku, zamiast czekać na następny.
@@ -12735,7 +12826,10 @@ OSTATNI RAPORT:
             "PLANNER",
             include_chrome=goal_needs_chrome,
             include_android=goal_needs_android,
-            extra="\nINFO RESEARCHER:\n" + researcher_out
+            extra=(
+                "\nINFO RESEARCHER:\n" + researcher_out
+                + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+            )
         )
     )
 
@@ -12776,6 +12870,7 @@ OSTATNI RAPORT:
             extra=(
                 "\nPLAN PLANNERA:\n" + planner_out
                 + "\nINFO RESEARCHER:\n" + researcher_out
+                + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
             )
         )
     )
@@ -12800,6 +12895,7 @@ OSTATNI RAPORT:
         "engineer_full": results.get("ENGINEER", ""),
         "critic":    short(results.get("CRITIC", ""), 4000),
         "browser":   short(results.get("BROWSER", ""), 2000),
+        "wojtek":    short(results.get("WOJTEK", ""), 1500),
     }
 
 
