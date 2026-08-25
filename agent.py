@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v103
+AEL-MINI AUTONOMOUS AGENT v104
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v103")
+    print("             AEL-MINI AUTONOMOUS AGENT v104")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11202,6 +11202,15 @@ def extract_code_block(text):
 
     Ignoruje opcjonalny znacznik języka po otwierających ``` (np.
     ```python, ```java).
+
+    Zaobserwowany realny przypadek: DeepSeek czasem zostawia
+    pojedynczą spację/tabulator zaraz po otwierającym ``` i
+    znaczniku języka, zanim zacznie się właściwy kod (np.
+    "```python\n try:\n"). Zapisane 1:1 do pliku, to psuje
+    wcięcie pierwszej linii (IndentationError: unexpected
+    indent) — dlatego wiodące spacje/taby PRZED pierwszym
+    faktycznym znakiem kodu są tu usuwane. Nie dotyka to wcięć
+    W ŚRODKU kodu (tylko sam początek bloku).
     """
 
     match = re.search(
@@ -11213,7 +11222,7 @@ def extract_code_block(text):
     if not match:
         return None
 
-    code = match.group(1).rstrip("\n")
+    code = match.group(1).lstrip(" \t").rstrip("\n")
 
     return code if code.strip() else None
 
