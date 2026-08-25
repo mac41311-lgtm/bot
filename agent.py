@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v101
+AEL-MINI AUTONOMOUS AGENT v102
 
 ARCHITEKTURA:
 
@@ -864,7 +864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v101")
+    print("             AEL-MINI AUTONOMOUS AGENT v102")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1515,6 +1515,21 @@ libgdx, cocos2d-x do gier; odpowiednie biblioteki Pythona, Javy czy
 Node do innych zadań), błędy budowania (Android SDK/Gradle w
 Termux, ale też pip/npm/kompilacja gdzie indziej) oraz komendy
 apt/pip/npm/gradle działające bez roota w Termux.
+
+NIE szukaj w internecie tego, JAK UŻYWAĆ WŁASNYCH NARZĘDZI tego
+agenta (android_click, android_tap, chrome_tabs, termux_* itd.) —
+to nie jest wiedza dostępna w internecie, tylko kwestia narzędzi,
+które już masz opisane w Twoim własnym prompcie systemowym. Nikt w
+sieci nie widział TEGO konkretnego ekranu, TEJ konkretnej aplikacji
+ani TEGO narzędzia — wyszukiwanie typu "jak kliknąć przycisk w
+Termuksie" zawsze zwróci albo nic, albo ogólniki, marnując
+wiadomość na "myślenie" o czymś, co jest zwykłym wykonaniem, nie
+prawdziwym problemem badawczym. Jeżeli kliknięcie/interakcja
+zawodzi, to zadanie dla PLANNERA/ENGINEERA (inny tekst, inne
+współrzędne, inne podejście na TYM ekranie) — nie dla wyszukiwarki.
+WEB_SEARCH/WEB_FETCH zostaw na rzeczy faktycznie zewnętrzne: wersje
+bibliotek, kompatybilność narzędzi, dokumentację API, treść
+konkretnej strony wymienionej w celu.
 
 Masz dwa sposoby na sprawdzenie czegoś w internecie SAMODZIELNIE
 — bez pośrednictwa Gemini/telefonu, wykonuje je bezpośrednio Python
