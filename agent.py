@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v119
+AEL-MINI AUTONOMOUS AGENT v120
 
 ARCHITEKTURA:
 
@@ -851,6 +851,22 @@ def _track_project_path(path):
                 # (agent.py.bak_YYYYMMDD_HHMMSS z CODE_FIXERA).
                 return
 
+            if second_level_name == "web_search.py":
+                # Zaobserwowany realny problem (skan $HOME,
+                # 2026-08-26): web_search.py leży obok agent.py w
+                # AGENT_DIR i jest TWARDĄ zależnością (moduł
+                # importowany na starcie: "import web_search") —
+                # bez niego program w ogóle się nie uruchomi. Mimo
+                # to NIE był chroniony jak agent.py, więc gdyby
+                # kiedykolwiek został nadpisany przez
+                # write_engineer_code_to/termux_write_file (np.
+                # CODE_FIXER "naprawiający" go), trafiłby do
+                # PROJECT_DIRS_FILE i mógłby zostać pokazany do
+                # usunięcia w zwykłym sprzątaniu — jedno "t" bez
+                # wczytania się w listę i program przestałby się
+                # uruchamiać.
+                return
+
             top_level_path = str(AGENT_DIR / second_level_name)
 
         else:
@@ -953,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v119")
+    print("             AEL-MINI AUTONOMOUS AGENT v120")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
