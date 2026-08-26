@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v127
+AEL-MINI AUTONOMOUS AGENT v128
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v127")
+    print("             AEL-MINI AUTONOMOUS AGENT v128")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6059,7 +6059,8 @@ def cdp_call(
 
 def chrome_eval(
     tab,
-    javascript
+    javascript,
+    timeout=20
 ):
 
     ws = cdp_connect(tab)
@@ -6083,7 +6084,8 @@ def chrome_eval(
                     True,
                 "awaitPromise":
                     True
-            }
+            },
+            timeout=timeout
         )
 
     finally:
@@ -6658,6 +6660,25 @@ def chrome_execute_js(
     tab_id=None,
     contains=None
 ):
+    """
+    Zaobserwowany realny problem (log 2026-08-27, cel: klucz API
+    Bland AI): Gemini po utworzeniu nowego klucza próbował go odczytać
+    przez coś na wzór navigator.clipboard.readText() (strona pokazywała
+    "API key copied to clipboard") — ale odczyt schowka przeglądarki
+    wymaga zgody użytkownika w oknie, którego NIKT (żaden proces) nie
+    może kliknąć w tej sesji CDP. Wywołanie wisiało pełne 20 sekund
+    (domyślny timeout cdp_call) i kończyło się "Connection timed out",
+    po czym zespół, zamiast spróbować odczytać wartość WPROST Z DOM-u
+    (np. z pola/input/modału, w którym nowy klucz jest widoczny w
+    postaci jawnego tekstu ZANIM zniknie po jego "skopiowaniu"),
+    poddawał się i pytał człowieka.
+
+    Krótszy timeout (10s zamiast domyślnych 20s dla chrome_click/
+    chrome_type/chrome_inspect, które używają wyłącznie szybkich,
+    znanych operacji DOM) sprawia, że taka sytuacja kończy się
+    szybciej i jaśniejszym błędem, zamiast marnować pół minuty na
+    każdą próbę.
+    """
 
     tab = find_tab(
         tab_id,
@@ -6674,7 +6695,8 @@ def chrome_execute_js(
 
     result = chrome_eval(
         tab,
-        javascript
+        javascript,
+        timeout=10
     )
 
     if (
@@ -7227,7 +7249,15 @@ def _gemini_tools_legacy():
                 "deweloperskiej. Użyj tego, gdy chrome_click/chrome_type "
                 "nie wystarczą (np. trzeba wywołać wewnętrzne API strony "
                 "bezpośrednio) — NIE pisz takiego kodu do pliku .js, bo "
-                "nic go tam nie uruchomi."
+                "nic go tam nie uruchomi. NIGDY nie używaj "
+                "navigator.clipboard.readText()/writeText() — wymaga "
+                "zgody w oknie, którego nikt nie może kliknąć, i wisi aż "
+                "do timeoutu (10s). Gdy strona pokazuje nowo utworzoną "
+                "wartość (np. klucz API) i mówi 'skopiowano do "
+                "schowka' — odczytaj ją WPROST z DOM (np. "
+                "document.querySelector(...).value/innerText tego pola/"
+                "modału), zanim znika po zamknięciu, zamiast próbować "
+                "czytać systemowy schowek."
             ),
             "parameters": {
                 "type": "object",
