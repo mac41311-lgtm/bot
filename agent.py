@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v125
+AEL-MINI AUTONOMOUS AGENT v126
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v125")
+    print("             AEL-MINI AUTONOMOUS AGENT v126")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14541,6 +14541,95 @@ def verify_final(goal=""):
     }
 
 
+def _handle_need_user_login(decision):
+    """
+    Obsługa decyzji NEED_USER_LOGIN — wspólna dla dwóch miejsc w
+    run_agent(): gdy to GŁÓWNA decyzja MAIN w danym kroku, ORAZ gdy
+    to ALTERNATYWA, którą MAIN podaje po własnym FAILED (patrz
+    "Sprawdź jeszcze raz" w run_agent()).
+
+    Zaobserwowany realny bug (log 2026-08-26): druga ścieżka
+    (alternatywa po FAILED) sprawdzała WYŁĄCZNIE, czy
+    alt.get("type") == "TASK" — gdy MAIN sam podał tam
+    NEED_USER_LOGIN (np. "wygeneruj klucz API ręcznie"), kod po
+    cichu to ignorował i kończył sesję zwykłym FAILED, mimo że MAIN
+    dosłownie właśnie podał wykonalną drogę do przodu. Wydzielenie
+    tej funkcji gwarantuje, że obie ścieżki obsługują NEED_USER_LOGIN
+    identycznie, zamiast ryzykować rozjazd przy przyszłych zmianach.
+
+    Otwiera podaną stronę w Chrome (TYLKO prawdziwe http(s), patrz
+    komentarz niżej), czeka na terminalu na potwierdzenie
+    użytkownika, i zwraca last_result do ustawienia przez wywołującego
+    (który MUSI potem zrobić `continue`, nie `return`).
+    """
+
+    login_reason = str(decision.get("reason", ""))
+    login_url = str(decision.get("url", "")).strip()
+    login_instructions = str(decision.get("instructions", ""))
+
+    print()
+    print("=" * 72)
+    print("AGENT POTRZEBUJE TWOJEGO DZIAŁANIA W PRZEGLĄDARCE")
+    print("=" * 72)
+
+    if login_reason:
+        print("Powód: " + login_reason)
+
+    if login_url:
+        print("Strona: " + login_url)
+
+    if login_instructions:
+        print("Co zrobić: " + login_instructions)
+
+    # Zaobserwowany realny problem (log 2026-08-26): MAIN podał "url":
+    # "android://settings/apps/com.termux/permissions" dla kroku,
+    # który w ogóle nie dotyczył strony w przeglądarce, tylko
+    # systemowych Ustawień Androida. chrome_open() na taki nie-http(s)
+    # URI po cichu "udawał sukces" (fallback przez `am start` zwracał
+    # kod 0), mimo że Chrome faktycznie zostawał na pustej nowej
+    # karcie. Otwieramy w Chrome TYLKO prawdziwe http(s) adresy; w
+    # przeciwnym razie polegamy wyłącznie na czytelnym tekście w
+    # "instructions" (który i tak MAIN już podaje).
+    if login_url.startswith(("http://", "https://")):
+
+        open_result = chrome_open(login_url)
+
+        if not open_result.get("ok"):
+            print(
+                "(nie udało się automatycznie otworzyć strony "
+                "— otwórz ją ręcznie w Chrome: " + login_url + ")"
+            )
+
+    elif login_url:
+
+        print(
+            "(to nie jest adres strony internetowej — "
+            "wykonaj czynność ręcznie, tak jak opisano wyżej "
+            "w \"Co zrobić\")"
+        )
+
+    input(
+        "Gdy skończysz (zalogowano/potwierdzono), wciśnij "
+        "Enter, żeby agent kontynuował > "
+    )
+
+    log(
+        "MAIN",
+        "NEED_USER_LOGIN: użytkownik potwierdził wykonanie "
+        "czynności na stronie " + (login_url or "(brak URL)") + "."
+    )
+
+    return {
+        "status": "USER_LOGIN_COMPLETED",
+        "url": login_url,
+        "note": (
+            "Użytkownik potwierdził, że ręcznie dokończył "
+            "wymaganą czynność (login/2FA/zgoda) na powyższej "
+            "stronie. Sprawdź aktualny stan Chrome i kontynuuj."
+        )
+    }
+
+
 def run_agent(goal):
 
     # Zapamiętujemy cel NA DYSKU. Jeśli sesja zostanie przerwana
@@ -15356,87 +15445,13 @@ Zwróć tylko JSON.
         # Zamiast FAILED, gdy JEDYNYM blokerem jest czynność, którą
         # fizycznie musi wykonać człowiek w przeglądarce (login,
         # kod SMS, CAPTCHA, zgoda na koncie usługi zewnętrznej) —
-        # Gemini nie potrafi tego wpisać ani ominąć. Otwieramy
-        # wskazaną stronę w Chrome (ta sama funkcja co narzędzie
-        # chrome_open, wywołana bezpośrednio z Pythona — bez
-        # zużycia Gemini) i CZEKAMY na terminalu, aż użytkownik
-        # ręcznie dokończy tam potrzebną czynność. Po potwierdzeniu
-        # (Enter) zespół w kolejnym kroku dostaje normalnie świeży
-        # stan Chrome (przez BROWSER/CDP) — bez przesyłania żadnych
-        # danych logowania przez DeepSeek/Gemini.
+        # Gemini nie potrafi tego wpisać ani ominąć. Patrz
+        # _handle_need_user_login() — ta sama obsługa jest używana
+        # też przy alternatywie po FAILED niżej.
 
         if dtype == "NEED_USER_LOGIN":
 
-            login_reason = str(decision.get("reason", ""))
-            login_url = str(decision.get("url", "")).strip()
-            login_instructions = str(decision.get("instructions", ""))
-
-            print()
-            print("=" * 72)
-            print("AGENT POTRZEBUJE TWOJEGO DZIAŁANIA W PRZEGLĄDARCE")
-            print("=" * 72)
-
-            if login_reason:
-                print("Powód: " + login_reason)
-
-            if login_url:
-                print("Strona: " + login_url)
-
-            if login_instructions:
-                print("Co zrobić: " + login_instructions)
-
-            # Zaobserwowany realny problem (log 2026-08-26): MAIN
-            # podał "url": "android://settings/apps/com.termux/
-            # permissions" dla kroku, który w ogóle nie dotyczył
-            # strony w przeglądarce, tylko systemowych Ustawień
-            # Androida. chrome_open() na taki nie-http(s) URI po
-            # cichu "udawał sukces" (fallback przez `am start`
-            # zwracał kod 0), mimo że Chrome faktycznie zostawał na
-            # pustej nowej karcie — użytkownik widział sam tekst
-            # "Strona: android://..." bez żadnego realnego działania.
-            # Otwieramy w Chrome TYLKO prawdziwe http(s) adresy;
-            # w przeciwnym razie polegamy wyłącznie na czytelnym
-            # tekście w "instructions" (który i tak MAIN już podaje).
-            if login_url.startswith(
-                ("http://", "https://")
-            ):
-
-                open_result = chrome_open(login_url)
-
-                if not open_result.get("ok"):
-                    print(
-                        "(nie udało się automatycznie otworzyć strony "
-                        "— otwórz ją ręcznie w Chrome: " + login_url + ")"
-                    )
-
-            elif login_url:
-
-                print(
-                    "(to nie jest adres strony internetowej — "
-                    "wykonaj czynność ręcznie, tak jak opisano wyżej "
-                    "w \"Co zrobić\")"
-                )
-
-            input(
-                "Gdy skończysz (zalogowano/potwierdzono), wciśnij "
-                "Enter, żeby agent kontynuował > "
-            )
-
-            log(
-                "MAIN",
-                "NEED_USER_LOGIN: użytkownik potwierdził wykonanie "
-                "czynności na stronie " + (login_url or "(brak URL)") + "."
-            )
-
-            last_result = {
-                "status": "USER_LOGIN_COMPLETED",
-                "url": login_url,
-                "note": (
-                    "Użytkownik potwierdził, że ręcznie dokończył "
-                    "wymaganą czynność (login/2FA/zgoda) na powyższej "
-                    "stronie. Sprawdź aktualny stan Chrome i kontynuuj."
-                )
-            }
+            last_result = _handle_need_user_login(decision)
 
             continue
 
@@ -15611,6 +15626,23 @@ Tylko JSON.
                         last_result = result
 
                     continue
+
+            # Zaobserwowany realny bug (log 2026-08-26): ta ścieżka
+            # sprawdzała WYŁĄCZNIE "type"=="TASK" — gdy MAIN, poproszony
+            # "sprawdź jeszcze raz, czy istnieje alternatywa", sam
+            # zwrócił NEED_USER_LOGIN (np. "wygeneruj klucz API
+            # ręcznie"), było to po cichu ignorowane i sesja kończyła
+            # się zwykłym FAILED, mimo że MAIN dosłownie właśnie podał
+            # wykonalną drogę do przodu. Patrz _handle_need_user_login().
+            if (
+                alt
+                and str(alt.get("type", "")).upper()
+                == "NEED_USER_LOGIN"
+            ):
+
+                last_result = _handle_need_user_login(alt)
+
+                continue
 
             print(
                 "Agent nie znalazł dalszej sensownej drogi."
