@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v118
+AEL-MINI AUTONOMOUS AGENT v119
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v118")
+    print("             AEL-MINI AUTONOMOUS AGENT v119")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1245,6 +1245,38 @@ FAILED:
 UWAGA: SecurityException/"Permission Denial" NIE jest sam w sobie
 powodem do FAILED — patrz niżej sekcja o `adb shell pm grant`, samo
 uprawnienie zazwyczaj da się nadać bez użytkownika.
+
+============================================================
+NEED_USER_LOGIN — zamiast FAILED, gdy blokerem jest coś, co
+TYLKO CZŁOWIEK potrafi zrobić w przeglądarce
+============================================================
+
+Zaobserwowany realny przypadek: cel wymagał usługi zewnętrznej
+(konto, logowanie, 2FA, CAPTCHA, zgoda na uprawnienia konta) — Gemini
+nie potrafi tego wpisać ani ominąć, więc jedyną drogą było FAILED.
+To NIEPOTRZEBNE — zamiast się poddawać, gdy JEDYNYM realnym
+blokerem jest krok wymagający ręcznego kliknięcia/zalogowania się
+przez człowieka na stronie (a NIE brak pomysłu na rozwiązanie ani
+błąd w kodzie), zwróć:
+
+{
+  "type": "NEED_USER_LOGIN",
+  "reason": "krótkie wyjaśnienie po co ta strona",
+  "url": "pełny adres strony do otwarcia",
+  "instructions": "co dokładnie użytkownik ma tam zrobić, np. 'Zaloguj się i przejdź do zakładki API Keys'"
+}
+
+Python otworzy ten adres w Chrome i zaczeka, aż użytkownik ręcznie
+dokończy tam potrzebną czynność (login/rejestracja/2FA/zgoda) i
+potwierdzi to na telefonie — TY dostaniesz o tym informację w
+kolejnym kroku i będziesz mógł kontynuować, korzystając z już
+zalogowanej karty Chrome (przez BROWSER/CDP) albo z danych, które
+użytkownik stamtąd przekaże.
+
+Użyj tego TYLKO gdy naprawdę chodzi o czynność, którą fizycznie musi
+kliknąć/wpisać człowiek (login, kod SMS, CAPTCHA, zgoda) — NIE jako
+sposób na uniknięcie normalnej pracy, którą Gemini może wykonać samo
+przez Termux/Android/Chrome.
 
 Zwracaj tylko JSON.
 
@@ -13159,6 +13191,17 @@ FAILED:
   "type": "FAILED",
   "reason": "..."
 }}
+
+NEED_USER_LOGIN (zamiast FAILED, gdy jedynym blokerem jest czynność,
+którą fizycznie musi kliknąć/wpisać człowiek — login, kod SMS,
+CAPTCHA, zgoda na koncie zewnętrznej usługi — patrz pełny opis w
+Twoim prompcie systemowym):
+{{
+  "type": "NEED_USER_LOGIN",
+  "reason": "...",
+  "url": "...",
+  "instructions": "..."
+}}
 {ask_contract_block}"""
 
     return deepseek(
@@ -15082,6 +15125,75 @@ Zwróć tylko JSON.
                 pass
 
             return
+
+        # ------------------------------------------------------
+        # NEED_USER_LOGIN
+        # ------------------------------------------------------
+        #
+        # Zamiast FAILED, gdy JEDYNYM blokerem jest czynność, którą
+        # fizycznie musi wykonać człowiek w przeglądarce (login,
+        # kod SMS, CAPTCHA, zgoda na koncie usługi zewnętrznej) —
+        # Gemini nie potrafi tego wpisać ani ominąć. Otwieramy
+        # wskazaną stronę w Chrome (ta sama funkcja co narzędzie
+        # chrome_open, wywołana bezpośrednio z Pythona — bez
+        # zużycia Gemini) i CZEKAMY na terminalu, aż użytkownik
+        # ręcznie dokończy tam potrzebną czynność. Po potwierdzeniu
+        # (Enter) zespół w kolejnym kroku dostaje normalnie świeży
+        # stan Chrome (przez BROWSER/CDP) — bez przesyłania żadnych
+        # danych logowania przez DeepSeek/Gemini.
+
+        if dtype == "NEED_USER_LOGIN":
+
+            login_reason = str(decision.get("reason", ""))
+            login_url = str(decision.get("url", "")).strip()
+            login_instructions = str(decision.get("instructions", ""))
+
+            print()
+            print("=" * 72)
+            print("AGENT POTRZEBUJE TWOJEGO DZIAŁANIA W PRZEGLĄDARCE")
+            print("=" * 72)
+
+            if login_reason:
+                print("Powód: " + login_reason)
+
+            if login_url:
+                print("Strona: " + login_url)
+
+            if login_instructions:
+                print("Co zrobić: " + login_instructions)
+
+            if login_url:
+
+                open_result = chrome_open(login_url)
+
+                if not open_result.get("ok"):
+                    print(
+                        "(nie udało się automatycznie otworzyć strony "
+                        "— otwórz ją ręcznie w Chrome: " + login_url + ")"
+                    )
+
+            input(
+                "Gdy skończysz (zalogowano/potwierdzono), wciśnij "
+                "Enter, żeby agent kontynuował > "
+            )
+
+            log(
+                "MAIN",
+                "NEED_USER_LOGIN: użytkownik potwierdził wykonanie "
+                "czynności na stronie " + (login_url or "(brak URL)") + "."
+            )
+
+            last_result = {
+                "status": "USER_LOGIN_COMPLETED",
+                "url": login_url,
+                "note": (
+                    "Użytkownik potwierdził, że ręcznie dokończył "
+                    "wymaganą czynność (login/2FA/zgoda) na powyższej "
+                    "stronie. Sprawdź aktualny stan Chrome i kontynuuj."
+                )
+            }
+
+            continue
 
         # ------------------------------------------------------
         # FAILED
