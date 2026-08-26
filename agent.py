@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v121
+AEL-MINI AUTONOMOUS AGENT v122
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v121")
+    print("             AEL-MINI AUTONOMOUS AGENT v122")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12813,14 +12813,19 @@ OSTATNI RAPORT:
         # dostawał ZA KAŻDYM razem BAJT-W-BAJT identyczną wiadomość
         # (sam surowy CEL, bez żadnej zmiany) — a jego sesja DeepSeek
         # jest ciągła, więc z JEGO perspektywy ktoś po prostu wklejał
-        # to samo pytanie po raz drugi, trzeci, czwarty, piąty. Efekt:
+        # to samo pytanie po raz drugi, trzeci... szósty. Efekt:
         # zamiast nowych pomysłów, Wojtek zaczynał odpowiadać
-        # sfrustrowanym komentarzem o powtarzaniu się rozmówcy
-        # ("Widzę, że wklejasz to samo zadanie już po raz piąty...")
-        # zamiast realnie pomagać. Naprawiono przez dodanie krótkiej,
-        # dalej całkowicie nietechnicznej wzmianki, że to celowe,
-        # okresowe dopytanie w miarę postępu prac, nie pomyłka.
-        if step <= 1:
+        # sfrustrowanym komentarzem o powtarzaniu się rozmówcy.
+        # Pierwsza poprawka (dopisanie "to nie pomyłka") wciąż
+        # WKLEJAŁA CAŁY CEL od nowa za każdym razem — leczyła objaw,
+        # nie przyczynę. Właściwa naprawa: skoro jego sesja i tak
+        # PAMIĘTA cel od pierwszego razu, kolejne pytania są krótkim,
+        # naturalnym dopytaniem BEZ powtarzania celu — dokładnie tak,
+        # jak wygląda prawdziwa rozmowa z kimś, kto już wie, o co
+        # chodzi.
+        wojtek_already_asked = "WOJTEK" in _role_response_cache
+
+        if not wojtek_already_asked:
 
             wojtek_context = (
                 "Oto zadanie, nad którym ktoś aktualnie pracuje:\n\n"
@@ -12831,16 +12836,9 @@ OSTATNI RAPORT:
         else:
 
             wojtek_context = (
-                "Wracam do Ciebie w tej samej sprawie po jakimś czasie "
-                "(to nie pomyłka ani wklejenie po raz drugi — po prostu "
-                "od czasu do czasu pytam Cię ponownie, w miarę jak "
-                "sprawa się toczy, czy wpadłeś na coś nowego). "
-                "Przypominam zadanie:\n\n"
-                + goal
-                + "\n\nJeśli masz już jakiś pomysł, którym się "
-                "podzieliłeś wcześniej, możesz go pogłębić albo "
-                "zaproponować coś zupełnie innego — nie musisz zaczynać "
-                "od zera ani powtarzać tego, co już powiedziałeś."
+                "Wracam do Ciebie w tej samej sprawie — masz jakieś "
+                "nowe pomysły, czy chcesz rozwinąć któryś z tych, o "
+                "których już mówiłeś?"
             )
 
         results["WOJTEK"] = deepseek(
