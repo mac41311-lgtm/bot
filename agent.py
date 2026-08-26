@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v117
+AEL-MINI AUTONOMOUS AGENT v118
 
 ARCHITEKTURA:
 
@@ -953,7 +953,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v117")
+    print("             AEL-MINI AUTONOMOUS AGENT v118")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13878,7 +13878,25 @@ def _goal_progress_snapshot(goal):
             + (" — " + preview if preview else "")
         )
 
+    # UWAGA (zaobserwowany realny bug): ta pętla dawniej NIE
+    # sprawdzała świeżości pliku względem BIEŻĄCEGO celu — mimo że
+    # docstring tej funkcji obiecuje "te same sprawdzenia, których
+    # używa verify_final()", a verify_final() takie sprawdzenie MA
+    # (patrz komentarz przy checks.append FINAL_OK.txt). Efekt:
+    # stary FINAL_OK.txt sprzed zupełnie innego, wcześniejszego celu
+    # (np. ~/FINAL_OK.txt z treścią "TEST_V73_ZAKONCZONY" sprzed
+    # wielu dni) był pokazywany zespołowi jako aktualny stan, co
+    # realnie zmyliło PLANNERA ("FINAL_OK.txt potwierdza jedynie
+    # poprzedni test V73"). Naprawiono przez dodanie identycznego
+    # progu mtime < goal_started_at co w verify_final().
+
+    try:
+        goal_started_at = GOAL_FILE.stat().st_mtime
+    except Exception:
+        goal_started_at = 0.0
+
     final_ok_seen = False
+    final_ok_stale_seen = False
 
     for candidate in (
         HOME / "FINAL_OK.txt",
@@ -13888,16 +13906,35 @@ def _goal_progress_snapshot(goal):
 
         content = read_text(candidate).strip()
 
-        if content:
-            lines.append(
-                "- FINAL_OK.txt: istnieje (" + str(candidate) + ") — \""
-                + content[:60] + "\""
-            )
-            final_ok_seen = True
-            break
+        if not content:
+            continue
+
+        try:
+            is_stale = candidate.stat().st_mtime < goal_started_at
+        except Exception:
+            is_stale = False
+
+        if is_stale:
+            final_ok_stale_seen = True
+            continue
+
+        lines.append(
+            "- FINAL_OK.txt: istnieje (" + str(candidate) + ") — \""
+            + content[:60] + "\""
+        )
+        final_ok_seen = True
+        break
 
     if not final_ok_seen:
-        lines.append("- FINAL_OK.txt: BRAK (nigdzie nie znaleziono)")
+        if final_ok_stale_seen:
+            lines.append(
+                "- FINAL_OK.txt: BRAK dla BIEŻĄCEGO celu (znaleziono "
+                "tylko plik STARSZY niż ten cel — to pozostałość po "
+                "wcześniejszym, niepowiązanym zadaniu, zignoruj jego "
+                "treść)"
+            )
+        else:
+            lines.append("- FINAL_OK.txt: BRAK (nigdzie nie znaleziono)")
 
     if CUSTOM_TOOLS:
 
@@ -15609,6 +15646,101 @@ def maybe_clear_custom_tools():
     load_custom_tools()
 
 
+def maybe_clear_stale_final_ok_evidence():
+    """
+    OSOBNE, opt-in pytanie o pliki-DOWODY FINAL_OK.txt.
+
+    Zaobserwowany realny problem (log 2026-08-26, cel "zadzwoń do
+    Beaty"): ~/FINAL_OK.txt (treść "TEST_V73_ZAKONCZONY", sprzed
+    wielu dni) i ~/agent/apk_output/FINAL_OK.txt (treść z zupełnie
+    innego, wcześniejszego zadania "ZADZWONIONO DO BEATY...")
+    leżały na dysku od dawna. Żaden z nich nie mógł trafić do
+    zwykłego sprzątania wygenerowanych plików: ~/FINAL_OK.txt
+    powstał najpewniej przez surową komendę powłoki (np.
+    `echo ... > FINAL_OK.txt` przez termux_run) — to całkowicie
+    omija _track_project_path() — a apk_output/ jest CELOWO
+    wykluczony ze śledzenia (patrz
+    _AGENT_DIR_PROTECTED_SECOND_LEVEL_NAMES), bo w tym katalogu mają
+    też prawo trwale leżeć prawdziwe zbudowane APK-i. Efekt: te 2
+    pliki zaśmiecały KAŻDY kolejny, niepowiązany cel — _goal_
+    progress_snapshot() naprawiono osobno, żeby ich TREŚCI nie
+    pokazywać zespołowi jako aktualnej (patrz świeżość vs
+    GOAL_FILE), ale same pliki nadal fizycznie zaśmiecały dysk.
+
+    CELOWO tylko te 3 znane, sztywne ścieżki (te same, które
+    sprawdza verify_final()/_goal_progress_snapshot()) — NIGDY
+    żaden skan katalogu domowego (patrz ostrzeżenie w
+    maybe_clear_generated_project_files() o ~/api_token.txt i
+    ~/test/pow_helper.js skasowanych przez taki skan w przeszłości).
+    """
+
+    candidates = [
+        HOME / "FINAL_OK.txt",
+        AGENT_DIR / "FINAL_OK.txt",
+        APK_OUTPUT_DIR / "FINAL_OK.txt",
+    ]
+
+    found = []
+
+    for p in candidates:
+
+        content = read_text(p).strip()
+
+        if content:
+            found.append((p, content))
+
+    if not found:
+        return
+
+    print()
+    print(
+        "Pliki-DOWODY FINAL_OK.txt znalezione na dysku (mogą być "
+        "pozostałością po wcześniejszych, niepowiązanych zadaniach "
+        "— sprawdź treść/datę poniżej):"
+    )
+
+    for p, content in found:
+
+        try:
+            mtime = datetime.fromtimestamp(
+                p.stat().st_mtime
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            mtime = "?"
+
+        print(
+            "  - " + str(p) + " (" + mtime + ") — \""
+            + content[:60] + "\""
+        )
+
+    confirm_message = (
+        "USUNIĘCIE PLIKÓW-DOWODÓW FINAL_OK.txt powyżej — to osobna "
+        "decyzja od zwykłego sprzątania; mogą pochodzić z zupełnie "
+        "innych, wcześniejszych zadań i nie są już potrzebne"
+    )
+
+    if not _confirm_destructive_action(confirm_message):
+        log(
+            "MAIN",
+            "Zachowano pliki-dowody FINAL_OK.txt."
+        )
+        return
+
+    for p, _content in found:
+
+        try:
+            p.unlink()
+            log(
+                "MAIN",
+                "Usunięto plik-dowód: " + str(p)
+            )
+        except Exception as e:
+            log(
+                "MAIN",
+                "Nie udało się usunąć " + str(p) + ": " + str(e)
+            )
+
+
 def prompt_adb_target():
     """
     Pyta przy starcie programu o adres bezprzewodowego ADB
@@ -15861,6 +15993,7 @@ def main():
 
     maybe_clear_previous_session_data()
     maybe_clear_generated_project_files()
+    maybe_clear_stale_final_ok_evidence()
     maybe_clear_custom_tools()
     maybe_restart_team_sessions_for_new_goal()
 
@@ -15958,6 +16091,7 @@ def main():
         _cleanup_screenshots_silently()
         maybe_clear_previous_session_data()
         maybe_clear_generated_project_files()
+        maybe_clear_stale_final_ok_evidence()
         maybe_clear_custom_tools()
 
         if not before:
