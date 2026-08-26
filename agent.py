@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v120
+AEL-MINI AUTONOMOUS AGENT v121
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v120")
+    print("             AEL-MINI AUTONOMOUS AGENT v121")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1278,7 +1278,7 @@ błąd w kodzie), zwróć:
 {
   "type": "NEED_USER_LOGIN",
   "reason": "krótkie wyjaśnienie po co ta strona",
-  "url": "pełny adres strony do otwarcia",
+  "url": "pełny adres http(s) strony do otwarcia — TYLKO prawdziwa strona internetowa, patrz UWAGA niżej",
   "instructions": "co dokładnie użytkownik ma tam zrobić, np. 'Zaloguj się i przejdź do zakładki API Keys'"
 }
 
@@ -1288,6 +1288,18 @@ potwierdzi to na telefonie — TY dostaniesz o tym informację w
 kolejnym kroku i będziesz mógł kontynuować, korzystając z już
 zalogowanej karty Chrome (przez BROWSER/CDP) albo z danych, które
 użytkownik stamtąd przekaże.
+
+UWAGA — "url" MUSI być prawdziwym adresem http(s) strony internetowej
+(np. usługi zewnętrznej, do której trzeba się zalogować). Zaobserwowany
+realny błąd: MAIN podał "android://settings/apps/com.termux/
+permissions" dla czynności w Ustawieniach SYSTEMOWYCH Androida (nie w
+przeglądarce) — to NIE jest adres strony, Chrome nic sensownego z tym
+nie zrobi (zostanie na pustej karcie), a "sukces" otwarcia był pozorny.
+Jeżeli potrzebna czynność dotyczy Ustawień Androida/systemu, a NIE
+strony w przeglądarce — zostaw "url" puste ("") i opisz DOKŁADNĄ ścieżkę
+menu w "instructions" (np. "Ustawienia -> Aplikacje -> Termux ->
+Uprawnienia -> włącz Mikrofon") — użytkownik i tak zrobi to ręcznie na
+telefonie, bez otwierania Chrome.
 
 Użyj tego TYLKO gdy naprawdę chodzi o czynność, którą fizycznie musi
 kliknąć/wpisać człowiek (login, kod SMS, CAPTCHA, zgoda) — NIE jako
@@ -12797,11 +12809,39 @@ OSTATNI RAPORT:
 
     if consult_wojtek:
 
-        wojtek_context = (
-            "Oto zadanie, nad którym ktoś aktualnie pracuje:\n\n"
-            + goal
-            + "\n\nPodziel się swoimi pomysłami."
-        )
+        # UWAGA (zaobserwowany realny problem, log 2026-08-26): Wojtek
+        # dostawał ZA KAŻDYM razem BAJT-W-BAJT identyczną wiadomość
+        # (sam surowy CEL, bez żadnej zmiany) — a jego sesja DeepSeek
+        # jest ciągła, więc z JEGO perspektywy ktoś po prostu wklejał
+        # to samo pytanie po raz drugi, trzeci, czwarty, piąty. Efekt:
+        # zamiast nowych pomysłów, Wojtek zaczynał odpowiadać
+        # sfrustrowanym komentarzem o powtarzaniu się rozmówcy
+        # ("Widzę, że wklejasz to samo zadanie już po raz piąty...")
+        # zamiast realnie pomagać. Naprawiono przez dodanie krótkiej,
+        # dalej całkowicie nietechnicznej wzmianki, że to celowe,
+        # okresowe dopytanie w miarę postępu prac, nie pomyłka.
+        if step <= 1:
+
+            wojtek_context = (
+                "Oto zadanie, nad którym ktoś aktualnie pracuje:\n\n"
+                + goal
+                + "\n\nPodziel się swoimi pomysłami."
+            )
+
+        else:
+
+            wojtek_context = (
+                "Wracam do Ciebie w tej samej sprawie po jakimś czasie "
+                "(to nie pomyłka ani wklejenie po raz drugi — po prostu "
+                "od czasu do czasu pytam Cię ponownie, w miarę jak "
+                "sprawa się toczy, czy wpadłeś na coś nowego). "
+                "Przypominam zadanie:\n\n"
+                + goal
+                + "\n\nJeśli masz już jakiś pomysł, którym się "
+                "podzieliłeś wcześniej, możesz go pogłębić albo "
+                "zaproponować coś zupełnie innego — nie musisz zaczynać "
+                "od zera ani powtarzać tego, co już powiedziałeś."
+            )
 
         results["WOJTEK"] = deepseek(
             "WOJTEK",
@@ -13211,11 +13251,14 @@ FAILED:
 NEED_USER_LOGIN (zamiast FAILED, gdy jedynym blokerem jest czynność,
 którą fizycznie musi kliknąć/wpisać człowiek — login, kod SMS,
 CAPTCHA, zgoda na koncie zewnętrznej usługi — patrz pełny opis w
-Twoim prompcie systemowym):
+Twoim prompcie systemowym). "url" TYLKO prawdziwy http(s) adres strony
+— jeśli chodzi o Ustawienia Androida/systemu (nie stronę w
+przeglądarce), zostaw "url" puste i opisz ścieżkę menu w
+"instructions":
 {{
   "type": "NEED_USER_LOGIN",
   "reason": "...",
-  "url": "...",
+  "url": "... (http(s) albo puste)",
   "instructions": "..."
 }}
 {ask_contract_block}"""
@@ -15178,7 +15221,21 @@ Zwróć tylko JSON.
             if login_instructions:
                 print("Co zrobić: " + login_instructions)
 
-            if login_url:
+            # Zaobserwowany realny problem (log 2026-08-26): MAIN
+            # podał "url": "android://settings/apps/com.termux/
+            # permissions" dla kroku, który w ogóle nie dotyczył
+            # strony w przeglądarce, tylko systemowych Ustawień
+            # Androida. chrome_open() na taki nie-http(s) URI po
+            # cichu "udawał sukces" (fallback przez `am start`
+            # zwracał kod 0), mimo że Chrome faktycznie zostawał na
+            # pustej nowej karcie — użytkownik widział sam tekst
+            # "Strona: android://..." bez żadnego realnego działania.
+            # Otwieramy w Chrome TYLKO prawdziwe http(s) adresy;
+            # w przeciwnym razie polegamy wyłącznie na czytelnym
+            # tekście w "instructions" (który i tak MAIN już podaje).
+            if login_url.startswith(
+                ("http://", "https://")
+            ):
 
                 open_result = chrome_open(login_url)
 
@@ -15187,6 +15244,14 @@ Zwróć tylko JSON.
                         "(nie udało się automatycznie otworzyć strony "
                         "— otwórz ją ręcznie w Chrome: " + login_url + ")"
                     )
+
+            elif login_url:
+
+                print(
+                    "(to nie jest adres strony internetowej — "
+                    "wykonaj czynność ręcznie, tak jak opisano wyżej "
+                    "w \"Co zrobić\")"
+                )
 
             input(
                 "Gdy skończysz (zalogowano/potwierdzono), wciśnij "
