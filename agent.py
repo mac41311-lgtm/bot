@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v122
+AEL-MINI AUTONOMOUS AGENT v123
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v122")
+    print("             AEL-MINI AUTONOMOUS AGENT v123")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12467,6 +12467,16 @@ def print_progress_bar(step, percent, summary):
 # krokach, w których nie są odpytywane (patrz consult_team()).
 _role_response_cache = {}
 
+# Realna odpowiedź (z web_search RESEARCHERA) czekająca na to, żeby
+# przekazać ją Wojtkowi przy JEGO następnej turze — patrz consult_team().
+# Na wyraźną prośbę użytkownika: Wojtek ma dostawać PRAWDZIWE,
+# zweryfikowane odpowiedzi na to, o co pyta/co twierdzi, zamiast
+# sztywnego szablonu — ale BEZ tworzenia własnych zadań/wyszukiwań
+# (to zdublowałoby pracę RESEARCHERA). Zamiast tego jego pytanie
+# "dopina się" do wyszukiwania, które RESEARCHER i tak robi w tym
+# samym kroku, a skrócony wynik wraca do Wojtka przy kolejnej okazji.
+_wojtek_pending_answer = None
+
 
 def _condense_last_result_for_team(last_result, limit=2500):
     """
@@ -12638,6 +12648,8 @@ def consult_team(
     testach), funkcja sama pyta urządzenie — zachowanie identyczne
     jak wcześniej.
     """
+
+    global _wojtek_pending_answer
 
     tool_hint = ""
 
@@ -12835,8 +12847,31 @@ OSTATNI RAPORT:
 
         else:
 
+            # Na wyraźną prośbę użytkownika: jeśli poprzednio Wojtek
+            # coś twierdził/o coś pytał, i RESEARCHER (w ramach
+            # własnego, i tak wykonywanego wyszukiwania — patrz niżej)
+            # zdążył to sprawdzić, oddajemy mu PRAWDZIWĄ, zweryfikowaną
+            # odpowiedź zamiast pustego "masz coś nowego?". Zero
+            # nowego wyszukiwania stworzonego specjalnie dla Wojtka —
+            # to ta sama odpowiedź, którą RESEARCHER i tak już podał
+            # zespołowi.
+            if _wojtek_pending_answer:
+
+                answer_block = (
+                    "Sprawdziliśmy to, o czym wspomniałeś ostatnio: "
+                    + _wojtek_pending_answer
+                    + "\n\n"
+                )
+
+                _wojtek_pending_answer = None
+
+            else:
+
+                answer_block = ""
+
             wojtek_context = (
-                "Wracam do Ciebie w tej samej sprawie — masz jakieś "
+                answer_block
+                + "Wracam do Ciebie w tej samej sprawie — masz jakieś "
                 "nowe pomysły, czy chcesz rozwinąć któryś z tych, o "
                 "których już mówiłeś?"
             )
@@ -12874,7 +12909,27 @@ OSTATNI RAPORT:
 
     if consult_researcher:
 
-        researcher_context = _team_context("RESEARCHER")
+        # Jeśli Wojtek właśnie coś twierdził/o coś pytał (patrz wyżej),
+        # doklejamy to do TEGO SAMEGO, i tak wykonywanego wyszukiwania
+        # RESEARCHERA — bez tworzenia dla niego osobnego zapytania.
+        # Wynik trafia normalnie do zespołu (jak dotychczas) ORAZ,
+        # skrócony, czeka jako _wojtek_pending_answer na jego następną
+        # turę (patrz wyżej) — to realna, zweryfikowana odpowiedź, nie
+        # sztywny szablon.
+        wojtek_extra = (
+            (
+                "\n\nDODATKOWO: kolega z zespołu napisał to (jeśli da "
+                "się to sprawdzić w sieci, zweryfikuj i uwzględnij "
+                "wynik, w przeciwnym razie zignoruj):\n" + wojtek_out
+            )
+            if consult_wojtek and wojtek_out
+            else ""
+        )
+
+        researcher_context = _team_context(
+            "RESEARCHER",
+            extra=wojtek_extra
+        )
 
         results["RESEARCHER"] = researcher_web_search(
             deepseek(
@@ -12885,6 +12940,9 @@ OSTATNI RAPORT:
         )
 
         _role_response_cache["RESEARCHER"] = results["RESEARCHER"]
+
+        if wojtek_extra:
+            _wojtek_pending_answer = short(results["RESEARCHER"], 400)
 
     else:
 
