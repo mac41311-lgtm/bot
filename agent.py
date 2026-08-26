@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v124
+AEL-MINI AUTONOMOUS AGENT v125
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v124")
+    print("             AEL-MINI AUTONOMOUS AGENT v125")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1430,6 +1430,9 @@ CHROME:
 - chrome_open
 - chrome_click
 - chrome_type
+- chrome_execute_js (dowolny JavaScript w karcie, np. fetch() do
+  API strony z realną sesją/ciasteczkami — użyj tego zamiast pisać
+  taki kod do pliku, którego i tak nic nie uruchomi)
 
 UWAGA — otwieranie URL do SPRAWDZENIA (tytuł/URL/zawartość):
 w tym wdrożeniu Chrome/CDP działa w trybie "ISTNIEJĄCE KARTY" —
@@ -5482,7 +5485,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "termux_delete", "termux_check_apk", "termux_patch_file",
     "ask_deepseek",
     "chrome_tabs", "chrome_inspect", "chrome_open", "chrome_click",
-    "chrome_type",
+    "chrome_type", "chrome_execute_js",
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
     "android_long_click", "android_set_clipboard", "android_paste_text",
@@ -6625,6 +6628,68 @@ def chrome_type(
 
 
 # ============================================================
+# CHROME EXECUTE JS
+# ============================================================
+#
+# Zaobserwowany realny problem (log 2026-08-26, cel: połączenie
+# głosowe przez Vapi Dashboard): zespół POPRAWNIE zdiagnozował, że
+# chrome_inspect() tylko CZYTA DOM i nie wykonuje JavaScriptu, i
+# POPRAWNIE napisał kod (fetch() do API Vapi z "credentials:
+# 'include'", korzystający z sesji przeglądarki, w którą użytkownik
+# WŁAŚNIE się zalogował) — ale w całym zestawie narzędzi nie było
+# NIC, co pozwoliłoby ten kod faktycznie wykonać. Zamiast tego zespół
+# kliknął przypadkowy przycisk demo ("Test Talk to my agent" — to
+# wbudowana funkcja Vapi do testowania asystenta przez mikrofon w
+# przeglądarce, NIE prawdziwe połączenie wychodzące) i zgłosił to
+# jako dowód sukcesu — CRITIC to poprawnie zablokował za każdym
+# razem, ale zespół nie miał ŻADNEJ innej drogi do przodu, więc
+# wracał do tego samego, błędnego działania w kółko.
+#
+# chrome_eval() (mechanizm CDP "Runtime.evaluate") już od dawna
+# istniał w kodzie i jest używany WEWNĘTRZNIE przez chrome_click/
+# chrome_type — ale nigdy nie był wystawiony Gemini jako osobne,
+# ogólne narzędzie z DOWOLNYM kodem JS. To domyka lukę: Gemini może
+# teraz faktycznie wykonać fetch()/XHR w kontekście zalogowanej
+# karty (z prawdziwymi ciasteczkami sesji), zamiast pisać taki kod
+# do pliku, którego i tak nic nie uruchomi.
+
+def chrome_execute_js(
+    javascript,
+    tab_id=None,
+    contains=None
+):
+
+    tab = find_tab(
+        tab_id,
+        contains
+    )
+
+    if tab is None:
+
+        return {
+            "ok": False,
+            "error":
+                "Brak istniejącej karty"
+        }
+
+    result = chrome_eval(
+        tab,
+        javascript
+    )
+
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+    ):
+        return result
+
+    return {
+        "ok": True,
+        "value": result
+    }
+
+
+# ============================================================
 # GEMINI KEYS
 # ============================================================
 
@@ -7147,6 +7212,31 @@ def _gemini_tools_legacy():
                     "contains": {"type": "string"}
                 },
                 "required": ["text"]
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "chrome_execute_js",
+            "description": (
+                "Wykonaj DOWOLNY kod JavaScript w kontekście istniejącej "
+                "karty Chrome (przez CDP) i zwróć jego wynik. Kod działa "
+                "z PRAWDZIWĄ sesją/ciasteczkami tej karty — np. fetch() "
+                "do API strony, do której użytkownik jest już zalogowany "
+                "w przeglądarce, zadziała tak samo jak w konsoli "
+                "deweloperskiej. Użyj tego, gdy chrome_click/chrome_type "
+                "nie wystarczą (np. trzeba wywołać wewnętrzne API strony "
+                "bezpośrednio) — NIE pisz takiego kodu do pliku .js, bo "
+                "nic go tam nie uruchomi."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "javascript": {"type": "string"},
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                },
+                "required": ["javascript"]
             }
         },
 
@@ -9752,6 +9842,24 @@ def _dispatch_tool_inner(
                     "ok": False,
                     "error":
                         "Brak implementacji chrome_type()."
+                }
+
+            return _call_tool_function(
+                fn,
+                args
+            )
+
+        if name == "chrome_execute_js":
+
+            fn = globals().get(
+                "chrome_execute_js"
+            )
+
+            if not callable(fn):
+                return {
+                    "ok": False,
+                    "error":
+                        "Brak implementacji chrome_execute_js()."
                 }
 
             return _call_tool_function(
