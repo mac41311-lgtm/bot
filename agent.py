@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v126
+AEL-MINI AUTONOMOUS AGENT v127
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v126")
+    print("             AEL-MINI AUTONOMOUS AGENT v127")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12635,6 +12635,28 @@ def _condense_last_result_for_team(last_result, limit=2500):
     if message:
         parts.append("komunikat: " + short(str(message), 500))
 
+    # Zaobserwowany realny bug (log 2026-08-27): last_result po
+    # NEED_USER_LOGIN niesie "note"/"user_provided_value" (np. klucz
+    # API, który użytkownik wkleił wprost w okienku Enter — patrz
+    # _handle_need_user_login()), ale ta funkcja miała STAŁĄ listę
+    # kluczy i nie znała żadnego z nich — MAIN (który dostaje surowy
+    # JSON last_result) widział wklejoną wartość, ale reszta zespołu
+    # (PLANNER/ENGINEER, którzy dostają WYŁĄCZNIE ten skrót) nie
+    # widziała jej wcale, mimo że to ENGINEER faktycznie pisze kod,
+    # który miałby tę wartość wykorzystać.
+    note = last_result.get("note")
+
+    if note:
+        parts.append("uwaga: " + short(str(note), 800))
+
+    user_provided_value = last_result.get("user_provided_value")
+
+    if user_provided_value:
+        parts.append(
+            "wartość wklejona przez użytkownika: "
+            + short(str(user_provided_value), 800)
+        )
+
     tool_result = last_result.get("tool_result")
 
     if isinstance(tool_result, dict):
@@ -14608,25 +14630,57 @@ def _handle_need_user_login(decision):
             "w \"Co zrobić\")"
         )
 
-    input(
-        "Gdy skończysz (zalogowano/potwierdzono), wciśnij "
-        "Enter, żeby agent kontynuował > "
-    )
+    # Zaobserwowany realny bug (log 2026-08-27): użytkownik, zapytany
+    # przez MAIN o np. klucz API, w NATURALNY sposób wklejał go
+    # BEZPOŚREDNIO w to okienko ("masz tu api key : org_...") zamiast
+    # otwierać drugą sesję Termux i ręcznie zapisywać go do pliku,
+    # którego ścieżkę MAIN podał w wolnym tekście "instructions". Kod
+    # jednak używał input() WYŁĄCZNIE jako blokady do naciśnięcia
+    # Enter — cokolwiek użytkownik faktycznie wpisał, było CAŁKOWICIE
+    # WYRZUCANE. Efekt: "podaję klucz, a agent nic z nim nie robi".
+    # Naprawiono: to, co użytkownik wpisał, trafia teraz do last_result
+    # i zespół (PLANNER/ENGINEER) może użyć tego wprost w następnym
+    # TASKu, zamiast zakładać że dane leżą już w jakimś pliku.
+    user_typed = input(
+        "Gdy skończysz (zalogowano/potwierdzono), wciśnij Enter, żeby "
+        "agent kontynuował — albo, jeśli masz gotową wartość (np. "
+        "klucz/kod/numer) do przekazania, wklej ją tutaj i wciśnij "
+        "Enter > "
+    ).strip()
 
     log(
         "MAIN",
         "NEED_USER_LOGIN: użytkownik potwierdził wykonanie "
         "czynności na stronie " + (login_url or "(brak URL)") + "."
+        + (
+            " Dodatkowo wkleił wartość (" + str(len(user_typed))
+            + " znaków)."
+            if user_typed else ""
+        )
     )
+
+    note = (
+        "Użytkownik potwierdził, że ręcznie dokończył wymaganą "
+        "czynność (login/2FA/zgoda) na powyższej stronie. Sprawdź "
+        "aktualny stan Chrome i kontynuuj."
+    )
+
+    if user_typed:
+        note += (
+            " DODATKOWO: w odpowiedzi na to pytanie użytkownik wprost "
+            "wkleił tę wartość (patrz pole \"user_provided_value\" — "
+            "potraktuj to jako to, o co proszono w \"Co zrobić\" "
+            "powyżej, np. klucz API/kod/numer telefonu — użyj jej "
+            "BEZPOŚREDNIO w następnym kroku, np. każąc Gemini zapisać "
+            "ją do właściwego pliku, zamiast zakładać że użytkownik "
+            "już to gdzieś zapisał sam)."
+        )
 
     return {
         "status": "USER_LOGIN_COMPLETED",
         "url": login_url,
-        "note": (
-            "Użytkownik potwierdził, że ręcznie dokończył "
-            "wymaganą czynność (login/2FA/zgoda) na powyższej "
-            "stronie. Sprawdź aktualny stan Chrome i kontynuuj."
-        )
+        "user_provided_value": user_typed or None,
+        "note": note
     }
 
 
