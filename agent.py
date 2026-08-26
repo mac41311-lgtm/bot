@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v123
+AEL-MINI AUTONOMOUS AGENT v124
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v123")
+    print("             AEL-MINI AUTONOMOUS AGENT v124")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16152,7 +16152,14 @@ def _run_permission_bootstrap():
 
         print("-> " + label + " (" + command.split()[0] + ")")
 
-        result = execute_shell(command, timeout=15)
+        # UWAGA (zaobserwowany realny problem, 2026-08-26): 15s bywa
+        # za krótkie na to, żeby użytkownik w ogóle ZDĄŻYŁ zauważyć
+        # świeże okienko Androida "Zezwól/Odmów" i je kliknąć —
+        # zwłaszcza zaraz po starcie programu, gdy telefon jeszcze
+        # "dogania się" po uruchomieniu. Zbyt krótki timeout dawał
+        # fałszywe "Błąd/timeout" nawet gdy użytkownik faktycznie
+        # kliknąłby "Zezwól", gdyby miał więcej czasu.
+        result = execute_shell(command, timeout=30)
 
         if result.get("ok"):
             print("   OK")
