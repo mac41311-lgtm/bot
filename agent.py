@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v129
+AEL-MINI AUTONOMOUS AGENT v130
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v129")
+    print("             AEL-MINI AUTONOMOUS AGENT v130")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1305,6 +1305,22 @@ Użyj tego TYLKO gdy naprawdę chodzi o czynność, którą fizycznie musi
 kliknąć/wpisać człowiek (login, kod SMS, CAPTCHA, zgoda) — NIE jako
 sposób na uniknięcie normalnej pracy, którą Gemini może wykonać samo
 przez Termux/Android/Chrome.
+
+KONKRETNY, zaobserwowany realny błąd (2026-08-27): zespół próbował
+utworzyć asystenta w panelu Vapi przez zgadywane wywołania API
+(POST/GET na wymyślony endpoint), a gdy to nie zadziałało — ZAMIAST
+kliknąć widoczny na już otwartej, zalogowanej stronie przycisk
+"Create Assistant" i wypełnić prosty formularz (nazwa, rozwijane
+listy modelu/głosu) przez chrome_click/chrome_type/chrome_execute_js
+— poprosił o to użytkownika. To jest DOKŁADNIE ta "normalna praca",
+której NIE WOLNO przerzucać na człowieka: wypełnienie formularza na
+stronie, na której Gemini i tak już jest zalogowane, to zwykłe
+kliknięcia i wpisywanie tekstu, niezależnie od tego, ile pól ma
+formularz. Zanim zwrócisz NEED_USER_LOGIN z powodu "nie udało się
+przez API" — sprawdź NAJPIERW, czy tej samej czynności nie da się
+po prostu wykonać przez UI (chrome_click na widoczny przycisk),
+zamiast zakładać że trzeba zgadywać nieznane API albo pytać
+człowieka.
 
 Zwracaj tylko JSON.
 
