@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v134
+AEL-MINI AUTONOMOUS AGENT v135
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v134")
+    print("             AEL-MINI AUTONOMOUS AGENT v135")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12939,7 +12939,31 @@ def consult_team(
     # ostrzeżenia (tool_hint — "nie proponuj tego samego podejścia")
     # zostają doklejone OSOBNO, dosłownie, PO tłumaczeniu — żeby
     # parafraza nigdy nie osłabiła krytycznego ostrzeżenia.
-    raw_report_material = _condense_last_result_for_team(last_result)
+    # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu (Ola
+    # przy tłumaczeniu, Tomek/Kamil/Wojtek/Marek przy czytaniu OSTATNI
+    # RAPORT) nie ma już "spamowanej" dosłownej wklejonej wartości
+    # (np. klucza API) — potrzebuje jej WYŁĄCZNIE Bartek/ENGINEER,
+    # który faktycznie pisze kod i jej użyje (patrz
+    # engineer_value_handoff niżej). Zamiast polegać na prośbie do
+    # LLM "nie cytuj tego" (Ola i tak widziałaby sekret w swoim
+    # wejściu i mogłaby go przypadkiem powtórzyć), REDAGUJEMY wartość
+    # z materiału, zanim w ogóle do niej trafi — sekret fizycznie nie
+    # istnieje w tym, co widzi Ola/reszta zespołu.
+    user_value = (
+        last_result.get("user_provided_value")
+        if isinstance(last_result, dict) else None
+    )
+
+    last_result_for_team = last_result
+
+    if user_value and isinstance(last_result, dict):
+        last_result_for_team = dict(last_result)
+        last_result_for_team["user_provided_value"] = (
+            "(wartość ukryta tutaj — przekazana bezpośrednio "
+            "Bartkowi, reszta zespołu jej nie potrzebuje)"
+        )
+
+    raw_report_material = _condense_last_result_for_team(last_result_for_team)
 
     human_report = deepseek(
         "BROWSER",
@@ -12961,6 +12985,32 @@ SUROWY RAPORT:
     # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
     # zostawiamy zespołu bez niczego — wracamy do surowego zlepku.
     readable_report = human_report.strip() if human_report else ""
+
+    # Deterministyczne (nie przez LLM) przekazanie DOSŁOWNEJ wartości
+    # WYŁĄCZNIE Bartkowi/ENGINEER — patrz komentarz przy
+    # last_result_for_team wyżej. Doklejane do jego `extra` niżej, przy
+    # wywołaniu ENGINEER (nie trafia do core_context, więc reszta
+    # zespołu jej nie widzi).
+    engineer_value_handoff = ""
+
+    if user_value:
+
+        engineer_value_handoff = (
+            "\n\nDLA CIEBIE (Bartek) — użytkownik wkleił tę wartość "
+            "DOSŁOWNIE, użyj jej bezpośrednio (np. zapisz do "
+            "właściwego pliku), nie proś o nią ponownie:\n"
+            + str(user_value)
+        )
+
+        if "\n" in str(user_value):
+            engineer_value_handoff += (
+                "\n\nUWAGA: ta wartość ma WIELE LINII — to może być "
+                "skopiowany fragment całej strony, nie sama wartość. "
+                "PRZEJRZYJ WSZYSTKIE linie i znajdź tę, która "
+                "faktycznie wygląda jak oczekiwana wartość (długi "
+                "ciąg losowych znaków alfanumerycznych, bez spacji), "
+                "zamiast zakładać że cały tekst to jedna wartość."
+            )
 
     # Fakty wspólne dla WSZYSTKICH ról — to jedyna część, która
     # faktycznie musi być identyczna, żeby zespół "rozumiał się
@@ -13289,6 +13339,7 @@ OSTATNI RAPORT:
                 "\nPLAN TOMKA:\n" + planner_out
                 + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                + engineer_value_handoff
             )
         )
     )
