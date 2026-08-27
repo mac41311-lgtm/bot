@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v131
+AEL-MINI AUTONOMOUS AGENT v132
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v131")
+    print("             AEL-MINI AUTONOMOUS AGENT v132")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12932,36 +12932,43 @@ OSTATNI RAPORT:
     # do stałego system_prompt sesji) — użytkownik prosił wprost,
     # żeby każda rola wiedziała, że ma INNĄ rolę niż pozostałe, nie
     # tylko dostawała identyczny zrzut faktów.
+    # UWAGA (zaobserwowany realny problem, 2026-08-27): system_prompt
+    # każdej roli od v116 zaczyna się od ludzkiego imienia ("Nazywasz
+    # się Tomek..."), ale to przypomnienie roli — DOKLEJANE DO KAŻDEJ
+    # WIADOMOŚCI, nie tylko do system_prompt — nadal używało sztywnej,
+    # mechanicznej etykiety ("TWOJA ROLA: PLANNER", "to CRITIC" itd.).
+    # Efekt: cała "ludzka" ramka wracała tylnymi drzwiami na każdym
+    # kroku. Poprawiono, żeby konsekwentnie używać imion wszędzie.
     _ROLE_FOCUS_REMINDER = {
         "RESEARCHER": (
-            "TWOJA ROLA: RESEARCHER. Szukaj w sieci KONKRETNEJ "
+            "Tu Kamil. Szukaj w sieci KONKRETNEJ "
             "przyczyny/rozwiązania problemu poniżej. Nie planuj "
-            "kolejnego kroku (to PLANNER) i nie oceniaj planu (to "
-            "CRITIC)."
+            "kolejnego kroku (to Tomek) i nie oceniaj planu (to "
+            "Marek)."
         ),
         "PLANNER": (
-            "TWOJA ROLA: PLANNER. Zaproponuj JEDEN konkretny "
-            "następny krok na podstawie stanu i ustaleń RESEARCHERA "
-            "poniżej. Nie szukaj w sieci (to RESEARCHER) i nie "
-            "oceniaj własnego planu (to CRITIC)."
+            "Tu Tomek. Zaproponuj JEDEN konkretny "
+            "następny krok na podstawie stanu i ustaleń Kamila "
+            "poniżej. Nie szukaj w sieci (to Kamil) i nie "
+            "oceniaj własnego planu (to Marek)."
         ),
         "BROWSER": (
-            "TWOJA ROLA: BROWSER. Oceń WYŁĄCZNIE stan przeglądarki "
+            "Tu Ola. Oceń WYŁĄCZNIE stan przeglądarki "
             "Chrome poniżej — czy karty/adresy mają sens względem "
             "celu. Nie komentuj stanu Androida ani nie planuj "
             "kroków spoza przeglądarki."
         ),
         "ENGINEER": (
-            "TWOJA ROLA: ENGINEER. Dostarcz konkretny "
-            "kod/rozwiązanie techniczne na podstawie planu PLANNERA "
-            "i ustaleń RESEARCHERA poniżej."
+            "Tu Bartek. Dostarcz konkretny "
+            "kod/rozwiązanie techniczne na podstawie planu Tomka "
+            "i ustaleń Kamila poniżej."
         ),
         "CRITIC": (
-            "TWOJA ROLA: CRITIC. Oceń KRYTYCZNIE plan PLANNERA "
+            "Tu Marek. Oceń KRYTYCZNIE plan Tomka "
             "poniżej (ryzyka, błędy, brakujące dowody) na podstawie "
             "STANU FAKTYCZNEGO/checklisty powyżej — nie twórz "
             "nowego planu od zera. Surowego zrzutu ekranu Chrome/"
-            "Androida celowo NIE dostajesz — PLANNER już go użył do "
+            "Androida celowo NIE dostajesz — Tomek już go użył do "
             "ułożenia planu poniżej; Twoja praca to ocena LOGIKI i "
             "DOWODÓW, nie ponowne odczytywanie ekranu."
         ),
@@ -13169,7 +13176,7 @@ OSTATNI RAPORT:
             include_chrome=goal_needs_chrome,
             include_android=goal_needs_android,
             extra=(
-                "\nINFO RESEARCHER:\n" + researcher_out
+                "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
             )
         )
@@ -13210,8 +13217,8 @@ OSTATNI RAPORT:
             "ENGINEER",
             include_android=goal_needs_android,
             extra=(
-                "\nPLAN PLANNERA:\n" + planner_out
-                + "\nINFO RESEARCHER:\n" + researcher_out
+                "\nPLAN TOMKA:\n" + planner_out
+                + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
             )
         )
@@ -13221,7 +13228,7 @@ OSTATNI RAPORT:
         "CRITIC",
         _team_context(
             "CRITIC",
-            extra="\nPLAN PLANNERA:\n" + planner_out
+            extra="\nPLAN TOMKA:\n" + planner_out
         )
     )
 
