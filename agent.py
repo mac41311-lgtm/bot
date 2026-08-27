@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v132
+AEL-MINI AUTONOMOUS AGENT v133
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v132")
+    print("             AEL-MINI AUTONOMOUS AGENT v133")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1944,12 +1944,33 @@ wyjaśnij dlaczego. To poprawna odpowiedź, lepsza niż zgadywanie.
 
 
 BROWSER_PROMPT = """
-Nazywasz się Ola. W tym zespole analizujesz wyłącznie stan
-przeglądarki Chrome przez CDP: jakie karty są otwarte, jakie mają
-adresy i tytuły, i jaki może być sensowny następny krok. To rola
-analityczna, nie wykonawcza — oceniasz stan i sugerujesz, ale
-decyzje podejmuje MAIN, a działania (w tym otwieranie nowych kart)
-wykonuje Gemini.
+Nazywasz się Ola. Masz w tym zespole DWIE role.
+
+============================================================
+GŁÓWNA ROLA (na każdym kroku): TŁUMACZKA NA LUDZKI JĘZYK
+============================================================
+
+Reszta zespołu potrzebuje wiedzieć, co się wydarzyło w ostatnim
+kroku — ale surowe dane (logi z Termuksa, wyniki narzędzi Gemini,
+kody błędów) same w sobie nie są łatwe do szybkiego ogarnięcia.
+Dostajesz taki surowy raport i CEL — Twoim zadaniem jest opowiedzieć
+w 1-3 zdaniach, PO LUDZKU, co się właściwie stało, jakby po prostu
+opowiadała koledze z zespołu, a nie odczytywała log. Bez żargonu i
+nazw wewnętrznych narzędzi, chyba że są naprawdę potrzebne do
+zrozumienia sensu. Nie oceniaj, nie planuj kolejnego kroku, nie
+wydawaj opinii — tylko streść fakty jasno i po ludzku. Ta Twoja
+odpowiedź trafia bezpośrednio do reszty zespołu jako opis ostatniego
+kroku, więc ma być zrozumiała sama w sobie.
+
+============================================================
+DRUGA ROLA (tylko gdy dostaniesz stan Chrome): OCENA PRZEGLĄDARKI
+============================================================
+
+Gdy dostajesz też aktualny stan przeglądarki Chrome przez CDP (karty,
+adresy, tytuły) — oceń, czy ma on sens względem celu, i jaki może być
+sensowny następny krok w przeglądarce. To rola analityczna, nie
+wykonawcza — oceniasz i sugerujesz, ale decyzje podejmuje MAIN, a
+działania (w tym otwieranie kart) wykonuje Gemini.
 
 Odpowiadaj krótko i konkretnie.
 """
@@ -12893,6 +12914,42 @@ def consult_team(
     checklist_summary = _checklist_summary_block()
     checklist_block = ("\n" + checklist_summary + "\n") if checklist_summary else ""
 
+    # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu od
+    # v116/v132 rozmawia po ludzku, ale sam OSTATNI RAPORT był
+    # mechanicznym zlepkiem Pythona ("status=... ok=... narzędzie:
+    # ..."), nie prawdziwym zdaniem — "sztywny środek" mimo ludzkiej
+    # otoczki. Ola/BROWSER była też NAJMNIEJ wykorzystywaną rolą w
+    # uniwersalnym bocie (konsultowana tylko gdy CEL dotyczył
+    # przeglądarki) — dla większości celów nigdy się nie odzywała.
+    # Przerobiono jej rolę: na KAŻDYM kroku (nie tylko co 3.) tłumaczy
+    # surowy, techniczny wynik na proste, ludzkie zdania — to ta
+    # wersja trafia do reszty zespołu jako OSTATNI RAPORT. Ostre
+    # ostrzeżenia (tool_hint — "nie proponuj tego samego podejścia")
+    # zostają doklejone OSOBNO, dosłownie, PO tłumaczeniu — żeby
+    # parafraza nigdy nie osłabiła krytycznego ostrzeżenia.
+    raw_report_material = _condense_last_result_for_team(last_result)
+
+    human_report = deepseek(
+        "BROWSER",
+        f"""
+Przetłumacz poniższy techniczny raport na proste, ludzkie zdania
+(1-3 zdania) — jakbyś opowiadała koledze z zespołu, co się stało.
+Bez żargonu i nazw wewnętrznych narzędzi, chyba że są naprawdę
+potrzebne do zrozumienia. Nie oceniaj, nie planuj kolejnego kroku —
+tylko streść fakty.
+
+CEL:
+{goal}
+
+SUROWY RAPORT:
+{raw_report_material}
+"""
+    )
+
+    # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
+    # zostawiamy zespołu bez niczego — wracamy do surowego zlepku.
+    readable_report = human_report.strip() if human_report else ""
+
     # Fakty wspólne dla WSZYSTKICH ról — to jedyna część, która
     # faktycznie musi być identyczna, żeby zespół "rozumiał się
     # nawzajem" (patrz prośba użytkownika). Stan Chrome/Android
@@ -12906,7 +12963,7 @@ CEL:
 {goal}
 {progress_block}{checklist_block}
 OSTATNI RAPORT:
-{_condense_last_result_for_team(last_result)}
+{readable_report or raw_report_material}
 {tool_hint}
 """
 
