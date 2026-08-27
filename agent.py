@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v128
+AEL-MINI AUTONOMOUS AGENT v129
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v128")
+    print("             AEL-MINI AUTONOMOUS AGENT v129")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14671,7 +14671,21 @@ def _handle_need_user_login(decision):
     # Naprawiono: to, co użytkownik wpisał, trafia teraz do last_result
     # i zespół (PLANNER/ENGINEER) może użyć tego wprost w następnym
     # TASKu, zamiast zakładać że dane leżą już w jakimś pliku.
-    user_typed = input(
+    # UWAGA: MUSI być _read_full_input(), nie zwykłe input() — patrz
+    # jego docstring. Zaobserwowany realny bug (log 2026-08-27, cel:
+    # Auth Token Twilio): użytkownik wklejał WIELOLINIOWY fragment
+    # strony (np. "Live credentials\nAccount SID...\nAuth token\n...
+    # \n93a29e032a..."). Zwykłe input() oddaje TYLKO pierwszą linię
+    # ("Live credentials", ok. 16 znaków — dokładnie tyle, ile log
+    # pokazał jako długość wklejonej wartości) — cała reszta,
+    # WŁĄCZNIE Z PRAWDZIWYM TOKENEM na końcu, zostawała w buforze
+    # stdin i była po cichu "konsumowana" przez KOLEJNE input() całe
+    # kroki później (stąd późniejsze, pozornie bezsensowne wklejki typu
+    # "Auth token" — to fragment TEJ SAMEJ, dawno wklejonej treści), a
+    # ostatecznie resztki lądowały jako dosłowne (błędne) polecenia w
+    # powłoce Termux po zakończeniu programu. To dokładnie ten sam
+    # mechanizm, który wcześniej naprawiono dla pola CELU.
+    user_typed = _read_full_input(
         "Gdy skończysz (zalogowano/potwierdzono), wciśnij Enter, żeby "
         "agent kontynuował — albo, jeśli masz gotową wartość (np. "
         "klucz/kod/numer) do przekazania, wklej ją tutaj i wciśnij "
@@ -14705,6 +14719,33 @@ def _handle_need_user_login(decision):
             "ją do właściwego pliku, zamiast zakładać że użytkownik "
             "już to gdzieś zapisał sam)."
         )
+
+        # Zaobserwowany realny bug (log 2026-08-27, cel: Auth Token
+        # Twilio): użytkownik wkleił CAŁY fragment strony ("Live
+        # credentials\nAccount SID...\nAuth token\n...\n93a29e032a...")
+        # — prawdziwy token BYŁ w tym tekście, na ostatniej linii. Ale
+        # PLANNER/ENGINEER spojrzeli tylko na PIERWSZĄ linię ("Live
+        # credentials"), uznali to za samą etykietę interfejsu bez
+        # wartości, i odrzucili całość, proszą użytkownika ponownie —
+        # dokładnie ten sam błąd powtórzył się chwilę później z
+        # napisem "Auth token". Dodajemy jawne ostrzeżenie, gdy
+        # wklejony tekst wygląda na WIELOLINIOWY fragment strony
+        # (a nie pojedynczą, czystą wartość) — żeby zespół PRZESZUKAŁ
+        # całość zamiast oceniać po pierwszej linii.
+        if "\n" in user_typed:
+            note += (
+                " UWAGA: wklejony tekst ma WIELE LINII — to wygląda "
+                "na skopiowany fragment całej strony, nie samą "
+                "wartość. Może zawierać etykiety interfejsu (np. "
+                "\"Auth token\", \"Live credentials\", nazwy sekcji) "
+                "WYMIESZANE z faktyczną wartością w INNEJ linii. NIE "
+                "oceniaj po samej pierwszej linii i nie odrzucaj "
+                "całości jako 'to tylko opis' — PRZEJRZYJ WSZYSTKIE "
+                "linie i znajdź tę, która faktycznie wygląda jak "
+                "oczekiwana wartość (długi ciąg losowych znaków "
+                "alfanumerycznych, bez spacji), zanim uznasz że "
+                "użytkownik nie podał właściwej wartości."
+            )
 
     return {
         "status": "USER_LOGIN_COMPLETED",
