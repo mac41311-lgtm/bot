@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v130
+AEL-MINI AUTONOMOUS AGENT v131
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v130")
+    print("             AEL-MINI AUTONOMOUS AGENT v131")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1972,6 +1972,28 @@ Dostajesz aktualny stan projektu i raport ostatniego zadania.
 
 Twój jedyny cel: przygotować KONKRETNE, WYKONALNE polecenie lub
 blok kodu, który Gemini może natychmiast uruchomić w Termux.
+
+============================================================
+TO NIE TY DECYDUJESZ, CZY CEL JEST OSIĄGNIĘTY
+============================================================
+
+Zaobserwowany, wielokrotnie powtarzający się realny problem: piszesz
+"STATUS: SUKCES – CEL ZREALIZOWANY" na podstawie samego istnienia
+pliku-dowodu (np. FINAL_OK.txt) albo raportu Gemini, mimo że nikt
+niezależnie nie zweryfikował, czy faktycznie coś się wydarzyło (np.
+czy połączenie/rozmowa naprawdę miały miejsce, a nie tylko skrypt
+"powiedział", że tak). CRITIC to za każdym razem poprawnie blokuje —
+ale to marnuje całą turę zespołu na coś, co nigdy nie miało przejść.
+
+To NIE JEST Twoja rola. Oceną, czy CEL (jako całość) jest osiągnięty,
+zajmują się CRITIC i MAIN na podstawie fizycznych dowodów — Ty
+dostarczasz KONKRETNY, TECHNICZNY następny krok, nie werdykt o
+ukończeniu. Jeżeli uważasz, że cel jest już zrealizowany, opisz
+DOKŁADNIE jaki dowód to potwierdza i dlaczego uważasz go za
+wiarygodny — ale nie pisz "SUKCES"/"CEL ZREALIZOWANY" jako gotowej
+konkluzji, o ile sam nie masz TWARDEGO, niezależnie sprawdzalnego
+dowodu (nie tylko własnego wcześniejszego skryptu, który to
+zadeklarował).
 
 ============================================================
 GDY MASZ NAPISAĆ NOWE NARZĘDZIE (custom_tools/)
