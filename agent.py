@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v133
+AEL-MINI AUTONOMOUS AGENT v134
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v133")
+    print("             AEL-MINI AUTONOMOUS AGENT v134")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1321,6 +1321,18 @@ przez API" — sprawdź NAJPIERW, czy tej samej czynności nie da się
 po prostu wykonać przez UI (chrome_click na widoczny przycisk),
 zamiast zakładać że trzeba zgadywać nieznane API albo pytać
 człowieka.
+
+KONKRETNY, zaobserwowany realny błąd (2026-08-27): zespół wcześniej w
+tej samej sesji sam znalazł potrzebne dane bezpośrednio na telefonie
+(np. numer kontaktu przez `termux-contact-list`, jeśli uprawnienie
+READ_CONTACTS jest nadane) — a w kolejnym kroku, zamiast spróbować
+tego samego narzędzia jeszcze raz, MAIN od razu napisał "dane nie są
+dostępne w plikach systemowych" i poprosił o nie użytkownika przez
+NEED_USER_LOGIN. To ten sam błąd co wyżej: zanim poprosisz człowieka
+o dane, które mogą już istnieć NA TYM TELEFONIE (kontakt, zapisane
+hasło, wcześniej pobrany plik) — spróbuj NAJPIERW znaleźć je
+narzędziami, które już masz (np. `termux-contact-list` dla
+kontaktów), zamiast od razu zakładać że trzeba pytać.
 
 Zwracaj tylko JSON.
 
@@ -14695,6 +14707,38 @@ def verify_final(goal=""):
     }
 
 
+def _looks_like_failure_report(text):
+    """
+    Prosty, celowo niewyczerpujący heurystyczny detektor: czy wpisany
+    przez użytkownika tekst brzmi jak ZGŁOSZENIE PROBLEMU/BŁĘDU
+    (np. "ta strona się nie wczytuje", "nie zalogowałem się"), a nie
+    jak potwierdzenie sukcesu ani przekazana wartość (klucz/kod).
+
+    Zaobserwowany realny bug (log 2026-08-27): użytkownik napisał
+    "https://app.vapi.ai/login ta strona sie nie wczytuje" w
+    odpowiedzi na prośbę o zalogowanie — _handle_need_user_login()
+    mimo to zawsze budował note z twierdzeniem, że logowanie zostało
+    ręcznie potwierdzone. Fałszywie ujemne dopasowanie (heurystyka
+    nie złapie zgłoszenia problemu) nie jest tragiczne — zespół i tak
+    dostaje neutralną notatkę każącą mu samemu ocenić treść, zamiast
+    z góry zakładać sukces jak poprzednio.
+    """
+
+    lowered = text.lower()
+
+    failure_markers = (
+        "nie wczytuje", "nie wczyt", "nie ładuje", "nie laduje",
+        "nie działa", "nie dziala", "błąd", "blad", "error",
+        "nie mogę", "nie moge", "nie udało", "nie udalo",
+        "nie otwiera", "nie otworz", "problem", "zawiesza",
+        "wywala", "nie widzę", "nie widze", "nie mam dostępu",
+        "nie mam dostepu", "nie zalogow", "nie działała",
+        "nie dzialala",
+    )
+
+    return any(marker in lowered for marker in failure_markers)
+
+
 def _handle_need_user_login(decision):
     """
     Obsługa decyzji NEED_USER_LOGIN — wspólna dla dwóch miejsc w
@@ -14794,32 +14838,75 @@ def _handle_need_user_login(decision):
         "Enter > "
     ).strip()
 
+    # Zaobserwowany realny bug (log 2026-08-27, cel: telefon do
+    # Beaty): kod NIŻEJ wcześniej ZAWSZE budował last_result ze
+    # "status": "USER_LOGIN_COMPLETED" i notatką "Użytkownik
+    # potwierdził, że ręcznie dokończył...", NIEZALEŻNIE od tego, co
+    # użytkownik faktycznie wpisał. Użytkownik napisał wprost
+    # "https://app.vapi.ai/login ta strona sie nie wczytuje" — czyli
+    # ZGŁASZAŁ, że strona logowania się NIE otworzyła (nie zalogował
+    # się) — a Ola/BROWSER (tłumacząca ten raport na ludzki język,
+    # patrz consult_team()) i tak przetłumaczyła to jako "użytkownik
+    # potwierdził logowanie", co PLANNER wziął za fakt ("użytkownik
+    # jest już zalogowany, potwierdzone ręcznie") i zbudował na tym
+    # kolejny krok. To była czysta, z góry przyjęta interpretacja
+    # Pythona — nie coś, co użytkownik faktycznie powiedział. Gdy
+    # wpisany tekst brzmi jak zgłoszenie problemu, note WPROST mówi
+    # zespołowi, żeby NIE zakładał sukcesu; w pozostałych przypadkach
+    # note jest neutralna (nie przesądza ani sukcesu, ani porażki) i
+    # każe zespołowi samodzielnie ocenić treść.
+    looks_like_failure = bool(user_typed) and _looks_like_failure_report(user_typed)
+
     log(
         "MAIN",
-        "NEED_USER_LOGIN: użytkownik potwierdził wykonanie "
-        "czynności na stronie " + (login_url or "(brak URL)") + "."
+        "NEED_USER_LOGIN: użytkownik odpowiedział na prośbę o "
+        "czynność ręczną na stronie " + (login_url or "(brak URL)") + "."
         + (
-            " Dodatkowo wkleił wartość (" + str(len(user_typed))
-            + " znaków)."
-            if user_typed else ""
+            " Wkleił tekst (" + str(len(user_typed)) + " znaków)."
+            if user_typed else " Nacisnął Enter bez tekstu."
+        )
+        + (
+            " UWAGA: treść wygląda na zgłoszenie problemu, nie "
+            "potwierdzenie sukcesu."
+            if looks_like_failure else ""
         )
     )
 
-    note = (
-        "Użytkownik potwierdził, że ręcznie dokończył wymaganą "
-        "czynność (login/2FA/zgoda) na powyższej stronie. Sprawdź "
-        "aktualny stan Chrome i kontynuuj."
-    )
-
-    if user_typed:
-        note += (
-            " DODATKOWO: w odpowiedzi na to pytanie użytkownik wprost "
-            "wkleił tę wartość (patrz pole \"user_provided_value\" — "
-            "potraktuj to jako to, o co proszono w \"Co zrobić\" "
-            "powyżej, np. klucz API/kod/numer telefonu — użyj jej "
-            "BEZPOŚREDNIO w następnym kroku, np. każąc Gemini zapisać "
-            "ją do właściwego pliku, zamiast zakładać że użytkownik "
-            "już to gdzieś zapisał sam)."
+    if not user_typed:
+        note = (
+            "Użytkownik nacisnął Enter bez wpisywania tekstu — to "
+            "literalny sygnał 'zrobione, kontynuuj' (dokładnie o to "
+            "proszono w pytaniu). Sprawdź aktualny stan Chrome i "
+            "kontynuuj, ale nadal zweryfikuj po stanie Chrome, czy "
+            "czynność faktycznie się udała, zamiast ślepo ufać."
+        )
+    elif looks_like_failure:
+        note = (
+            "UWAGA: to NIE jest potwierdzenie sukcesu. Odpowiedź "
+            "użytkownika (patrz \"user_provided_value\") brzmi jak "
+            "ZGŁOSZENIE PROBLEMU/BŁĘDU (np. strona się nie wczytała, "
+            "coś nie zadziałało) — użytkownik wprost mówi, że "
+            "czynność NIE została wykonana. NIE zakładaj, że "
+            "logowanie/czynność zostały ukończone. Sprawdź aktualny "
+            "stan Chrome i zaplanuj kolejny krok uwzględniający ten "
+            "problem (np. spróbuj otworzyć stronę jeszcze raz, "
+            "zaproponuj inny adres, albo zapytaj użytkownika o więcej "
+            "szczegółów) — NIE kontynuuj tak, jakby użytkownik był "
+            "już zalogowany."
+        )
+    else:
+        note = (
+            "Użytkownik odpowiedział, wklejając poniższy tekst "
+            "(patrz \"user_provided_value\"). NIE zakładaj "
+            "automatycznie, że to potwierdzenie sukcesu — to może "
+            "być: (a) faktyczna wartość do wykorzystania (klucz "
+            "API/kod/numer), (b) potwierdzenie że czynność jest "
+            "zrobiona, albo (c) coś innego. Przeczytaj treść i sam "
+            "oceń, co faktycznie oznacza, zanim uznasz czynność za "
+            "zakończoną. Jeśli to wartość — użyj jej BEZPOŚREDNIO w "
+            "następnym kroku, np. każąc Gemini zapisać ją do "
+            "właściwego pliku, zamiast zakładać że użytkownik już to "
+            "gdzieś zapisał sam."
         )
 
         # Zaobserwowany realny bug (log 2026-08-27, cel: Auth Token
@@ -14850,7 +14937,7 @@ def _handle_need_user_login(decision):
             )
 
     return {
-        "status": "USER_LOGIN_COMPLETED",
+        "status": "USER_RESPONDED_TO_LOGIN_PROMPT",
         "url": login_url,
         "user_provided_value": user_typed or None,
         "note": note
