@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v153
+AEL-MINI AUTONOMOUS AGENT v154
 
 ARCHITEKTURA:
 
@@ -1046,7 +1046,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v153")
+    print("             AEL-MINI AUTONOMOUS AGENT v154")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12260,6 +12260,36 @@ def _looks_like_python_script(code, target_path):
     return bool(_PYTHON_SCRIPT_MARKERS.search(code or ""))
 
 
+def _python_syntax_error(code):
+    """
+    Zwraca czytelny opis błędu składni, jeśli `code` NIE jest
+    poprawnym Pythonem — albo None, gdy jest poprawny.
+
+    Zaobserwowany realny, DWUKROTNY przypadek w JEDNEJ sesji
+    (2026-08-28, "fetch_ainora_api_docs.py", potem
+    "find_ainora_docs.py"): ENGINEER podał w bloku kodu de facto
+    POLECENIE URUCHOMIENIA ("cd ~/agent && pip install ... &&
+    python plik.py", "python ~/agent/plik.py"), nie treść samego
+    pliku Pythona. _looks_like_shell_script() tego NIE złapał — jego
+    regex szuka konkretnych wzorców (shebang, heredoc, `cat >`,
+    `$(...)`), a żadna z tych dwóch komend żadnego z nich nie
+    zawiera. write_engineer_code_to zapisało to 1:1 jako "kod",
+    Gemini uruchomił `python plik.py` i dostał natychmiastowy
+    SyntaxError — cały krok (konsultacja zespołu + TASK) poszedł na
+    marne, DWA RAZY, mimo że błąd był wykrywalny deterministycznie
+    bez zgadywania kolejnych wzorców tekstowych: wystarczyło
+    faktycznie spróbować SKOMPILOWAĆ to jako Python, dokładnie tak,
+    jak zaraz zrobi to sam interpreter przy uruchomieniu.
+    """
+
+    try:
+        compile(code, "<engineer_code>", "exec")
+    except SyntaxError as e:
+        return str(e)
+
+    return None
+
+
 def apply_patch_from_fixer_text(fixer_text):
     """
     Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
@@ -16232,6 +16262,47 @@ Zwróć tylko JSON.
                     }
 
                     continue
+
+                # --------------------------------------------------
+                # BEZPIECZEŃSTWO: gdy cel to .py, sprawdź NAPRAWDĘ,
+                # czy to poprawny Python — zamiast dalej zgadywać
+                # kolejne wzorce tekstowe (patrz docstring
+                # _python_syntax_error). To łapie DOKŁADNIE ten
+                # przypadek, którego _looks_like_shell_script() nie
+                # złapał: "polecenie do uruchomienia" zapisane jako
+                # "treść pliku" .py.
+                # --------------------------------------------------
+
+                if target_path.suffix.lower() == ".py":
+
+                    syntax_error = _python_syntax_error(
+                        engineer_code
+                    )
+
+                    if syntax_error:
+
+                        last_result = {
+                            "status":
+                                "ENGINEER_CODE_INVALID_PYTHON_SYNTAX",
+                            "message": (
+                                "write_engineer_code_to ODRZUCONE: "
+                                "docelowa ścieżka to " + str(target_path)
+                                + " (.py), ale blok kodu od ENGINEER "
+                                "NIE JEST poprawnym Pythonem — próba "
+                                "kompilacji zwróciła: " + syntax_error
+                                + ". To zwykle oznacza, że ENGINEER "
+                                "podał POLECENIE URUCHOMIENIA (np. "
+                                "\"cd ... && python plik.py\") zamiast "
+                                "TREŚCI samego pliku. Poproś ENGINEER "
+                                "o czystą treść pliku .py, bez "
+                                "poleceń powłoki wokół niej — samo "
+                                "uruchomienie (jeśli potrzebne) należy "
+                                "do zwykłego TASKu, nie do tego bloku "
+                                "kodu."
+                            )
+                        }
+
+                        continue
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: write_engineer_code_to NADPISUJE
