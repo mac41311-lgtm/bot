@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v139
+AEL-MINI AUTONOMOUS AGENT v140
 
 ARCHITEKTURA:
 
@@ -978,7 +978,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v139")
+    print("             AEL-MINI AUTONOMOUS AGENT v140")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1880,6 +1880,23 @@ Poniższe punkty warto sprawdzać za każdym razem:
   zablokuj i zażądaj innego podejścia do znalezienia właściwego
   celu (kontakty telefonu, zainstalowane aplikacje, dokumentacja
   narzędzia), nie dalszej analizy własnego procesu.
+- REJESTRACJA MIĘDZY KROKAMI (czy dane z poprzedniego kroku faktycznie
+  "trafiają" tam, gdzie kolejny krok ich potrzebuje — jak w druku
+  warstwowym, gdzie każda warstwa musi się dokładnie pokryć z
+  poprzednią, inaczej obraz "ucieka"): zaobserwowany realny przypadek
+  — krok N zapisał klucz API do pliku, krok N+1 miał go użyć w
+  poleceniu `curl`, ale zmienna powłoki z tym kluczem była w
+  POJEDYNCZYCH cudzysłowach (bash jej wtedy NIE podstawia) — obie
+  warstwy z osobna wyglądały poprawnie, ale się nie "zarejestrowały",
+  więc do zewnętrznego serwisu poleciał dosłowny tekst zmiennej
+  zamiast jej wartości, a błąd (AUTH_FAILURE) wyszedł na jaw dopiero
+  po fakcie. Gdy plan Tomka każe użyć czegoś wyprodukowanego we
+  wcześniejszym kroku (zapisany plik, wartość, zmienna) — sprawdź NIE
+  TYLKO czy to coś istnieje, ale czy sposób jego UŻYCIA (dokładna
+  nazwa, ścieżka, cudzysłowy/interpolacja) faktycznie odpowiada temu,
+  jak to zostało zapisane. Jeśli nie masz pewności, zażądaj, żeby
+  Bartek pokazał dokładne polecenie, zanim uznasz plan za gotowy do
+  wykonania.
 
 Format:
 
@@ -8253,6 +8270,62 @@ def _detect_single_quoted_shell_variable(command):
     return None
 
 
+# "Rejestracja warstw" (na wyraźną prośbę użytkownika, allegoria
+# CMYK/sitodruk — każda warstwa/krok musi się dokładnie pokryć z
+# tym, co wyprodukowała poprzednia): krok N zapisuje plik, krok N+1
+# ZAKŁADA, że on tam jest i czyta go przez `$(cat ~/plik)`. Jeśli
+# krok N faktycznie nie zapisał go pod TĄ dokładną ścieżką (literówka,
+# inny katalog, cichy wcześniejszy błąd) — samo podstawienie `$(cat
+# ...)` nie wywala polecenia: `cat` zgłosi błąd na stderr, ale
+# podstawienie i tak "zadziała", tylko z PUSTYM tekstem zamiast
+# prawdziwej wartości (dokładnie ten sam rodzaj cichej, niewidocznej
+# awarii co pojedyncze cudzysłowy w _detect_single_quoted_shell_
+# variable — inna przyczyna, ten sam objaw: kolejny krok dostaje
+# śmieciowe dane, a "ok": true nic o tym nie mówi). Wykrywamy to
+# STATYCZNIE, zanim polecenie w ogóle ruszy.
+_CAT_SUBSTITUTION_RE = re.compile(
+    r'\$\(\s*cat\s+([^\s)]+)\s*\)|`\s*cat\s+([^\s`]+)\s*`'
+)
+
+
+def _detect_missing_cat_substitution_file(command):
+
+    command_str = str(command or "")
+
+    for m in _CAT_SUBSTITUTION_RE.finditer(command_str):
+
+        raw_path = m.group(1) or m.group(2)
+
+        # Plik tworzony W TEJ SAMEJ komendzie (np. "echo x > ~/f &&
+        # cat $(cat ~/f)") to samodzielna, kompletna komenda, nie
+        # "niezarejestrowana warstwa" między dwoma krokami — pomijamy.
+        if re.search(
+            r'>>?\s*["\']?' + re.escape(raw_path) + r'["\']?(\s|$|;|&)',
+            command_str
+        ):
+            continue
+
+        try:
+            expanded = Path(raw_path).expanduser()
+        except Exception:
+            continue
+
+        if not expanded.exists():
+            return (
+                "Komenda odczytuje plik '" + raw_path + "' przez "
+                "podstawienie $(cat ...), ale ten plik NIE ISTNIEJE "
+                "na dysku w tej chwili — podstawienie zwróci PUSTY "
+                "tekst bez żadnego widocznego błędu polecenia (samo "
+                "'cat' zgłosi błąd na stderr, ale reszta polecenia i "
+                "tak 'zadziała' z pustą wartością zamiast prawdziwej). "
+                "Sprawdź, czy poprzedni krok faktycznie zapisał ten "
+                "plik pod DOKŁADNIE tą ścieżką, zanim uznasz że dane "
+                "są gotowe do użycia."
+            )
+
+    return None
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -8295,6 +8368,13 @@ def termux_run(command):
 
             if quoting_warning:
                 result["shell_quoting_warning"] = quoting_warning
+
+            missing_file_warning = _detect_missing_cat_substitution_file(
+                command_str
+            )
+
+            if missing_file_warning:
+                result["missing_file_warning"] = missing_file_warning
 
         if (
             not result.get("ok")
@@ -8439,6 +8519,13 @@ def termux_run_background(
 
         if quoting_warning:
             bg_result["shell_quoting_warning"] = quoting_warning
+
+        missing_file_warning = _detect_missing_cat_substitution_file(
+            command
+        )
+
+        if missing_file_warning:
+            bg_result["missing_file_warning"] = missing_file_warning
 
         return bg_result
 
@@ -10794,7 +10881,8 @@ CO POWINIEN ZROBIĆ MAIN:
                         "blocked_fake_tool_invocation",
                         "custom_tool_rejected",
                         "already_launched_note",
-                        "shell_quoting_warning"
+                        "shell_quoting_warning",
+                        "missing_file_warning"
                     ):
 
                         if result.get(warning_key):
