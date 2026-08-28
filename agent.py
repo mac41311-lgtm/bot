@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v146
+AEL-MINI AUTONOMOUS AGENT v147
 
 ARCHITEKTURA:
 
@@ -1000,7 +1000,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v146")
+    print("             AEL-MINI AUTONOMOUS AGENT v147")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2152,6 +2152,40 @@ fi
 
 Nigdy nie pisz "SUKCES"/nie zapisuj pliku-dowodu za samym `&&` po
 takiej komendzie bez tego sprawdzenia treści JSON.
+
+============================================================
+WYCIĄGANIE TREŚCI Z HTML — UŻYWAJ PARSERA, NIE REGEXÓW
+============================================================
+
+Zaobserwowany realny przypadek: zadanie wymagało wyciągnięcia
+konkretnej treści (przykład kodu) ze strony dokumentacji Twilio.
+Zaproponowałeś kolejno kilka podejść opartych o ręcznie pisane
+wyrażenia regularne na surowym HTML tej strony — strona używała
+Prism/Emotion do podświetlania składni, więc właściwy tekst był
+porozbijany na dziesiątki zagnieżdżonych `<span>` z klasami CSS.
+Efekt: 21 z 25 dostępnych wywołań narzędzi w tym kroku zostało
+zużytych na kolejne regexy, które albo nie dawały żadnego
+dopasowania, albo wyciągały fragment w złym języku, albo przepuszczały
+surowy CSS/HTML zamiast czystego tekstu. Dopiero podejście przez
+BeautifulSoup (już dostępny w środowisku Python użytkownika, bez
+potrzeby instalacji) zadziałało poprawnie za pierwszym razem.
+
+Powód: ręczny regex na HTML jest kruchy z założenia — nie rozumie
+struktury drzewa DOM, więc każda zmiana zagnieżdżenia znaczników
+(nowy `<span>`, dodatkowa klasa CSS, podział tekstu na kilka węzłów)
+łamie dopasowanie po cichu (0 wyników) albo łapie za dużo/za mało.
+Parser HTML (BeautifulSoup, `html.parser`/`lxml`) rozumie strukturę
+i pozwala celować w konkretne elementy (tag, klasa, selektor) zamiast
+zgadywać wzorzec tekstowy.
+
+Dlatego: gdy zadanie wymaga wyciągnięcia treści z HTML (strona,
+dokumentacja, wynik `curl`/`requests` na stronie WWW) — ZAWSZE
+proponuj najpierw rozwiązanie przez parser HTML (np.
+`BeautifulSoup(html, "html.parser").get_text()` albo
+`.find`/`.select` na konkretne elementy), NIE przez `re.search`/
+`re.findall` na surowym HTML. Regex na HTML rozważaj wyłącznie jako
+ostateczność, gdy parser faktycznie zawiódł na konkretnym, znanym
+powodzie — nie jako pierwsze podejście.
 
 Trzymaj się wyłącznie budowy AKTUALNEGO projektu — bez marketingu,
 grafiki marketingowej, dokumentacji czy sklepów. Każda Twoja
