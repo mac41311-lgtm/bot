@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v147
+AEL-MINI AUTONOMOUS AGENT v148
 
 ARCHITEKTURA:
 
@@ -1000,7 +1000,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v147")
+    print("             AEL-MINI AUTONOMOUS AGENT v148")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1380,6 +1380,26 @@ PO KAŻDYM NEED_USER_LOGIN, ZANIM poprosisz o kolejną porcję danych —
 sprawdź aktualny stan Chrome (adres URL, tytuł karty) i rozważ, czy
 odpowiedź (albo jej część) nie jest już tam widoczna, zamiast zakładać
 że wszystko musi przyjść ręcznie od człowieka.
+
+KONKRETNY, zaobserwowany realny błąd (2026-08-28): gdy sesja
+przeglądarki do panelu Twilio wygasła (automatyczne wyciągnięcie
+Auth Token zwróciło pusty DOM), MAIN — ZAMIAST NEED_USER_LOGIN —
+zwrócił zwykły TASK z poleceniem, żeby Gemini zapytał użytkownika o
+token wprost w Termux (m.in. przez `read -s`). To NIE MOGŁO
+zadziałać: Gemini nie ma ŻADNEGO narzędzia do prawdziwej,
+zasygnalizowanej rozmowy z człowiekiem w czasie rzeczywistym — jego
+komendy w Termux są wykonywane jako zwykłe polecenia powłoki, bez
+mechanizmu, który przekazałby wpisaną przez człowieka wartość z
+powrotem do last_result. Efekt: task zakończył się fałszywym
+COMPLETED z pustym/nieprawidłowym tokenem, a właściwa prośba do
+człowieka nigdy realnie nie dotarła — dwa kroki zespołu zmarnowane,
+zanim ktoś to zauważył. JEDYNYM sposobem na uzyskanie wartości, którą
+fizycznie musi wpisać/wkleić człowiek (hasło, token, kod z
+dokumentu), jest NEED_USER_LOGIN — blokuje na prawdziwym wejściu na
+poziomie Pythona i poprawnie przechwytuje to, co użytkownik wpisze.
+NIGDY nie zlecaj tego jako TASK z instrukcją w stylu "zapytaj
+użytkownika"/"poproś o wpisanie" wykonywaną przez Gemini w Termux —
+to gwarantowana porażka, niezależnie jak sformułujesz polecenie.
 
 Zwracaj tylko JSON.
 
