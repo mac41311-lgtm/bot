@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v135
+AEL-MINI AUTONOMOUS AGENT v136
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v135")
+    print("             AEL-MINI AUTONOMOUS AGENT v136")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15013,67 +15013,33 @@ def run_agent(goal):
 
     signatures = []
 
-    for step in range(
-        1,
-        MAX_STEPS + 1
-    ):
+    # Zaobserwowany realny bug (log 2026-08-27, sesja puszczona na
+    # noc bez nadzoru): to BYŁ `for step in range(1, MAX_STEPS + 1)`
+    # — każda iteracja, WŁĄCZNIE z tymi, które tylko czekały na reset
+    # limitu Gemini (blok "WYKONAWCA ZABLOKOWANY" niżej, sleep(30) +
+    # continue), zużywała JEDEN z ograniczonej puli MAX_STEPS (domyślnie
+    # 40) kroków. Log pokazał dokładnie to: po wyczerpaniu limitu API
+    # (KROK 2) kolejne 38 kroków (KROK 3-40) to WYŁĄCZNIE czekanie co
+    # 30s — realnie ok. 19 minut — po czym padło "OSIĄGNIĘTO LIMIT
+    # KROKÓW" i CAŁY PROGRAM SIĘ ZAKOŃCZYŁ, mimo że własny komunikat
+    # w kodzie mówi, że reset limitu Gemini trwa "zwykle 24h". Program
+    # zostawiony na całą noc bez nadzoru realnie popracował kilka minut,
+    # a resztę czasu leżał już zamknięty, czekając na nikogo. Naprawiono:
+    # `step` (i limit MAX_STEPS) liczy TYLKO iteracje, w których agent
+    # faktycznie coś zrobił — czekanie na reset limitu API kręci pętlę
+    # w kółko (`continue`) BEZ zużywania budżetu kroków, więc program
+    # faktycznie doczeka realnego resetu zamiast zamykać się na próżno.
+    step = 0
 
-        print()
-        print(
-            "--- KROK "
-            + str(step)
-            + " ---"
-        )
-
-        # Wykryj nowe/zmienione narzędzia w custom_tools/ — tanie
-        # (stat() na plikach), gdy nic się nie zmieniło.
-        load_custom_tools()
-
-        # ------------------------------------------------------
-        # Najpierw wykonujemy istniejący task.
-        # ------------------------------------------------------
-
-        if not gemini_disabled:
-
-            path, task = pending_task()
-
-            if task is not None:
-
-                result = run_next_task()
-
-                if result:
-
-                    last_result = result
-
-                    # TOOL_LIMIT to specjalny przypadek: Gemini
-                    # skończył mu narzędzia zanim skończył zadanie.
-                    # Nie jest to błąd narzędzia ani błąd agenta —
-                    # TASK był za duży. Dodajemy hint, żeby MAIN
-                    # wiedział, że ma podzielić zadanie, a nie
-                    # traktował tego jak sukces lub zwykłą awarię.
-                    if (
-                        isinstance(result, dict)
-                        and result.get("status") == "TOOL_LIMIT"
-                    ):
-                        last_result["hint"] = (
-                            "Gemini wyczerpał limit wywołań narzędzi "
-                            "(" + str(result.get("tool_calls", "?")) + "). "
-                            "TASK był za duży lub za szeroki. "
-                            "Podziel go na DWIE mniejsze operacje "
-                            "i wyślij je jako osobne TASKi."
-                        )
-                        log_event(
-                            "tool_limit_hit",
-                            {"tool_calls": result.get("tool_calls")}
-                        )
-
-                continue
+    while step < MAX_STEPS:
 
         # ------------------------------------------------------
-        # Jeśli Gemini quota jest wyczerpana,
-        # NIE twórz kolejnych tasków i nie konsultuj teamu —
-        # to strata kredytów DeepSeek, bo i tak nie możemy nic
-        # wykonać. Daj MAIN znać i poczekaj na reset limitu.
+        # Jeśli Gemini quota jest wyczerpana, NIE twórz kolejnych
+        # tasków i nie konsultuj teamu — to strata kredytów DeepSeek,
+        # bo i tak nie możemy nic wykonać. Daj MAIN znać i poczekaj
+        # na reset limitu. UMYŚLNIE PRZED zwiększeniem `step`/printem
+        # "--- KROK ---" — patrz komentarz wyżej, to czekanie nie
+        # jest krokiem agenta i nie ma zużywać budżetu MAX_STEPS.
         # ------------------------------------------------------
 
         if gemini_disabled:
@@ -15097,6 +15063,57 @@ def run_agent(goal):
 
             import time
             time.sleep(30)
+
+            continue
+
+        step += 1
+
+        print()
+        print(
+            "--- KROK "
+            + str(step)
+            + " ---"
+        )
+
+        # Wykryj nowe/zmienione narzędzia w custom_tools/ — tanie
+        # (stat() na plikach), gdy nic się nie zmieniło.
+        load_custom_tools()
+
+        # ------------------------------------------------------
+        # Najpierw wykonujemy istniejący task.
+        # ------------------------------------------------------
+
+        path, task = pending_task()
+
+        if task is not None:
+
+            result = run_next_task()
+
+            if result:
+
+                last_result = result
+
+                # TOOL_LIMIT to specjalny przypadek: Gemini
+                # skończył mu narzędzia zanim skończył zadanie.
+                # Nie jest to błąd narzędzia ani błąd agenta —
+                # TASK był za duży. Dodajemy hint, żeby MAIN
+                # wiedział, że ma podzielić zadanie, a nie
+                # traktował tego jak sukces lub zwykłą awarię.
+                if (
+                    isinstance(result, dict)
+                    and result.get("status") == "TOOL_LIMIT"
+                ):
+                    last_result["hint"] = (
+                        "Gemini wyczerpał limit wywołań narzędzi "
+                        "(" + str(result.get("tool_calls", "?")) + "). "
+                        "TASK był za duży lub za szeroki. "
+                        "Podziel go na DWIE mniejsze operacje "
+                        "i wyślij je jako osobne TASKi."
+                    )
+                    log_event(
+                        "tool_limit_hit",
+                        {"tool_calls": result.get("tool_calls")}
+                    )
 
             continue
 
