@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v154
+AEL-MINI AUTONOMOUS AGENT v155
 
 ARCHITEKTURA:
 
@@ -1046,7 +1046,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v154")
+    print("             AEL-MINI AUTONOMOUS AGENT v155")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1273,14 +1273,17 @@ projektu — gry, aplikacji Android, skryptu, narzędzia CLI,
 automatyzacji, strony itd., zależnie od aktualnego CELU. Poniższe
 zasady dotyczą jego kodu niezależnie od rodzaju projektu.
 
-To NIE jest opcja do rozważenia — to TWÓJ OBOWIĄZEK w konkretnej
-sytuacji: jeżeli ENGINEER podał w swojej odpowiedzi
+TWÓJ OBOWIĄZEK w konkretnej sytuacji, nie opcja do rozważenia:
+jeżeli ENGINEER podał w swojej odpowiedzi
 gotowy blok kodu (wewnątrz ```...```),
 A Twój TASK dotyczy ZAPISANIA tego kodu do pliku — MASZ UŻYĆ pola
-"write_engineer_code_to" z docelową ścieżką (np.
-"/data/data/com.termux/files/home/game3d/game.py"). Python zapisze
-kod do pliku SAM, zanim TASK w ogóle trafi do Gemini — zero zużycia
-Gemini na przepisywanie.
+"write_engineer_code_to" z docelową ścieżką
+(np. "/data/data/com.termux/files/home/game3d/game.py"). Python
+zapisze kod do pliku SAM, zanim TASK w ogóle trafi do Gemini — zero
+zużycia Gemini na przepisywanie. Pole "task" ma wtedy dotyczyć
+WYŁĄCZNIE uruchomienia i przetestowania już zapisanego pliku (np.
+"Uruchom ~/game3d/game.py i sprawdź czy proces nie kończy się
+błędem") — plik już tam będzie, zanim Gemini zacznie pracować.
 
 ZABRONIONE w tej sytuacji: opisywanie kodu słownie w "task" i
 liczenie, że Gemini sam go napisze/odtworzy przez termux_write_file.
@@ -1289,12 +1292,6 @@ przepisywania — dokładnie to, czego ten mechanizm ma unikać. Jeżeli
 zauważysz, że ostatni TASK kazał Gemini samodzielnie napisać duży
 plik, mimo że ENGINEER miał gotowy kod — to był błąd,
 napraw podejście w następnym TASKu.
-
-Kiedy używasz write_engineer_code_to, pole "task" ma dotyczyć
-WYŁĄCZNIE uruchomienia i przetestowania już zapisanego pliku (np.
-"Uruchom ~/game3d/game.py i sprawdź czy proces nie kończy się
-błędem"), NIE jego tworzenia — plik już tam będzie, zanim Gemini
-zacznie pracować.
 
 Jeżeli w ostatniej odpowiedzi ENGINEER NIE MA bloku
 kodu (```...```), pole zostanie odrzucone z jasnym błędem — nie
@@ -1307,20 +1304,19 @@ UWAGA — write_engineer_code_to NADPISUJE CAŁY PLIK
 ============================================================
 
 write_engineer_code_to zastępuje CAŁĄ zawartość pliku blokiem kodu
-ENGINEER. To bezpieczne TYLKO gdy ten blok to PEŁNA,
-kompletna zawartość pliku (np. pierwszy zapis nowego pliku, albo
-ENGINEER świadomie podał cały plik od nowa).
+ENGINEER — bezpieczne TYLKO gdy ten blok to PEŁNA, kompletna
+zawartość pliku (np. pierwszy zapis nowego pliku, albo ENGINEER
+świadomie podał cały plik od nowa).
 
-NIE UŻYWAJ write_engineer_code_to, jeżeli ENGINEER
-podał tylko FRAGMENT/POPRAWKĘ istniejącego pliku (np. "zmień tę
-jedną funkcję") — nadpisałbyś resztę pliku tym fragmentem i
-zniszczył wszystko inne. Do poprawek fragmentu istniejącego pliku
-zrób zamiast tego zwykły TASK instruujący Gemini, żeby użyło
-termux_patch_file (search/replace) — poproś Gemini, żeby najpierw
-odczytało plik (termux_read_file), znalazło dokładny fragment do
-zmiany, i podmieniło go przez termux_patch_file. To jest właściwe
-narzędzie do poprawek fragmentów, write_engineer_code_to jest do
-zapisu całych plików.
+Dla POPRAWKI FRAGMENTU istniejącego pliku (np. "zmień tę jedną
+funkcję") użyj zamiast tego zwykłego TASKu instruującego Gemini, żeby
+użyło termux_patch_file (search/replace) — poproś Gemini, żeby
+najpierw odczytało plik (termux_read_file), znalazło dokładny
+fragment do zmiany, i podmieniło go przez termux_patch_file. To jest
+właściwe narzędzie do poprawek fragmentów; write_engineer_code_to
+jest do zapisu całych plików — jeżeli ENGINEER podał tylko fragment,
+a użyjesz write_engineer_code_to, nadpiszesz nim resztę pliku i
+zniszczysz wszystko inne.
 ============================================================
 
 DONE:
@@ -1664,16 +1660,15 @@ To działa (uprzywilejowany `shell` przez ADB), podczas gdy gołe
 ale i tak PIERWSZY WYBÓR to android_state/chrome_tabs, bo są
 prostsze i już dostępne bez dodatkowego polecenia.
 
-KRYTYCZNE — gdy piszesz TASK dla Gemini, NIGDY nie każ mu wsadzać
+KRYTYCZNE — gdy TASK wymaga dowodu wizualnego/stanu Chrome, treść
+TASKu ma wprost nakazywać Gemini wywołanie KONKRETNEGO narzędzia
+bezpośrednio ("wywołaj android_screenshot", "wywołaj chrome_tabs")
+jako osobny krok w tym samym zadaniu. Nigdy nie każ mu wsadzać
 android_screenshot / chrome_tabs / chrome_inspect / chrome_open /
 android_launch_app DO treści skryptu bash (termux_run/
 termux_run_background) — to narzędzia PO STRONIE GEMINI, nie
 polecenia powłoki, więc taki skrypt po cichu nic z nimi nie zrobi,
-a mimo to może zgłosić COMPLETED. Jeśli TASK wymaga dowodu
-wizualnego/stanu Chrome, treść TASKu ma wprost nakazywać Gemini
-wywołanie KONKRETNEGO narzędzia bezpośrednio ("wywołaj
-android_screenshot", "wywołaj chrome_tabs") jako osobny krok w tym
-samym zadaniu — nie "zrób to w skrypcie".
+a mimo to może zgłosić COMPLETED.
 
 SHELL:
 - shell
@@ -1797,46 +1792,42 @@ da się zbudować i uruchomić przez Termux, ADB/Android albo
 Chrome. Rozpoznaj o co dokładnie chodzi z treści CELU, który
 dostajesz w każdej wiadomości.
 
-Dostajesz: cel, ostatni wynik, stan systemu. Twoje zadanie to
-wybrać JEDEN konkretny, realistyczny następny krok — nie więcej niż
-3 kroki naprzód, każdy zrozumiały dla Gemini jako komenda Termux
-albo konkretny plik do utworzenia. Jeśli poprzedni krok skończył
-się timeoutem, rozbij podejście na etapy (najpierw setup, potem
-build, potem sprawdzenie) zamiast próbować tego samego jeszcze raz
-— a jeśli krok już dwa razy zawiódł tym samym sposobem, trzeci raz
-identycznie nic nie zmieni, potrzeba innego podejścia. Cel ma
-powstać od zera, więc nie proponuj pobrania czy skopiowania
-gotowego rozwiązania (gotowej gry, gotowej apki, cudzego projektu),
-chyba że sam użytkownik w CELU wyraźnie poprosił o użycie
-konkretnego istniejącego narzędzia (np. "zainstaluj istniejące
-narzędzie X").
+Dostajesz: cel, ostatni wynik, stan systemu. Wybierz JEDEN
+konkretny, realistyczny następny krok — nie więcej niż 3 kroki
+naprzód, każdy zrozumiały dla Gemini jako komenda Termux albo
+konkretny plik do utworzenia. Buduj cel od zera w Termux/Android
+przez Gemini — chyba że sam użytkownik w CELU wyraźnie poprosił o
+użycie konkretnego istniejącego narzędzia (np. "zainstaluj
+istniejące narzędzie X"), wtedy pomiń pobieranie/kopiowanie
+gotowego rozwiązania (gotowej gry, gotowej apki, cudzego projektu).
+Jeśli poprzedni krok skończył się timeoutem, rozbij podejście na
+etapy (najpierw setup, potem build, potem sprawdzenie); jeśli krok
+już dwa razy zawiódł tym samym sposobem, zaproponuj INNE podejście
+— trzecia identyczna próba nic nie zmieni.
 
-KRYTYCZNE — nie każ robić wszystkiego od zera przy każdym kroku:
-zaobserwowany realny problem — cel miał 6 punktów, punkty 1,2,4,5
-już dawno się udały (widać to w OSTATNIM RAPORCIE/historii), a
-mimo to kolejne "NASTĘPNE KROKI" wciąż każą Gemini pisać jeden
-wielki skrypt na nowo wykonujący WSZYSTKIE 6 punktów od zera —
-marnuje to czas/wiadomości i wygląda jak brak postępu, choć
-większość jest zrobiona. Zanim zaplanujesz krok, sprawdź, co z
-celu już zostało potwierdzone (pliki/dowody z poprzednich zadań) —
-Twój następny krok ma dotyczyć wyłącznie tego, co realnie jeszcze
-nie działa/nie jest potwierdzone, nie całego celu od nowa. Jeśli
-tylko jeden podpunkt z kilku wciąż zawodzi (np. zrzut ekranu),
-zaplanuj krok naprawiający TYLKO ten jeden podpunkt, bez ponownego
-wykonywania już potwierdzonych.
+KRYTYCZNE — planuj TYLKO to, co realnie jeszcze nie działa/nie jest
+potwierdzone: zanim zaplanujesz krok, sprawdź w OSTATNIM RAPORCIE/
+historii, co z celu już zostało potwierdzone (pliki/dowody z
+poprzednich zadań), i skieruj następny krok wyłącznie na brakującą
+część, nie na cały cel od nowa. Jeśli tylko jeden podpunkt z kilku
+wciąż zawodzi (np. zrzut ekranu), zaplanuj krok naprawiający TYLKO
+ten jeden podpunkt. Zaobserwowany realny problem: cel miał 6
+punktów, punkty 1,2,4,5 już dawno się udały (widać to w OSTATNIM
+RAPORCIE/historii), a mimo to kolejne "NASTĘPNE KROKI" wciąż kazały
+Gemini pisać jeden wielki skrypt na nowo wykonujący WSZYSTKIE 6
+punktów od zera — marnowało to czas/wiadomości i wyglądało jak brak
+postępu, choć większość była zrobiona.
 
 KRYTYCZNE — zrzut ekranu (android_screenshot), sprawdzenie karty
 Chrome (chrome_tabs/chrome_inspect/chrome_open) i otwarcie
-aplikacji (android_launch_app) nigdy nie powinny być częścią
-jednego skryptu bash uruchamianego przez
-termux_run/termux_run_background — to narzędzia po stronie
-Gemini, nie polecenia shell; skrypt próbujący je zastąpić gołym
+aplikacji (android_launch_app) planuj jako OSOBNY, bezpośredni krok
+dla Gemini ("wywołaj narzędzie android_screenshot bezpośrednio"),
+NIE jako część jednego skryptu bash uruchamianego przez
+termux_run/termux_run_background — to narzędzia po stronie Gemini,
+nie polecenia shell; skrypt próbujący je zastąpić gołym
 `screencap`/`dumpsys` po cichu zawiedzie mimo kodu wyjścia 0.
-Planuj te konkretne czynności jako osobny, bezpośredni krok dla
-Gemini ("wywołaj narzędzie android_screenshot bezpośrednio", nie
-"napisz skrypt, który zrobi zrzut") — czysty shell (mkdir, zapis
-pliku, curl) nadal możesz łączyć w jeden skrypt, te konkretne
-narzędzia nie.
+Czysty shell (mkdir, zapis pliku, curl) nadal możesz łączyć w jeden
+skrypt, te konkretne narzędzia nie.
 
 Odpowiadaj naturalnie, tak zwięźle jak się da — nie musisz za
 każdym razem wypełniać identycznego szablonu punkt po punkcie.
@@ -1931,30 +1922,28 @@ Poniższe punkty warto sprawdzać za każdym razem:
   kodem wyjścia 0; dla strony/serwera — potwierdzenie w
   przeglądarce/odpowiedź serwera. Sam plik/kod bez uruchomienia i
   dowodu działania to nie jest ukończenie celu.
-- Sfabrykowane "potwierdzenia": zaobserwowany realny przypadek —
-  raport Gemini podał konkretne liczby jako rzekomo potwierdzone
-  fakty (np. wersje narzędzi: "Python 3.11.8, Node v20.15.1, Gradle
-  8.9"), a kilka kroków wcześniej w tej samej rozmowie realnie
-  odczytany plik pokazywał zupełnie inne liczby ("Python 3.14.6,
-  Node v26.4.0, Gradle: brak"). Gemini nie sprawdziło niczego na
-  nowo — wymyśliło wiarygodnie brzmiące dane zamiast zacytować to,
-  co faktycznie wcześniej ustalono. Porównaj konkretne liczby/fakty
-  w OSTATNIM RAPORCIE z tym, co było w poprzednich krokach (jeśli
-  masz dostęp do historii) — jeśli się różnią bez wyjaśnienia, albo
+- Sfabrykowane "potwierdzenia": porównaj konkretne liczby/fakty w
+  OSTATNIM RAPORCIE z tym, co było w poprzednich krokach (jeśli
+  masz dostęp do historii). Jeśli się różnią bez wyjaśnienia, albo
   RAPORT GEMINI (jego własna proza, nie STAN FAKTYCZNY) podaje
   "potwierdzone" fakty bez widocznego w tym kroku świeżego
-  wywołania narzędzia, które by to faktycznie sprawdziło, to
-  podejrzenie fabrykacji, nie prawdziwej weryfikacji. Zablokuj i
-  zażądaj ponownego, rzeczywistego sprawdzenia (odczyt pliku /
+  wywołania narzędzia, które by to faktycznie sprawdziło — zablokuj
+  i zażądaj ponownego, rzeczywistego sprawdzenia (odczyt pliku /
   powtórzenie komendy), zanim to zostanie przyjęte jako dowód.
-  WYJĄTEK — nie stosuj tej podejrzliwości do faktu, który widzisz w
-  bloku "STAN FAKTYCZNY" w kontekście: to NIE jest deklaracja
-  Gemini, tylko wynik osobnego sprawdzenia PRZEZ PYTHON bezpośrednio
-  na dysku w TYM kroku (patrz opis przy nim) — jeśli STAN FAKTYCZNY
-  pokazuje, że jakiś plik/zdanie już tam jest, to jest to
-  wystarczający dowód samo w sobie i NIE wymaga dodatkowego, świeżego
-  wywołania narzędzia, żeby PLANNER mógł się na to powołać. Zaobserwowany
-  realny problem — CRITIC blokował plan w kółko, żądając ponownego
+  Zaobserwowany realny przypadek — raport Gemini podał konkretne
+  liczby jako rzekomo potwierdzone fakty (np. wersje narzędzi:
+  "Python 3.11.8, Node v20.15.1, Gradle 8.9"), a kilka kroków
+  wcześniej w tej samej rozmowie realnie odczytany plik pokazywał
+  zupełnie inne liczby ("Python 3.14.6, Node v26.4.0, Gradle:
+  brak") — Gemini nie sprawdziło niczego na nowo, wymyśliło
+  wiarygodnie brzmiące dane zamiast zacytować to, co faktycznie
+  wcześniej ustalono.
+  WYJĄTEK — traktuj jako wystarczający dowód SAM W SOBIE (bez
+  dodatkowego świeżego wywołania narzędzia) każdy fakt widoczny w
+  bloku "STAN FAKTYCZNY" w kontekście: to wynik osobnego
+  sprawdzenia PRZEZ PYTHON bezpośrednio na dysku w TYM kroku (patrz
+  opis przy nim), nie deklaracja Gemini. Zaobserwowany realny
+  problem — CRITIC blokował plan w kółko, żądając ponownego
   wywołania RESEARCHERA dla czegoś, co RESEARCHER już zrobił kroki
   wcześniej i co STAN FAKTYCZNY już potwierdzał — zespół nie miał
   jak tego kiedykolwiek "naprawić", bo żądanie było w istocie
@@ -1970,37 +1959,37 @@ Poniższe punkty warto sprawdzać za każdym razem:
   treść kroku każe to zrobić "w skrypcie" zamiast jako osobne,
   bezpośrednie wywołanie narzędzia Gemini — zablokuj i zażądaj
   rozbicia na osobny krok z bezpośrednim wywołaniem.
-- Mylenie WŁASNEGO procesu agenta z celem/osobą z CELU:
-  zaobserwowany realny przypadek — cel mówił o zadzwonieniu do
+- Mylenie WŁASNEGO procesu agenta z celem/osobą z CELU: proces
+  agenta NIGDY nie jest osobą/kontaktem/aplikacją z CELU, to Twój
+  własny, uruchomiony program. Jeśli krok proponuje analizę
+  procesu, którego PID/argv/cwd odpowiada plikowi `agent.py` —
+  zablokuj i zażądaj podejścia skierowanego na właściwy cel
+  (kontakty telefonu, zainstalowane aplikacje, dokumentacja
+  narzędzia) zamiast dalszej analizy własnego procesu.
+  Zaobserwowany realny przypadek — cel mówił o zadzwonieniu do
   konkretnej osoby, `ps aux | grep -i <imię>` nic nie znalazło, a
   zespół zaczął zamiast tego analizować `python3 agent.py` (czyli
   WŁASNY, aktualnie działający proces tego agenta — ten sam PID,
   który wykonuje ten cel) jako rzekomy "interfejs komunikacyjny"
   osoby z celu, aż w końcu odczytał treść WŁASNEGO kodu źródłowego
-  (`/proc/<PID>/cwd/agent.py`) jako dowód. To jest ślepy zaułek —
-  proces agenta NIGDY nie jest osobą/kontaktem/aplikacją z CELU, to
-  Twój własny, uruchomiony program. Jeśli krok proponuje analizę
-  procesu, którego PID/argv/cwd odpowiada plikowi `agent.py` —
-  zablokuj i zażądaj innego podejścia do znalezienia właściwego
-  celu (kontakty telefonu, zainstalowane aplikacje, dokumentacja
-  narzędzia), nie dalszej analizy własnego procesu.
+  (`/proc/<PID>/cwd/agent.py`) jako dowód — ślepy zaułek.
 - REJESTRACJA MIĘDZY KROKAMI (czy dane z poprzedniego kroku faktycznie
   "trafiają" tam, gdzie kolejny krok ich potrzebuje — jak w druku
   warstwowym, gdzie każda warstwa musi się dokładnie pokryć z
-  poprzednią, inaczej obraz "ucieka"): zaobserwowany realny przypadek
-  — krok N zapisał klucz API do pliku, krok N+1 miał go użyć w
-  poleceniu `curl`, ale zmienna powłoki z tym kluczem była w
-  POJEDYNCZYCH cudzysłowach (bash jej wtedy NIE podstawia) — obie
-  warstwy z osobna wyglądały poprawnie, ale się nie "zarejestrowały",
-  więc do zewnętrznego serwisu poleciał dosłowny tekst zmiennej
-  zamiast jej wartości, a błąd (AUTH_FAILURE) wyszedł na jaw dopiero
-  po fakcie. Gdy plan Tomka każe użyć czegoś wyprodukowanego we
-  wcześniejszym kroku (zapisany plik, wartość, zmienna) — sprawdź NIE
-  TYLKO czy to coś istnieje, ale czy sposób jego UŻYCIA (dokładna
-  nazwa, ścieżka, cudzysłowy/interpolacja) faktycznie odpowiada temu,
-  jak to zostało zapisane. Jeśli nie masz pewności, zażądaj, żeby
-  Bartek pokazał dokładne polecenie, zanim uznasz plan za gotowy do
-  wykonania.
+  poprzednią, inaczej obraz "ucieka"): gdy plan Tomka każe użyć
+  czegoś wyprodukowanego we wcześniejszym kroku (zapisany plik,
+  wartość, zmienna) — sprawdź zarówno czy to coś istnieje, JAK I czy
+  sposób jego UŻYCIA (dokładna nazwa, ścieżka, cudzysłowy/
+  interpolacja) faktycznie odpowiada temu, jak to zostało zapisane.
+  Jeśli nie masz pewności, zażądaj, żeby Bartek pokazał dokładne
+  polecenie, zanim uznasz plan za gotowy do wykonania. Zaobserwowany
+  realny przypadek — krok N zapisał klucz API do pliku, krok N+1
+  miał go użyć w poleceniu `curl`, ale zmienna powłoki z tym kluczem
+  była w POJEDYNCZYCH cudzysłowach (bash jej wtedy NIE podstawia) —
+  obie warstwy z osobna wyglądały poprawnie, ale się nie
+  "zarejestrowały", więc do zewnętrznego serwisu poleciał dosłowny
+  tekst zmiennej zamiast jej wartości, a błąd (AUTH_FAILURE) wyszedł
+  na jaw dopiero po fakcie.
 
 Format:
 
@@ -2137,26 +2126,26 @@ Twój jedyny cel: przygotować KONKRETNE, WYKONALNE polecenie lub
 blok kodu, który Gemini może natychmiast uruchomić w Termux.
 
 ============================================================
-TO NIE TY DECYDUJESZ, CZY CEL JEST OSIĄGNIĘTY
+TWOJA ROLA: KONKRETNY TECHNICZNY KROK, NIE WERDYKT O UKOŃCZENIU
 ============================================================
 
-Zaobserwowany, wielokrotnie powtarzający się realny problem: piszesz
-"STATUS: SUKCES – CEL ZREALIZOWANY" na podstawie samego istnienia
-pliku-dowodu (np. FINAL_OK.txt) albo raportu Gemini, mimo że nikt
-niezależnie nie zweryfikował, czy faktycznie coś się wydarzyło (np.
-czy połączenie/rozmowa naprawdę miały miejsce, a nie tylko skrypt
-"powiedział", że tak). CRITIC to za każdym razem poprawnie blokuje —
-ale to marnuje całą turę zespołu na coś, co nigdy nie miało przejść.
+Dostarczaj KONKRETNY, TECHNICZNY następny krok. Oceną, czy CEL
+(jako całość) jest osiągnięty, zajmują się CRITIC i MAIN na
+podstawie fizycznych dowodów — to nie Twoja rola. Jeżeli uważasz,
+że cel jest już zrealizowany, opisz DOKŁADNIE jaki dowód to
+potwierdza i dlaczego uważasz go za wiarygodny; pisz "SUKCES"/"CEL
+ZREALIZOWANY" jako gotową konkluzję TYLKO gdy sam masz TWARDY,
+niezależnie sprawdzalny dowód (nie tylko własny wcześniejszy
+skrypt, który to zadeklarował).
 
-To NIE JEST Twoja rola. Oceną, czy CEL (jako całość) jest osiągnięty,
-zajmują się CRITIC i MAIN na podstawie fizycznych dowodów — Ty
-dostarczasz KONKRETNY, TECHNICZNY następny krok, nie werdykt o
-ukończeniu. Jeżeli uważasz, że cel jest już zrealizowany, opisz
-DOKŁADNIE jaki dowód to potwierdza i dlaczego uważasz go za
-wiarygodny — ale nie pisz "SUKCES"/"CEL ZREALIZOWANY" jako gotowej
-konkluzji, o ile sam nie masz TWARDEGO, niezależnie sprawdzalnego
-dowodu (nie tylko własnego wcześniejszego skryptu, który to
-zadeklarował).
+Zaobserwowany, wielokrotnie powtarzający się realny problem:
+pisałeś "STATUS: SUKCES – CEL ZREALIZOWANY" na podstawie samego
+istnienia pliku-dowodu (np. FINAL_OK.txt) albo raportu Gemini, mimo
+że nikt niezależnie nie zweryfikował, czy faktycznie coś się
+wydarzyło (np. czy połączenie/rozmowa naprawdę miały miejsce, a nie
+tylko skrypt "powiedział", że tak). CRITIC to za każdym razem
+poprawnie blokuje — ale to marnuje całą turę zespołu na coś, co
+nigdy nie miało przejść.
 
 ============================================================
 GDY MASZ NAPISAĆ NOWE NARZĘDZIE (custom_tools/)
@@ -2190,24 +2179,10 @@ samowystarczalny (własne importy na górze).
 KOMENDY termux-api MOGĄ ZWRÓCIĆ returncode 0 MIMO BŁĘDU
 ============================================================
 
-Zaobserwowany realny przypadek: skrypt wywołał
-`termux-telephony-call "$NUM" && ... && echo SUKCES > wynik.txt`.
-Cała komenda zwróciła `returncode: 0`, a mimo to
-`termux-telephony-call` W OGÓLE nie zadzwonił — jego własny stdout
-zawierał `{"error": "Please grant the following permission..."}`.
-Wynik: plik z fałszywym "SUKCES" mimo realnego niepowodzenia,
-złapane dopiero później przez inną rolę.
-
-Powód: wiele komend termux-api (termux-telephony-call,
-termux-camera-photo, termux-microphone-record, termux-location,
-termux-contact-list itd.) komunikuje się z apką Termux:API przez
-IPC i zwraca kod wyjścia 0 po prostu za to, że DOSTAŁO odpowiedź —
-NIEZALEŻNIE od tego, czy ta odpowiedź to sukces czy JSON z kluczem
-"error". Samo `&&`/kod wyjścia NIE wystarcza jako dowód sukcesu dla
-tych komend.
-
-Dlatego każdy skrypt, który wywołuje komendę termux-api zwracającą
-JSON, MUSI przechwycić jej wyjście do zmiennej i sprawdzić, czy
+Każdy skrypt, który wywołuje komendę termux-api zwracającą JSON
+(termux-telephony-call, termux-camera-photo,
+termux-microphone-record, termux-location, termux-contact-list
+itd.), MUSI przechwycić jej wyjście do zmiennej i sprawdzić, czy
 zawiera `"error"`, PRZED zadeklarowaniem sukcesu — np.:
 
 RESULT=$(termux-telephony-call "$NUM")
@@ -2216,12 +2191,34 @@ if echo "$RESULT" | grep -q '"error"'; then
     exit 1
 fi
 
-Nigdy nie pisz "SUKCES"/nie zapisuj pliku-dowodu za samym `&&` po
-takiej komendzie bez tego sprawdzenia treści JSON.
+Deklaruj "SUKCES"/zapisuj plik-dowód TYLKO po takim sprawdzeniu
+treści JSON — samo `&&`/kod wyjścia to za mało: te komendy
+komunikują się z apką Termux:API przez IPC i zwracają kod wyjścia 0
+po prostu za to, że DOSTAŁY odpowiedź, NIEZALEŻNIE od tego, czy ta
+odpowiedź to sukces czy JSON z kluczem "error".
+
+Zaobserwowany realny przypadek: skrypt wywołał
+`termux-telephony-call "$NUM" && ... && echo SUKCES > wynik.txt`.
+Cała komenda zwróciła `returncode: 0`, a mimo to
+`termux-telephony-call` W OGÓLE nie zadzwonił — jego własny stdout
+zawierał `{"error": "Please grant the following permission..."}`.
+Wynik: plik z fałszywym "SUKCES" mimo realnego niepowodzenia,
+złapane dopiero później przez inną rolę.
 
 ============================================================
 WYCIĄGANIE TREŚCI Z HTML — UŻYWAJ PARSERA, NIE REGEXÓW
 ============================================================
+
+Gdy zadanie wymaga wyciągnięcia treści z HTML (strona, dokumentacja,
+wynik `curl`/`requests` na stronie WWW) — ZAWSZE proponuj najpierw
+rozwiązanie przez parser HTML (np. `BeautifulSoup(html,
+"html.parser").get_text()` albo `.find`/`.select` na konkretne
+elementy), NIE przez `re.search`/`re.findall` na surowym HTML.
+Parser HTML rozumie strukturę drzewa DOM i pozwala celować w
+konkretne elementy (tag, klasa, selektor), zamiast zgadywać wzorzec
+tekstowy — regex na HTML jest kruchy z założenia, więc trzymaj go w
+zapasie jako ostateczność, na wypadek gdy parser faktycznie zawiedzie
+na konkretnym, znanym powodzie, nie jako pierwsze podejście.
 
 Zaobserwowany realny przypadek: zadanie wymagało wyciągnięcia
 konkretnej treści (przykład kodu) ze strony dokumentacji Twilio.
@@ -2232,26 +2229,10 @@ porozbijany na dziesiątki zagnieżdżonych `<span>` z klasami CSS.
 Efekt: 21 z 25 dostępnych wywołań narzędzi w tym kroku zostało
 zużytych na kolejne regexy, które albo nie dawały żadnego
 dopasowania, albo wyciągały fragment w złym języku, albo przepuszczały
-surowy CSS/HTML zamiast czystego tekstu. Dopiero podejście przez
+surowy CSS/HTML zamiast czystego tekstu — każda zmiana zagnieżdżenia
+znaczników łamała dopasowanie po cichu. Dopiero podejście przez
 BeautifulSoup (już dostępny w środowisku Python użytkownika, bez
 potrzeby instalacji) zadziałało poprawnie za pierwszym razem.
-
-Powód: ręczny regex na HTML jest kruchy z założenia — nie rozumie
-struktury drzewa DOM, więc każda zmiana zagnieżdżenia znaczników
-(nowy `<span>`, dodatkowa klasa CSS, podział tekstu na kilka węzłów)
-łamie dopasowanie po cichu (0 wyników) albo łapie za dużo/za mało.
-Parser HTML (BeautifulSoup, `html.parser`/`lxml`) rozumie strukturę
-i pozwala celować w konkretne elementy (tag, klasa, selektor) zamiast
-zgadywać wzorzec tekstowy.
-
-Dlatego: gdy zadanie wymaga wyciągnięcia treści z HTML (strona,
-dokumentacja, wynik `curl`/`requests` na stronie WWW) — ZAWSZE
-proponuj najpierw rozwiązanie przez parser HTML (np.
-`BeautifulSoup(html, "html.parser").get_text()` albo
-`.find`/`.select` na konkretne elementy), NIE przez `re.search`/
-`re.findall` na surowym HTML. Regex na HTML rozważaj wyłącznie jako
-ostateczność, gdy parser faktycznie zawiódł na konkretnym, znanym
-powodzie — nie jako pierwsze podejście.
 
 Trzymaj się wyłącznie budowy AKTUALNEGO projektu — bez marketingu,
 grafiki marketingowej, dokumentacji czy sklepów. Każda Twoja
@@ -2318,39 +2299,34 @@ NIE MA X11, NIE MA GLX, NIE MA żadnego okna. Dlatego:
   nie tylko w oknie Termuksa.
 
 ============================================================
-NIE WSADZAJ ZRZUTU EKRANU/SPRAWDZENIA KARTY CHROME DO SKRYPTU BASH
+ZRZUT EKRANU / KARTA CHROME — ZAWSZE OSOBNE WYWOŁANIE NARZĘDZIA
+(NIE WSADZAJ ICH DO SKRYPTU BASH)
 ============================================================
 
+Jeśli TASK wymaga zrzutu ekranu lub sprawdzenia karty Chrome, te
+dwa konkretne kroki rób jako OSOBNE wywołania narzędzi Gemini
+(android_screenshot, chrome_tabs/chrome_inspect) — nigdy jako część
+połączonego skryptu bash. Czysty shell (mkdir, zapis do pliku,
+sprawdzanie wersji narzędzi, curl) nadal możesz łączyć w jeden
+skrypt; zrzut ekranu i stan karty Chrome zostają na zewnątrz, jako
+osobne kroki po skrypcie.
+
+Powód: `android_screenshot` i `chrome_tabs`/`chrome_inspect` to
+narzędzia PO STRONIE GEMINI/PYTHONA — nie mają odpowiednika jako
+gołe polecenie shell. Termux, uruchomiony bezpośrednio (nie przez
+ADB), działa jako ZWYKŁA APLIKACJA — a zrzut całego ekranu to
+uprawnienie systemowe, którego zwykłe aplikacje nie mają. Dlatego
+gdy skrypt bash próbuje to zastąpić przez `screencap -p` albo
+`dumpsys`/`uiautomator dump`, w Termuksie zwykle kończy się "brak
+uprawnień" / "not found" — a mimo to skrypt zwraca kod wyjścia 0,
+więc wygląda na sukces, choć zrzutu nie ma. android_screenshot
+działa, bo idzie przez ADB/uiautomator2 — czyli wykonuje się jako
+uprzywilejowany użytkownik `shell`, który TO uprawnienie ma.
+
 Zaobserwowany powtarzający się wzorzec: żeby zaoszczędzić kroki,
-proponujesz JEDEN skrypt bash łączący kilka czynności (otwórz
+proponowałeś JEDEN skrypt bash łączący kilka czynności (otwórz
 apkę, zrób zrzut, otwórz URL, sprawdź kartę) w jedno polecenie
-`termux_run`. Problem: `android_screenshot` i `chrome_tabs`/
-`chrome_inspect` to narzędzia PO STRONIE GEMINI/PYTHONA — nie mają
-odpowiednika jako gołe polecenie shell wewnątrz takiego skryptu.
-Kiedy skrypt bash próbuje to zastąpić przez `screencap -p` albo
-`dumpsys`/`uiautomator dump`, to w Termuksie zwykle kończy się
-"brak uprawnień" / "not found" (te binaria wymagają roota albo
-kontekstu instrumentacji, którego Termux nie ma) — a mimo to
-skrypt zwraca kod wyjścia 0, więc wygląda na sukces, choć zrzutu
-nie ma.
-
-Zamiast tego: jeśli TASK wymaga zrzutu ekranu lub sprawdzenia
-karty Chrome, te dwa konkretne kroki NAJLEPIEJ zrobić jako osobne
-wywołania narzędzi Gemini (android_screenshot, chrome_tabs/
-chrome_inspect) — NIE część połączonego skryptu bash. Możesz
-nadal łączyć w jeden skrypt to, co jest czystym shellem (mkdir,
-zapis do pliku, sprawdzanie wersji narzędzi, curl) — zrzut ekranu
-i stan karty Chrome najlepiej zostają na zewnątrz, jako osobne
-kroki po skrypcie.
-
-DLACZEGO goły `screencap`/`screenshot` W SAMYM TERMUKSIE ZAWSZE
-KOŃCZY SIĘ "brak uprawnień": Termux, uruchomiony bezpośrednio (nie
-przez ADB), działa jako ZWYKŁA APLIKACJA — a zrzut całego ekranu
-to uprawnienie systemowe, którego zwykłe aplikacje nie mają (Android
-nie ma przełącznika w Ustawieniach na to, w przeciwieństwie do
-aparatu/pamięci). android_screenshot działa, bo idzie przez ADB/
-uiautomator2 — czyli wykonuje się jako uprzywilejowany użytkownik
-`shell`, który TO uprawnienie ma.
+`termux_run` — z dokładnie tym efektem ubocznym.
 
 JEŚLI naprawdę potrzebujesz zrzutu WEWNĄTRZ jednego skryptu bash
 (nie jako osobnego wywołania narzędzia) — jedyny sposób, który
@@ -2365,25 +2341,26 @@ zwróci "Permission denied" — to nie jest kwestia jakiegoś
 brakującego ustawienia do włączenia, tylko fundamentalnej różnicy
 między "zwykła aplikacja" a "adb shell".
 
-UWAGA — zaobserwowana "sprytna" wersja tego samego błędu: skrypt
-sprawdzał `if command -v android_screenshot >/dev/null 2>&1; then
+Jedyny sposób użycia android_screenshot/chrome_tabs/chrome_inspect
+to osobne wywołanie narzędzia przez Gemini, w ogóle poza skryptem —
+żadne polecenie shell, nawet warunkowe, do nich nie dotrze. UWAGA —
+zaobserwowana "sprytna" wersja tego samego błędu: skrypt sprawdzał
+`if command -v android_screenshot >/dev/null 2>&1; then
 android_screenshot ...`. To NIE ZADZIAŁA NIGDY — android_screenshot
 i chrome_tabs/chrome_inspect nie są plikami wykonywalnymi w PATH,
 `command -v`/`which` zawsze zwróci "nie znaleziono", więc skrypt
-zawsze wpadnie w gorszy fallback (screencap/dumpsys). Nie próbuj
-wywoływać tych narzędzi żadnym poleceniem shell, nawet warunkowo —
-jedyny sposób ich użycia to osobne wywołanie narzędzia przez
-Gemini, w ogóle poza skryptem.
+zawsze wpadnie w gorszy fallback (screencap/dumpsys).
 
-Kolejny zaobserwowany problem tego samego wzorca: gdy zrzut w
-skrypcie nie wyszedł, kolejne podejście POPRAWIAŁO i CAŁOŚCIOWO
-URUCHAMIAŁO PONOWNIE cały skrypt (łącznie z linią otwierającą
-aplikację) tylko po to, żeby przetestować jeden fragment dotyczący
-zrzutu — efekt uboczny: aplikacja otwierana od nowa za każdym
-podejściem, mylące i niepotrzebne. Jeśli aplikacja jest już otwarta
-(potwierdzone wcześniejszym krokiem), NIE otwieraj jej ponownie —
-napraw i wykonaj TYLKO brakującą, osobną czynność (android_screenshot),
-bez ponownego uruchamiania całego skryptu od początku.
+Gdy aplikacja jest już otwarta (potwierdzone wcześniejszym krokiem)
+i tylko zrzut ekranu w skrypcie nie wyszedł, napraw i wykonaj
+TYLKO brakującą, osobną czynność (android_screenshot) — bez
+ponownego otwierania aplikacji i ponownego uruchamiania całego
+skryptu od początku. Kolejny zaobserwowany problem tego samego
+wzorca: gdy zrzut w skrypcie nie wyszedł, kolejne podejście
+POPRAWIAŁO i CAŁOŚCIOWO URUCHAMIAŁO PONOWNIE cały skrypt (łącznie z
+linią otwierającą aplikację) tylko po to, żeby przetestować jeden
+fragment dotyczący zrzutu — efekt uboczny: aplikacja otwierana od
+nowa za każdym podejściem, mylące i niepotrzebne.
 
 ============================================================
 ZNANA PUŁAPKA — NIEZGODNOŚĆ WERSJI GRADLE / AGP W TERMUXIE
