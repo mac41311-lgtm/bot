@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v151
+AEL-MINI AUTONOMOUS AGENT v152
 
 ARCHITEKTURA:
 
@@ -1046,7 +1046,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v151")
+    print("             AEL-MINI AUTONOMOUS AGENT v152")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16301,6 +16301,34 @@ Zwróć tylko JSON.
                             "path": str(target_path),
                             "chars": len(engineer_code)
                         }
+                    )
+
+                    # Zaobserwowany realny problem (2026-08-28, log
+                    # "finalize.sh"): mimo że Python WŁAŚNIE zapisał
+                    # gotowy kod ENGINEER do target_path (bez udziału
+                    # Gemini), pole "task" napisane przez MAIN i tak
+                    # kazało Gemini napisać ten sam plik jeszcze raz
+                    # (termux_write_file) — Gemini nadpisał świeżo
+                    # zapisany plik (391 B) krótszą, własną wersją
+                    # (131 B), złapane dopiero przez ogólny,
+                    # niespecyficzny mechanizm ostrzegania o nadpisaniu
+                    # pliku (czysty przypadek, że oba warianty akurat
+                    # zadziałały). MAIN_PROMPT od dawna mówi wprost, że
+                    # "task" ma dotyczyć WYŁĄCZNIE uruchomienia/
+                    # testowania — ale to tylko sugestia dla modelu,
+                    # nie gwarancja, więc dopisujemy JEDNOZNACZNĄ,
+                    # deterministyczną notatkę do treści zadania,
+                    # niezależnie od tego, co MAIN faktycznie napisał.
+                    task_text += (
+                        "\n\n[AUTOMATYCZNA NOTATKA — PRZECZYTAJ]: "
+                        "plik " + str(target_path) + " ZOSTAŁ JUŻ "
+                        "ZAPISANY (gotowy kod ENGINEER, "
+                        + str(len(engineer_code)) + " znaków) PRZED "
+                        "tym zadaniem, bez Twojego udziału. NIE twórz "
+                        "go ponownie i nie nadpisuj (termux_write_file"
+                        "/cat/echo > itp.) — to zadanie dotyczy "
+                        "WYŁĄCZNIE uruchomienia i przetestowania "
+                        "pliku, który już tam jest."
                     )
 
                 except Exception as e:
