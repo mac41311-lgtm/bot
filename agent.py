@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v142
+AEL-MINI AUTONOMOUS AGENT v143
 
 ARCHITEKTURA:
 
@@ -978,7 +978,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v142")
+    print("             AEL-MINI AUTONOMOUS AGENT v143")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13111,6 +13111,62 @@ def _chrome_relevant_now(goal, last_result=None):
     )
 
 
+# Na wyraźną prośbę użytkownika: Ola nie ma tylko streszczać do JEDNEJ
+# wspólnej wiadomości dla wszystkich — ma umieć zaadresować coś
+# WYŁĄCZNIE do konkretnej osoby, tak jak człowiek w zespole robi, gdy
+# wie że dana uwaga dotyczy tylko jednej roli. Zamiast dawać jej OSOBNE
+# wywołanie DeepSeeka na każdą rolę (użytkownik wyraźnie chce oszczędzać
+# — opendeep steruje stroną czatu, nie oficjalnym API, więc zbyt
+# częste wywołania ryzykują blokadę strony), robi to w TEJ SAMEJ,
+# jednej konsultacji: jeśli ma coś do powiedzenia tylko jednej osobie,
+# dopisuje to na końcu jako linię "DLA TOMKA:"/"DLA KAMILA:"/
+# "DLA MARKA:"/"DLA BARTKA:" — Python to wycina i kieruje WYŁĄCZNIE do
+# tej roli, reszta zespołu tego nie widzi. Wojtek celowo NIE jest tu
+# uwzględniony — jego rola ma pozostać wolna od szczegółów
+# technicznych (patrz WOJTEK_PROMPT/_ROLE_ACCOUNT), więc nie dostaje
+# adresowanych dopisków Oli.
+_OLA_ROLE_CALLOUT_RE = re.compile(
+    r'DLA (TOMKA|KAMILA|MARKA|BARTKA):\s*',
+    re.IGNORECASE
+)
+
+_OLA_CALLOUT_NAME_TO_ROLE = {
+    "TOMKA": "PLANNER",
+    "KAMILA": "RESEARCHER",
+    "MARKA": "CRITIC",
+    "BARTKA": "ENGINEER",
+}
+
+
+def _split_ola_translation_by_role(text):
+
+    text = str(text or "")
+
+    matches = list(_OLA_ROLE_CALLOUT_RE.finditer(text))
+
+    if not matches:
+        return text.strip(), {}
+
+    general = text[:matches[0].start()].strip()
+
+    callouts = {}
+
+    for i, m in enumerate(matches):
+
+        role_key = _OLA_CALLOUT_NAME_TO_ROLE.get(m.group(1).upper())
+
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunk = text[start:end].strip()
+
+        if role_key and chunk:
+            callouts[role_key] = (
+                callouts.get(role_key, "") + (" " if role_key in callouts else "") + chunk
+            )
+
+    return general, callouts
+
+
 def consult_team(
     goal,
     last_result,
@@ -13262,6 +13318,15 @@ Bez żargonu i nazw wewnętrznych narzędzi, chyba że są naprawdę
 potrzebne do zrozumienia. Nie oceniaj, nie planuj kolejnego kroku —
 tylko streść fakty.
 
+Jeśli w raporcie jest coś, co ma znaczenie TYLKO dla jednej,
+konkretnej osoby z zespołu (np. szczegół istotny wyłącznie dla
+Bartka, który pisze kod, albo coś, co Marek powinien konkretnie
+zweryfikować przy ocenie planu) — dopisz to na KOŃCU jako osobną
+linię zaczynającą się dosłownie od "DLA TOMKA:", "DLA KAMILA:",
+"DLA MARKA:" albo "DLA BARTKA:" (tylko dla osoby, dla której to
+faktycznie ważne — możesz nie pisać żadnej, jeśli nic takiego nie
+ma; NIE pisz do Wojtka, on nie zajmuje się szczegółami technicznymi).
+
 CEL:
 {goal}
 
@@ -13272,7 +13337,11 @@ SUROWY RAPORT:
 
     # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
     # zostawiamy zespołu bez niczego — wracamy do surowego zlepku.
-    readable_report = human_report.strip() if human_report else ""
+    readable_report_general, ola_role_callouts = _split_ola_translation_by_role(
+        human_report
+    )
+
+    readable_report = readable_report_general if human_report else ""
 
     # Deterministyczne (nie przez LLM) przekazanie DOSŁOWNEJ wartości
     # WYŁĄCZNIE Bartkowi/ENGINEER — patrz komentarz przy
@@ -13540,7 +13609,14 @@ OSTATNI RAPORT:
 
         researcher_context = _team_context(
             "RESEARCHER",
-            extra=wojtek_extra
+            extra=(
+                wojtek_extra
+                + (
+                    "\n\nOD OLI (tylko dla Ciebie): "
+                    + ola_role_callouts["RESEARCHER"]
+                    if "RESEARCHER" in ola_role_callouts else ""
+                )
+            )
         )
 
         results["RESEARCHER"] = researcher_web_search(
@@ -13585,6 +13661,11 @@ OSTATNI RAPORT:
             extra=(
                 "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                + (
+                    "\n\nOD OLI (tylko dla Ciebie): "
+                    + ola_role_callouts["PLANNER"]
+                    if "PLANNER" in ola_role_callouts else ""
+                )
             )
         )
     )
@@ -13628,6 +13709,11 @@ OSTATNI RAPORT:
                 + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
                 + engineer_value_handoff
+                + (
+                    "\n\nOD OLI (tylko dla Ciebie): "
+                    + ola_role_callouts["ENGINEER"]
+                    if "ENGINEER" in ola_role_callouts else ""
+                )
             )
         )
     )
@@ -13636,7 +13722,14 @@ OSTATNI RAPORT:
         "CRITIC",
         _team_context(
             "CRITIC",
-            extra="\nPLAN TOMKA:\n" + planner_out
+            extra=(
+                "\nPLAN TOMKA:\n" + planner_out
+                + (
+                    "\n\nOD OLI (tylko dla Ciebie): "
+                    + ola_role_callouts["CRITIC"]
+                    if "CRITIC" in ola_role_callouts else ""
+                )
+            )
         )
     )
 
