@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v143
+AEL-MINI AUTONOMOUS AGENT v144
 
 ARCHITEKTURA:
 
@@ -978,7 +978,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v143")
+    print("             AEL-MINI AUTONOMOUS AGENT v144")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5088,7 +5088,7 @@ def android_launch_app(package):
         }
 
     result = execute_shell(
-        "adb shell monkey -p " + package
+        "adb shell monkey -p " + shlex.quote(package)
         + " -c android.intent.category.LAUNCHER 1",
         timeout=20
     )
@@ -5372,7 +5372,7 @@ def android_install_apk(path, reinstall=True):
     flags = "-r" if reinstall else ""
 
     result = execute_shell(
-        "adb install " + flags + " " + path,
+        "adb install " + flags + " " + shlex.quote(path),
         timeout=90
     )
 
@@ -5418,7 +5418,7 @@ def android_uninstall_app(package):
         }
 
     result = execute_shell(
-        "adb uninstall " + package,
+        "adb uninstall " + shlex.quote(package),
         timeout=30
     )
 
@@ -5462,7 +5462,7 @@ def android_logcat(package=None, lines=200):
         package = str(package).strip()
 
         pid_result = execute_shell(
-            "adb shell pidof " + package,
+            "adb shell pidof " + shlex.quote(package),
             timeout=15
         )
 
@@ -5474,7 +5474,7 @@ def android_logcat(package=None, lines=200):
     command = "adb logcat -d -t " + str(lines)
 
     if pid:
-        command += " --pid=" + pid
+        command += " --pid=" + shlex.quote(pid)
 
     result = execute_shell(
         command,
@@ -8683,7 +8683,7 @@ def termux_file_exists(path):
         }
 
     result = execute_shell(
-        "test -e " + path
+        "test -e " + shlex.quote(path)
         + " && echo EXISTS || echo MISSING",
         timeout=10
     )
@@ -8811,7 +8811,7 @@ def termux_check_apk(path):
         }
 
     size_result = execute_shell(
-        "wc -c < " + path
+        "wc -c < " + shlex.quote(path)
         + " 2>/dev/null || echo 0",
         timeout=10
     )
@@ -8837,7 +8837,7 @@ def termux_check_apk(path):
         }
 
     zip_result = execute_shell(
-        "unzip -l " + path
+        "unzip -l " + shlex.quote(path)
         + " 2>/dev/null | grep -E"
         + " 'AndroidManifest|classes.dex'",
         timeout=20
@@ -14469,7 +14469,7 @@ def _guess_package_name(apk_path):
     try:
         result = execute_shell(
             "aapt dump badging "
-            + str(apk_path)
+            + shlex.quote(str(apk_path))
             + " 2>/dev/null | grep \"package: name\"",
             timeout=20
         )
@@ -15016,7 +15016,7 @@ def verify_final(goal=""):
             apk_path = apks[-1]
 
             listing = execute_shell(
-                "unzip -l " + str(apk_path),
+                "unzip -l " + shlex.quote(str(apk_path)),
                 timeout=20
             )
 
@@ -15063,7 +15063,7 @@ def verify_final(goal=""):
     if package_name:
 
         packages = execute_shell(
-            "adb shell pm list packages | grep " + package_name,
+            "adb shell pm list packages | grep " + shlex.quote(package_name),
             timeout=20
         )
 
