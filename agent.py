@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v136
+AEL-MINI AUTONOMOUS AGENT v137
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v136")
+    print("             AEL-MINI AUTONOMOUS AGENT v137")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10106,6 +10106,46 @@ def _call_tool_function(fn, args):
     )
 
 
+# Zaobserwowany realny wzorzec (log 2026-08-28): Gemini uruchomił
+# `ls -la plik.html && grep -iE "bland|retell|vapi|twilio" plik.html`
+# przez termux_run. `ls` się powiódł, ale `grep` NIE znalazł dopasowania
+# (plik istniał i był kompletny, po prostu nie zawierał tych słów
+# dosłownie) — w Unixie to zwyczajowo kod wyjścia 1, NIE awaria. Kod
+# niżej traktuje KAŻDY niezerowy kod wyjścia identycznie jak prawdziwy
+# crash (`"ok": result.returncode == 0`) — to poprawne ogólne zachowanie
+# (Python nie ma jak z góry wiedzieć, czy dany kod znaczy "nic nie
+# znaleziono" czy "coś się zepsuło"), ale kosztowało to zespół 3 rundy
+# konsultacji (~7 minut), zanim się domyślił z samego kontekstu. Ta
+# heurystyka NIE zmienia interpretacji "ok"/błąd (zbyt ryzykowne —
+# fałszywie ujemne dopasowanie ukryłoby prawdziwy błąd) — tylko dokleja
+# PODPOWIEDŹ do raportu, gdy wzorzec pasuje do znanych narzędzi
+# filtrujących (grep/diff/cmp/pgrep/test), których kod 1 zwyczajowo
+# znaczy "brak dopasowania/warunek fałszywy", nie awarię.
+_BENIGN_NONZERO_EXIT_COMMAND_RE = re.compile(
+    r'(^|[|&;]|\s)(grep|egrep|fgrep|diff|cmp|pgrep|test)\s'
+)
+
+
+def _shell_exit_1_may_be_benign(tool_name, result):
+
+    if tool_name not in ("termux_run", "termux_run_background"):
+        return False
+
+    if not isinstance(result, dict):
+        return False
+
+    if result.get("returncode") != 1:
+        return False
+
+    stderr = str(result.get("stderr") or "").strip()
+
+    if stderr:
+        return False
+
+    command = str(result.get("command") or "")
+
+    return bool(_BENIGN_NONZERO_EXIT_COMMAND_RE.search(command))
+
 
 def gemini_execute_task(task_id, task, success_condition=''):
     """
@@ -10744,6 +10784,22 @@ CO POWINIEN ZROBIĆ MAIN:
 
                 if tool_failed:
 
+                    benign_exit_hint = (
+                        " UWAGA (automatyczna heurystyka): ta komenda "
+                        "zawiera grep/egrep/fgrep/diff/cmp/pgrep/test, "
+                        "kod wyjścia to dokładnie 1, a stderr jest "
+                        "PUSTE — to zwyczajowo znaczy 'nie znaleziono "
+                        "dopasowania / warunek fałszywy', NIE że "
+                        "narzędzie się zepsuło. Jeśli reszta polecenia "
+                        "wykonała się poprawnie, rozważ czy to nie jest "
+                        "po prostu brak wyniku wyszukiwania (np. inny "
+                        "wzorzec, treść ładowana przez JS), zanim "
+                        "uznasz to za prawdziwą awarię wymagającą "
+                        "innego podejścia."
+                        if _shell_exit_1_may_be_benign(name, result)
+                        else ""
+                    )
+
                     error_report = {
                         "task_id": task_id,
                         "status": "GEMINI_TOOL_ERROR",
@@ -10757,6 +10813,7 @@ CO POWINIEN ZROBIĆ MAIN:
                             "Narzędzie zakończyło się błędem. "
                             "Gemini nie wykonuje samodzielnej naprawy. "
                             "MAIN / DeepSeek musi przygotować następny TASK lub PATCH."
+                            + benign_exit_hint
                         ),
                         "interaction_id": interaction_id,
                         "tool_warnings": collected_warnings,
