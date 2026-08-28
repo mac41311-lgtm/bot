@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v144
+AEL-MINI AUTONOMOUS AGENT v145
 
 ARCHITEKTURA:
 
@@ -73,6 +73,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 from web_search import web_search
 from datetime import datetime
+
+# Opcjonalna, czysto-pythonowa biblioteka (żadnych skompilowanych
+# zależności — bezpieczna na Termux, w odróżnieniu od np. pydantic,
+# które wymaga komponentu w Rust) do naprawiania SKŁADNIOWO zepsutego
+# JSON-a z LLM (brakujący cudzysłów, przecinek na końcu, niedomknięty
+# nawias) — patrz parse_json() niżej. Import jest opcjonalny: jeśli
+# pakiet nie jest jeszcze zainstalowany (`pip install json_repair`),
+# parse_json() po prostu pomija tę dodatkową próbę i działa dokładnie
+# tak jak wcześniej — nigdy nie wywraca programu.
+try:
+    from json_repair import repair_json as _repair_json
+except ImportError:
+    _repair_json = None
 
 
 
@@ -978,7 +991,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v144")
+    print("             AEL-MINI AUTONOMOUS AGENT v145")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14222,6 +14235,33 @@ def parse_json(text):
 
     if obj is not None:
         return obj
+
+    # Ostatnia deska ratunku: powyższe próby wyciągają JSON z
+    # otoczenia (tekst dookoła, blok ```json```), ale żadna z nich nie
+    # naprawia SKŁADNIOWO zepsutego JSON-a (brakujący cudzysłów,
+    # przecinek na końcu listy, niedomknięty nawias) — a to zdarza
+    # się realnie, bo opendeep steruje stroną czatu, nie oficjalnym
+    # API, więc formatowanie bywa mniej stabilne. Jeśli json_repair
+    # nie jest zainstalowany, _repair_json jest None i ten blok jest
+    # po prostu pomijany — zachowanie identyczne jak wcześniej.
+    if _repair_json is not None:
+
+        try:
+
+            repaired = _repair_json(text, return_objects=True)
+
+            if isinstance(repaired, dict):
+                return repaired
+
+            if isinstance(repaired, str):
+
+                obj = json.loads(repaired)
+
+                if isinstance(obj, dict):
+                    return obj
+
+        except Exception:
+            pass
 
     return None
 
