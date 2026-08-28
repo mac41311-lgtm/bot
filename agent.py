@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v148
+AEL-MINI AUTONOMOUS AGENT v149
 
 ARCHITEKTURA:
 
@@ -274,6 +274,51 @@ except Exception as e:
     print(e)
     print("pip install -U pychrome")
     sys.exit(1)
+
+
+# Zaobserwowany realny efekt uboczny v146 (zamiana na pychrome,
+# 2026-08-28): za każdym razem, gdy zamykamy połączenie
+# (_PychromeConnection.close() -> tab.stop()), wątek _recv_loop
+# pychrome.Tab (patrz pychrome/tab.py) czasem dostaje PUSTY string z
+# właśnie zamykanego websocketu zamiast wyjątku WebSocketException —
+# a pychrome łapie w tym wątku WYŁĄCZNIE WebSocketException/OSError,
+# więc json.loads("") wywala się jako NIEZŁAPANY JSONDecodeError,
+# którego domyślny excepthook Pythona wypisuje jako pełny traceback
+# wprost na ekran użytkownika. Wynik każdego wywołania CDP w logach
+# był mimo to zawsze poprawny (to WYŁĄCZNIE kosmetyczny, alarmująco
+# wyglądający ślad wyścigu przy zamykaniu, nie realna usterka) — ale
+# wygląda jak awaria i myli użytkownika co do stanu CDP. Filtrujemy
+# TYLKO ten dokładny, znany przypadek (JSONDecodeError wewnątrz
+# pychrome/tab.py:_recv_loop) — każdy inny wyjątek w dowolnym wątku
+# leci dalej do domyślnego excepthooka, żeby nigdy nie ukryć
+# prawdziwego błędu.
+import threading as _threading_bootstrap
+
+_default_threading_excepthook = _threading_bootstrap.excepthook
+
+
+def _pychrome_recv_loop_excepthook(args):
+
+    if args.exc_type is json.JSONDecodeError:
+
+        tb = args.exc_traceback
+
+        while tb is not None:
+
+            frame = tb.tb_frame
+
+            if (
+                frame.f_code.co_name == "_recv_loop"
+                and "pychrome" in frame.f_code.co_filename
+            ):
+                return
+
+            tb = tb.tb_next
+
+    _default_threading_excepthook(args)
+
+
+_threading_bootstrap.excepthook = _pychrome_recv_loop_excepthook
 
 
 try:
@@ -1000,7 +1045,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v148")
+    print("             AEL-MINI AUTONOMOUS AGENT v149")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
