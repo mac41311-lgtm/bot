@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v150
+AEL-MINI AUTONOMOUS AGENT v151
 
 ARCHITEKTURA:
 
@@ -63,6 +63,7 @@ import select
 import shlex
 import shutil
 import hashlib
+import difflib
 import subprocess
 import traceback
 import uuid
@@ -1045,7 +1046,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v150")
+    print("             AEL-MINI AUTONOMOUS AGENT v151")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2584,29 +2585,87 @@ def _prompt_hash(system_prompt):
     ).hexdigest()
 
 
-def _save_session_state(name, session, prompt_hash=None):
+def _save_session_state(name, session, prompt_hash=None, prompt_text=None):
 
     data = {
         "chat_session_id": session.chat_session_id,
         "parent_message_id": session.parent_message_id
     }
 
-    if prompt_hash is None:
-        # Zachowaj już zapisany hash, jeśli wołający go nie podał
-        # (np. zapisy z deepseek() po zwykłej turze rozmowy, gdzie
-        # prompt się nie zmienił) — bez tego kolejny zapis bez
-        # prompt_hash wyzerowałby wiedzę o tym, jaką wersję promptu
-        # sesja już dostała.
+    if prompt_hash is None or prompt_text is None:
+        # Zachowaj już zapisane hash/tekst, jeśli wołający ich nie
+        # podał (np. zapisy z deepseek() po zwykłej turze rozmowy,
+        # gdzie prompt się nie zmienił) — bez tego kolejny zapis bez
+        # tych pól wyzerowałby wiedzę o tym, jaką wersję promptu
+        # sesja już dostała (i uniemożliwiłby policzenie diffa przy
+        # następnej faktycznej zmianie promptu — patrz
+        # _build_prompt_update_message).
         existing = read_json(session_state_file(name), {})
         if isinstance(existing, dict):
-            prompt_hash = existing.get("prompt_hash")
+            if prompt_hash is None:
+                prompt_hash = existing.get("prompt_hash")
+            if prompt_text is None:
+                prompt_text = existing.get("prompt_text")
 
     if prompt_hash:
         data["prompt_hash"] = prompt_hash
 
+    if prompt_text:
+        data["prompt_text"] = prompt_text
+
     write_json(
         session_state_file(name),
         data
+    )
+
+
+# Na wyraźną prośbę użytkownika (2026-08-28): każda zmiana promptu
+# roli (a zmienialiśmy je niemal co wersję — MAIN_PROMPT/PLANNER_
+# PROMPT/CRITIC_PROMPT/ENGINEER_PROMPT rosną z każdym naprawionym
+# incydentem) wysyłała CAŁĄ, pełną nową treść jako nową wiadomość w
+# JUŻ trwającej rozmowie ("AKTUALIZACJA INSTRUKCJI ROLI" + cały
+# prompt od nowa). Model i tak już zna starą wersję z własnej
+# historii TEJ SAMEJ rozmowy — przy wielu kolejnych poprawkach w
+# jednej, długo trwającej sesji ta sama, w większości NIEZMIENIONA
+# treść (setki linii) była wysyłana wielokrotnie, niepotrzebnie
+# rozdymając historię rozmowy (koszt/limit DeepSeek, a użytkownik już
+# wcześniej sygnalizował obawę o blokady strony przy zbyt dużych/
+# częstych zapytaniach). Wysyłamy więc TYLKO rzeczywistą różnicę
+# (diff) względem poprzedniej wersji, którą faktycznie zapisaliśmy —
+# chyba że starej wersji nie mamy (sesja sprzed tego mechanizmu) albo
+# diff wyszedłby WIĘKSZY niż po prostu cała nowa treść (częste przy
+# rozrzuconych po całym prompcie drobnych zmianach) — wtedy bez sensu
+# komplikować, wysyłamy całość jak wcześniej.
+def _build_prompt_update_message(old_prompt_text, new_prompt_text):
+
+    full_text_message = (
+        "AKTUALIZACJA INSTRUKCJI ROLI (zastępuje poprzednią "
+        "wersję instrukcji z tej rozmowy, reszta historii/"
+        "ustaleń pozostaje ważna):\n\n"
+        + new_prompt_text
+    )
+
+    if not old_prompt_text or old_prompt_text == new_prompt_text:
+        return full_text_message
+
+    diff_text = "\n".join(
+        difflib.unified_diff(
+            old_prompt_text.splitlines(),
+            new_prompt_text.splitlines(),
+            lineterm=""
+        )
+    )
+
+    if not diff_text or len(diff_text) >= len(new_prompt_text):
+        return full_text_message
+
+    return (
+        "AKTUALIZACJA INSTRUKCJI ROLI — poniżej TYLKO zmiany (diff w "
+        "formacie unified diff, linie z '-' usunięte, z '+' dodane) "
+        "względem poprzedniej wersji Twoich instrukcji z TEJ ROZMOWY. "
+        "Wszystko, czego nie ma w tym diffie, pozostaje bez zmian — "
+        "to nadal Twoje aktualne instrukcje:\n\n"
+        + diff_text
     )
 
 
@@ -2669,16 +2728,17 @@ def start_session(name, system_prompt):
             if saved.get("prompt_hash") != current_hash:
 
                 session.send_message(
-                    "AKTUALIZACJA INSTRUKCJI ROLI (zastępuje "
-                    "poprzednią wersję instrukcji z tej rozmowy, "
-                    "reszta historii/ustaleń pozostaje ważna):\n\n"
-                    + system_prompt
+                    _build_prompt_update_message(
+                        saved.get("prompt_text"),
+                        system_prompt
+                    )
                 )
 
                 _save_session_state(
                     name,
                     session,
-                    prompt_hash=current_hash
+                    prompt_hash=current_hash,
+                    prompt_text=system_prompt
                 )
 
                 log(
@@ -2705,7 +2765,8 @@ def start_session(name, system_prompt):
             _save_session_state(
                 name,
                 session,
-                prompt_hash=_prompt_hash(system_prompt)
+                prompt_hash=_prompt_hash(system_prompt),
+                prompt_text=system_prompt
             )
 
             log(
