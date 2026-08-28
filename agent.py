@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v145
+AEL-MINI AUTONOMOUS AGENT v146
 
 ARCHITEKTURA:
 
@@ -264,6 +264,15 @@ except Exception as e:
     print("[KRYTYCZNY] Brak websocket-client")
     print(e)
     print("pip install -U websocket-client")
+    sys.exit(1)
+
+
+try:
+    import pychrome
+except Exception as e:
+    print("[KRYTYCZNY] Brak pychrome")
+    print(e)
+    print("pip install -U pychrome")
     sys.exit(1)
 
 
@@ -991,7 +1000,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v145")
+    print("             AEL-MINI AUTONOMOUS AGENT v146")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6107,15 +6116,43 @@ def find_tab(
     return None
 
 
+# Na wyraźną prośbę użytkownika (2026-08-28): najsłabszym punktem
+# obsługi Chrome był NASZ WŁASNY, ręcznie pisany JSON-RPC po surowym
+# websockecie — to tam realnie pojawiały się błędy w logach ("CDP
+# próba 1/3 nieudana", "CDP niedostępne"). Sprawdzone PRZED
+# wdrożeniem (nauczka z pomyłki przy pydantic): `pychrome` używa
+# WYŁĄCZNIE `requests` i `websocket-client` — tych samych dwóch
+# bibliotek, których ten plik już używa — więc zero nowego ryzyka
+# platformowego na Termux (w odróżnieniu od np. Playwrighta, który
+# oficjalnie NIE wspiera Androida).
+#
+# `cdp_connect()`/`cdp_call()` zachowują DOKŁADNIE ten sam kontrakt
+# co wcześniej (ten sam zwracany kształt, to samo `ws.close()` w
+# `finally` u wywołujących) — dzięki temu chrome_eval() i chrome_open()
+# (jedyne dwa miejsca, które ich bezpośrednio używają) NIE MUSIAŁY
+# zostać w ogóle zmienione. `_PychromeConnection` to cienki wrapper
+# zapewniający zgodność z `ws.close()`, którego wywołujący już
+# oczekują, mimo że pychrome.Tab ma metodę `stop()`, nie `close()`.
+class _PychromeConnection:
+
+    def __init__(self, tab):
+        self._tab = tab
+
+    def close(self):
+        try:
+            self._tab.stop()
+        except Exception:
+            pass
+
+
 def cdp_connect(tab):
 
     try:
 
-        return websocket.create_connection(
-            tab["webSocketDebuggerUrl"],
-            timeout=15,
-            suppress_origin=True
-        )
+        pychrome_tab = pychrome.Tab(**tab)
+        pychrome_tab.start()
+
+        return _PychromeConnection(pychrome_tab)
 
     except Exception as e:
 
@@ -6135,45 +6172,18 @@ def cdp_call(
     timeout=20
 ):
 
-    message = {
-        "id": msg_id,
-        "method": method
-    }
-
-    if params is not None:
-        message["params"] = params
-
     try:
 
-        ws.send(
-            json.dumps(message)
+        result = ws._tab.call_method(
+            method,
+            _timeout=timeout,
+            **(params or {})
         )
 
-        ws.settimeout(timeout)
-
-        while True:
-
-            raw = ws.recv()
-
-            data = json.loads(raw)
-
-            if data.get("id") != msg_id:
-                continue
-
-            if "error" in data:
-
-                return {
-                    "ok": False,
-                    "error": data["error"]
-                }
-
-            return {
-                "ok": True,
-                "result": data.get(
-                    "result",
-                    {}
-                )
-            }
+        return {
+            "ok": True,
+            "result": result
+        }
 
     except Exception as e:
 
