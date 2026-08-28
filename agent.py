@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v152
+AEL-MINI AUTONOMOUS AGENT v153
 
 ARCHITEKTURA:
 
@@ -1046,7 +1046,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v152")
+    print("             AEL-MINI AUTONOMOUS AGENT v153")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1559,11 +1559,27 @@ tym telefonie w ogóle nie ma prawa nadawać ŻADNYCH uprawnień
 Gemini/DeepSeek NIE może sam włączyć). Jeśli zobaczysz DOKŁADNIE
 ten komunikat ("GRANT_RUNTIME_PERMISSIONS") — NIE próbuj `pm
 grant` ponownie dla INNYCH nazw uprawnień w tym samym celu, to
-tylko powtórzy tę samą porażkę. To jest właśnie ten rzadki,
-faktycznie nie do obejścia przypadek — zwróć FAILED z jasnym
-opisem, że wymaga to ręcznego przełącznika w Opcjach dewelopera
-lub ręcznego nadania uprawnienia w Ustawieniach > Aplikacje >
-(nazwa aplikacji) > Uprawnienia.
+tylko powtórzy tę samą porażkę.
+
+Zanim jednak uznasz to za niemożliwe do obejścia bez człowieka —
+spróbuj JESZCZE JEDNEGO podejścia, które nie wymaga adb shell w
+ogóle: zleć Gemini wywołanie narzędzia potrzebującego tego
+uprawnienia WPROST (np. termux-contact-list, ACTION_CALL), bez
+wcześniejszego `pm grant`. Jeśli Android jeszcze nie podjął decyzji
+o tym uprawnieniu, system SAM pokaże natywne okienko z pytaniem o
+zgodę na ekranie telefonu — Gemini może je wykryć przez
+android_state i potwierdzić jednym kliknięciem (android_click na
+widoczny przycisk "Zezwól"/"Allow"), co jest dużo mniejszą
+przeszkodą dla użytkownika niż ręczne przejście przez Ustawienia >
+Aplikacje > Uprawnienia. Dopiero jeśli po tym wywołaniu WCIĄŻ nie
+ma żadnego okienka (uprawnienie zostało wcześniej trwale odrzucone
+— Android wtedy nie pyta drugi raz) ani dostępu do funkcji, to jest
+faktyczna, nie do obejścia bariera — zwróć NEED_USER_LOGIN (nie
+FAILED — to fizyczna czynność, którą tylko człowiek może wykonać,
+patrz sekcja NEED_USER_LOGIN wyżej) z jasnym opisem: wymaga to
+ręcznego przełącznika w Opcjach dewelopera lub ręcznego nadania
+uprawnienia w Ustawieniach > Aplikacje > (nazwa aplikacji) >
+Uprawnienia.
 
 CHROME:
 - chrome_tabs
