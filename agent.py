@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v141
+AEL-MINI AUTONOMOUS AGENT v142
 
 ARCHITEKTURA:
 
@@ -978,7 +978,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v141")
+    print("             AEL-MINI AUTONOMOUS AGENT v142")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12833,9 +12833,12 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
         chrome_text if chrome_text is not None else chrome_summary()
     )
 
-    _chrome_relevant_for_progress = _chrome_relevant_now(
-        goal, _resolved_chrome_text_for_progress
-    )
+    # Bez last_result (nieprzekazywanego do tej funkcji) trzymamy tu
+    # WYŁĄCZNIE statyczne dopasowanie CELU — patrz komentarz przy
+    # _chrome_relevant_now() o unikaniu "lepkiego" spamowania stanem
+    # Chrome; ocena procentowa jest niższej stawki niż decyzje
+    # PLANNER/ENGINEER/MAIN, więc nie potrzebuje dynamicznego wyjątku.
+    _chrome_relevant_for_progress = _goal_mentions_chrome(goal)
 
     if _chrome_relevant_for_progress or _goal_mentions_android(goal):
 
@@ -13080,30 +13083,31 @@ def _goal_mentions_chrome(goal):
 # Chrome — mimo że w międzyczasie NEED_USER_LOGIN otworzył konsolę
 # Twilio, użytkownik się zalogował, a Account SID był WIDOCZNY WPROST
 # w adresie URL karty (".../account/AC18e2f65e69db8b12faee23e58634
-# cd6b"). Zespół tego nigdy nie zobaczył — zamiast tego wymyślał
-# kolejne sposoby na ręczne wklejanie danych przez użytkownika, aż w
-# końcu się poddał (FAILED), mimo że część odpowiedzi leżała
-# dosłownie w adresie już otwartej karty. Statyczne dopasowanie słów
-# kluczowych w CELU nie wystarcza — Chrome może stać się istotny W
-# TRAKCIE sesji (NEED_USER_LOGIN, decyzja Gemini) niezależnie od tego,
-# jak CEL został pierwotnie sformułowany. Rozszerzamy warunek: Chrome
-# jest "istotny" także wtedy, gdy AKTUALNY stan pokazuje prawdziwą,
-# otwartą stronę (nie pustą nową kartę) — niezależnie od treści CELU.
-def _chrome_state_shows_real_page(chrome_text):
-
-    text = str(chrome_text or "")
-
-    if not text or "Brak dostępnych kart" in text:
-        return False
-
-    return "http://" in text or "https://" in text
-
-
-def _chrome_relevant_now(goal, chrome_text):
+# cd6b"). Zespół tego nigdy nie zobaczył.
+#
+# PIERWSZA wersja tej poprawki uznawała Chrome za "istotny" za każdym
+# razem, gdy AKTUALNY stan pokazywał jakąkolwiek prawdziwą stronę —
+# ale karta w Chrome zostaje otwarta na tym samym adresie przez CAŁĄ
+# resztę sesji (nic jej nie zamyka), więc taki warunek byłby "lepki":
+# spamowałby cały zespół tym samym zrzutem stanu Chrome na KAŻDYM
+# kolejnym kroku aż do końca sesji, dokładnie to marnotrawstwo
+# kontekstu, któremu miał zapobiegać cały mechanizm z v87 (na
+# wyraźną uwagę użytkownika po wdrożeniu). Naprawiono: Chrome jest
+# "istotny" dynamicznie TYLKO na jeden krok — ten bezpośrednio po
+# odpowiedzi użytkownika na NEED_USER_LOGIN (last_result.status ==
+# USER_RESPONDED_TO_LOGIN_PROMPT) — bo to jedyny moment, w którym
+# wiadomo, że coś w Chrome mogło się właśnie zmienić z powodu akcji
+# człowieka. To samo naturalnie "wygasa": już następny krok ma inny
+# last_result, więc dodatkowy stan Chrome nie ciągnie się bez końca.
+def _chrome_relevant_now(goal, last_result=None):
 
     return (
         _goal_mentions_chrome(goal)
-        or _chrome_state_shows_real_page(chrome_text)
+        or (
+            isinstance(last_result, dict)
+            and last_result.get("status")
+            == "USER_RESPONDED_TO_LOGIN_PROMPT"
+        )
     )
 
 
@@ -13403,10 +13407,7 @@ OSTATNI RAPORT:
     )
 
     goal_needs_android = _goal_mentions_android(goal)
-    goal_needs_chrome = _chrome_relevant_now(
-        goal,
-        chrome_text if chrome_text is not None else chrome_summary()
-    )
+    goal_needs_chrome = _chrome_relevant_now(goal, last_result)
 
     consult_researcher = (
         (step % 3 == 1)
@@ -13780,7 +13781,7 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
         "\nAKTUALNE KARTY CHROME:\n"
         + _resolved_chrome_text
         + "\n"
-        if _chrome_relevant_now(goal, _resolved_chrome_text) else ""
+        if _chrome_relevant_now(goal, last_result) else ""
     )
 
     android_block = (
