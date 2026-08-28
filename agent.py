@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v137
+AEL-MINI AUTONOMOUS AGENT v138
 
 ARCHITEKTURA:
 
@@ -969,7 +969,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v137")
+    print("             AEL-MINI AUTONOMOUS AGENT v138")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8203,6 +8203,47 @@ def _looks_long_running(command):
     )
 
 
+# Zaobserwowany realny bug (log 2026-08-28, cel: zadzwoń do Beaty
+# przez Bland AI): Gemini zbudował
+#   curl ... -H 'Authorization: Bearer $API_KEY' ...
+# — czyli $API_KEY W POJEDYNCZYCH CUDZYSŁOWACH. W bashu pojedyncze
+# cudzysłowy NIE rozwijają zmiennych — do Bland poleciał DOSŁOWNY
+# tekst "Bearer $API_KEY", nie prawdziwy klucz, stąd
+# {"error":"AUTH_FAILURE","message":"Unauthorized"} mimo że
+# użytkownik wcześniej wprost wkleił poprawny klucz. Co gorsza,
+# `curl` bez flagi `-f` zwraca kod wyjścia 0 nawet przy odpowiedzi
+# HTTP 401/403/500 — więc "ok": true, returncode 0 — TASK zgłosił się
+# jako COMPLETED, a błąd wyszedł na jaw dopiero gdy ktoś przeczytał
+# treść pliku z odpowiedzią. Ten dokładny wzorzec (`-H`/nagłówek albo
+# dowolny argument z $ZMIENNĄ zamknięty w POJEDYNCZYCH cudzysłowach)
+# jest wykrywalny statycznie z samej treści komendy, ZANIM się ją
+# wykona — i jest uniwersalny: dotyczy każdego przyszłego zadania,
+# które buduje polecenie curl/API z kluczem/tokenem w zmiennej powłoki.
+_SHELL_VAR_RE = re.compile(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?')
+
+
+def _detect_single_quoted_shell_variable(command):
+
+    for quoted in re.findall(r"'([^']*)'", str(command or "")):
+
+        match = _SHELL_VAR_RE.search(quoted)
+
+        if match:
+            return (
+                "Komenda zawiera zmienną powłoki '" + match.group(0)
+                + "' WEWNĄTRZ pojedynczych cudzysłowów ('...') — bash "
+                "NIE rozwija zmiennych w pojedynczych cudzysłowach, "
+                "więc do zdalnego serwisu/pliku poleciałby DOSŁOWNY "
+                "tekst '" + match.group(0) + "', nie jej wartość "
+                "(dokładnie to spowodowało AUTH_FAILURE przy "
+                "prawdziwym kluczu API w przeszłości). Użyj podwójnych "
+                "cudzysłowów (\"...\") tam, gdzie potrzebna jest "
+                "wartość zmiennej."
+            )
+
+    return None
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -8236,6 +8277,15 @@ def termux_run(command):
             return bg
 
         result = execute_shell(command_str)
+
+        if isinstance(result, dict):
+
+            quoting_warning = _detect_single_quoted_shell_variable(
+                command_str
+            )
+
+            if quoting_warning:
+                result["shell_quoting_warning"] = quoting_warning
 
         if (
             not result.get("ok")
@@ -8368,13 +8418,20 @@ def termux_run_background(
             start_new_session=True
         )
 
-        return {
+        bg_result = {
             "ok": True,
             "pid": proc.pid,
             "command": command,
             "workdir": cwd,
             "log_file": str(log)
         }
+
+        quoting_warning = _detect_single_quoted_shell_variable(command)
+
+        if quoting_warning:
+            bg_result["shell_quoting_warning"] = quoting_warning
+
+        return bg_result
 
     except Exception as e:
         return {
@@ -10727,7 +10784,8 @@ CO POWINIEN ZROBIĆ MAIN:
                         "compile_error",
                         "blocked_fake_tool_invocation",
                         "custom_tool_rejected",
-                        "already_launched_note"
+                        "already_launched_note",
+                        "shell_quoting_warning"
                     ):
 
                         if result.get(warning_key):
