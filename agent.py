@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v149
+AEL-MINI AUTONOMOUS AGENT v150
 
 ARCHITEKTURA:
 
@@ -1045,7 +1045,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v149")
+    print("             AEL-MINI AUTONOMOUS AGENT v150")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1650,12 +1650,9 @@ prostsze i już dostępne bez dodatkowego polecenia.
 KRYTYCZNE — gdy piszesz TASK dla Gemini, NIGDY nie każ mu wsadzać
 android_screenshot / chrome_tabs / chrome_inspect / chrome_open /
 android_launch_app DO treści skryptu bash (termux_run/
-termux_run_background). Zaobserwowany realny incydent: TASK kazał
-"napisać jeden skrypt robiący wszystko", Gemini napisał bash, który
-PO CICHU nie mógł wykonać zrzutu/sprawdzenia karty (to nie są
-polecenia shell), wypisał w swoim outpucie "brak narzędzia" i mimo
-to zgłosił TASK jako COMPLETED — w całym kroku nie padło ANI JEDNO
-prawdziwe wywołanie tych narzędzi. Jeśli TASK wymaga dowodu
+termux_run_background) — to narzędzia PO STRONIE GEMINI, nie
+polecenia powłoki, więc taki skrypt po cichu nic z nimi nie zrobi,
+a mimo to może zgłosić COMPLETED. Jeśli TASK wymaga dowodu
 wizualnego/stanu Chrome, treść TASKu ma wprost nakazywać Gemini
 wywołanie KONKRETNEGO narzędzia bezpośrednio ("wywołaj
 android_screenshot", "wywołaj chrome_tabs") jako osobny krok w tym
@@ -1816,19 +1813,12 @@ Chrome (chrome_tabs/chrome_inspect/chrome_open) i otwarcie
 aplikacji (android_launch_app) nigdy nie powinny być częścią
 jednego skryptu bash uruchamianego przez
 termux_run/termux_run_background — to narzędzia po stronie
-Gemini, nie polecenia shell.
-Zaobserwowany realny problem — zaplanowano "jeden skrypt robiący
-wszystko", Gemini napisał bash, który wewnątrz próbował zastąpić te
-narzędzia gołym `screencap`/`dumpsys` (co w Termuksie zawsze kończy
-się brakiem uprawnień), i sam skrypt po cichu wypisał "brak
-narzędzia" zamiast w ogóle spróbować prawdziwego narzędzia — a
-MAIN/Ty nie miałeś jak to zauważyć, bo w kroku nie było ŻADNEGO
-wywołania android_screenshot/chrome_*/android_launch_app. Zamiast
-tego planuj te konkretne czynności jako osobny, bezpośredni krok
-dla Gemini ("wywołaj narzędzie android_screenshot bezpośrednio",
-"wywołaj chrome_open/chrome_tabs bezpośrednio", nie "napisz skrypt,
-który zrobi zrzut") — czysty shell (mkdir, zapis pliku, sprawdzenie
-wersji, curl) nadal możesz łączyć w jeden skrypt, te konkretne
+Gemini, nie polecenia shell; skrypt próbujący je zastąpić gołym
+`screencap`/`dumpsys` po cichu zawiedzie mimo kodu wyjścia 0.
+Planuj te konkretne czynności jako osobny, bezpośredni krok dla
+Gemini ("wywołaj narzędzie android_screenshot bezpośrednio", nie
+"napisz skrypt, który zrobi zrzut") — czysty shell (mkdir, zapis
+pliku, curl) nadal możesz łączyć w jeden skrypt, te konkretne
 narzędzia nie.
 
 Odpowiadaj naturalnie, tak zwięźle jak się da — nie musisz za
@@ -1955,20 +1945,14 @@ Poniższe punkty warto sprawdzać za każdym razem:
   wytworzy nowego dowodu silniejszego niż to, co Python już
   sprawdził).
 - Zrzut ekranu / stan Chrome wsadzony do skryptu bash:
-  zaobserwowany realny przypadek — zaplanowany krok kazał Gemini
-  napisać jeden skrypt bash (termux_run) robiący wszystko naraz, w
-  tym "zrzut ekranu" i "sprawdzenie karty Chrome" — ale to są
-  narzędzia po stronie Gemini (android_screenshot, chrome_tabs/
-  chrome_inspect/chrome_open, android_launch_app), nie polecenia
-  shell, więc skrypt nie mógł ich faktycznie wykonać i po cichu
-  wypisał "brak narzędzia", a MAIN i tak dostał "COMPLETED" bez
-  żadnego realnego wywołania tych narzędzi w całym kroku. Jeśli
-  proponowany krok wymaga zrzutu ekranu, stanu Chrome albo otwarcia
-  aplikacji, a treść kroku każe to zrobić "w skrypcie"/"w tym samym
-  poleceniu shell" zamiast jako osobne, bezpośrednie wywołanie
-  narzędzia Gemini — zablokuj i zażądaj rozbicia na osobny krok z
-  bezpośrednim wywołaniem (android_screenshot / chrome_tabs /
-  chrome_open / android_launch_app), nie przez shell/termux_run.
+  android_screenshot, chrome_tabs/chrome_inspect/chrome_open i
+  android_launch_app to narzędzia po stronie Gemini, nie polecenia
+  shell — skrypt bash próbujący je zastąpić po cichu zawiedzie, a
+  mimo to MAIN może dostać "COMPLETED". Jeśli proponowany krok
+  wymaga zrzutu ekranu, stanu Chrome albo otwarcia aplikacji, a
+  treść kroku każe to zrobić "w skrypcie" zamiast jako osobne,
+  bezpośrednie wywołanie narzędzia Gemini — zablokuj i zażądaj
+  rozbicia na osobny krok z bezpośrednim wywołaniem.
 - Mylenie WŁASNEGO procesu agenta z celem/osobą z CELU:
   zaobserwowany realny przypadek — cel mówił o zadzwonieniu do
   konkretnej osoby, `ps aux | grep -i <imię>` nic nie znalazło, a
