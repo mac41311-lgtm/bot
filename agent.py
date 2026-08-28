@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v138
+AEL-MINI AUTONOMOUS AGENT v139
 
 ARCHITEKTURA:
 
@@ -465,6 +465,15 @@ TOOL_ATTEMPTS_FILE = STATE_DIR / "tool_attempts.json"
 # NIEZALEŻNIE od dokładnych argumentów (patrz
 # GENERIC_TOOL_FAILURE_STREAK_LIMIT powyżej).
 TOOL_FAILURE_STREAK_FILE = STATE_DIR / "tool_failure_streak.json"
+
+# Flaga: czy agent w TEJ sesji już próbował poszukać danych kontaktu
+# (numeru telefonu) bezpośrednio na telefonie (termux-contact-list),
+# zanim ewentualnie zapyta o to użytkownika — patrz
+# _decision_asks_for_contact_info()/_mark_contacts_lookup_attempted()
+# przy run_agent(). Kasowana razem z resztą stanu sesji w
+# maybe_clear_previous_session_data(), żeby nowy cel nie dziedziczył
+# "sprawdzone" po zupełnie niepowiązanym poprzednim celu.
+CONTACTS_LOOKUP_ATTEMPTED_FILE = STATE_DIR / "contacts_lookup_attempted.flag"
 
 # Zapamiętany, niedokończony cel — pozwala wznowić sesję po
 # Ctrl+C zamiast zaczynać rozmowę od zera.
@@ -969,7 +978,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v138")
+    print("             AEL-MINI AUTONOMOUS AGENT v139")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10806,6 +10815,21 @@ CO POWINIEN ZROBIĆ MAIN:
                     )
                 })
 
+                # Patrz komentarz przy _decision_asks_for_contact_info()
+                # (przed _handle_need_user_login) — zapamiętujemy, że
+                # agent w tej sesji faktycznie SPRÓBOWAŁ poszukać
+                # kontaktu na telefonie, niezależnie od tego, czy się
+                # udało (nieudana próba to wciąż informacja, że
+                # sprawdzono).
+                if (
+                    name in ("termux_run", "termux_run_background")
+                    and "termux-contact-list" in str(
+                        args.get("command", "")
+                        if isinstance(args, dict) else ""
+                    )
+                ):
+                    _mark_contacts_lookup_attempted()
+
                 if (
                     name == "android_assert_text_visible"
                     and isinstance(result, dict)
@@ -14905,6 +14929,113 @@ def _looks_like_failure_report(text):
     return any(marker in lowered for marker in failure_markers)
 
 
+# Zaobserwowany realny wzorzec (log 2026-08-28): agent CZASEM sam
+# znajduje dane kontaktowe (numer telefonu) na telefonie przez
+# `termux-contact-list`, zanim o nie zapyta (patrz MAIN_PROMPT,
+# sekcja "Create Assistant"/kontakty, v135) — ale to WYŁĄCZNIE
+# instrukcja w prompcie, więc bywa pomijana: w jednej sesji zadziałała,
+# w kolejnej, bardzo podobnej, MAIN od razu zapytał użytkownika o numer
+# Beaty, mimo że nigdy nie spróbował kontaktów. Użytkownik poprosił o
+# TWARDY (deterministyczny) mechanizm w Pythonie — ale WYRAŹNIE
+# zastrzegł, żeby nie zabić naturalnej, elastycznej rozmowy zespołu.
+# Dlatego to NIE jest twardy błąd/wyjątek: to ten sam, już istniejący
+# mechanizm "miękkiego przekierowania" co
+# TASK_DUPLICATE_OF_VERIFIED_POINT/TASK_ALREADY_SATISFIED_ON_DISK —
+# ustawia last_result i `continue`, więc trafia do Oli (tłumaczenie na
+# ludzki język, v133) i wraca do MAIN jako zwykła, naturalna kolejna
+# tura rozmowy, nie awaria. Zabezpieczenie przed zapętleniem: po
+# _CONTACT_GATE_MAX_REDIRECTS przekierowaniach w TEJ SAMEJ sesji agent
+# przestaje blokować (np. gdy uprawnienie do kontaktów jest odmówione
+# i sprawdzanie nigdy się nie powiedzie) — nie chcemy nieskończonej
+# pętli w imię "bezpieczeństwa".
+_CONTACT_GATE_MAX_REDIRECTS = 2
+
+_CONTACT_INFO_REQUEST_RE = re.compile(
+    r"numer\s+telefonu|numer\s+kontaktow|numer\s+do\b|telefon\s+do\b|"
+    r"phone\s+number|contact\s+number",
+    re.IGNORECASE
+)
+
+
+def _decision_asks_for_contact_info(decision):
+
+    # Prawdziwy adres http(s) oznacza prośbę o logowanie na stronie,
+    # nie o dane kontaktowe — celowo poza zakresem tej bramki.
+    if str(decision.get("url", "")).strip():
+        return False
+
+    text = (
+        str(decision.get("reason", ""))
+        + " "
+        + str(decision.get("instructions", ""))
+    )
+
+    return bool(_CONTACT_INFO_REQUEST_RE.search(text))
+
+
+def _mark_contacts_lookup_attempted():
+
+    try:
+        CONTACTS_LOOKUP_ATTEMPTED_FILE.parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        CONTACTS_LOOKUP_ATTEMPTED_FILE.write_text("1")
+    except Exception:
+        pass
+
+
+def _contacts_lookup_attempted():
+
+    return CONTACTS_LOOKUP_ATTEMPTED_FILE.exists()
+
+
+def _need_user_login_with_contact_gate(decision, contact_gate_redirects):
+    """
+    Wspólna logika dla OBU miejsc w run_agent(), w których obsługiwany
+    jest NEED_USER_LOGIN (główna decyzja MAIN ORAZ alternatywa po
+    FAILED) — patrz też docstring _handle_need_user_login() o tym
+    samym ryzyku rozjazdu między dwiema ścieżkami. Owija
+    _handle_need_user_login() bramką kontaktów (patrz komentarz przy
+    _decision_asks_for_contact_info() wyżej). Zwraca
+    (last_result, nowy_licznik_przekierowań) — wywołujący musi
+    nadpisać swoją lokalną zmienną licznika wynikiem.
+    """
+
+    if (
+        _decision_asks_for_contact_info(decision)
+        and not _contacts_lookup_attempted()
+        and contact_gate_redirects < _CONTACT_GATE_MAX_REDIRECTS
+    ):
+
+        contact_gate_redirects += 1
+
+        log(
+            "MAIN",
+            "NEED_USER_LOGIN o dane kontaktowe odrzucone -- "
+            "kontakty na telefonie nie były jeszcze sprawdzone w tej "
+            "sesji (" + str(contact_gate_redirects) + "/"
+            + str(_CONTACT_GATE_MAX_REDIRECTS) + ")."
+        )
+
+        return (
+            {
+                "status": "TRY_CONTACTS_FIRST",
+                "message": (
+                    "Zanim poprosisz użytkownika o numer/kontakt, "
+                    "sprawdź najpierw kontakty zapisane na telefonie "
+                    "(termux-contact-list) — ta informacja może już "
+                    "tam być, tak jak wcześniej w tej samej rozmowie. "
+                    "Jeśli po faktycznym sprawdzeniu kontaktów nadal "
+                    "jej brakuje (albo brak uprawnienia), dopiero "
+                    "wtedy poproś użytkownika."
+                )
+            },
+            contact_gate_redirects
+        )
+
+    return (_handle_need_user_login(decision), contact_gate_redirects)
+
+
 def _handle_need_user_login(decision):
     """
     Obsługa decyzji NEED_USER_LOGIN — wspólna dla dwóch miejsc w
@@ -15127,6 +15258,12 @@ def run_agent(goal):
     }
 
     signatures = []
+
+    # Licznik "miękkich" przekierowań MAIN-a z powrotem do zespołu,
+    # gdy prosi o dane kontaktowe (numer telefonu) BEZ wcześniejszej
+    # próby sprawdzenia kontaktów na telefonie — patrz
+    # _decision_asks_for_contact_info() przy _handle_need_user_login().
+    contact_gate_redirects = 0
 
     # Zaobserwowany realny bug (log 2026-08-27, sesja puszczona na
     # noc bez nadzoru): to BYŁ `for step in range(1, MAX_STEPS + 1)`
@@ -15948,7 +16085,11 @@ Zwróć tylko JSON.
 
         if dtype == "NEED_USER_LOGIN":
 
-            last_result = _handle_need_user_login(decision)
+            last_result, contact_gate_redirects = (
+                _need_user_login_with_contact_gate(
+                    decision, contact_gate_redirects
+                )
+            )
 
             continue
 
@@ -16137,7 +16278,11 @@ Tylko JSON.
                 == "NEED_USER_LOGIN"
             ):
 
-                last_result = _handle_need_user_login(alt)
+                last_result, contact_gate_redirects = (
+                    _need_user_login_with_contact_gate(
+                        alt, contact_gate_redirects
+                    )
+                )
 
                 continue
 
@@ -16314,7 +16459,8 @@ def maybe_clear_previous_session_data():
         TOOL_ATTEMPTS_FILE,
         LAST_RESULT_FILE,
         GEMINI_STATE_FILE,
-        PROGRESS_CHECKLIST_FILE
+        PROGRESS_CHECKLIST_FILE,
+        CONTACTS_LOOKUP_ATTEMPTED_FILE
     ):
         try:
             extra.unlink(missing_ok=True)
