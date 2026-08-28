@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v140
+AEL-MINI AUTONOMOUS AGENT v141
 
 ARCHITEKTURA:
 
@@ -978,7 +978,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v140")
+    print("             AEL-MINI AUTONOMOUS AGENT v141")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1342,6 +1342,22 @@ o dane, które mogą już istnieć NA TYM TELEFONIE (kontakt, zapisane
 hasło, wcześniej pobrany plik) — spróbuj NAJPIERW znaleźć je
 narzędziami, które już masz (np. `termux-contact-list` dla
 kontaktów), zamiast od razu zakładać że trzeba pytać.
+
+KONKRETNY, zaobserwowany realny błąd (2026-08-28): po tym, jak
+użytkownik zalogował się do panelu Twilio na prośbę NEED_USER_LOGIN,
+karta Chrome pokazywała `https://.../account/AC18e2f65e69db8b12fae...`
+— Account SID (wartość zaczynająca się od "AC") był WIDOCZNY WPROST w
+adresie URL już otwartej karty. Zespół tego nie sprawdził — zamiast
+przeczytać adres otwartej karty (albo doczytać resztę danych z
+zalogowanej strony przez chrome_execute_js/chrome_click), wymyślał
+kolejne sposoby na ręczne wklejanie WSZYSTKICH danych przez
+użytkownika (skrypt z `read`, zmienne środowiskowe w linii poleceń),
+aż w końcu poddał się (FAILED), mimo że część odpowiedzi leżała
+dosłownie w adresie karty, którą i tak już miał w swoim stanie Chrome.
+PO KAŻDYM NEED_USER_LOGIN, ZANIM poprosisz o kolejną porcję danych —
+sprawdź aktualny stan Chrome (adres URL, tytuł karty) i rozważ, czy
+odpowiedź (albo jej część) nie jest już tam widoczna, zamiast zakładać
+że wszystko musi przyjść ręcznie od człowieka.
 
 Zwracaj tylko JSON.
 
@@ -12813,7 +12829,15 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
     # przeglądarką ani ekranem telefonu.
     device_state_block = ""
 
-    if _goal_mentions_chrome(goal) or _goal_mentions_android(goal):
+    _resolved_chrome_text_for_progress = (
+        chrome_text if chrome_text is not None else chrome_summary()
+    )
+
+    _chrome_relevant_for_progress = _chrome_relevant_now(
+        goal, _resolved_chrome_text_for_progress
+    )
+
+    if _chrome_relevant_for_progress or _goal_mentions_android(goal):
 
         device_state_block = (
             "\nAKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (pokazuje "
@@ -12822,12 +12846,11 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
             "czynnościach, zanim to wykorzystasz do oceny):\n"
         )
 
-        if _goal_mentions_chrome(goal):
+        if _chrome_relevant_for_progress:
             device_state_block += (
                 "\nAKTUALNY CHROME:\n"
                 + short(
-                    chrome_text if chrome_text is not None
-                    else chrome_summary(),
+                    _resolved_chrome_text_for_progress,
                     1500
                 ) + "\n"
             )
@@ -13048,6 +13071,40 @@ def _goal_mentions_android(goal):
 def _goal_mentions_chrome(goal):
     goal_lower = str(goal or "").lower()
     return any(kw in goal_lower for kw in _GOAL_CHROME_KEYWORDS)
+
+
+# Zaobserwowany realny bug (log 2026-08-28, cel: integracja głosowa +
+# telefon do Beaty): CEL nie wspominał wprost słów "chrome"/
+# "przeglądarka"/"URL" (_goal_mentions_chrome zwracało False), więc
+# PLANNER, ENGINEER i nawet sam MAIN NIGDY nie dostawali stanu
+# Chrome — mimo że w międzyczasie NEED_USER_LOGIN otworzył konsolę
+# Twilio, użytkownik się zalogował, a Account SID był WIDOCZNY WPROST
+# w adresie URL karty (".../account/AC18e2f65e69db8b12faee23e58634
+# cd6b"). Zespół tego nigdy nie zobaczył — zamiast tego wymyślał
+# kolejne sposoby na ręczne wklejanie danych przez użytkownika, aż w
+# końcu się poddał (FAILED), mimo że część odpowiedzi leżała
+# dosłownie w adresie już otwartej karty. Statyczne dopasowanie słów
+# kluczowych w CELU nie wystarcza — Chrome może stać się istotny W
+# TRAKCIE sesji (NEED_USER_LOGIN, decyzja Gemini) niezależnie od tego,
+# jak CEL został pierwotnie sformułowany. Rozszerzamy warunek: Chrome
+# jest "istotny" także wtedy, gdy AKTUALNY stan pokazuje prawdziwą,
+# otwartą stronę (nie pustą nową kartę) — niezależnie od treści CELU.
+def _chrome_state_shows_real_page(chrome_text):
+
+    text = str(chrome_text or "")
+
+    if not text or "Brak dostępnych kart" in text:
+        return False
+
+    return "http://" in text or "https://" in text
+
+
+def _chrome_relevant_now(goal, chrome_text):
+
+    return (
+        _goal_mentions_chrome(goal)
+        or _chrome_state_shows_real_page(chrome_text)
+    )
 
 
 def consult_team(
@@ -13346,7 +13403,10 @@ OSTATNI RAPORT:
     )
 
     goal_needs_android = _goal_mentions_android(goal)
-    goal_needs_chrome = _goal_mentions_chrome(goal)
+    goal_needs_chrome = _chrome_relevant_now(
+        goal,
+        chrome_text if chrome_text is not None else chrome_summary()
+    )
 
     consult_researcher = (
         (step % 3 == 1)
@@ -13712,11 +13772,15 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
     # run_agent() pobiera stan RAZ na krok i przekazuje go tutaj,
     # zamiast MAIN pytającego urządzenie NIEZALEŻNIE o dokładnie to
     # samo, co PLANNER/CRITIC już przed chwilą dostali.
+    _resolved_chrome_text = (
+        chrome_text if chrome_text is not None else chrome_summary()
+    )
+
     chrome_block = (
         "\nAKTUALNE KARTY CHROME:\n"
-        + (chrome_text if chrome_text is not None else chrome_summary())
+        + _resolved_chrome_text
         + "\n"
-        if _goal_mentions_chrome(goal) else ""
+        if _chrome_relevant_now(goal, _resolved_chrome_text) else ""
     )
 
     android_block = (
