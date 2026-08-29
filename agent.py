@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v171
+AEL-MINI AUTONOMOUS AGENT v172
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v171")
+    print("             AEL-MINI AUTONOMOUS AGENT v172")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2404,6 +2404,30 @@ Cała komenda zwróciła `returncode: 0`, a mimo to
 zawierał `{"error": "Please grant the following permission..."}`.
 Wynik: plik z fałszywym "SUKCES" mimo realnego niepowodzenia,
 złapane dopiero później przez inną rolę.
+
+PUSTY wynik też NIE jest sukcesem. termux-telephony-call przy
+powodzeniu zwykle nie wypisuje NIC — więc pusty wynik nie mówi, że
+połączenie się nawiązało, że był zasięg ani że ktoś odebrał; to
+tylko "numer poszedł do dialera". Nie deklaruj rozmowy/kontaktu ani
+nie pisz FINAL_OK na podstawie pustego wyniku — potwierdź realnie
+(termux-call-log, stan ekranu). Zaobserwowany realny przypadek
+(2026-08-29): wynik był pusty (brak zasięgu, połączenie się nie
+nawiązało), a skrypt i tak zapisał FINAL_OK "interakcja zakończona".
+
+DŹWIĘK W TERMUKSIE JEST LOKALNY — NIE WCHODZI W ROZMOWĘ.
+termux-tts-speak gra na GŁOŚNIKU tego telefonu, a
+termux-microphone-record nagrywa z jego MIKROFONU — żadne z nich nie
+jest wpięte w kanał audio trwającego połączenia. Nie da się przez
+nie "powiedzieć czegoś rozmówcy" ani "słuchać go" w trakcie rozmowy
+telefonicznej — druga strona odtworzonego TTS po prostu nie usłyszy.
+Jeśli cel wymaga dwustronnego głosu z rozmówcą PRZEZ połączenie,
+jest on nieosiągalny tymi narzędziami: powiedz to wprost (zgłoś do
+MAIN jako niewykonalne, żeby padło NEED_USER/FAILED z prawdziwym
+powodem) albo zaproponuj wyjście poza powłokę — ten agent steruje
+CAŁYM telefonem (realne aplikacje przez UI/uiautomator, Chrome przez
+CDP, strony i usługi WWW), więc gdy shell Termuksa nie potrafi
+czegoś zrobić, właściwym ruchem jest użyć tych szerszych możliwości,
+a NIE odtworzyć namiastkę lokalnie i uznać cel za wykonany.
 
 WARTOŚĆ DOMYŚLNA "JEŚLI PUSTE" — NIGDY przez `&&`, zawsze przez `;`
 albo `${VAR:-domyślna}`. Idiom `[ -z "$VAR" ] && VAR=domyślna`
@@ -8912,6 +8936,61 @@ def _detect_grep_on_termux_api_json(command):
     )
 
 
+# Realny log 2026-08-29 (cel "zrób głosową interakcję z Beatą,
+# powiedz hej i rozmawiaj"): skrypt zadzwonił przez
+# termux-telephony-call (wynik PUSTY — użytkownik nie miał zasięgu i
+# połączenie się nie nawiązało), potem odtworzył termux-tts-speak
+# "Hej Beata" i zapisał FINAL_OK.txt jako "cel osiągnięty". Dwa
+# osobne, fundamentalne nieporozumienia co do środowiska:
+#
+# 1. termux-telephony-call zwykle NIE wypisuje nic na sukces — pusty
+#    wynik NIE jest dowodem, że połączenie się nawiązało, że był
+#    zasięg ani że ktokolwiek odebrał. To tylko "dyspozycja wybrania
+#    numeru poszła do dialera". (Istniejąca reguła wyżej łapała JSON
+#    z "error"; pusty wynik przechodził przez nią jak sukces.)
+#
+# 2. termux-tts-speak gra na GŁOŚNIKU tego telefonu, a
+#    termux-microphone-record nagrywa z jego MIKROFONU — ŻADNE z
+#    nich nie jest wpięte w kanał audio trwającej rozmowy. Nie da
+#    się przez nie "powiedzieć czegoś drugiej stronie" ani "słuchać
+#    jej" w trakcie połączenia. Cel wymagający dwustronnego głosu z
+#    rozmówcą PRZEZ połączenie jest nieosiągalny tymi narzędziami —
+#    trzeba to powiedzieć wprost (NEED_USER/‌FAILED z prawdziwym
+#    powodem) albo wyjść poza powłokę (sterować realną aplikacją
+#    przez UI/Chrome), a NIE odtwarzać TTS lokalnie i pisać FINAL_OK.
+def _detect_call_audio_fallacy(command):
+
+    command_str = str(command or "")
+
+    if "termux-telephony-call" not in command_str:
+        return None
+
+    base = (
+        "UWAGA co do środowiska: termux-telephony-call zwykle nie "
+        "wypisuje NIC, gdy się powiedzie — więc PUSTY wynik NIE jest "
+        "dowodem, że połączenie się nawiązało, że był zasięg ani że "
+        "ktoś odebrał (to tylko 'numer poszedł do dialera'). Nie "
+        "pisz pliku-dowodu ani FINAL_OK na podstawie samego pustego "
+        "wyniku — potwierdź realnie przez termux-call-log albo stan "
+        "ekranu."
+    )
+
+    if "termux-tts-speak" in command_str:
+        base += (
+            " DODATKOWO to polecenie łączy połączenie z "
+            "termux-tts-speak — a TTS gra na GŁOŚNIKU tego telefonu, "
+            "NIE wchodzi w kanał audio rozmowy. Druga strona tego NIE "
+            "usłyszy. 'Powiedzenie czegoś rozmówcy' ani 'słuchanie "
+            "go' w trakcie połączenia jest tymi narzędziami "
+            "NIEOSIĄGALNE — jeśli cel tego wymaga, zgłoś to wprost "
+            "(NEED_USER/FAILED z prawdziwym powodem) albo wyjdź poza "
+            "powłokę (realna aplikacja przez UI/Chrome), zamiast grać "
+            "TTS lokalnie i uznawać cel za wykonany."
+        )
+
+    return base
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -8975,6 +9054,11 @@ def termux_run(command):
 
             if json_parse_warning:
                 result["json_parse_warning"] = json_parse_warning
+
+            call_audio_warning = _detect_call_audio_fallacy(command_str)
+
+            if call_audio_warning:
+                result["call_audio_warning"] = call_audio_warning
 
         if (
             not result.get("ok")
@@ -9136,6 +9220,11 @@ def termux_run_background(
 
         if json_parse_warning:
             bg_result["json_parse_warning"] = json_parse_warning
+
+        call_audio_warning = _detect_call_audio_fallacy(command)
+
+        if call_audio_warning:
+            bg_result["call_audio_warning"] = call_audio_warning
 
         return bg_result
 
@@ -11495,6 +11584,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "missing_file_warning",
                         "shortcircuit_warning",
                         "json_parse_warning",
+                        "call_audio_warning",
                         "stale_warning"
                     ):
 
