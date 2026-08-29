@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v159
+AEL-MINI AUTONOMOUS AGENT v160
 
 ARCHITEKTURA:
 
@@ -1098,7 +1098,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v159")
+    print("             AEL-MINI AUTONOMOUS AGENT v160")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13785,12 +13785,53 @@ SUROWY RAPORT:
     # _ROLE_CONTEXT_BLOCKS niżej). Wcześniej RESEARCHER i BROWSER
     # dostawały bajt-w-bajt ten sam pełny blok (CEL + raport +
     # Chrome + Android) — czysty spam bez różnicowania ról.
+    # Gdy ostatni krok SIĘ WYWALIŁ, do ludzkiego streszczenia Oli
+    # DOKLEJAMY surowe fakty techniczne — zamiast je nimi zastępować.
+    #
+    # ZAOBSERWOWANY REALNY PROBLEM (analiza kodu + logi 2026-08-28):
+    # ta sekcja budowała się jako `readable_report or
+    # raw_report_material`, czyli wystarczyło, że Ola cokolwiek
+    # napisała, a WSZYSTKIE surowe szczegóły znikały. Przy pierwszej
+    # porażce narzędzia (najczęstszy przypadek — tool_hint pojawia
+    # się dopiero przy POWTÓRZONYCH) zespół nie widział ani
+    # `SyntaxError: invalid syntax`, ani dokładnej komendy, ani
+    # stderr — wyłącznie zdanie w rodzaju "nie udało się uruchomić
+    # skryptu". Najbardziej cierpiał na tym Bartek, który ma
+    # napisać POPRAWKĘ, ale nie dostawał treści błędu, który
+    # naprawia.
+    #
+    # Użytkownik ujął to wprost: "kiedy błąd to błąd i każdy dostaje
+    # odpowiedzi" — w normalnej rozmowie zespołu mówi się "skrypt
+    # padł" I POKAZUJE log, a nie samo "coś poszło nie tak".
+    # Streszczenie Oli zostaje (to ona robi z tego zdanie po
+    # ludzku), surowe fakty idą pod spodem. Doklejane WYŁĄCZNIE przy
+    # faktycznym błędzie, żeby nie rozdymać każdego udanego kroku.
+    error_details_block = ""
+
+    if (
+        readable_report
+        and isinstance(last_result, dict)
+        and (
+            last_result.get("ok") is False
+            or last_result.get("status") == "GEMINI_TOOL_ERROR"
+        )
+    ):
+        error_details_block = (
+            "\n\nDOKŁADNIE TO, CO ZWRÓCIŁO NARZĘDZIE (surowe, "
+            "nieprzetworzone — na tym opieraj poprawkę, nie na samym "
+            "streszczeniu powyżej):\n"
+            + _condense_last_result_for_team(
+                last_result_for_team,
+                limit=1400
+            )
+        )
+
     core_context = f"""
 CEL:
 {goal}
 {progress_block}{checklist_block}
 OSTATNI RAPORT:
-{readable_report or raw_report_material}
+{readable_report or raw_report_material}{error_details_block}
 {tool_hint}
 """
 
