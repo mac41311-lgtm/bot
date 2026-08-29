@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v160
+AEL-MINI AUTONOMOUS AGENT v161
 
 ARCHITEKTURA:
 
@@ -1098,7 +1098,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v160")
+    print("             AEL-MINI AUTONOMOUS AGENT v161")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13445,6 +13445,59 @@ def _condense_last_result_for_team(last_result, limit=2500):
 
     if tool_calls:
         parts.append("liczba wywołań narzędzi: " + str(tool_calls))
+
+    # CO GEMINI FAKTYCZNIE WYWOŁAŁO — zapis zbierany przez Pythona,
+    # nie deklaracja Gemini.
+    #
+    # ZAOBSERWOWANY REALNY PROBLEM (analiza kodu + logi): tool_trace
+    # był zbierany (gemini_execute_task), zapisywany do checklisty i
+    # NIGDY NIKOMU NIE POKAZYWANY. Zespół oceniał krok wyłącznie na
+    # podstawie PROZY Gemini ("raport Gemini: CO ZROBIŁEM: 1... 2...")
+    # — a CRITIC ma w swoim prompcie WPROST zadanie wykrywania
+    # fabrykacji ("raport podał 'Python 3.11.8', a realnie odczytany
+    # plik pokazywał 3.14.6") i nie miał ŻADNEGO niepodrabialnego
+    # źródła, z którym mógłby tę prozę porównać.
+    #
+    # Ta lista jest dokładnie takim źródłem: pochodzi z faktycznego
+    # dyspozytora narzędzi, więc Gemini nie ma jak jej "opowiedzieć".
+    # Trzymana zwięźle (nazwa + czy się udało), żeby nie stała się
+    # kolejnym szumem — przy długich seriach zwijana do zliczeń.
+    tool_trace = last_result.get("tool_trace")
+
+    if isinstance(tool_trace, list) and tool_trace:
+
+        def _name_of(entry):
+            return str(entry.get("tool", "?")) if isinstance(entry, dict) else "?"
+
+        def _ok_of(entry):
+            return entry.get("ok") if isinstance(entry, dict) else None
+
+        failed = sum(1 for e in tool_trace if _ok_of(e) is False)
+
+        if len(tool_trace) <= 12:
+            rendered = ", ".join(
+                _name_of(e) + ("" if _ok_of(e) is not False else " [BŁĄD]")
+                for e in tool_trace
+            )
+        else:
+            counts = {}
+            for e in tool_trace:
+                counts[_name_of(e)] = counts.get(_name_of(e), 0) + 1
+            rendered = ", ".join(
+                name + " x" + str(n)
+                for name, n in sorted(
+                    counts.items(),
+                    key=lambda kv: -kv[1]
+                )
+            )
+
+        parts.append(
+            "co Gemini FAKTYCZNIE wywołało (zapis Pythona, nie jego "
+            "własna proza) — wywołań: "
+            + str(len(tool_trace))
+            + ", nieudanych: " + str(failed) + " -> "
+            + short(rendered, 600)
+        )
 
     return short("\n".join(parts), limit)
 
