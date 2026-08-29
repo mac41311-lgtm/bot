@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v165
+AEL-MINI AUTONOMOUS AGENT v166
 
 ARCHITEKTURA:
 
@@ -1202,7 +1202,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v165")
+    print("             AEL-MINI AUTONOMOUS AGENT v166")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2146,6 +2146,19 @@ Poniższe punkty warto sprawdzać za każdym razem:
   "zarejestrowały", więc do zewnętrznego serwisu poleciał dosłowny
   tekst zmiennej zamiast jej wartości, a błąd (AUTH_FAILURE) wyszedł
   na jaw dopiero po fakcie.
+
+MOŻESZ ZAPYTAĆ, ZAMIAST BLOKOWAĆ. Gdy Twoje zastrzeżenie sprowadza
+się do "nie wiem, czy on to sprawdził, czy założył" — dopisz na końcu
+osobną linię:
+
+PYTANIE DO TOMKA: <konkretne pytanie>     (albo: PYTANIE DO BARTKA:)
+
+Odpowiedź wróci do Ciebie w następnym kroku. Zaobserwowany realny
+przypadek: zablokowałeś plan słowami "plan zakłada, że klucz jest w
+otwartej karcie, ale nikt tego nie sprawdził — to założenie, nie
+fakt". To było w istocie pytanie, ale blokada kosztowała całą turę
+zespołu. Jedno pytanie na raz; BLOKUJ zostaw na realne błędy, nie na
+niepewność, którą da się rozwiać jednym zdaniem.
 
 Format:
 
@@ -13910,6 +13923,88 @@ _OLA_CALLOUT_NAME_TO_ROLE = {
 }
 
 
+# ============================================================
+# PYTANIA MAREKA (CRITIC) DO TOMKA/BARTKA
+#
+# ZAOBSERWOWANY REALNY PROBLEM (log 2026-08-28, KROK 4): Marek
+# zablokował plan słowami "plan zakłada, że klucz jest w otwartej
+# karcie, ale nikt tego nie sprawdził. To ZAŁOŻENIE, nie fakt". To
+# nie jest zarzut — to PYTANIE ("sprawdziłeś, czy zakładasz?"). Ale
+# Marek nie miał JAK zapytać, więc jedynym narzędziem nacisku, jakie
+# miał, była blokada. Blokada kosztuje całą turę zespołu; pytanie nie
+# kosztuje nic.
+#
+# Świadomie wąski zakres: TYLKO Marek może pytać i TYLKO Tomka albo
+# Bartka. Na ten jeden przypadek mamy twardy dowód z loga; że inne
+# role też potrzebują pytać, było wyłącznie hipotezą — a w tym
+# projekcie naprawiamy to, co udowodnione. Obie te role są pytane
+# CO KROK, więc odpowiedź wraca już w następnej turze (do Kamila czy
+# Wojtka, pytanych co 3. krok, pytanie czekałoby tak długo, że
+# straciłoby sens).
+#
+# KOSZT: zero dodatkowych zapytań do DeepSeeka. Pytanie i odpowiedź
+# jadą doklejone do wywołań, które i tak następują — dokładnie ten
+# sam mechanizm co _wojtek_pending_answer.
+# ============================================================
+
+_CRITIC_QUESTION_RE = re.compile(
+    r"PYTANIE\s+DO\s+(TOMKA|BARTKA)\s*:\s*(.+?)(?:\n\s*\n|\Z)",
+    re.IGNORECASE | re.DOTALL
+)
+
+_CRITIC_ANSWER_RE = re.compile(
+    r"ODPOWIED[ŹZ]\s+DLA\s+MARKA\s*:\s*(.+?)(?:\n\s*\n|\Z)",
+    re.IGNORECASE | re.DOTALL
+)
+
+_QUESTION_NAME_TO_ROLE = {"TOMKA": "PLANNER", "BARTKA": "ENGINEER"}
+
+# Pytanie Marka czekające na odpowiedź: {"role":..., "text":..., "wiek":int}
+_critic_question = None
+
+# Odpowiedź czekająca na Marka: {"od":..., "text":...}
+_answer_for_critic = None
+
+# Po ilu krokach bez odpowiedzi pytanie przepada. Sytuacja zmienia się
+# z kroku na krok — odpowiedź na nieaktualne pytanie jest gorsza niż
+# jej brak.
+CRITIC_QUESTION_MAX_AGE = 2
+
+
+def _extract_critic_question(text):
+    """Zwraca (rola, treść) pierwszego pytania Marka albo (None, None)."""
+
+    m = _CRITIC_QUESTION_RE.search(str(text or ""))
+
+    if not m:
+        return None, None
+
+    role = _QUESTION_NAME_TO_ROLE.get(m.group(1).upper())
+    pytanie = " ".join(m.group(2).split())
+
+    if not role or not pytanie:
+        return None, None
+
+    return role, short(pytanie, 400)
+
+
+def _extract_answer_for_critic(text, fallback_limit=400):
+    """
+    Wyciąga odpowiedź oznaczoną "ODPOWIEDŹ DLA MARKA:". Gdy roli
+    umknie sam marker, oddajemy początek jej wypowiedzi — lepsze to
+    niż zgubienie odpowiedzi przez brak formatki.
+    """
+
+    text = str(text or "")
+
+    m = _CRITIC_ANSWER_RE.search(text)
+
+    if m:
+        return short(" ".join(m.group(1).split()), 500)
+
+    return short(" ".join(text.split()), fallback_limit)
+
+
 def _split_ola_translation_by_role(text):
 
     text = str(text or "")
@@ -14001,6 +14096,8 @@ def consult_team(
     global _critic_verdict_for_engineer
     global _main_decision_for_team
     global _critic_block_streak
+    global _critic_question
+    global _answer_for_critic
 
     tool_hint = ""
 
@@ -14506,6 +14603,18 @@ OSTATNI RAPORT:
     else:
         critic_feedback_block = ""
 
+    # Pytanie Marka do Tomka (patrz _critic_question) — dopisane do
+    # tury, która i tak się odbywa.
+    planner_question_block = ""
+
+    if _critic_question and _critic_question.get("role") == "PLANNER":
+        planner_question_block = (
+            "\n\nMAREK PYTA CIĘ WPROST (odpowiedz mu w swojej "
+            "wypowiedzi, zaczynając linię od \"ODPOWIEDŹ DLA MARKA:\" "
+            "— dzięki temu odpowiedź do niego wróci):\n"
+            + _critic_question.get("text", "")
+        )
+
     results["PLANNER"] = deepseek(
         "PLANNER",
         _team_context(
@@ -14516,6 +14625,7 @@ OSTATNI RAPORT:
                 "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
                 + critic_feedback_block
+                + planner_question_block
                 + (
                     "\n\nOD OLI (tylko dla Ciebie): "
                     + ola_role_callouts["PLANNER"]
@@ -14552,6 +14662,14 @@ OSTATNI RAPORT:
             )
         )
 
+    # Jeżeli Tomek był pytany — odbieramy odpowiedź dla Marka.
+    if _critic_question and _critic_question.get("role") == "PLANNER":
+        _answer_for_critic = {
+            "od": "Tomek",
+            "text": _extract_answer_for_critic(results.get("PLANNER", "")),
+        }
+        _critic_question = None
+
     planner_out = short(results.get("PLANNER", ""), 2000)
 
     # Zarzut Marka do POPRZEDNIEJ propozycji Bartka — ta sama zasada
@@ -14571,6 +14689,16 @@ OSTATNI RAPORT:
     else:
         engineer_critic_block = ""
 
+    engineer_question_block = ""
+
+    if _critic_question and _critic_question.get("role") == "ENGINEER":
+        engineer_question_block = (
+            "\n\nMAREK PYTA CIĘ WPROST (odpowiedz mu w swojej "
+            "wypowiedzi, zaczynając linię od \"ODPOWIEDŹ DLA MARKA:\" "
+            "— dzięki temu odpowiedź do niego wróci):\n"
+            + _critic_question.get("text", "")
+        )
+
     results["ENGINEER"] = deepseek(
         "ENGINEER",
         _team_context(
@@ -14581,6 +14709,7 @@ OSTATNI RAPORT:
                 + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
                 + engineer_critic_block
+                + engineer_question_block
                 + engineer_value_handoff
                 + (
                     "\n\nOD OLI (tylko dla Ciebie): "
@@ -14591,12 +14720,32 @@ OSTATNI RAPORT:
         )
     )
 
+    # Odpowiedź na poprzednie pytanie Marka + przechwycenie
+    # odpowiedzi Bartka, jeśli to jego pytano.
+    if _critic_question and _critic_question.get("role") == "ENGINEER":
+        _answer_for_critic = {
+            "od": "Bartek",
+            "text": _extract_answer_for_critic(results.get("ENGINEER", "")),
+        }
+        _critic_question = None
+
+    critic_answer_block = ""
+
+    if _answer_for_critic:
+        critic_answer_block = (
+            "\n\n" + _answer_for_critic.get("od", "Ktoś")
+            + " ODPOWIEDZIAŁ NA TWOJE POPRZEDNIE PYTANIE:\n"
+            + _answer_for_critic.get("text", "")
+        )
+        _answer_for_critic = None
+
     results["CRITIC"] = deepseek(
         "CRITIC",
         _team_context(
             "CRITIC",
             extra=(
                 "\nPLAN TOMKA:\n" + planner_out
+                + critic_answer_block
                 + (
                     "\n\nOD OLI (tylko dla Ciebie): "
                     + ola_role_callouts["CRITIC"]
@@ -14612,6 +14761,25 @@ OSTATNI RAPORT:
     # słuchać, a doklejanie zgody co krok byłoby tylko kolejnym
     # szumem w jego kontekście.
     _critic_out_full = results.get("CRITIC", "") or ""
+
+    # Nowe pytanie Marka — tylko gdy żadne inne nie czeka (jedno na
+    # raz: to ma być doprecyzowanie, nie przesłuchanie).
+    if _critic_question is None:
+
+        _q_role, _q_text = _extract_critic_question(_critic_out_full)
+
+        if _q_role:
+            _critic_question = {"role": _q_role, "text": _q_text, "wiek": 0}
+
+    elif _critic_question is not None:
+
+        # Pytanie bez odpowiedzi się starzeje. Sytuacja zmienia się z
+        # kroku na krok — odpowiedź na nieaktualne pytanie jest gorsza
+        # niż jej brak.
+        _critic_question["wiek"] = _critic_question.get("wiek", 0) + 1
+
+        if _critic_question["wiek"] > CRITIC_QUESTION_MAX_AGE:
+            _critic_question = None
 
     if any(
         marker in _critic_out_full.upper()
