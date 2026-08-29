@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v155
+AEL-MINI AUTONOMOUS AGENT v156
 
 ARCHITEKTURA:
 
@@ -1046,7 +1046,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v155")
+    print("             AEL-MINI AUTONOMOUS AGENT v156")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8348,6 +8348,13 @@ def termux_write_file(path, content, append=False):
         }
 
 
+# Moment startu TEGO uruchomienia agenta. Ustawiany raz, przy
+# imporcie modułu — służy WYŁĄCZNIE do rozpoznania, czy odczytywany
+# plik powstał w tej sesji, czy został po poprzedniej (patrz
+# termux_read_file).
+_SESSION_STARTED_AT = time.time()
+
+
 def termux_read_file(path, max_bytes=20000):
     try:
         p = Path(str(path)).expanduser()
@@ -8368,7 +8375,7 @@ def termux_read_file(path, max_bytes=20000):
 
         data = data[:limit]
 
-        return {
+        result = {
             "ok": True,
             "path": str(p),
             "content": data.decode(
@@ -8377,6 +8384,50 @@ def termux_read_file(path, max_bytes=20000):
             ),
             "truncated": truncated
         }
+
+        # ZAOBSERWOWANY REALNY PROBLEM (log 2026-08-28, cel "zadzwoń
+        # do Beaty", KROK 12): Gemini odczytało ~/agent/.env
+        # pozostawiony przez POPRZEDNIĄ sesję i potraktowało jego
+        # treść jako aktualną — a plik zawierał
+        # "VAPI_API_KEY=pk-mock-valid-key-for-tests" (klucz-atrapa z
+        # testów) ORAZ "BEATA_PHONE=+48500600700", czyli numer INNY
+        # niż prawdziwy numer podany przez użytkownika w TEJ sesji
+        # (+48514590110). W tym samym kroku Gemini odczytało też
+        # call_result.txt i call_test.log z dawnych sesji jako "stan
+        # obecny". Sprzątanie po sesji tego nie łapie: śledzone są
+        # tylko pliki utworzone przez termux_write_file/
+        # termux_patch_file/write_engineer_code_to, a te powstały
+        # przez zwykłe przekierowanie powłoki (`curl ... > plik`),
+        # więc nigdy nie trafiły na listę do wyczyszczenia.
+        # Świadomie NIE kasujemy tu niczego automatycznie (skanowanie
+        # katalogu domowego zostało wcześniej wycofane po incydencie,
+        # w którym usunęło ~/api_token.txt) — zamiast tego jawnie
+        # OZNACZAMY plik jako pochodzący sprzed startu tej sesji,
+        # deterministycznie, na podstawie czasu modyfikacji.
+        try:
+            mtime = p.stat().st_mtime
+
+            if mtime < _SESSION_STARTED_AT:
+                result["stale_from_previous_session"] = True
+                result["modified"] = datetime.fromtimestamp(
+                    mtime
+                ).strftime("%Y-%m-%d %H:%M:%S")
+                result["stale_warning"] = (
+                    "UWAGA: ten plik powstał PRZED startem bieżącej "
+                    "sesji (ostatnia zmiana: "
+                    + result["modified"]
+                    + "), więc pochodzi z POPRZEDNIEGO uruchomienia "
+                    "agenta. Jego treść może być nieaktualna albo "
+                    "testowa (zaobserwowany realny przypadek: stary "
+                    ".env z kluczem-atrapą i INNYM numerem telefonu "
+                    "niż podany w tej sesji). Zanim się na nim "
+                    "oprzesz, potwierdź te dane wobec tego, co "
+                    "ustalono W TEJ sesji."
+                )
+        except Exception:
+            pass
+
+        return result
 
     except Exception as e:
         return {
@@ -11058,7 +11109,8 @@ CO POWINIEN ZROBIĆ MAIN:
                         "custom_tool_rejected",
                         "already_launched_note",
                         "shell_quoting_warning",
-                        "missing_file_warning"
+                        "missing_file_warning",
+                        "stale_warning"
                     ):
 
                         if result.get(warning_key):
@@ -11675,6 +11727,71 @@ _CHECKLIST_STATUS_LABELS = {
 }
 
 
+def _checklist_refresh_failed_items():
+    """
+    Promuje punkty ze statusem BLAD do ZWERYFIKOWANY, jeżeli ich
+    warunek sukcesu jest TERAZ faktycznie spełniony na dysku —
+    niezależnie od tego, który TASK go ostatecznie spełnił.
+
+    ZAOBSERWOWANY REALNY, KOSZTOWNY BUG (log 2026-08-28, cel "zadzwoń
+    do Beaty", KROKI 6-13): `_checklist_record_result()` ustawia
+    "BLAD" wyłącznie dla pozycji o TYM SAMYM task_id, a ponowna próba
+    tej samej rzeczy dostaje NOWY task_id — czyli NOWĄ pozycję na
+    liście. Nic w całym pliku nigdy nie zdejmowało starego "BLAD"
+    (sprawdzone: `item["status"] = "BLAD"` występuje w dokładnie
+    jednym miejscu, bez żadnego odpowiednika cofającego), mimo że
+    docstring _checklist_summary_block() wprost obiecywał, że błędy
+    znikają, "dopóki się nie pojawi ich naprawiony odpowiednik" —
+    ta obietnica NIGDY nie została zaimplementowana.
+
+    Skutek w realnym logu: dwa skrypty padły na SyntaxError (KROK 4 i
+    6), po czym w KROKU 8 Gemini wykonało DOKŁADNIE tę samą pracę
+    poprawnie (pobrało stronę, znalazło linki, zapisało
+    api_docs_url.txt) — a mimo to CRITIC w krokach 6, 7, 8, 9, 11 i 13
+    blokował KAŻDY kolejny plan, cytując "3 aktywne błędy w STANIE
+    FAKTYCZNYM, które wymagają ponowienia". Zespół nie miał ŻADNEJ
+    drogi wyjścia: te pozycje były strukturalnie nie do zamknięcia.
+    W KROKU 9 MAIN, pod presją tej blokady, zlecił zadanie-atrapę
+    (zapis pliku "resolved_script_errors.txt" z tekstem, że błędy
+    zostały rozwiązane) — co oczywiście niczego nie zmieniło i CRITIC
+    blokował dalej. Co najmniej 5 pełnych tur zespołu zmarnowanych na
+    martwą blokadę.
+
+    Weryfikacja używa DOKŁADNIE tego samego, deterministycznego
+    sprawdzenia na dysku co reszta checklisty
+    (_verify_success_condition_evidence) — więc nie wprowadza nowego
+    "miękkiego" kryterium ani nowej powierzchni do oszukania: jeżeli
+    warunek sukcesu nie wymienia pliku, którego istnienie da się
+    sprawdzić, pozycja zostaje BLAD (zachowawczo).
+    """
+
+    items = _load_progress_checklist()
+    changed = False
+
+    for item in items:
+
+        if item.get("status") != "BLAD":
+            continue
+
+        verified, evidence = _verify_success_condition_evidence(
+            item.get("success_condition", "")
+        )
+
+        if verified:
+            item["status"] = "ZWERYFIKOWANY"
+            item["evidence"] = (
+                evidence
+                + " (warunek spełniony PÓŹNIEJ, innym podejściem niż "
+                "to, które pierwotnie zawiodło)"
+            )
+            changed = True
+
+    if changed:
+        _save_progress_checklist(items)
+
+    return items
+
+
 def _checklist_summary_block():
     """
     Zwięzłe podsumowanie checklisty do wstrzyknięcia w kontekst
@@ -11692,9 +11809,12 @@ def _checklist_summary_block():
     zamiast tego zespół po prostu szedł dalej do nowych punktów.
     Błędy (BLAD) są więc TERAZ pokazywane ZAWSZE, niezależnie od
     tego, jak dawno powstały — dopóki się nie pojawi ich naprawiony
-    odpowiednik.
+    odpowiednik. Za tę drugą część odpowiada
+    _checklist_refresh_failed_items() wołane niżej (patrz jego
+    docstring — przez wiele wersji ta obietnica NIE była w ogóle
+    zaimplementowana, co zapętlało CRITIC-a na martwych błędach).
     """
-    items = _load_progress_checklist()
+    items = _checklist_refresh_failed_items()
 
     if not items:
         return ""
