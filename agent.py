@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v172
+AEL-MINI AUTONOMOUS AGENT v173
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v172")
+    print("             AEL-MINI AUTONOMOUS AGENT v173")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2460,6 +2460,22 @@ miał sam wyciągnąć numer i grepował `termux-contact-list` po kluczu
 nie z JSON-a termux-api). Numer wyszedł pusty, krok padł jako
 NOT_FOUND. Poprawnie — parserem, który widzi realne klucze:
 `termux-contact-list | python -c "import sys,json; print(next((c['number'] for c in json.load(sys.stdin) if 'beata' in (c.get('name') or '').lower()), ''))"`
+
+UŻYCIE PARSERA (jq, python) NIE WYSTARCZY, JEŚLI KLUCZ W NIM JEST
+ZGADNIĘTY. Sam parser JSON nie chroni przed zgadywaniem STRUKTURY —
+realne, zaobserwowane wyjście termux-contact-list jest PŁASKIE:
+`{"name": "...", "number": "..."}`, klucz to liczba pojedyncza
+`number` na tym samym poziomie co `name`, BEZ żadnej zagnieżdżonej
+tablicy. Realny przypadek (2026-08-29, kolejna sesja tego samego
+celu, świeża rozmowa bez pamięci poprzedniej): skrypt użył
+poprawnego narzędzia (`jq`), ale zgadł ZŁĄ, zagnieżdżoną strukturę —
+`jq -r '.[] | select(.name | test("beata";"i")) | .numbers[0].number'`
+— której ta komenda nigdy nie zwraca. `.numbers` na obiekcie bez
+tego klucza to `null`, `null[0]` w jq kończy się błędem, a że
+polecenie miało `2>/dev/null`, błąd zniknął bez śladu i skrypt
+zapisał "nie znaleziono", mimo że osoba BYŁA w kontaktach. Zawsze
+używaj PŁASKIEGO `.number` (jak w przykładzie z Pythonem wyżej), nie
+zgaduj zagnieżdżonej struktury bez sprawdzenia realnego wyjścia.
 
 ============================================================
 WYCIĄGANIE TREŚCI Z HTML — UŻYWAJ PARSERA, NIE REGEXÓW
@@ -8991,6 +9007,52 @@ def _detect_call_audio_fallacy(command):
     return base
 
 
+# Realny log 2026-08-29 (druga sesja tego samego celu, ŚWIEŻA rozmowa
+# DeepSeek bez pamięci poprzedniej — użytkownik celowo wyczyścił
+# stan). W POPRZEDNIEJ sesji zespół już raz odczytał prawdziwe
+# wyjście termux-contact-list i było ono PŁASKIE:
+#   {"name": "Beata", "number": "+48514590110"}
+# W TEJ sesji (bez pamięci tamtego dowodu) ENGINEER napisał zamiast
+# tego: `jq -r '.[] | select(.name | test("beata";"i")) | .numbers[0].number'`
+# — ZGADUJĄC zagnieżdżoną strukturę `.numbers[]`, jakiej
+# termux-contact-list nigdy nie zwraca. `.numbers` na obiekcie bez
+# tego klucza to `null`, `null[0]` w jq rzuca błąd w trakcie
+# przetwarzania strumienia — a że polecenie miało `2>/dev/null`,
+# błąd zniknął bez śladu, `BEATA_NUMBER` wyszło puste i skrypt
+# zapisał "BRAK", mimo że numer BYŁ w kontaktach (potwierdzone
+# wcześniej naocznie). To ta sama rodzina cichej awarii co v169
+# (zgadnięty klucz zamiast realnego), tylko tym razem przez
+# poprawne narzędzie (`jq`, nie grep) — czyli sam wybór PARSERA nie
+# wystarczy, jeśli klucz w nim jest zgadnięty, a nie zweryfikowany.
+_CONTACT_LIST_NESTED_NUMBERS_RE = re.compile(r'\.numbers\s*(\[|\.)')
+
+
+def _detect_contact_list_wrong_schema(command):
+
+    command_str = str(command or "")
+
+    if "termux-contact-list" not in command_str:
+        return None
+
+    if not _CONTACT_LIST_NESTED_NUMBERS_RE.search(command_str):
+        return None
+
+    return (
+        "Komenda zakłada, że termux-contact-list zwraca "
+        "ZAGNIEŻDŻONĄ tablicę numerów (wzorzec `.numbers[...]`) — "
+        "ale realne, zaobserwowane wyjście tej komendy jest PŁASKIE: "
+        "`{\"name\": \"...\", \"number\": \"...\"}`, klucz to liczba "
+        "pojedyncza `number` na tym samym poziomie co `name`, BEZ "
+        "żadnej tablicy `numbers`. Odwołanie się do `.numbers[0]` na "
+        "obiekcie bez tego klucza zwróci null/błąd — jeśli polecenie "
+        "tłumi stderr (`2>/dev/null`), ta pomyłka przejdzie CICHO "
+        "jako 'nie znaleziono', mimo że dana osoba jest w "
+        "kontaktach. Użyj płaskiego klucza `.number`, np.: "
+        "`termux-contact-list | jq -r '.[] | select(.name | "
+        "test(\"beata\"; \"i\")) | .number' | head -1`."
+    )
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -9059,6 +9121,13 @@ def termux_run(command):
 
             if call_audio_warning:
                 result["call_audio_warning"] = call_audio_warning
+
+            contact_schema_warning = _detect_contact_list_wrong_schema(
+                command_str
+            )
+
+            if contact_schema_warning:
+                result["contact_schema_warning"] = contact_schema_warning
 
         if (
             not result.get("ok")
@@ -9225,6 +9294,11 @@ def termux_run_background(
 
         if call_audio_warning:
             bg_result["call_audio_warning"] = call_audio_warning
+
+        contact_schema_warning = _detect_contact_list_wrong_schema(command)
+
+        if contact_schema_warning:
+            bg_result["contact_schema_warning"] = contact_schema_warning
 
         return bg_result
 
@@ -11585,6 +11659,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "shortcircuit_warning",
                         "json_parse_warning",
                         "call_audio_warning",
+                        "contact_schema_warning",
                         "stale_warning"
                     ):
 
