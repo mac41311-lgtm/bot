@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v164
+AEL-MINI AUTONOMOUS AGENT v165
 
 ARCHITEKTURA:
 
@@ -87,6 +87,28 @@ try:
     from json_repair import repair_json as _repair_json
 except ImportError:
     _repair_json = None
+
+
+# `rich` — CAŁKOWICIE OPCJONALNA. Gdy jest zainstalowana, narada
+# zespołu jest wypisywana jako czytelna rozmowa (imię + kolor +
+# ramka) zamiast jednolinijkowych wpisów logu. Gdy jej nie ma,
+# wszystko działa dokładnie jak wcześniej — dlatego NIE ma tu
+# sys.exit(1) jak przy prawdziwych zależnościach (opendeep,
+# uiautomator2, pychrome).
+#
+# Sprawdzone PRZED dodaniem (nauczka z pomyłki przy pydantic): rich i
+# wszystkie jej zależności (markdown-it-py, mdurl, pygments) mają
+# koła `py3-none-any` — czysty Python, żadnego kompilowanego
+# rozszerzenia, więc instalują się na Termux/ARM64 bez budowania
+# czegokolwiek ze źródeł.
+try:
+    from rich.console import Console as _RichConsole
+    from rich.panel import Panel as _RichPanel
+    _rich_console = _RichConsole()
+except Exception:
+    _RichConsole = None
+    _RichPanel = None
+    _rich_console = None
 
 
 
@@ -796,6 +818,68 @@ def log(tag, message):
     )
 
 
+# Ludzkie imiona i kolory ról — żeby narada w terminalu czytała się
+# jak rozmowa, a nie jak zrzut logów. Używane tylko przez _speak().
+_ROLE_SPEAKERS = {
+    "PLANNER": ("Tomek", "cyan", "planowanie"),
+    "RESEARCHER": ("Kamil", "blue", "research"),
+    "ENGINEER": ("Bartek", "green", "technika"),
+    "CRITIC": ("Marek", "yellow", "ocena"),
+    "BROWSER": ("Ola", "magenta", "tłumaczenie"),
+    "WOJTEK": ("Wojtek", "bright_magenta", "pomysły"),
+    "MAIN": ("MAIN", "bold white", "decyzja"),
+    "PROGRESS_ESTIMATOR": ("Ela", "bright_blue", "postęp"),
+    "CODE_REVIEWER": ("Piotr", "bright_yellow", "analiza kodu"),
+    "CODE_FIXER": ("Ania", "bright_green", "poprawka"),
+}
+
+
+def _speak(role, text, preview_chars=400):
+    """
+    Wypisuje wypowiedź roli. Z `rich` — jako ramkę z imieniem i
+    kolorem, czyli czytelną rozmowę. Bez `rich` — dokładnie tak jak
+    dotąd, jedną linią logu.
+
+    Na wyraźną prośbę użytkownika: chciał widzieć NORMALNĄ ROZMOWĘ
+    zespołu, a nie ciąg jednakowych wpisów "[DEEPSEEK] ROLA: 1341
+    znaków | początek: ...". Podgląd jest tu dłuższy niż w starym
+    logu (400 zamiast 150 znaków), bo w ramce da się to przeczytać.
+    """
+
+    speaker, color, topic = _ROLE_SPEAKERS.get(
+        role, (role, "white", "")
+    )
+
+    body = short(str(text or ""), preview_chars).strip()
+
+    if _rich_console is None or _RichPanel is None:
+        log(
+            "DEEPSEEK",
+            f"{role}: "
+            + str(len(str(text or "")))
+            + " znaków | początek: "
+            + short(str(text or ""), 150).replace("\n", " ")
+        )
+        return
+
+    try:
+        title = speaker + (" — " + topic if topic else "")
+        _rich_console.print(
+            _RichPanel(
+                body or "(brak treści)",
+                title=title,
+                title_align="left",
+                border_style=color,
+                subtitle=str(len(str(text or ""))) + " znaków",
+                subtitle_align="right",
+            )
+        )
+    except Exception:
+        # Terminal bez obsługi kolorów/ramek — nigdy nie wolno
+        # przez to stracić samej treści.
+        log("DEEPSEEK", f"{role}: " + body.replace("\n", " "))
+
+
 def short(value, limit=1000):
 
     if value is None:
@@ -1118,7 +1202,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v164")
+    print("             AEL-MINI AUTONOMOUS AGENT v165")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3596,13 +3680,7 @@ def deepseek(name, message):
                 # Podgląd początku KAŻDEJ odpowiedzi wprost w logu
                 # terminala rozstrzyga to ostatecznie, bez kolejnej
                 # rundy ręcznego kopiowania z chat.deepseek.com.
-                log(
-                    "DEEPSEEK",
-                    f"{name}: "
-                    + str(len(text))
-                    + " znaków | początek: "
-                    + short(text, 150).replace("\n", " ")
-                )
+                _speak(name, text)
 
                 health = _get_health(_account_of(name))
                 health["consecutive_failures"] = 0
