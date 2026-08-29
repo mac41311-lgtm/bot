@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v158
+AEL-MINI AUTONOMOUS AGENT v159
 
 ARCHITEKTURA:
 
@@ -1098,7 +1098,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v158")
+    print("             AEL-MINI AUTONOMOUS AGENT v159")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13310,6 +13310,27 @@ _role_response_cache = {}
 # samym kroku, a skrócony wynik wraca do Wojtka przy kolejnej okazji.
 _wojtek_pending_answer = None
 
+# Werdykt Marka/CRITIC z POPRZEDNIEGO kroku, czekający na to, żeby
+# trafić do Tomka/PLANNERA przy jego następnej turze.
+#
+# ZAOBSERWOWANY REALNY PROBLEM (log 2026-08-28, cel "zadzwoń do
+# Beaty", KROKI 6-13): Marek zablokował plan Tomka SZEŚĆ razy z
+# rzędu, za każdym razem pisząc wprost o Tomku ("Plan Tomka ma trzy
+# krytyczne luki", "Tomek całkowicie ignoruje trzy otwarte błędy",
+# "Plan Tomka NADAL ignoruje..."). Tomek nie miał JAK się o tym
+# dowiedzieć: wyjście CRITIC-a trafiało wyłącznie do MAIN-a, a każda
+# rola ma własną, odrębną rozmowę z DeepSeekiem — Tomek widział
+# swoje poprzednie wiadomości, ale nigdy ani jednego słowa Marka.
+# Planował więc dalej obok tego samego zarzutu, bo strukturalnie nie
+# mógł go usłyszeć.
+#
+# To jest dokładnie ta "normalna komunikacja zespołu", o którą prosił
+# użytkownik: gdy recenzent mówi "twój plan pomija X", autor planu to
+# słyszy i poprawia. Przekazujemy TEKST, KTÓRY I TAK JUŻ POWSTAŁ —
+# zero dodatkowych wywołań DeepSeeka (użytkownik wprost sygnalizował
+# obawę o blokady strony przy zbyt częstych zapytaniach).
+_critic_verdict_for_planner = None
+
 
 def _condense_last_result_for_team(last_result, limit=2500):
     """
@@ -13611,6 +13632,7 @@ def consult_team(
     """
 
     global _wojtek_pending_answer
+    global _critic_verdict_for_planner
 
     tool_hint = ""
 
@@ -14038,6 +14060,25 @@ OSTATNI RAPORT:
 
     researcher_out = short(results.get("RESEARCHER", ""), 2000)
 
+    # Zarzut Marka do POPRZEDNIEGO planu Tomka — patrz
+    # _critic_verdict_for_planner. Bez tego Tomek planuje obok tej
+    # samej, powtarzanej co krok uwagi, bo nigdy jej nie widzi.
+    if _critic_verdict_for_planner:
+
+        critic_feedback_block = (
+            "\n\nCO MAREK ZARZUCIŁ TWOJEMU POPRZEDNIEMU PLANOWI "
+            "(przeczytaj to ZANIM zaproponujesz kolejny krok — jeśli "
+            "zarzut jest słuszny, uwzględnij go; jeśli uważasz, że "
+            "Marek się myli, napisz wprost dlaczego, zamiast go po "
+            "cichu pomijać):\n"
+            + _critic_verdict_for_planner
+        )
+
+        _critic_verdict_for_planner = None
+
+    else:
+        critic_feedback_block = ""
+
     results["PLANNER"] = deepseek(
         "PLANNER",
         _team_context(
@@ -14047,6 +14088,7 @@ OSTATNI RAPORT:
             extra=(
                 "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                + critic_feedback_block
                 + (
                     "\n\nOD OLI (tylko dla Ciebie): "
                     + ola_role_callouts["PLANNER"]
@@ -14118,6 +14160,19 @@ OSTATNI RAPORT:
             )
         )
     )
+
+    # Werdykt Marka czeka na Tomka do NASTĘPNEGO kroku. Przekazujemy
+    # go tylko wtedy, gdy faktycznie jest zastrzeżeniem (OSTRZEŻENIE/
+    # BLOKUJ) — "OCENA: OK" nie wnosi nic, czego Tomek miałby
+    # słuchać, a doklejanie zgody co krok byłoby tylko kolejnym
+    # szumem w jego kontekście.
+    _critic_out_full = results.get("CRITIC", "") or ""
+
+    if any(
+        marker in _critic_out_full.upper()
+        for marker in ("BLOKUJ", "OSTRZEŻENIE")
+    ):
+        _critic_verdict_for_planner = short(_critic_out_full, 1200)
 
     return {
         "planner":   short(results.get("PLANNER", ""), 4000),
