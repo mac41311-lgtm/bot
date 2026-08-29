@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v161
+AEL-MINI AUTONOMOUS AGENT v162
 
 ARCHITEKTURA:
 
@@ -626,6 +626,26 @@ PROJECT_DIRS_FILE = AGENT_DIR / "project_dirs.json"
 # przy create_task()/run_next_task() i w konsultacji zespołu.
 PROGRESS_CHECKLIST_FILE = AGENT_DIR / "progress_checklist.json"
 
+# Rejestr PODEJŚĆ (zewnętrznych usług/serwisów), których zespół już
+# próbował, wraz z tym, jak się skończyły.
+#
+# ZAOBSERWOWANY REALNY PROBLEM (log 2026-08-28, cel "zadzwoń do
+# Beaty"): zespół krążył między usługami — Twilio -> Bland -> Vapi ->
+# Ainora -> z powrotem Bland — a POSTĘP CELU skakał 25% -> 10% ->
+# 20% -> 10%. To nie był błąd estymatora, tylko wierne odbicie tego
+# błądzenia. Przyczyna jest strukturalna: checklist śledzi TASK-i, a
+# nie PODEJŚCIA, więc nigdzie nie było zapisane "Twilio odpadło, bo
+# nie mamy poświadczeń", "Ainora odpadła, bo nie ma publicznego API".
+# Zespół co kilka kroków wracał do czegoś, co już odrzucił, bo nikt
+# nie pamiętał DLACZEGO to odrzucono — każdy krok z osobna był
+# sensowny, całość była błądzeniem.
+#
+# Rejestr budowany jest DETERMINISTYCZNIE przez Pythona (hosty z
+# adresów URL w treści zadania i w argumentach narzędzi), bez ani
+# jednego dodatkowego zapytania do DeepSeeka i bez polegania na tym,
+# że któraś rola sama o tym pamięta.
+APPROACHES_FILE = AGENT_DIR / "approaches.json"
+
 # Gdzie run_agent() spodziewa się finalnego APK i FINAL_OK.txt —
 # używane wyłącznie do FIZYCZNEJ weryfikacji przed przyjęciem DONE.
 APK_OUTPUT_DIR = AGENT_DIR / "apk_output"
@@ -1098,7 +1118,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v161")
+    print("             AEL-MINI AUTONOMOUS AGENT v162")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11853,6 +11873,171 @@ def _checklist_refresh_failed_items():
     return items
 
 
+# Host z adresu URL — jedyny w pełni jednoznaczny sygnał "o jakiej
+# zewnętrznej usłudze mowa", jaki da się wyciągnąć bez LLM-a. W
+# realnych logach KAŻDE podejście miało swój adres (console.twilio.com,
+# app.bland.ai, docs.vapi.ai, ainora.lt), więc pokrycie jest pełne.
+_APPROACH_URL_PATTERN = re.compile(
+    r"https?://([A-Za-z0-9.\-]+)",
+    re.IGNORECASE
+)
+
+# Hosty, które są infrastrukturą TEGO agenta albo ogólnym internetem —
+# nigdy nie są "podejściem do celu" i tylko zaśmiecałyby rejestr.
+_APPROACH_IGNORED_HOSTS = {
+    "127.0.0.1", "localhost", "0.0.0.0",
+    "chat.deepseek.com", "deepseek.com",
+    "google.com", "www.google.com",
+    "github.com", "www.github.com",
+    "developer.android.com",
+    "example.com", "www.example.com",
+}
+
+
+def _approach_names_in(text):
+    """
+    Zwraca znormalizowane nazwy usług (np. "twilio", "bland",
+    "ainora") wymienionych przez adres URL w podanym tekście.
+
+    Normalizacja: bierzemy przedostatni człon hosta, czyli tę część,
+    która faktycznie identyfikuje usługę niezależnie od subdomeny —
+    console.twilio.com, api.twilio.com i www.twilio.com to jedno i to
+    samo podejście, a nie trzy różne.
+    """
+
+    found = []
+
+    for host in _APPROACH_URL_PATTERN.findall(str(text or "")):
+
+        host = host.lower().strip(".")
+
+        if host in _APPROACH_IGNORED_HOSTS:
+            continue
+
+        parts = [p for p in host.split(".") if p]
+
+        if len(parts) < 2:
+            continue
+
+        name = parts[-2]
+
+        if name in ("com", "co", "org", "net"):
+            # np. "example.co.uk" — cofamy się o jeden człon dalej
+            if len(parts) < 3:
+                continue
+            name = parts[-3]
+
+        if name and name not in found:
+            found.append(name)
+
+    return found
+
+
+def _load_approaches():
+    data = read_json(APPROACHES_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _approaches_record(task_text, success_condition, result):
+    """
+    Zapisuje, jak skończyło się podejście do usług wymienionych w
+    tym zadaniu. Wołane po KAŻDYM wykonanym TASK-u.
+
+    Świadomie nie ocenia "czy porzucić" — tylko rzetelnie notuje, ile
+    razy próbowano i czym się skończyła ostatnia próba. Wniosek
+    ("to już nie działa, spróbujmy inaczej") wyciąga zespół, mając
+    wreszcie fakty przed oczami zamiast polegać na pamięci.
+    """
+
+    if not isinstance(result, dict):
+        return
+
+    haystack = " ".join([
+        str(task_text or ""),
+        str(success_condition or ""),
+        json.dumps(result.get("arguments", {}), ensure_ascii=False)
+        if isinstance(result.get("arguments"), dict) else "",
+        str(result.get("report", "")),
+    ])
+
+    names = _approach_names_in(haystack)
+
+    if not names:
+        return
+
+    failed = (
+        result.get("ok") is False
+        or result.get("status") == "GEMINI_TOOL_ERROR"
+    )
+
+    outcome = (
+        str(
+            result.get("error")
+            or (result.get("tool_result") or {}).get("stderr")
+            or result.get("message")
+            or "błąd"
+        )
+        if failed
+        else "OK"
+    )
+
+    data = _load_approaches()
+
+    for name in names:
+
+        entry = data.get(name) or {
+            "kroki": 0,
+            "bledy": 0,
+            "ostatnio": ""
+        }
+
+        entry["kroki"] = int(entry.get("kroki", 0)) + 1
+
+        if failed:
+            entry["bledy"] = int(entry.get("bledy", 0)) + 1
+
+        entry["ostatnio"] = short(outcome.replace("\n", " "), 160)
+        data[name] = entry
+
+    write_json(APPROACHES_FILE, data)
+
+
+def _approaches_summary_block():
+    """
+    Zwięzła pamięć zespołu o tym, czego już próbowano — wstrzykiwana
+    w kontekst każdej roli. Bez tego zespół co kilka kroków wracał do
+    usługi, którą sam wcześniej odrzucił (patrz APPROACHES_FILE).
+    """
+
+    data = _load_approaches()
+
+    if not data:
+        return ""
+
+    # Najpierw te, przy których było najwięcej roboty — to one
+    # najczęściej wracały w kółko w realnych logach.
+    ordered = sorted(
+        data.items(),
+        key=lambda kv: -int(kv[1].get("kroki", 0))
+    )[:6]
+
+    lines = [
+        "CZEGO JUŻ PRÓBOWALIŚMY (rejestr Pythona — zanim "
+        "zaproponujesz usługę z tej listy, sprawdź, czym skończyła "
+        "się poprzednia próba):"
+    ]
+
+    for name, entry in ordered:
+        lines.append(
+            "- " + name
+            + ": kroków " + str(entry.get("kroki", 0))
+            + ", błędów " + str(entry.get("bledy", 0))
+            + ", ostatnio: " + str(entry.get("ostatnio", "?"))
+        )
+
+    return "\n".join(lines)
+
+
 def _checklist_summary_block():
     """
     Zwięzłe podsumowanie checklisty do wstrzyknięcia w kontekst
@@ -12055,6 +12240,14 @@ def run_next_task():
     )
 
     _checklist_record_result(task["task_id"], result)
+
+    # Pamięć o PODEJŚCIACH (jakie usługi już próbowano i jak się
+    # to skończyło) — patrz APPROACHES_FILE.
+    _approaches_record(
+        task.get("task", ""),
+        task.get("success_condition", ""),
+        result
+    )
 
     task["finished"] = (
         datetime.now().isoformat()
@@ -13730,6 +13923,14 @@ def consult_team(
 
     checklist_summary = _checklist_summary_block()
     checklist_block = ("\n" + checklist_summary + "\n") if checklist_summary else ""
+
+    # Pamięć zespołu o już wypróbowanych podejściach — patrz
+    # APPROACHES_FILE. Doklejana do checklisty, bo to ta sama klasa
+    # informacji: twarde fakty zebrane przez Pythona, nie deklaracje.
+    _approaches_summary = _approaches_summary_block()
+
+    if _approaches_summary:
+        checklist_block += "\n" + _approaches_summary + "\n"
 
     # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu od
     # v116/v132 rozmawia po ludzku, ale sam OSTATNI RAPORT był
@@ -17392,6 +17593,7 @@ def maybe_clear_previous_session_data():
         LAST_RESULT_FILE,
         GEMINI_STATE_FILE,
         PROGRESS_CHECKLIST_FILE,
+        APPROACHES_FILE,
         CONTACTS_LOOKUP_ATTEMPTED_FILE,
         USER_PROVIDED_VALUE_FILE
     ):
