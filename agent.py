@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v162
+AEL-MINI AUTONOMOUS AGENT v163
 
 ARCHITEKTURA:
 
@@ -1118,7 +1118,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v162")
+    print("             AEL-MINI AUTONOMOUS AGENT v163")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13524,6 +13524,24 @@ _wojtek_pending_answer = None
 # obawę o blokady strony przy zbyt częstych zapytaniach).
 _critic_verdict_for_planner = None
 
+# To samo co wyżej, ale dla Bartka/ENGINEER: Marek regularnie ocenia
+# także JEGO kod (nie tylko plan Tomka), a ta ocena tak samo do niego
+# nie wracała.
+_critic_verdict_for_engineer = None
+
+# Co MAIN faktycznie POSTANOWIŁ w poprzednim kroku i dlaczego —
+# czekające na następną turę zespołu.
+#
+# ZAOBSERWOWANY REALNY PROBLEM: zespół proponuje, MAIN decyduje, ale
+# jego decyzja nie wraca do NIKOGO. Tomek nie wie, czy jego plan
+# został użyty, zmieniony czy odrzucony — w realnych logach MAIN
+# wielokrotnie szedł zupełnie inną drogą niż Tomek, a Tomek za
+# każdym razem planował dalej tak, jakby nic się nie stało. To ten
+# sam brak sprzężenia zwrotnego co Marek->Tomek (v159), tylko o
+# poziom wyżej: bez tego zespół nie ma jak się uczyć, czego MAIN od
+# niego oczekuje.
+_main_decision_for_team = None
+
 
 def _condense_last_result_for_team(last_result, limit=2500):
     """
@@ -13879,6 +13897,8 @@ def consult_team(
 
     global _wojtek_pending_answer
     global _critic_verdict_for_planner
+    global _critic_verdict_for_engineer
+    global _main_decision_for_team
 
     tool_hint = ""
 
@@ -14080,10 +14100,20 @@ SUROWY RAPORT:
             )
         )
 
+    # Co MAIN postanowił w POPRZEDNIM kroku — patrz
+    # _main_decision_for_team. Bez tego zespół proponuje w próżnię:
+    # nie wie, czy jego plan został użyty, zmieniony, czy odrzucony.
+    main_decision_block = (
+        "\nCO MAIN POSTANOWIŁ PO POPRZEDNIEJ NARADZIE (jeśli poszedł "
+        "inną drogą niż proponowaliście, weź to pod uwagę teraz):\n"
+        + _main_decision_for_team
+        + "\n"
+    ) if _main_decision_for_team else ""
+
     core_context = f"""
 CEL:
 {goal}
-{progress_block}{checklist_block}
+{progress_block}{checklist_block}{main_decision_block}
 OSTATNI RAPORT:
 {readable_report or raw_report_material}{error_details_block}
 {tool_hint}
@@ -14422,6 +14452,23 @@ OSTATNI RAPORT:
 
     planner_out = short(results.get("PLANNER", ""), 2000)
 
+    # Zarzut Marka do POPRZEDNIEJ propozycji Bartka — ta sama zasada
+    # co przy Tomku (v159): recenzowany ma usłyszeć recenzję.
+    if _critic_verdict_for_engineer:
+
+        engineer_critic_block = (
+            "\n\nCO MAREK ZARZUCIŁ POPRZEDNIEMU KROKOWI (jeśli zarzut "
+            "dotyczy Twojego kodu i jest słuszny — popraw to teraz; "
+            "jeśli uważasz, że Marek się myli, napisz wprost dlaczego, "
+            "zamiast go po cichu pomijać):\n"
+            + _critic_verdict_for_engineer
+        )
+
+        _critic_verdict_for_engineer = None
+
+    else:
+        engineer_critic_block = ""
+
     results["ENGINEER"] = deepseek(
         "ENGINEER",
         _team_context(
@@ -14431,6 +14478,7 @@ OSTATNI RAPORT:
                 "\nPLAN TOMKA:\n" + planner_out
                 + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                + engineer_critic_block
                 + engineer_value_handoff
                 + (
                     "\n\nOD OLI (tylko dla Ciebie): "
@@ -14468,6 +14516,7 @@ OSTATNI RAPORT:
         for marker in ("BLOKUJ", "OSTRZEŻENIE")
     ):
         _critic_verdict_for_planner = short(_critic_out_full, 1200)
+        _critic_verdict_for_engineer = short(_critic_out_full, 1200)
 
     return {
         "planner":   short(results.get("PLANNER", ""), 4000),
@@ -16615,6 +16664,20 @@ albo:
                 ""
             )
         ).upper()
+
+        # Zespół dowie się przy NASTĘPNEJ naradzie, co MAIN z ich
+        # propozycjami faktycznie zrobił — patrz
+        # _main_decision_for_team. Zapisujemy typ decyzji i jej
+        # uzasadnienie (nie całe zadanie), bo to właśnie "dlaczego"
+        # było tym, czego zespół nigdy nie widział.
+        globals()["_main_decision_for_team"] = short(
+            dtype
+            + (
+                " — " + str(decision.get("reason", "")).strip()
+                if decision.get("reason") else ""
+            ),
+            700
+        )
 
         # ------------------------------------------------------
         # POWTARZANIE
