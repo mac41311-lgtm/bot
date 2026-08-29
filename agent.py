@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v173
+AEL-MINI AUTONOMOUS AGENT v174
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v173")
+    print("             AEL-MINI AUTONOMOUS AGENT v174")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1595,6 +1595,24 @@ PO KAŻDYM NEED_USER_LOGIN, ZANIM poprosisz o kolejną porcję danych —
 sprawdź aktualny stan Chrome (adres URL, tytuł karty) i rozważ, czy
 odpowiedź (albo jej część) nie jest już tam widoczna, zamiast zakładać
 że wszystko musi przyjść ręcznie od człowieka.
+
+KLUCZ/KONTO W SERWISIE ZEWNĘTRZNYM = "url" MUSI wskazywać stronę
+TEGO serwisu, NIGDY puste. Zaobserwowany realny błąd (2026-08-29,
+cel: integracja głosowa przez Retell AI): brakowało numeru telefonu
+ORAZ klucza API Retell — MAIN zwrócił JEDNO NEED_USER_LOGIN z "url":
+"" i poprosił o OBIE wartości zwykłym tekstem w terminalu. Numer
+telefonu to dane czysto osobiste (nie mają strony do otwarcia — "url"
+puste jest tu w porządku), ale klucz API do konta w Retell AI *ma*
+konkretną stronę logowania/panelu — a skoro "url" było puste, Chrome
+SIĘ NIE OTWORZYŁ (patrz mechanizm wyżej — otwiera TYLKO http(s)),
+więc użytkownik nie miał się gdzie zalogować i nie miał skąd wziąć
+klucza inaczej niż z pamięci, czego oczywiście nie mógł zrobić. Gdy
+choć JEDNA z brakujących rzeczy jest kluczem/tokenem/kontem w
+serwisie zewnętrznym — zawsze podaj w "url" prawdziwy adres
+logowania/panelu TEGO serwisu (nawet jeśli inne brakujące dane, jak
+numer telefonu, wpiszesz zwykłym tekstem w "instructions"): dopiero
+otwarta, zalogowana karta daje szansę, żeby to Ty (przez BROWSER/CDP)
+odczytał klucz z panelu, zamiast każąc człowiekowi go pamiętać.
 
 KONKRETNY, zaobserwowany realny błąd (2026-08-28): gdy sesja
 przeglądarki do panelu Twilio wygasła (automatyczne wyciągnięcie
@@ -16734,16 +16752,67 @@ def _contacts_lookup_attempted():
     return CONTACTS_LOOKUP_ATTEMPTED_FILE.exists()
 
 
-def _need_user_login_with_contact_gate(decision, contact_gate_redirects):
+# Zaobserwowany realny przypadek (log 2026-08-29, cel "integracja
+# głosowa z Beatą" przez Retell AI): brakowało numeru Beaty ORAZ
+# klucza API Retell. MAIN zwrócił JEDNO NEED_USER_LOGIN z "url": ""
+# i poprosił o OBIE wartości zwykłym tekstem w terminalu — łącznie z
+# kluczem API do konta w zewnętrznym serwisie (Retell AI), do którego
+# nikt nigdy nie otworzył strony logowania. Efekt: Chrome się nie
+# otworzył (patrz _handle_need_user_login — otwiera TYLKO gdy "url"
+# zaczyna się od http/https), więc nie było ŻADNEJ szansy, żeby
+# zespół po zalogowaniu odczytał klucz z już otwartej karty (ten sam
+# mechanizm, co istniejąca reguła w MAIN_PROMPT o Account SID
+# widocznym w adresie karty Twilio) — użytkownik miał wkleić klucz z
+# pamięci, czego oczywiście nie mógł zrobić. Klucz API/token konta w
+# zewnętrznym serwisie ZAWSZE wymaga zalogowania się na stronie tego
+# serwisu — w przeciwieństwie do danych czysto osobistych (numer
+# telefonu), które nie mają żadnej strony do otwarcia. Gdy w tekście
+# prośby pojawia się słownictwo klucza/konta/panelu usługi, a "url"
+# jest puste, to NIE jest przypadek "czynność w Ustawieniach
+# Androida" (jedyny legalny powód pustego "url") — MAIN po prostu
+# zapomniał podać adres. Ten sam "miękki" mechanizm co bramka
+# kontaktów: nie blokuje na stałe (limit przekierowań), tylko każe
+# MAIN spróbować jeszcze raz z prawdziwym adresem.
+_WEB_CREDENTIAL_GATE_MAX_REDIRECTS = 2
+
+_WEB_CREDENTIAL_REQUEST_RE = re.compile(
+    r"klucz\s+api|api\s+key|api[\s_-]?token|panel(?:u|em)?\s+u.ytkownika|"
+    r"dashboard|zaloguj\s+si.\s+do|konto\s+w\s+\w|swoim\s+koncie\s+w\b",
+    re.IGNORECASE
+)
+
+
+def _decision_asks_for_web_credential_without_url(decision):
+
+    # Prawdziwy adres http(s) oznacza, że MAIN już wskazał, gdzie się
+    # zalogować — nic tu do poprawienia.
+    if str(decision.get("url", "")).strip():
+        return False
+
+    text = (
+        str(decision.get("reason", ""))
+        + " "
+        + str(decision.get("instructions", ""))
+    )
+
+    return bool(_WEB_CREDENTIAL_REQUEST_RE.search(text))
+
+
+def _need_user_login_with_contact_gate(
+    decision, contact_gate_redirects, credential_gate_redirects=0
+):
     """
     Wspólna logika dla OBU miejsc w run_agent(), w których obsługiwany
     jest NEED_USER_LOGIN (główna decyzja MAIN ORAZ alternatywa po
     FAILED) — patrz też docstring _handle_need_user_login() o tym
     samym ryzyku rozjazdu między dwiema ścieżkami. Owija
-    _handle_need_user_login() bramką kontaktów (patrz komentarz przy
-    _decision_asks_for_contact_info() wyżej). Zwraca
-    (last_result, nowy_licznik_przekierowań) — wywołujący musi
-    nadpisać swoją lokalną zmienną licznika wynikiem.
+    _handle_need_user_login() dwiema bramkami: kontaktów (patrz
+    komentarz przy _decision_asks_for_contact_info() wyżej) i
+    poświadczeń webowych bez adresu (patrz komentarz przy
+    _decision_asks_for_web_credential_without_url() wyżej). Zwraca
+    (last_result, nowy_licznik_kontaktów, nowy_licznik_poświadczeń) —
+    wywołujący musi nadpisać obie swoje lokalne zmienne licznika
+    wynikiem.
     """
 
     if (
@@ -16775,10 +16844,53 @@ def _need_user_login_with_contact_gate(decision, contact_gate_redirects):
                     "wtedy poproś użytkownika."
                 )
             },
-            contact_gate_redirects
+            contact_gate_redirects,
+            credential_gate_redirects
         )
 
-    return (_handle_need_user_login(decision), contact_gate_redirects)
+    if (
+        _decision_asks_for_web_credential_without_url(decision)
+        and credential_gate_redirects < _WEB_CREDENTIAL_GATE_MAX_REDIRECTS
+    ):
+
+        credential_gate_redirects += 1
+
+        log(
+            "MAIN",
+            "NEED_USER_LOGIN o klucz/konto w serwisie zewnętrznym "
+            "odrzucone -- brak adresu strony do zalogowania (" +
+            str(credential_gate_redirects) + "/"
+            + str(_WEB_CREDENTIAL_GATE_MAX_REDIRECTS) + ")."
+        )
+
+        return (
+            {
+                "status": "MISSING_LOGIN_URL",
+                "message": (
+                    "Prośba dotyczy klucza/konta w serwisie "
+                    "zewnętrznym (np. klucz API), ale \"url\" było "
+                    "puste, więc przeglądarka NIE otworzyła się na "
+                    "stronie tego serwisu — użytkownik nie miał gdzie "
+                    "się zalogować, żeby stamtąd przekazać wartość. "
+                    "Podaj prawdziwy adres http(s) strony "
+                    "logowania/panelu tego serwisu w polu \"url\" — "
+                    "dopiero wtedy Chrome się otworzy i użytkownik "
+                    "będzie mógł się zalogować, zamiast wklejać klucz "
+                    "z pamięci. Dane czysto osobiste (np. numer "
+                    "telefonu), które nie mają żadnej strony do "
+                    "otwarcia, mogą zostać w \"instructions\" bez "
+                    "zmian."
+                )
+            },
+            contact_gate_redirects,
+            credential_gate_redirects
+        )
+
+    return (
+        _handle_need_user_login(decision),
+        contact_gate_redirects,
+        credential_gate_redirects
+    )
 
 
 def _handle_need_user_login(decision):
@@ -17064,6 +17176,11 @@ def run_agent(goal):
     # próby sprawdzenia kontaktów na telefonie — patrz
     # _decision_asks_for_contact_info() przy _handle_need_user_login().
     contact_gate_redirects = 0
+
+    # To samo, dla NEED_USER_LOGIN o klucz/konto w serwisie
+    # zewnętrznym (np. klucz API) podanym z pustym "url" — patrz
+    # _decision_asks_for_web_credential_without_url().
+    credential_gate_redirects = 0
 
     # Zaobserwowany realny bug (log 2026-08-27, sesja puszczona na
     # noc bez nadzoru): to BYŁ `for step in range(1, MAX_STEPS + 1)`
@@ -17968,9 +18085,10 @@ Zwróć tylko JSON.
 
         if dtype == "NEED_USER_LOGIN":
 
-            last_result, contact_gate_redirects = (
+            last_result, contact_gate_redirects, credential_gate_redirects = (
                 _need_user_login_with_contact_gate(
-                    decision, contact_gate_redirects
+                    decision, contact_gate_redirects,
+                    credential_gate_redirects
                 )
             )
 
@@ -18161,9 +18279,10 @@ Tylko JSON.
                 == "NEED_USER_LOGIN"
             ):
 
-                last_result, contact_gate_redirects = (
+                last_result, contact_gate_redirects, credential_gate_redirects = (
                     _need_user_login_with_contact_gate(
-                        alt, contact_gate_redirects
+                        alt, contact_gate_redirects,
+                        credential_gate_redirects
                     )
                 )
 
