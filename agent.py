@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v168
+AEL-MINI AUTONOMOUS AGENT v169
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v168")
+    print("             AEL-MINI AUTONOMOUS AGENT v169")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2407,6 +2407,21 @@ istniał (GATEWAY niepuste), a `nmap` był już zainstalowany —
 zespół błędnie obwiniał nmap. Poprawnie: `VAR="${VAR:-domyślna}"`
 (zawsze kod 0) albo rozdziel średnikiem:
 `[ -z "$VAR" ] && VAR=domyślna; <dalsza praca>`.
+
+WYJŚCIE termux-api TO JSON — PARSUJ PARSEREM, NIE grep/sed. Komendy
+termux-contact-list, termux-call-log, termux-sms-list,
+termux-telephony-deviceinfo, termux-location, termux-battery-status
+itp. zwracają JSON. Wyciąganie z niego pól przez `grep`/`sed`/`awk`
+na zgadnięty klucz jest kruche tak samo jak regex na HTML: przy
+najmniejszej pomyłce w nazwie pola grep nie znajduje NIC i zwraca
+PUSTO bez błędu, a dalszy skrypt myśli "nie znaleziono", choć dane
+tam były. Realny przypadek (2026-08-29, "zadzwoń do Beaty"): skrypt
+miał sam wyciągnąć numer i grepował `termux-contact-list` po kluczu
+`"display_name"` — ale ta komenda takiego klucza NIE emituje (używa
+`"name"` i `"number"`; "display_name" to kolumna z ContactsContract,
+nie z JSON-a termux-api). Numer wyszedł pusty, krok padł jako
+NOT_FOUND. Poprawnie — parserem, który widzi realne klucze:
+`termux-contact-list | python -c "import sys,json; print(next((c['number'] for c in json.load(sys.stdin) if 'beata' in (c.get('name') or '').lower()), ''))"`
 
 ============================================================
 WYCIĄGANIE TREŚCI Z HTML — UŻYWAJ PARSERA, NIE REGEXÓW
@@ -8813,6 +8828,76 @@ def _detect_short_circuiting_test_chain(command):
     return None
 
 
+# Dokładnie ta sama rodzina awarii co regex-na-HTML (v147) i
+# pojedyncze cudzysłowy (v134) — kruche parsowanie STRUKTURY tekstem,
+# które przy najmniejszej rozbieżności nazwy pola zwraca PUSTO bez
+# błędu. Realny log 2026-08-29 (cel "zadzwoń do Beaty"): skrypt miał
+# sam wyciągnąć numer z kontaktów i zrobił to tak:
+#
+#   termux-contact-list | grep '"display_name".*"Beata"' -A 10 \
+#       | grep '"number"' | sed 's/.*"number": *"\([^"]*\)".*/\1/'
+#
+# `termux-contact-list` NIE emituje klucza "display_name" — to nazwa
+# kolumny z ContactsContract w Androidzie, ale termux-api w swoim
+# JSON-ie nazywa to pole po prostu "name" (obok "number"). grep na
+# nieistniejący klucz nie znalazł nic, `number` wyszło PUSTE, skrypt
+# poszedł w gałąź NOT_FOUND i zrobił `exit 1` — a użytkownik słusznie
+# zauważył "wcześniej potrafił sobie wziąć numer sam, czemu teraz
+# nie". Nie stracił dostępu do kontaktów (uprawnienie działa,
+# startowy test termux-contact-list przeszedł) — po prostu odczytał
+# JSON zgadniętym, błędnym kluczem. Wyjście większości komend
+# termux-api to JSON, więc uniwersalna rada jest jedna: parsuj je
+# PARSEREM JSON, nie grep/sed/awk na zgadnięty klucz.
+_TERMUX_JSON_CMDS = (
+    "termux-contact-list",
+    "termux-call-log",
+    "termux-sms-list",
+    "termux-telephony-deviceinfo",
+    "termux-battery-status",
+    "termux-location",
+    "termux-wifi-connectioninfo",
+    "termux-wifi-scaninfo",
+    "termux-sensor",
+    "termux-notification-list",
+    "termux-camera-info",
+)
+_TEXT_TOOL_RE = re.compile(r'\b(grep|sed|awk|cut)\b')
+
+
+def _detect_grep_on_termux_api_json(command):
+
+    command_str = str(command or "")
+
+    used = [c for c in _TERMUX_JSON_CMDS if c in command_str]
+
+    if not used or not _TEXT_TOOL_RE.search(command_str):
+        return None
+
+    hint = ""
+    if "termux-contact-list" in used and "display_name" in command_str:
+        hint = (
+            " KONKRETNIE: `termux-contact-list` NIE ma klucza "
+            "\"display_name\" — używa \"name\" i \"number\". grep na "
+            "\"display_name\" zawsze zwróci pusto, więc numer nigdy "
+            "się nie znajdzie (to dokładnie ta cicha porażka z realnej "
+            "sesji)."
+        )
+
+    return (
+        "Komenda parsuje wyjście " + ", ".join(used) + " przez "
+        "grep/sed/awk/cut. To wyjście jest JSON-em, a wyciąganie z "
+        "niego pól tekstem jest kruche: przy najmniejszej pomyłce w "
+        "nazwie pola grep nie znajduje NIC i zwraca PUSTĄ wartość bez "
+        "żadnego błędu — dalszy skrypt myśli wtedy 'nie znaleziono', "
+        "choć dane tam były (ta sama cicha awaria co regex na HTML). "
+        "Parsuj JSON PARSEREM, nie wzorcem tekstowym, np.: "
+        "`termux-contact-list | python -c \"import sys,json; "
+        "print(next((c['number'] for c in json.load(sys.stdin) if "
+        "'beata' in (c.get('name') or '').lower()), ''))\"` — parser "
+        "widzi realne klucze i nie zgaduje ich nazw." + hint
+    )
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -8869,6 +8954,13 @@ def termux_run(command):
 
             if shortcircuit_warning:
                 result["shortcircuit_warning"] = shortcircuit_warning
+
+            json_parse_warning = _detect_grep_on_termux_api_json(
+                command_str
+            )
+
+            if json_parse_warning:
+                result["json_parse_warning"] = json_parse_warning
 
         if (
             not result.get("ok")
@@ -9025,6 +9117,11 @@ def termux_run_background(
 
         if shortcircuit_warning:
             bg_result["shortcircuit_warning"] = shortcircuit_warning
+
+        json_parse_warning = _detect_grep_on_termux_api_json(command)
+
+        if json_parse_warning:
+            bg_result["json_parse_warning"] = json_parse_warning
 
         return bg_result
 
@@ -11383,6 +11480,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "shell_quoting_warning",
                         "missing_file_warning",
                         "shortcircuit_warning",
+                        "json_parse_warning",
                         "stale_warning"
                     ):
 
