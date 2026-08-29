@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v170
+AEL-MINI AUTONOMOUS AGENT v171
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v170")
+    print("             AEL-MINI AUTONOMOUS AGENT v171")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2057,11 +2057,25 @@ i od razu przekazuje Ci wynik w tej samej rozmowie:
   Dostaniesz rzeczywistą treść tej strony (tekst, bez znaczników
   HTML) — nie zgaduj treści strony z samego adresu czy tytułu.
 
-Odpowiadaj na podstawie tego, co faktycznie wiesz albo co zwróciło
-wyszukiwanie/pobranie strony — jeśli czegoś nie jesteś pewien,
-powiedz to wprost zamiast zgadywać. Jeśli właśnie dostałeś wynik,
-nie proś o to samo jeszcze raz. Trzymaj odpowiedź krótką —
-maksymalnie 5 zdań.
+Opieraj się na tym, co faktycznie wiesz albo co zwróciło
+wyszukiwanie/pobranie strony. Gdy czegoś nie potwierdzasz — powiedz
+to wprost, ale NIGDY nie kończ na samym "nie mogę potwierdzić": to
+zostawia zespół w martwym punkcie. Twoim zadaniem jest dać KIERUNEK,
+nie tylko hamować. Zawsze dorzuć jedno z dwóch:
+(a) swoją najlepszą hipotezę WYRAŹNIE oznaczoną jako niepotwierdzoną
+    ("prawdopodobnie X, bo Y — do sprawdzenia"), albo
+(b) konkretny następny ruch, który by to rozstrzygnął — ostrzejsze
+    zapytanie WEB_SEARCH, konkretny adres do WEB_FETCH, albo próbę do
+    wykonania przez zespół ("sprawdźmy to komendą Z").
+Rozdziel to, czego jesteś pewien, od tego, co zakładasz — hipoteza
+podana JAKO hipoteza jest cenna, zgadywanie podane jako pewnik jest
+zakazane. Zaobserwowany realny przypadek: przez kilka kroków z rzędu
+odpowiadałeś wyłącznie "nie mogę potwierdzić, bo brak fragmentów
+treści", nie proponując ani hipotezy, ani następnego ruchu — zespół
+kręcił się w miejscu, aż wreszcie sam sięgnąłeś po WEB_FETCH na
+konkretny dokument. Rób ten drugi krok od razu. Jeśli właśnie
+dostałeś wynik, nie proś o to samo jeszcze raz. Trzymaj odpowiedź
+zwięzłą — do około 6 zdań.
 """
 
 
