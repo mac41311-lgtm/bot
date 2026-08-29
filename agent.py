@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v156
+AEL-MINI AUTONOMOUS AGENT v157
 
 ARCHITEKTURA:
 
@@ -543,6 +543,29 @@ TOOL_FAILURE_STREAK_FILE = STATE_DIR / "tool_failure_streak.json"
 # "sprawdzone" po zupełnie niepowiązanym poprzednim celu.
 CONTACTS_LOOKUP_ATTEMPTED_FILE = STATE_DIR / "contacts_lookup_attempted.flag"
 
+# Wartość wklejona przez użytkownika w odpowiedzi na NEED_USER_LOGIN
+# (klucz API, token, kod) — zapisana pod STAŁĄ, znaną ścieżką.
+#
+# ZAOBSERWOWANY REALNY, STRUKTURALNY BRAK (log 2026-08-28, cel
+# "zadzwoń do Beaty", KROKI 11-13): użytkownik wkleił klucz API Bland,
+# ENGINEER faktycznie go zobaczył (redakcja z v135 działa: dosłowna
+# wartość trafia wyłącznie do niego) i MAIN też go widzi — ale GEMINI,
+# czyli ten, kto realnie pisze i uruchamia skrypt, NIE MA ŻADNEGO
+# kanału, żeby tę wartość dostać. Gemini dostaje wyłącznie tekst TASK-u
+# od MAIN-a. W efekcie Gemini napisało skrypt bez klucza i dostało
+# `401 {"error":"AUTH_FAILURE","message":"No Authorization Header or
+# Session Cookie"}`, po czym zaczęło szukać poświadczeń po plikach na
+# dysku — i znalazło jedynie atrapę z ~/agent/.env po starej sesji
+# (klucz "pk-mock-valid-key-for-tests").
+#
+# Zapis pod stałą ścieżkę zamyka tę lukę bez przepychania sekretu
+# przez prozę modeli: skrypt czyta wartość z pliku, a w treści TASK-u
+# wystarczy ŚCIEŻKA, nie sama wartość. Plik dostaje prawa 0600 i jest
+# kasowany razem z resztą stanu sesji (maybe_clear_previous_session_data),
+# żeby nie stał się dokładnie tym, co właśnie naprawiliśmy — nieaktualną
+# wartością z poprzedniego uruchomienia.
+USER_PROVIDED_VALUE_FILE = STATE_DIR / "user_provided_value.txt"
+
 # Zapamiętany, niedokończony cel — pozwala wznowić sesję po
 # Ctrl+C zamiast zaczynać rozmowę od zera.
 GOAL_FILE = AGENT_DIR / "current_goal.txt"
@@ -1046,7 +1069,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v156")
+    print("             AEL-MINI AUTONOMOUS AGENT v157")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13321,6 +13344,21 @@ def _condense_last_result_for_team(last_result, limit=2500):
             + short(str(user_provided_value), 800)
         )
 
+    # Ścieżka jako OSOBNA pozycja, nie tylko wewnątrz "note" — note
+    # jest skracana do 800 znaków, a to jedyna informacja, dzięki
+    # której Gemini w ogóle może dosięgnąć wklejonej wartości (patrz
+    # USER_PROVIDED_VALUE_FILE). Ucięcie jej przez limit długości
+    # cicho przywróciłoby dokładnie ten błąd, który naprawia.
+    value_file = last_result.get("user_provided_value_file")
+
+    if value_file:
+        parts.append(
+            "wklejona wartość jest też ZAPISANA W PLIKU "
+            + str(value_file)
+            + " — w TASKu dla Gemini podawaj tę ŚCIEŻKĘ (np. "
+            "`KEY=$(cat " + str(value_file) + ")`), nie samą wartość"
+        )
+
     tool_result = last_result.get("tool_result")
 
     if isinstance(tool_result, dict):
@@ -15816,11 +15854,66 @@ def _handle_need_user_login(decision):
                 "użytkownik nie podał właściwej wartości."
             )
 
+    # Zapis wklejonej wartości pod STAŁĄ ścieżkę — jedyny kanał,
+    # którym GEMINI (wykonawca piszący i uruchamiający skrypt) może ją
+    # w ogóle dostać. Patrz komentarz przy USER_PROVIDED_VALUE_FILE:
+    # bez tego Gemini pisało skrypty bez klucza i dostawało 401.
+    value_file_note = ""
+
+    if user_typed:
+        try:
+            USER_PROVIDED_VALUE_FILE.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            USER_PROVIDED_VALUE_FILE.write_text(
+                user_typed,
+                encoding="utf-8"
+            )
+
+            # Sekret — czytelny wyłącznie dla właściciela.
+            try:
+                os.chmod(USER_PROVIDED_VALUE_FILE, 0o600)
+            except Exception:
+                pass
+
+            value_file_note = (
+                "\n\nWARTOŚĆ JEST ZAPISANA W PLIKU: "
+                + str(USER_PROVIDED_VALUE_FILE)
+                + "\nGemini NIE widzi treści tej rozmowy — jeżeli "
+                "kolejny krok ma jej użyć (np. w nagłówku "
+                "Authorization), TASK ma kazać ODCZYTAĆ ją z TEGO "
+                "pliku (np. `KEY=$(cat "
+                + str(USER_PROVIDED_VALUE_FILE)
+                + ")`), zamiast wklejać samą wartość w treść "
+                "zadania. Zaobserwowany realny przypadek: skrypt "
+                "napisany bez dostępu do wartości dostał 401 "
+                "AUTH_FAILURE, po czym szukał klucza po starych "
+                "plikach i trafił na atrapę z poprzedniej sesji."
+            )
+
+            log(
+                "MAIN",
+                "Wklejona wartość zapisana do "
+                + str(USER_PROVIDED_VALUE_FILE)
+                + " (prawa 0600) — Gemini może ją odczytać z pliku."
+            )
+
+        except Exception as e:
+            log(
+                "MAIN",
+                "Nie udało się zapisać wklejonej wartości do pliku: "
+                + str(e)
+            )
+
     return {
         "status": "USER_RESPONDED_TO_LOGIN_PROMPT",
         "url": login_url,
         "user_provided_value": user_typed or None,
-        "note": note
+        "user_provided_value_file": (
+            str(USER_PROVIDED_VALUE_FILE) if value_file_note else None
+        ),
+        "note": note + value_file_note
     }
 
 
@@ -17112,7 +17205,8 @@ def maybe_clear_previous_session_data():
         LAST_RESULT_FILE,
         GEMINI_STATE_FILE,
         PROGRESS_CHECKLIST_FILE,
-        CONTACTS_LOOKUP_ATTEMPTED_FILE
+        CONTACTS_LOOKUP_ATTEMPTED_FILE,
+        USER_PROVIDED_VALUE_FILE
     ):
         try:
             extra.unlink(missing_ok=True)
