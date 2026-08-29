@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v166
+AEL-MINI AUTONOMOUS AGENT v167
 
 ARCHITEKTURA:
 
@@ -1202,7 +1202,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v166")
+    print("             AEL-MINI AUTONOMOUS AGENT v167")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2373,6 +2373,23 @@ Cała komenda zwróciła `returncode: 0`, a mimo to
 zawierał `{"error": "Please grant the following permission..."}`.
 Wynik: plik z fałszywym "SUKCES" mimo realnego niepowodzenia,
 złapane dopiero później przez inną rolę.
+
+WARTOŚĆ DOMYŚLNA "JEŚLI PUSTE" — NIGDY przez `&&`, zawsze przez `;`
+albo `${VAR:-domyślna}`. Idiom `[ -z "$VAR" ] && VAR=domyślna`
+spięty z resztą przez `&&` to cicha pułapka: gdy $VAR NIE jest pusta
+(czyli w normalnym przypadku!), `[ -z ... ]` zwraca kod 1, a `&&`
+URYWA CAŁY łańcuch — reszta polecenia nie wykona się w ogóle, a
+narzędzie zwróci `returncode: 1` z PUSTYM stdout i stderr. To zero
+informacji, więc łatwo pomylić to z "brak pakietu" albo "za długa
+składnia" i stracić kilka kroków na leczeniu nie tej przyczyny.
+Zaobserwowany realny przypadek (2026-08-29): polecenie
+`GATEWAY=$(cat ~/gateway.txt) && [ -z "$GATEWAY" ] && \
+GATEWAY="192.168.43.1" && nmap ... $GATEWAY` dwa razy z rzędu
+zwróciło returncode 1 i nic nie zeskanowało, bo gateway.txt
+istniał (GATEWAY niepuste), a `nmap` był już zainstalowany —
+zespół błędnie obwiniał nmap. Poprawnie: `VAR="${VAR:-domyślna}"`
+(zawsze kod 0) albo rozdziel średnikiem:
+`[ -z "$VAR" ] && VAR=domyślna; <dalsza praca>`.
 
 ============================================================
 WYCIĄGANIE TREŚCI Z HTML — UŻYWAJ PARSERA, NIE REGEXÓW
@@ -8725,6 +8742,60 @@ def _detect_missing_cat_substitution_file(command):
     return None
 
 
+# Cicha, najbardziej myląca awaria z realnego logu (2026-08-29,
+# cel "wejść na hotspot i napisać"): TEN SAM idiom "ustaw domyślną
+# wartość, jeśli pusta" napisany przez `&&` zamiast `;` zabijał CAŁE
+# polecenie bez jednego znaku wyjścia. Wzorzec:
+#
+#   GATEWAY=$(cat ~/gateway.txt) && [ -z "$GATEWAY" ] && \
+#       GATEWAY="192.168.43.1" && nmap ... $GATEWAY
+#
+# Zamysł: "jeśli GATEWAY puste, wpisz 192.168.43.1, a potem skanuj".
+# Rzeczywistość basha: `[ -z "$GATEWAY" ]` przy NIEpustym GATEWAY
+# zwraca kod 1, a `&&` natychmiast urywa CAŁY łańcuch — nmap/for/echo
+# NIGDY się nie wykonują. Wynik: {"ok": false, "returncode": 1,
+# "stdout": "", "stderr": ""} — zero informacji. W logu zespół dwa
+# razy z rzędu (19:05, 19:13) błędnie zdiagnozował to jako "nmap nie
+# zainstalowany" (był — potwierdzone "nmap is already the newest
+# version") i "składnia za długa", spalając kolejne kroki.
+#
+# Kluczowe rozróżnienie, które robi regex: DOKŁADNIE ten sam test
+# rozdzielony `;` ( "[ -z "$X" ] && X=default; reszta" ) jest w pełni
+# poprawny i wcześniej w tej samej sesji zadziałał — bo `;` nie
+# przenosi kodu wyjścia dalej. Flagujemy WYŁĄCZNIE wariant, w którym
+# po przypisaniu-domyślnej-wartości łańcuch biegnie dalej przez `&&`
+# (czyli realna praca jest uzależniona od tego, że zmienna była
+# PUSTA) — bo tylko on po cichu gubi całe polecenie.
+_SHORTCIRCUIT_DEFAULT_RE = re.compile(
+    r'(?:\[\s*-[zn]\b[^\]]*\]|\btest\s+-[zn]\b[^&|;]*?)\s*&&\s*'
+    r'[A-Za-z_][A-Za-z0-9_]*=[^&|;]*?&&'
+)
+
+
+def _detect_short_circuiting_test_chain(command):
+
+    if _SHORTCIRCUIT_DEFAULT_RE.search(str(command or "")):
+        return (
+            "Komenda używa idiomu 'ustaw domyślną wartość, jeśli "
+            "pusta' spięty przez `&&` (np. `[ -z \"$VAR\" ] && "
+            "VAR=domyślna && <dalsza praca>`). To CICHA pułapka "
+            "basha: gdy $VAR NIE jest pusta, `[ -z \"$VAR\" ]` "
+            "zwraca kod 1, a `&&` URYWA CAŁY łańcuch — wszystko po "
+            "nim (nmap/for/echo/cat...) NIGDY się nie wykona, a "
+            "narzędzie zwróci returncode 1 z pustym stdout i stderr, "
+            "czyli zero informacji o tym, co się stało. To NIE jest "
+            "'brak pakietu' ani 'za długa składnia' — to logika "
+            "łańcucha. Popraw tak, by warunek domyślnej wartości nie "
+            "przerywał reszty: rozdziel go średnikiem "
+            "(`[ -z \"$VAR\" ] && VAR=domyślna; <dalsza praca>`) albo "
+            "użyj podstawienia (`VAR=\"${VAR:-domyślna}\"`), tak by "
+            "$VAR miało wartość, a łańcuch biegł dalej niezależnie od "
+            "tego, czy była pusta."
+        )
+
+    return None
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -8774,6 +8845,13 @@ def termux_run(command):
 
             if missing_file_warning:
                 result["missing_file_warning"] = missing_file_warning
+
+            shortcircuit_warning = _detect_short_circuiting_test_chain(
+                command_str
+            )
+
+            if shortcircuit_warning:
+                result["shortcircuit_warning"] = shortcircuit_warning
 
         if (
             not result.get("ok")
@@ -8925,6 +9003,11 @@ def termux_run_background(
 
         if missing_file_warning:
             bg_result["missing_file_warning"] = missing_file_warning
+
+        shortcircuit_warning = _detect_short_circuiting_test_chain(command)
+
+        if shortcircuit_warning:
+            bg_result["shortcircuit_warning"] = shortcircuit_warning
 
         return bg_result
 
@@ -11282,6 +11365,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "already_launched_note",
                         "shell_quoting_warning",
                         "missing_file_warning",
+                        "shortcircuit_warning",
                         "stale_warning"
                     ):
 
