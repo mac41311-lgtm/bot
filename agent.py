@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v167
+AEL-MINI AUTONOMOUS AGENT v168
 
 ARCHITEKTURA:
 
@@ -544,6 +544,23 @@ _ANDROID_GENERIC_CONTAINER_IDS = {
     "inputArea",
     "keyboard_holder",
     "seeding_capsule_container_root",
+    # Dopisane po analizie realnego logu z 2026-08-29: przy WŁĄCZONYM
+    # debugowaniu bezprzewodowym stała rozwinięta notyfikacja z paska
+    # stanu ("Podłączono debugowanie bezprzewodowe") wstrzykiwała w
+    # KAŻDY zrzut android_state komplet swoich kontenerów z frameworka
+    # SystemUI — bez własnego tekstu i bez możliwości kliknięcia —
+    # spychając poza limit znaków to, co faktycznie dotyczyło celu.
+    # To standardowe id SystemUI (te same na każdym urządzeniu i w
+    # każdym języku), więc filtr pozostaje uniwersalny. Klikalny
+    # `alternate_expand_target` CELOWO tu nie trafia — istniejący
+    # warunek niżej i tak pokazuje węzły klikalne/fokusowalne oraz
+    # niosące własną treść, więc nic realnego nie zniknie.
+    "status_bar_latest_event_content",
+    "notification_headerless_view_row",
+    "notification_headerless_view_column",
+    "notification_main_column",
+    "expand_button_touch_container",
+    "icon",
 }
 
 # Po ilu identycznych zadaniach (na poziomie decyzji MAIN)
@@ -1202,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v167")
+    print("             AEL-MINI AUTONOMOUS AGENT v168")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
