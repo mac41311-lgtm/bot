@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v163
+AEL-MINI AUTONOMOUS AGENT v164
 
 ARCHITEKTURA:
 
@@ -1118,7 +1118,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v163")
+    print("             AEL-MINI AUTONOMOUS AGENT v164")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13542,6 +13542,29 @@ _critic_verdict_for_engineer = None
 # niego oczekuje.
 _main_decision_for_team = None
 
+# Ile razy Z RZĘDU Marek/CRITIC zgłosił zastrzeżenie (BLOKUJ/
+# OSTRZEŻENIE), a MAIN mimo to poszedł dalej.
+#
+# ZAOBSERWOWANY REALNY PROBLEM (log 2026-08-28 + sprawdzenie kodu):
+# werdykt Marka jest CZYSTYM TEKSTEM — ani jedna linia kodu nie
+# parsuje "OCENA: BLOKUJ". W realnym logu Marek zablokował 10 z 13
+# kroków, a MAIN za każdym razem i tak tworzył TASK. Sygnał, który
+# zapala się prawie zawsze i nic nie powoduje, przestaje cokolwiek
+# znaczyć — MAIN uczy się go ignorować, a zespół płaci za niego
+# jedno zapytanie na krok.
+#
+# NIE blokujemy MAIN-a twardo: właśnie naprawiliśmy jeden martwy
+# zakleszczenie (v156) i wprowadzanie drugiego byłoby lekkomyślne.
+# Zamiast tego po kilku zastrzeżeniach POD RZĄD wstrzykujemy MAIN-owi
+# deterministyczną, niemożliwą do przeoczenia notatkę: albo usuń
+# przyczynę, albo napisz wprost, dlaczego uważasz zarzut za
+# nietrafiony. Zastrzeżenie przestaje być czymś, co da się w
+# nieskończoność minąć w milczeniu.
+_critic_block_streak = 0
+
+# Po ilu zastrzeżeniach Z RZĘDU MAIN dostaje tę notatkę.
+CRITIC_STREAK_ESCALATION = 3
+
 
 def _condense_last_result_for_team(last_result, limit=2500):
     """
@@ -13899,6 +13922,7 @@ def consult_team(
     global _critic_verdict_for_planner
     global _critic_verdict_for_engineer
     global _main_decision_for_team
+    global _critic_block_streak
 
     tool_hint = ""
 
@@ -14517,6 +14541,11 @@ OSTATNI RAPORT:
     ):
         _critic_verdict_for_planner = short(_critic_out_full, 1200)
         _critic_verdict_for_engineer = short(_critic_out_full, 1200)
+        _critic_block_streak += 1
+
+    else:
+        # Marek nie ma zastrzeżeń — seria się zeruje.
+        _critic_block_streak = 0
 
     return {
         "planner":   short(results.get("PLANNER", ""), 4000),
@@ -14625,6 +14654,32 @@ def main_decide(
             last_result.get("ok") is False
             or last_result.get("status") == "GEMINI_TOOL_ERROR"
         )
+    )
+
+    # Zastrzeżenia Marka narastają, a MAIN idzie dalej — patrz
+    # _critic_block_streak. Deterministyczna, niemożliwa do
+    # przeoczenia notatka zamiast twardej blokady (twarda blokada
+    # groziłaby drugim zakleszczeniem, po tym z v156).
+    critic_streak_block = (
+        """============================================================
+MAREK ZGŁASZA ZASTRZEŻENIE JUŻ """
+        + str(_critic_block_streak)
+        + """ RAZ Z RZĘDU
+============================================================
+
+Tyle razy pod rząd padło BLOKUJ/OSTRZEŻENIE, a praca szła dalej.
+Zanim zlecisz kolejny TASK, zrób JEDNO z dwóch — wprost, w polu
+"reason":
+
+1. Usuń przyczynę zastrzeżenia (napisz, co konkretnie zmieniasz), albo
+2. Napisz, dlaczego uważasz zarzut Marka za nietrafiony i idziesz
+   dalej mimo niego.
+
+Milczące pominięcie tego po raz kolejny oznacza, że zespół pracuje w
+kółko nad czymś, co Marek uznaje za zablokowane — a Ty i tak płacisz
+za jego ocenę w każdym kroku.
+"""
+        if _critic_block_streak >= CRITIC_STREAK_ESCALATION else ""
     )
 
     repair_rule_block = (
@@ -14738,7 +14793,7 @@ INTERPRETACJA STATUSU
 
 {status_interpretation_block}
 
-{repair_rule_block}
+{critic_streak_block}{repair_rule_block}
 ============================================================
 
 PLANNER:
