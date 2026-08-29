@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v169
+AEL-MINI AUTONOMOUS AGENT v170
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v169")
+    print("             AEL-MINI AUTONOMOUS AGENT v170")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15255,6 +15255,14 @@ CRITIC:
 
 BROWSER:
 {team['browser']}
+
+POMYSŁY (Wojtek — patrzy na CEL jak zwykły człowiek, bez wiedzy o
+Termuksie/Androidzie/narzędziach; jego rolą jest świeży KIERUNEK, nie
+techniczne szczegóły. Jeśli zespół od kilku kroków kręci się wokół
+jednego podejścia w tym samym środowisku, rozważ WPROST, czy któryś z
+tych kierunków nie prowadzi prościej do celu — masz prawo zmienić
+podejście na jego):
+{team.get('wojtek', '')}
 {chrome_block}{android_block}
 {ask_block}
 ZASADY DECYZJI:
