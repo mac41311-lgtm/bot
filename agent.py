@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v157
+AEL-MINI AUTONOMOUS AGENT v158
 
 ARCHITEKTURA:
 
@@ -493,6 +493,35 @@ _ANDROID_GENERIC_CONTAINER_IDS = {
     "contentPanel",
     "customPanel",
     "frame",
+    # Dopisane po analizie realnych logów z 2026-08-28: te węzły
+    # przechodziły przez filtr i wypełniały PRAWIE CAŁY zrzut
+    # android_state w każdym kroku, wypychając poza limit znaków tę
+    # część, która faktycznie dotyczyła celu.
+    #
+    # "0_resource_name_obfuscated" to nie jest prawdziwe id, tylko
+    # zastępnik wstawiany, gdy id jest zaciemnione — w logach
+    # pojawiał się po 3-6 razy w KAŻDYM zrzucie, zawsze bez tekstu i
+    # bez możliwości kliknięcia.
+    #
+    # parentPanel/inputArea/topPanel/buttonPanel/customPanel to
+    # standardowe kontenery AlertDialog z frameworka Androida (te
+    # same na każdym urządzeniu i w każdym języku — filtr pozostaje
+    # uniwersalny, nie zależy od polskich napisów), a
+    # keyboard_holder/seeding_capsule_container_root to kontenery
+    # klawiatury ekranowej i powłoki OEM.
+    #
+    # WAŻNE: wszystkie te wpisy i tak są pomijane WYŁĄCZNIE wtedy,
+    # gdy węzeł nie ma własnego tekstu ani opisu I NIE jest
+    # klikalny/fokusowalny (warunek niżej, niezmieniony) — jeśli
+    # którykolwiek kiedyś będzie niósł realną treść, zostanie
+    # pokazany.
+    "0_resource_name_obfuscated",
+    "parentPanel",
+    "topPanel",
+    "buttonPanel",
+    "inputArea",
+    "keyboard_holder",
+    "seeding_capsule_container_root",
 }
 
 # Po ilu identycznych zadaniach (na poziomie decyzji MAIN)
@@ -1069,7 +1098,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v157")
+    print("             AEL-MINI AUTONOMOUS AGENT v158")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3400,12 +3429,21 @@ def deepseek(name, message):
                     name, session, message
                 )
 
-                if status:
+                # Eksperyment z v75 (przechwycenie statusu, który
+                # opendeep odrzuca) jest POTWIERDZONY setkami realnych
+                # odpowiedzi — w logach produkcyjnych praktycznie
+                # każda ma status "FINISHED". Logowanie tego przy
+                # KAŻDEJ odpowiedzi dawało ~7 linii na krok (~90 na
+                # sesję) niosących zawsze tę samą, zerową informację i
+                # zagłuszało to, co użytkownik faktycznie czyta:
+                # rozmowę zespołu. Zostawiamy log WYŁĄCZNIE dla
+                # statusu innego niż normalne zakończenie — czyli
+                # dokładnie tam, gdzie coś się dzieje (ucięcie).
+                if status and str(status).strip().upper() != "FINISHED":
                     log(
                         "DEEPSEEK",
-                        name + ": EKSPERYMENT — przechwycony "
-                        "status odpowiedzi (wczesniej biblioteka go "
-                        "odrzucala): " + short(str(status), 200)
+                        name + ": nietypowy status odpowiedzi: "
+                        + short(str(status), 200)
                     )
 
                 truncated, reason = _deepseek_looks_truncated(
