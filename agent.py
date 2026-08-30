@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v178
+AEL-MINI AUTONOMOUS AGENT v179
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v178")
+    print("             AEL-MINI AUTONOMOUS AGENT v179")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2723,63 +2723,29 @@ zignorowany).
 
 
 PROGRESS_ESTIMATOR_PROMPT = """
-Nazywasz się Ela. W tym zespole oceniasz procentowy postęp
-realizacji DOWOLNEGO celu autonomicznego agenta (gra/aplikacja
-Android, skrypt, narzędzie CLI, automatyzacja, strona itd. —
-rozpoznaj rodzaj celu z jego treści).
+Nazywasz się Ela. Oceniasz, ile procent celu jest FAKTYCZNIE
+zrobione — nie ile Gemini zadeklarowało. Cel może być czymkolwiek
+(gra, aplikacja, skrypt, strona...) — rozpoznaj go z treści.
 
-Dostajesz:
-1. Listę kilku ostatnio wykonanych zadań (status, skrócony
-   raport/błąd) — to WŁASNE deklaracje Gemini o tym, co zrobiło.
-   Traktuj je z rezerwą: zaobserwowany realny przypadek — Gemini
-   podało konkretne "potwierdzone" liczby (wersje narzędzi), które
-   kilka kroków wcześniej w tej samej rozmowie były zupełnie inne
-   naprawdę zweryfikowane — czyli zmyślone, nie sprawdzone na nowo.
-2. PUNKTY ZADAŃ — checklist zbudowany PRZEZ PYTHON, nie przez
-   deklarację: "zweryfikowany dowodem" oznacza, że Python SAM
-   potwierdził to niezależnie — plik z warunku sukcesu istnieje na
-   dysku, ALBO android_assert_text_visible faktycznie zwrócił
-   found=true dla tekstu z tego warunku W TRAKCIE zadania (nie sama
-   proza raportu Gemini). "zadeklarowany BEZ dowodu" oznacza, że
-   Gemini tak napisało, ale NIKT tego niezależnie nie sprawdził —
-   traktuj to jako niepewne, NIE jako
-   fakt, ale też NIE jako dowód porażki.
+Dostajesz trzy rzeczy:
+- Ostatnie kroki — to WŁASNE relacje Gemini, mogą mijać się z prawdą.
+- PUNKTY ZADAŃ — checklist Pythona: "zweryfikowany dowodem" znaczy,
+  że Python sam to potwierdził (plik na dysku, realny wynik na
+  ekranie); "bez dowodu" znaczy, że tylko Gemini tak napisało —
+  traktuj jako niepewne, nie jako fakt ani porażkę.
+- Co widać teraz na ekranie. Telefon żyje własnym życiem między
+  krokami (aplikacje się zamykają, ekran gaśnie) — jeśli wcześniejszy
+  krok dotyczył PRZEJŚCIOWEJ czynności (np. "otwórz kalkulator,
+  potwierdź wynik"), to że jej już nie ma na ekranie TERAZ jest
+  normalne. NIE obniżaj za to oceny. Ekran sprawdzaj tylko pod kątem
+  tego, co MA zostać widoczne do końca (finalna karta, docelowy
+  ekran).
 
-3. AKTUALNY, ŚWIEŻO POBRANY stan Chrome i Androida — pokazuje TYLKO
-   to, co jest na ekranie W TEJ CHWILI. UWAGA: telefon naturalnie
-   PRZECHODZI DALEJ między krokami (użytkownik używa telefonu,
-   agent w kolejnym kroku otwiera inną aplikację, ekran gaśnie) —
-   jeżeli wcześniejszy krok dotyczył PRZEJŚCIOWEJ czynności (np.
-   "otwórz kalkulator i potwierdź wynik", "otwórz zegar i
-   potwierdź ekran"), to że ta aplikacja NIE jest już widoczna
-   TERAZ jest NORMALNE i NIE oznacza, że krok się nie wykonał —
-   NIE obniżaj za to oceny. Aktualny stan Chrome/Androida służy
-   WYŁĄCZNIE do sprawdzania rzeczy, które MAJĄ pozostać widoczne do
-   końca (np. finalna karta ma zostać otwarta, docelowy ekran ma
-   zostać osiągnięty) — nie do potwierdzania przejściowych kroków
-   sprzed kilku konsultacji, bo to strukturalnie fałszywy alarm
-   (zaobserwowany realny przypadek: użytkownik wyszedł z
-   kalkulatora po chwili, ocena postępu błędnie uznała to za
-   niewykonany krok, mimo że krok faktycznie się wykonał i miał
-   swój dowód w momencie wykonania).
-
-Na tej podstawie oceniasz, jaki procent CAŁEGO celu jest już
-FAKTYCZNIE zrealizowany — nie ile Gemini zadeklarowało.
-
-Bądź REALISTYCZNY, nie optymistyczny. "Utworzono plik" / "napisano
-raport" to nie to samo co "cel działa i jest potwierdzony". Zależnie
-od rodzaju celu, pełne ukończenie zwykle wymaga fizycznego dowodu
-(zbudowany+zainstalowany+uruchomiony APK ze zrzutem ekranu dla
-gry/aplikacji; realny kod wyjścia dla skryptu; potwierdzony stan w
-Chrome/Androidzie dla czynności na ekranie) — nie samej deklaracji
-sukcesu w raporcie.
-
-Jeżeli w ostatnich zadaniach widzisz powtarzające się błędy bez
-postępu, albo rozbieżność między deklaracją a czymś, co MIAŁO
-pozostać trwale widoczne/sprawdzalne (plik, karta, ekran końcowy) —
-obniż ocenę, nawet jeśli poprzednio było wyżej. Nie licz w to
-zniknięcia PRZEJŚCIOWEJ aplikacji z poprzedniego kroku (patrz punkt
-3 wyżej).
+Bądź realistyczny. "Zapisano plik" to nie to samo co "cel działa i
+jest potwierdzony" — zwykle potrzeba fizycznego dowodu (zbudowany i
+uruchomiony APK ze zrzutem ekranu; realny wynik skryptu; potwierdzony
+stan na ekranie). Powtarzające się błędy bez postępu — obniż ocenę,
+nawet jeśli wcześniej było wyżej.
 
 Zwróć WYŁĄCZNIE JSON, bez żadnego dodatkowego tekstu:
 {
@@ -14052,6 +14018,67 @@ def _recent_task_summaries(n=8):
     return summaries
 
 
+# Krótkie, ludzkie etykiety statusów — zamiast wklejać surowe stałe
+# takie jak "GEMINI_TOOL_ERROR" wprost w wiadomość do Eli.
+_HUMAN_STATUS_LABELS = {
+    "COMPLETED": "ukończono",
+    "GEMINI_TOOL_ERROR": "błąd narzędzia",
+    "TOOL_LIMIT": "przekroczony limit narzędzi",
+    "DONE_REJECTED_VERIFICATION_FAILED": "zgłoszony DONE odrzucony (brak dowodu)",
+    "TASK_BLOCKED_BY_POLICY": "zablokowane zasadą",
+    "TASK_DUPLICATE_OF_VERIFIED_POINT": "powtórka już zweryfikowanego punktu",
+    "TASK_ALREADY_SATISFIED_ON_DISK": "już spełnione na dysku",
+}
+
+
+# Zaobserwowana realna skarga użytkownika (2026-08-30): Ela dostawała
+# surowy `json.dumps(summaries, indent=2)` — czyli listę słowników z
+# cudzysłowami, przecinkami i uciekniętymi `\n` w środku raportu.
+# Zamieniamy to na zwykłe, ponumerowane zdania — ta sama treść,
+# ludzka forma, zero dodatkowego zapytania do DeepSeeka (to czysto
+# formatowanie w Pythonie).
+def _human_task_summary_lines(summaries):
+
+    lines = []
+
+    for i, s in enumerate(summaries, 1):
+
+        label = _HUMAN_STATUS_LABELS.get(
+            s.get("status"), str(s.get("status") or "nieznany status")
+        )
+
+        report = str(s.get("report") or "").strip().replace("\n", " ")
+
+        line = str(i) + ". " + label
+
+        if report:
+            line += " — " + short(report, 140)
+
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+# Ela ocenia TYLKO, czy coś jest wciąż widoczne na ekranie (patrz jej
+# prompt systemowy) — nie potrzebuje `click=/focus=/enabled=/bounds=`,
+# tylko listy tego, co faktycznie tam jest. Ta sama skarga co wyżej:
+# surowy zrzut accessibility-tree wyglądał jak dane maszynowe, nie
+# jak coś, co można ludzko przeczytać.
+def _labels_only(state_text, limit=400):
+
+    if not state_text:
+        return ""
+
+    labels = []
+
+    for line in str(state_text).split("\n"):
+        label = line.split(" | ")[0].strip()
+        if label:
+            labels.append(label)
+
+    return short(", ".join(labels), limit)
+
+
 def estimate_progress(goal, chrome_text=None, android_text=None):
     """
     Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
@@ -14106,28 +14133,22 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
     if _chrome_relevant_for_progress or _goal_mentions_android(goal):
 
         device_state_block = (
-            "\nAKTUALNY, ŚWIEŻO POBRANY STAN URZĄDZENIA (pokazuje "
-            "TYLKO to co jest na ekranie TERAZ — patrz punkt 3 "
-            "Twojego prompta systemowego o przejściowych "
-            "czynnościach, zanim to wykorzystasz do oceny):\n"
+            "\nCo widać teraz na ekranie (pamiętaj o przejściowych "
+            "krokach — patrz Twój prompt systemowy):\n"
         )
 
         if _chrome_relevant_for_progress:
             device_state_block += (
-                "\nAKTUALNY CHROME:\n"
-                + short(
-                    _resolved_chrome_text_for_progress,
-                    1500
+                "- Chrome: " + _labels_only(
+                    _resolved_chrome_text_for_progress
                 ) + "\n"
             )
 
         if _goal_mentions_android(goal):
             device_state_block += (
-                "\nAKTUALNY ANDROID:\n"
-                + short(
+                "- Ekran telefonu: " + _labels_only(
                     android_text if android_text is not None
-                    else android_summary(),
-                    1500
+                    else android_summary()
                 ) + "\n"
             )
 
@@ -14135,9 +14156,9 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
 CEL:
 {goal}
 
-OSTATNIE ZADANIA (od najstarszego do najnowszego, WŁASNE raporty
-Gemini — traktuj je z rezerwą, mogą być niedokładne):
-{json.dumps(summaries, ensure_ascii=False, indent=2)}
+OSTATNIE KROKI (od najstarszego do najnowszego — własne relacje
+Gemini, traktuj z rezerwą):
+{_human_task_summary_lines(summaries)}
 {checklist_block}
 {device_state_block}
 Zwróć WYŁĄCZNIE JSON zgodnie z formatem z Twojego prompta
