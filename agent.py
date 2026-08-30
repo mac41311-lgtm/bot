@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v174
+AEL-MINI AUTONOMOUS AGENT v175
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v174")
+    print("             AEL-MINI AUTONOMOUS AGENT v175")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11091,6 +11091,46 @@ def _shell_exit_1_may_be_benign(tool_name, result):
     return bool(_BENIGN_NONZERO_EXIT_COMMAND_RE.search(command))
 
 
+# Zaobserwowany realny wzorzec (log 2026-08-30, cel "zadzwoń do
+# Beaty przez Bland AI"): Marek POPRAWNIE nie ufa gołej prozie
+# Gemini ("RAPORT: zrobiłem X, Y, Z") — to jego zadanie (patrz
+# CRITIC_PROMPT, sekcja o sfabrykowanych potwierdzeniach). Problem:
+# `collected_tool_trace` (co Gemini FAKTYCZNIE wywołało — patrz
+# _condense_last_result_for_team) trzymał TYLKO nazwę narzędzia i
+# ok/fail, NIGDY treść tego, co narzędzie faktycznie zwróciło. Krok
+# 7 realnie wykonał `termux_run`, które zwróciło (returncode 0):
+# "✅ Znaleziono numer dla Beaty: +48514590110\n✅ Finalny skrypt
+# dzwoniący zapisany jako ~/call_beata_final.py" — to jest PRAWDZIWY,
+# przechwycony przez Pythona dowód (stdout polecenia powłoki, nie
+# swobodna proza Gemini), ale zespół go NIGDY nie zobaczył: dostał
+# tylko "raport Gemini: CO ZROBIŁEM: ..." (prozę) i "termux_run" (samą
+# nazwę). W kroku 8 Marek ZABLOKOWAŁ kolejny plan właśnie dlatego, że
+# "poprzedni raport JEST DEKLARACJĄ GEMINI, A NIE ŚWIEŻYM DOWODEM" —
+# słusznie nie ufał prozie, ale nie miał jak zobaczyć dowodu, który
+# fizycznie już istniał w stdout poprzedniego kroku. Efekt: zespół
+# wpadał w pętlę żądania kolejnych, coraz to nowych weryfikacji
+# rzeczy, które faktycznie już zaszły i były zapisane w surowym
+# wyniku narzędzia — dokładnie ten wzorzec, o którym napisał
+# użytkownik ("ciągle szukają dowodów... a coś już zadziałało").
+def _short_tool_evidence(result):
+
+    if not isinstance(result, dict):
+        return ""
+
+    for key in ("stdout", "content"):
+        value = result.get(key)
+        if value and str(value).strip():
+            return short(str(value).strip(), 160)
+
+    if result.get("ok") and "path" in result and "bytes" in result:
+        return (
+            "zapisano " + str(result.get("bytes")) + " B do "
+            + str(result.get("path"))
+        )
+
+    return ""
+
+
 def gemini_execute_task(task_id, task, success_condition=''):
     """
     Gemini executor — Interactions API.
@@ -11696,7 +11736,8 @@ CO POWINIEN ZROBIĆ MAIN:
                     "ok": (
                         result.get("ok")
                         if isinstance(result, dict) else None
-                    )
+                    ),
+                    "evidence": _short_tool_evidence(result)
                 })
 
                 # Patrz komentarz przy _decision_asks_for_contact_info()
@@ -14183,6 +14224,16 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # dyspozytora narzędzi, więc Gemini nie ma jak jej "opowiedzieć".
     # Trzymana zwięźle (nazwa + czy się udało), żeby nie stała się
     # kolejnym szumem — przy długich seriach zwijana do zliczeń.
+    #
+    # Krótki fragment "evidence" (patrz _short_tool_evidence) — realne
+    # stdout/content narzędzia, nie proza Gemini — jest dołączany
+    # TYLKO gdy wywołań jest niewiele (ten sam próg <=12, po którym i
+    # tak przechodzimy na same liczby): zaobserwowany realny problem
+    # (log 2026-08-30) to CRITIC blokujący kolejny krok słowami "to
+    # deklaracja Gemini, nie świeży dowód", mimo że dowód (np. "✅
+    # Finalny skrypt zapisany jako ~/plik.py") FIZYCZNIE już leżał w
+    # stdout poprzedniego, udanego wywołania — po prostu nigdy nie
+    # trafiał do zespołu.
     tool_trace = last_result.get("tool_trace")
 
     if isinstance(tool_trace, list) and tool_trace:
@@ -14193,13 +14244,20 @@ def _condense_last_result_for_team(last_result, limit=2500):
         def _ok_of(entry):
             return entry.get("ok") if isinstance(entry, dict) else None
 
+        def _evidence_of(entry):
+            return str(entry.get("evidence", "")) if isinstance(entry, dict) else ""
+
         failed = sum(1 for e in tool_trace if _ok_of(e) is False)
 
         if len(tool_trace) <= 12:
-            rendered = ", ".join(
-                _name_of(e) + ("" if _ok_of(e) is not False else " [BŁĄD]")
-                for e in tool_trace
-            )
+            pieces = []
+            for e in tool_trace:
+                label = _name_of(e) + ("" if _ok_of(e) is not False else " [BŁĄD]")
+                evidence = _evidence_of(e)
+                if evidence:
+                    label += " -> " + evidence
+                pieces.append(label)
+            rendered = "; ".join(pieces)
         else:
             counts = {}
             for e in tool_trace:
