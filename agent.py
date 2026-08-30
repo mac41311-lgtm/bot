@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v186
+AEL-MINI AUTONOMOUS AGENT v187
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v186")
+    print("             AEL-MINI AUTONOMOUS AGENT v187")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1414,15 +1414,19 @@ Nie dotykasz Gemini ani Pythona bezpośrednio, tylko proponujesz.
 """
 
 
+# v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil ma
+# WŁĄCZONE natywne wyszukiwanie w sieci (patrz search_enabled w
+# start_session()) — szuka sam, tak jak człowiek pytający wprost na
+# stronie chat.deepseek.com, bez sztucznego hasła WEB_SEARCH:/
+# WEB_FETCH: do nauczenia. Ta narracja (i cała funkcja
+# researcher_web_search(), którą i tak wywołujemy dalej jako
+# nieszkodliwy przepust dla tekstu bez markera) zniknęła świadomie —
+# szukanie dzieje się PO STRONIE DeepSeek, nie przez Pythona.
 RESEARCHER_PROMPT = """
-Nazywasz się Kamil. Szukasz informacji w sieci — sam, bez
-pośrednictwa Gemini. Napisz jedną linię:
-WEB_SEARCH: <zapytanie po angielsku>
-albo, gdy znasz konkretny adres:
-WEB_FETCH: <pełny URL>
-Dostaniesz prawdziwy wynik w tej samej rozmowie. Nie zmyślaj faktów
-— jeśli wynik nie potwierdza czegoś, powiedz to wprost i zaproponuj
-hipotezę albo kolejny krok, nie kończ na samym "nie mogę potwierdzić".
+Nazywasz się Kamil. Masz włączone wyszukiwanie w sieci — szukaj sam,
+kiedy trzeba sprawdzić fakt. Nie zmyślaj — jeśli czegoś nie możesz
+potwierdzić, powiedz to wprost i zaproponuj hipotezę albo kolejny
+krok.
 """
 
 
@@ -1718,6 +1722,32 @@ def start_session(name, system_prompt):
         session = (
             deepseek_model.start_chat()
         )
+
+        # v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil
+        # (RESEARCHER) dostaje NATYWNĄ zdolność szukania w sieci
+        # chat.deepseek.com — dokładnie ten sam przełącznik "Search",
+        # który widać na stronie, gdy człowiek sam tam pyta. Payload
+        # do DeepSeek (patrz _deepseek_raw_post_with_action) i tak już
+        # zawsze wysyła "search_enabled": session.search_enabled —
+        # dotąd nigdy świadomie nie ustawiany, więc szedł z domyślną
+        # wartością biblioteki opendeep. Włączając go jawnie dla
+        # Kamila, DeepSeek sam wykonuje prawdziwe wyszukiwanie jako
+        # część generowania odpowiedzi — nie trzeba uczyć go żadnego
+        # sztucznego hasła (WEB_SEARCH:/WEB_FETCH:), tak jak nie trzeba
+        # uczyć człowieka pytającego na stronie. Owinięte w try/except,
+        # bo to atrybut obiektu z zewnętrznej biblioteki — jeśli kiedyś
+        # zniknie/zmieni nazwę, sesja ma dalej działać (bez natywnego
+        # szukania, ale bez wywrócenia całego startu roli).
+        if name == "RESEARCHER":
+            try:
+                session.search_enabled = True
+            except Exception as e:
+                log(
+                    "DEEPSEEK",
+                    "RESEARCHER: nie udało się włączyć natywnego "
+                    "search_enabled (" + str(e) + ") — sesja rusza "
+                    "dalej bez tego."
+                )
 
         saved = _load_session_state(name)
 
