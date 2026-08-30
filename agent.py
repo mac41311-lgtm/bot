@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v185
+AEL-MINI AUTONOMOUS AGENT v186
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v185")
+    print("             AEL-MINI AUTONOMOUS AGENT v186")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1372,12 +1372,6 @@ stanu i zespołu (Tomek/PLANNER, Kamil/RESEARCHER, Marek/CRITIC,
 Ola/BROWSER, Bartek/ENGINEER). Gemini wykonuje Twoje polecenia w
 Termux/Android/Chrome.
 
-"PUNKTY ZADAŃ" w kontekście: "zweryfikowany dowodem" = Python sam to
-potwierdził niezależnie (plik na dysku istnieje, albo
-android_assert_text_visible zwrócił found=true). "bez dowodu" = sama
-deklaracja Gemini, nikt tego nie sprawdził — traktuj jako niepewne,
-nie jako fakt.
-
 Zwróć WYŁĄCZNIE JSON, jeden z:
 
 {
@@ -1385,7 +1379,7 @@ Zwróć WYŁĄCZNIE JSON, jeden z:
   "reason": "...",
   "task": "...",
   "success_condition": "...",
-  "write_engineer_code_to": "ścieżka pliku — użyj, gdy ENGINEER dał gotowy kod w ```...```, żeby Python zapisał go od razu, bez zużycia Gemini na przepisywanie"
+  "write_engineer_code_to": "ścieżka pliku, gdy ENGINEER dał gotowy kod w ```...```"
 }
 
 {
@@ -1401,7 +1395,7 @@ Zwróć WYŁĄCZNIE JSON, jeden z:
 {
   "type": "NEED_USER_LOGIN",
   "reason": "...",
-  "url": "pełny adres http(s), jeśli chodzi o konto/logowanie w serwisie zewnętrznym — w przeciwnym razie puste",
+  "url": "pełny adres http(s) albo puste",
   "instructions": "co dokładnie użytkownik ma zrobić"
 }
 
@@ -1410,10 +1404,6 @@ Zwróć WYŁĄCZNIE JSON, jeden z:
   "ask_role": "jedna z: PLANNER, ENGINEER, RESEARCHER, CRITIC, BROWSER",
   "ask_question": "konkretne pytanie"
 }
-
-"task" pisz swoimi słowami, jakbyś sam/sama prosił/a o to wprost —
-nie kopiuj notatek zespołu. Gotowy blok kodu (```...```) przepisz
-dokładnie, bez zmian.
 """
 
 
@@ -14664,7 +14654,6 @@ TASK:
   "reason": "...",
   "task": "...",
   "success_condition": "...",
-  "priority": "high",
   "write_engineer_code_to": "WYMAGANE gdy dotyczy, patrz wyżej"
 }}
 
@@ -15131,8 +15120,7 @@ def protect_main_failed(decision, goal):
         "success_condition": (
             "Cel został faktycznie wykonany "
             "i zweryfikowany."
-        ),
-        "priority": "high"
+        )
     }
 
 
@@ -16595,8 +16583,7 @@ Zwróć wyłącznie jeden obiekt:
   "type": "TASK",
   "reason": "...",
   "task": "...",
-  "success_condition": "...",
-  "priority": "high"
+  "success_condition": "..."
 }
 
 albo:
