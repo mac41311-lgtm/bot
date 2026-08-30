@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v175
+AEL-MINI AUTONOMOUS AGENT v177
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v175")
+    print("             AEL-MINI AUTONOMOUS AGENT v177")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2446,6 +2446,21 @@ CAŁYM telefonem (realne aplikacje przez UI/uiautomator, Chrome przez
 CDP, strony i usługi WWW), więc gdy shell Termuksa nie potrafi
 czegoś zrobić, właściwym ruchem jest użyć tych szerszych możliwości,
 a NIE odtworzyć namiastkę lokalnie i uznać cel za wykonany.
+
+PRZYKŁADOWA WARTOŚĆ W KODZIE ILUSTRACYJNYM ("+48123456789" i
+podobne) NIGDY nie może polecieć do prawdziwego wywołania —
+jeśli podajesz szkielet kodu z placeholderem typu
+`DEFAULT_NUMBER = "+48123456789"  # podmienić na właściwy numer`,
+to jest instrukcja DLA CZŁOWIEKA/ZESPOŁU, żeby wstawić prawdziwą
+wartość PRZED uruchomieniem — nie gotowe dane do wykonania. Realny
+przypadek (2026-08-30, cel: zadzwoń do Beaty): dokładnie taki
+placeholder trafił bez zmian do `termux-telephony-call
++48123456789` — agent faktycznie zadzwonił na fikcyjny numer
+zamiast na numer prawdziwego rozmówcy. Gdy dajesz kod z
+przykładową wartością, jasno oznacz w swojej odpowiedzi, że MUSI
+ona zostać zastąpiona prawdziwą (np. znalezioną wcześniej przez
+termux-contact-list) PRZED uruchomieniem — nie zakładaj, że ktoś
+się domyśli z samego komentarza w kodzie.
 
 WARTOŚĆ DOMYŚLNA "JEŚLI PUSTE" — NIGDY przez `&&`, zawsze przez `;`
 albo `${VAR:-domyślna}`. Idiom `[ -z "$VAR" ] && VAR=domyślna`
@@ -5476,11 +5491,58 @@ def android_screenshot_ocr(path=None, lang=None):
         )
 
         if result.returncode != 0:
+
+            stderr_text = str(result.stderr or "")
+
+            # Zaobserwowany realny przypadek (2026-08-30): to samo
+            # polecenie z lang="pol" zawiodło TU, nie w gałęzi "brak
+            # tesseract_bin" wyżej — sam tesseract JEST zainstalowany
+            # i uruchomił się, ale zabrakło pliku danych językowych
+            # (pol.traineddata). Poprzednio ta gałąź zwracała goły,
+            # surowy stderr tesseracta ("Failed loading language
+            # 'pol'") bez ŻADNEJ wskazówki, jak to naprawić — mimo że
+            # dokładnie taka wskazówka (curl .../pol.traineddata) już
+            # istniała w kodzie, tylko w NIEWŁAŚCIWEJ gałęzi (tej dla
+            # brakującego binarium tesseract, nie brakującego pakietu
+            # językowego). Wykrywamy ten konkretny przypadek po treści
+            # stderr i dołączamy tę samą, działającą wskazówkę —
+            # uogólnioną na FAKTYCZNIE żądany język, nie tylko polski.
+            if (
+                "failed loading language" in stderr_text.lower()
+                or "error opening data file" in stderr_text.lower()
+            ):
+
+                missing_lang = str(lang or "pol")
+
+                return {
+                    "ok": False,
+                    "error": (
+                        "Brak pliku danych językowych dla tesseract "
+                        "(lang=\"" + missing_lang + "\") — sam "
+                        "tesseract JEST zainstalowany, ale brakuje "
+                        "pakietu językowego. Dla większości języków "
+                        "(w tym polskiego) NIE MA osobnego pakietu w "
+                        "repozytorium Termux — pobierz plik ręcznie: "
+                        "curl -o $PREFIX/share/tessdata/"
+                        + missing_lang + ".traineddata "
+                        "https://raw.githubusercontent.com/"
+                        "tesseract-ocr/tessdata/4.0.0/"
+                        + missing_lang + ".traineddata — "
+                        "albo, jeśli treść na ekranie jest po "
+                        "angielsku/cyframi, wywołaj ponownie BEZ "
+                        "parametru lang (domyślny angielski działa "
+                        "od razu, bez dodatkowego pobierania). "
+                        "Surowy błąd tesseracta: "
+                        + short(stderr_text, 300)
+                    ),
+                    "path": target
+                }
+
             return {
                 "ok": False,
                 "error": (
                     "tesseract zakończył się błędem: "
-                    + short(result.stderr, 500)
+                    + short(stderr_text, 500)
                 ),
                 "path": target
             }
@@ -9071,6 +9133,50 @@ def _detect_contact_list_wrong_schema(command):
     )
 
 
+# Realny log 2026-08-30 (cel "zadzwoń do Beaty przez Bland AI"):
+# ENGINEER dostarczył ILUSTRACYJNY kod z linią
+#   DEFAULT_NUMBER = "+48123456789"   # podmienić na właściwy numer
+# — czyli sam jasno oznaczył tę wartość jako placeholder do
+# zastąpienia. Zamiast go zastąpić prawdziwym numerem (np. z
+# kontaktów przez termux-contact-list), MAIN w NASTĘPNYM kroku
+# wykonał `termux-telephony-call +48123456789` DOSŁOWNIE — czyli
+# agent faktycznie zadzwonił na fikcyjny, przykładowy numer zamiast
+# na numer prawdziwego rozmówcy. "+48123456789"/"123456789" to
+# KANONICZNY placeholder (kolejne cyfry po sobie) używany
+# powszechnie w polskiej dokumentacji jako "przykładowy numer" —
+# nigdy nie jest prawdziwym numerem telefonu. Wykrywamy to
+# statycznie, PRZED wybraniem numeru, zamiast dowiadywać się po
+# fakcie, że agent zadzwonił w próżnię.
+_PLACEHOLDER_PHONE_RE = re.compile(r'(?:\+?\d{1,3})?123456789\d?\b')
+
+
+def _detect_placeholder_phone_target(command):
+
+    command_str = str(command or "")
+
+    if "termux-telephony-call" not in command_str:
+        return None
+
+    if not _PLACEHOLDER_PHONE_RE.search(command_str):
+        return None
+
+    return (
+        "Komenda dzwoni na numer, który wygląda na PRZYKŁADOWY/"
+        "placeholder (kolejne cyfry po sobie, np. \"123456789\") — "
+        "taki wzorzec pojawia się w ilustracyjnym kodzie i "
+        "dokumentacji jako miejsce na 'podmień na właściwy numer', "
+        "NIGDY jako prawdziwy numer telefonu. Zaobserwowany realny "
+        "przypadek: ENGINEER podał przykładowy kod z "
+        "`DEFAULT_NUMBER = \"+48123456789\"  # podmienić na właściwy "
+        "numer`, a MAIN wykonał ten placeholder DOSŁOWNIE, faktycznie "
+        "dzwoniąc na fikcyjny numer zamiast na numer prawdziwego "
+        "rozmówcy. Przed wybraniem numeru sprawdź, czy to NAPRAWDĘ "
+        "numer celu (np. odczytany z kontaktów przez "
+        "termux-contact-list), nie wartość przykładowa skopiowana z "
+        "kodu/dokumentacji."
+    )
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -9146,6 +9252,13 @@ def termux_run(command):
 
             if contact_schema_warning:
                 result["contact_schema_warning"] = contact_schema_warning
+
+            placeholder_phone_warning = _detect_placeholder_phone_target(
+                command_str
+            )
+
+            if placeholder_phone_warning:
+                result["placeholder_phone_warning"] = placeholder_phone_warning
 
         if (
             not result.get("ok")
@@ -9317,6 +9430,11 @@ def termux_run_background(
 
         if contact_schema_warning:
             bg_result["contact_schema_warning"] = contact_schema_warning
+
+        placeholder_phone_warning = _detect_placeholder_phone_target(command)
+
+        if placeholder_phone_warning:
+            bg_result["placeholder_phone_warning"] = placeholder_phone_warning
 
         return bg_result
 
@@ -11718,6 +11836,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "json_parse_warning",
                         "call_audio_warning",
                         "contact_schema_warning",
+                        "placeholder_phone_warning",
                         "stale_warning"
                     ):
 
