@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v187
+AEL-MINI AUTONOMOUS AGENT v189
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v187")
+    print("             AEL-MINI AUTONOMOUS AGENT v189")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2263,7 +2263,18 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                             current_fragment_type = frag_type
 
                 elif isinstance(val, str):
-                    if current_patch_target == "response/status":
+                    # v189 — zaobserwowany realny bug (log 2026-08-30,
+                    # 23:26): odpowiedz Kamila zaczela sie doslownie od
+                    # "FINISHEDCzesc! Rozumiem cel..." — slowo statusu
+                    # WKLEJONE w tresc, bez spacji. Przyczyna: ten
+                    # warunek wymagal DOKLADNEJ rownosci
+                    # "response/status", wiec gdy status przyszedl na
+                    # wariancie sciezki (albo w porcji bez wlasnego "p",
+                    # gdy current_patch_target wskazywal jeszcze
+                    # tresc) — literalne "FINISHED" ladowalo w
+                    # full_text jako tekst roli. Dopasowanie po
+                    # fragmencie "status" lapie wszystkie warianty.
+                    if "status" in current_patch_target:
                         # Dokladnie to pole opendeek zawsze
                         # odrzuca (patrz komentarz nad funkcja) —
                         # tu je przechwytujemy zamiast wyrzucac.
@@ -2293,6 +2304,24 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
         except json.JSONDecodeError:
             continue
+
+    # v189 — siatka bezpieczenstwa na wypadek, gdyby status przeciekl
+    # JESZCZE inna sciezka niz ta zalatana wyzej. Sygnatura jest
+    # jednoznaczna: odpowiedz ZACZYNA sie od slowa-statusu SKLEJONEGO
+    # z tekstem, bez spacji ("FINISHEDCzesc!"). Zaden model tak nie
+    # pisze, wiec obcinamy tylko ten doslowny przypadek — sam
+    # "FINISHED " z normalna spacja albo w srodku zdania zostaje
+    # nietkniety, zeby nigdy nie zjesc prawdziwej tresci.
+    for _leak in ("FINISHED", "ANSWER", "CONTENT"):
+        if (
+            full_text.startswith(_leak)
+            and len(full_text) > len(_leak)
+            and not full_text[len(_leak)].isspace()
+        ):
+            if status_seen is None:
+                status_seen = _leak
+            full_text = full_text[len(_leak):]
+            break
 
     return full_text, status_seen
 
@@ -12125,6 +12154,48 @@ def extract_code_block(text):
     return code if code.strip() else None
 
 
+def _engineer_for_team(text, limit=4000):
+    """
+    Wersja odpowiedzi Bartka pokazywana RESZCIE ZESPOŁU (Tomek, Marek).
+
+    v189 — zaobserwowany realny, kosztowny bug (log 2026-08-30, cel
+    "zadzwoń do Beaty"): Bartek odpowiadał 4370-9040 znaków, czyli
+    ZAWSZE powyżej limitu 4000, więc zespół widział jego wypowiedź
+    uciętą znacznikiem "...[skrócono]...". Tomek i Kamil odczytali ten
+    znacznik jako DOWÓD, że kodu w ogóle nie ma:
+
+        "Skrypt od ENGINEER'a NIGDY nie pojawił się w tej rozmowie
+         — w każdej wiadomości było `……`"
+
+    To była fałszywa diagnoza — Python przez cały czas MIAŁ pełny blok
+    kodu (engineer_full) i poprawnie go wycinał. Zespół spędził na tym
+    urojeniu 4 kroki, kłócąc się o coś, czego nigdy nie było.
+
+    Dlatego: gdy w odpowiedzi JEST blok ```...```, doklejamy twarde,
+    jednoznaczne zdanie — kod istnieje i Python go ma w całości. To
+    fakt sprawdzony w kodzie (regex znalazł blok), nie deklaracja
+    którejkolwiek z ról.
+    """
+
+    text = str(text or "")
+
+    if len(text) <= limit:
+        return text
+
+    trimmed = short(text, limit)
+
+    if extract_code_block(text):
+        trimmed += (
+            "\n\n[FAKT OD PYTHONA: powyższa wypowiedź jest tu skrócona "
+            "do podglądu, ale zawiera kompletny blok kodu ```...``` i "
+            "Python MA GO W CAŁOŚCI — potrafi zapisać go do pliku sam, "
+            "bez niczyjego kopiowania. Nie zgaduj, czy kod istnieje: "
+            "istnieje.]"
+        )
+
+    return trimmed
+
+
 _SHELL_SCRIPT_MARKERS = re.compile(
     r"^#!/|<<\s*['\"]?EOF['\"]?\s*$|^\s*cat\s+>>?\s|\$\(",
     re.MULTILINE
@@ -14349,7 +14420,7 @@ OSTATNI RAPORT:
     return {
         "planner":   short(results.get("PLANNER", ""), 4000),
         "researcher": short(results.get("RESEARCHER", ""), 4000),
-        "engineer":  short(results.get("ENGINEER", ""), 4000),
+        "engineer":  _engineer_for_team(results.get("ENGINEER", "")),
         # Pełna, nieskrócona odpowiedź ENGINEER — NIE
         # trafia do prompta MAIN (żeby nie pompować mu kontekstu),
         # ale run_agent() jej potrzebuje w całości, żeby wyciąć z
@@ -15930,6 +16001,37 @@ def _decision_asks_for_contact_info(decision):
     return bool(_CONTACT_INFO_REQUEST_RE.search(text))
 
 
+# v188 -- zaobserwowany realny bug (log 2026-08-30, cel "zadzwoń do
+# Beaty"): MAIN zwrócił zwykły TASK z treścią "Zapytaj użytkownika o
+# numer telefonu Beaty...". Gemini nie ma ŻADNEGO narzędzia do
+# realnego, przerywającego pytania człowieka w czasie rzeczywistym —
+# jedyne co mógł zrobić, to wypisać pytanie przez `shell`/echo i
+# oznaczyć TASK jako COMPLETED, mimo że nikt nigdy nie odpowiedział.
+# To DOKŁADNIE ten sam błąd, który wcześniej (v148) próbowano naprawić
+# WYŁĄCZNIE narracją w MAIN_PROMPT — narracja zniknęła w v182 (uznana
+# za "naukę z wyprzedzenia bez mechanizmu"), a błąd bez zaskoczenia
+# wrócił naprawdę. Zamiast dokładać tekst z powrotem do promptu,
+# Python SAM wykrywa ten wzorzec w treści "task" i podmienia decyzję
+# na NEED_USER_LOGIN — jedyny mechanizm w tym systemie, który
+# faktycznie ZATRZYMUJE pętlę i czeka na prawdziwy input od człowieka.
+_TASK_IS_USER_QUESTION_RE = re.compile(
+    r"zapytaj\s+(go\s+|j.\s+|użytkownika\s+)?(o\b|,?\s*czy\b)|"
+    r"popro[śs]\s+(użytkownika\s+)?o\s+(podanie|numer|link|url|dane)|"
+    r"poinformuj\s+użytkownika\s+i\s+zapytaj",
+    re.IGNORECASE
+)
+
+
+def _decision_task_is_user_question(decision):
+
+    if str(decision.get("type", "")).upper() != "TASK":
+        return False
+
+    task_text = str(decision.get("task", ""))
+
+    return bool(_TASK_IS_USER_QUESTION_RE.search(task_text))
+
+
 def _mark_contacts_lookup_attempted():
 
     try:
@@ -16801,6 +16903,33 @@ Zwróć tylko JSON.
             # kolejnym kroku.
             _critic_block_streak = 0
 
+        # ------------------------------------------------------
+        # TASK, KTÓRY W ISTOCIE JEST PYTANIEM DO CZŁOWIEKA (v188)
+        # ------------------------------------------------------
+        # Gemini nie ma żadnego narzędzia do realnego, przerywającego
+        # pytania użytkownika — jedyne, co potrafi zrobić z takim
+        # TASK-iem, to wypisać tekst i oznaczyć go COMPLETED, mimo że
+        # nikt nie odpowiedział (patrz _decision_task_is_user_question
+        # wyżej). Podmieniamy na NEED_USER_LOGIN, jedyny mechanizm,
+        # który faktycznie zatrzymuje pętlę i czeka na człowieka.
+        if dtype == "TASK" and _decision_task_is_user_question(decision):
+
+            log(
+                "MAIN",
+                "TASK w istocie proszący użytkownika o dane -> "
+                "podmieniam na NEED_USER_LOGIN (Gemini nie ma jak "
+                "naprawdę zapytać i poczekać na odpowiedź)."
+            )
+
+            decision = {
+                "type": "NEED_USER_LOGIN",
+                "reason": str(decision.get("reason", "")).strip(),
+                "url": "",
+                "instructions": str(decision.get("task", "")).strip()
+            }
+
+            dtype = "NEED_USER_LOGIN"
+
         # Czytelne zdanie zamiast surowego JSON — patrz
         # _main_human_line() i komentarz przy _speak(name, text)
         # w deepseek(). Pokazywane RAZ, tu, dla każdej ostatecznej
@@ -16879,9 +17008,24 @@ Zwróć tylko JSON.
 
                     continue
 
-                target_path = Path(
+                # v188 -- zaobserwowany realny bug (log 2026-08-30,
+                # cel "zadzwoń do Beaty"): MAIN podał gołą, względną
+                # nazwę ("rozmowa_beata.sh"). Path(...).expanduser()
+                # rozwiązuje to względem cwd PROCESU agent.py (czyli
+                # katalogu, z którego uruchomiono `python agent.py`,
+                # np. ~/agent/), a NIE względem $HOME, gdzie operuje
+                # Gemini (termux_run/termux_ls mają cwd=HOME od v178).
+                # Efekt w logu: Python "zapisywał" plik z sukcesem, ale
+                # Gemini pod tą samą, względną nazwą widział "No such
+                # file or directory" -- 3+ kroki zmarnowane na
+                # zgadywanie zupełnie innej przyczyny (obcięta
+                # odpowiedź, brak treści od ENGINEER). Ta sama funkcja
+                # co dla termux_write_file/termux_ls (v178) naprawia
+                # to identycznie: gołe względne ścieżki kotwiczą się
+                # do $HOME.
+                target_path = _resolve_home_relative_path(
                     write_target
-                ).expanduser()
+                )
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: blok kodu może być SKRYPTEM DO
