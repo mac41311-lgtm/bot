@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v177
+AEL-MINI AUTONOMOUS AGENT v178
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v177")
+    print("             AEL-MINI AUTONOMOUS AGENT v178")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2461,6 +2461,15 @@ przykładową wartością, jasno oznacz w swojej odpowiedzi, że MUSI
 ona zostać zastąpiona prawdziwą (np. znalezioną wcześniej przez
 termux-contact-list) PRZED uruchomieniem — nie zakładaj, że ktoś
 się domyśli z samego komentarza w kodzie.
+
+GOŁA WZGLĘDNA NAZWA PLIKU (np. `open("plik.txt", "w")` albo
+`echo x > plik.txt`, BEZ `~/` ani `/`) w KAŻDYM poleceniu powłoki
+zawsze ląduje w katalogu domowym `~` — niezależnie od tego, skąd
+faktycznie wystartował sam program agenta. Możesz na to polegać, ale
+lepiej i tak pisz pełną ścieżkę (`~/plik.txt`) w skryptach, które
+inna rola/krok będzie potem odczytywać przez `termux_read_file` czy
+`termux_file_exists` — jednoznaczna ścieżka eliminuje ryzyko pomyłki
+przy odczycie w kolejnym kroku.
 
 WARTOŚĆ DOMYŚLNA "JEŚLI PUSTE" — NIGDY przez `&&`, zawsze przez `;`
 albo `${VAR:-domyślna}`. Idiom `[ -z "$VAR" ] && VAR=domyślna`
@@ -6270,13 +6279,31 @@ def execute_shell(command, timeout=None):
 
     try:
 
+        # BEZ `cwd=` TU: subprocess dziedziczy katalog roboczy PROCESU
+        # agent.py — czyli tam, skąd użytkownik uruchomił `python
+        # agent.py` (np. `~/agent`, jeśli stamtąd odpalił skrypt), a
+        # NIE koniecznie `~`. Zaobserwowany realny bug (log
+        # 2026-08-30): skrypt napisał `open('plik.txt', 'w')` (goła,
+        # względna nazwa — bez `~/`) i faktycznie zapisał plik, ale
+        # POD ~/agent/plik.txt, nie ~/plik.txt. Kolejny krok próbował
+        # go odczytać przez `termux_read_file("~/plik.txt")` (zespół
+        # zakłada, że "goła nazwa pliku" = katalog domowy) i dostał
+        # "Plik nie istnieje" — mimo że plik fizycznie ISTNIAŁ, tylko
+        # gdzie indziej. Zespół stracił kilka kroków, próbując
+        # "znaleźć" dane, które od początku były na dysku. Pinujemy
+        # katalog roboczy WPROST na `~`, żeby goła względna nazwa
+        # pliku w KAŻDYM poleceniu powłoki (termux_run) zawsze
+        # lądowała tam, gdzie zespół i tak zakłada — niezależnie od
+        # tego, z jakiego katalogu faktycznie wystartował sam
+        # agent.py.
         result = subprocess.run(
             command,
             shell=True,
             executable=_SHELL_EXECUTABLE,
             capture_output=True,
             text=True,
-            timeout=effective_timeout
+            timeout=effective_timeout,
+            cwd=str(HOME)
         )
 
         return {
@@ -8454,7 +8481,7 @@ def gemini_tools():
     return result
 def termux_mkdir(path):
     try:
-        p = Path(str(path)).expanduser()
+        p = _resolve_home_relative_path(path)
         p.mkdir(parents=True, exist_ok=True)
         _track_project_path(p)
         return {
@@ -8468,9 +8495,27 @@ def termux_mkdir(path):
         }
 
 
+# Ta sama zasada co w execute_shell/termux_run_background (patrz
+# komentarz tam): goła WZGLĘDNA ścieżka (bez `~/`, bez wiodącego `/`)
+# musi lądować w katalogu domowym `~`, a NIE w katalogu, z którego
+# faktycznie wystartował proces agent.py — inaczej termux_write_file
+# i termux_read_file mogłyby się "mijać" tak samo, jak minął się
+# skrypt powłoki z tym narzędziem w realnym logu 2026-08-30. `.`
+# (wartość domyślna np. dla termux_ls) traktujemy jako `~` z tego
+# samego powodu.
+def _resolve_home_relative_path(path):
+
+    p = Path(str(path or ".")).expanduser()
+
+    if not p.is_absolute():
+        p = HOME / p
+
+    return p
+
+
 def termux_ls(path="."):
     try:
-        p = Path(str(path or ".")).expanduser()
+        p = _resolve_home_relative_path(path)
 
         if not p.exists():
             return {
@@ -8527,7 +8572,7 @@ def termux_write_file(path, content, append=False):
     """
 
     try:
-        p = Path(str(path)).expanduser()
+        p = _resolve_home_relative_path(path)
 
         p.parent.mkdir(
             parents=True,
@@ -8712,7 +8757,7 @@ _SESSION_STARTED_AT = time.time()
 
 def termux_read_file(path, max_bytes=20000):
     try:
-        p = Path(str(path)).expanduser()
+        p = _resolve_home_relative_path(path)
 
         if not p.exists():
             return {
@@ -9332,7 +9377,14 @@ def termux_run_background(
                     "blocked_by_safety_gate": True
                 }
 
-        cwd = None
+        # Domyślnie `~`, ta sama zasada co w execute_shell (patrz
+        # komentarz tam) — bez tego goła względna nazwa pliku w
+        # komendzie uruchomionej w tle lądowałaby w katalogu, z
+        # którego wystartował sam proces agent.py, a nie tam, gdzie
+        # zespół (i termux_read_file/termux_write_file na gołej
+        # nazwie) się jej spodziewa. `workdir`, jeśli podany, nadal
+        # ma pierwszeństwo.
+        cwd = str(HOME)
 
         if workdir:
             cwd = str(
@@ -9609,7 +9661,7 @@ def termux_delete(path):
             "error": "Pusta ścieżka."
         }
 
-    target = Path(path).expanduser()
+    target = _resolve_home_relative_path(path)
 
     if not target.exists():
         return {
@@ -9784,7 +9836,7 @@ def termux_patch_file(path, search, replace):
             "error": "Pusta ścieżka."
         }
 
-    target = Path(path).expanduser()
+    target = _resolve_home_relative_path(path)
 
     if not target.exists():
         return {
