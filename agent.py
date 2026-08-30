@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v182
+AEL-MINI AUTONOMOUS AGENT v183
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v182")
+    print("             AEL-MINI AUTONOMOUS AGENT v183")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2571,7 +2571,28 @@ def deepseek(name, message):
                 # Podgląd początku KAŻDEJ odpowiedzi wprost w logu
                 # terminala rozstrzyga to ostatecznie, bez kolejnej
                 # rundy ręcznego kopiowania z chat.deepseek.com.
-                _speak(name, text)
+                #
+                # WYJĄTEK — MAIN (na wyraźne pytanie użytkownika,
+                # 2026-08-30, "czy musi być ten jonson"): MAIN, w
+                # odróżnieniu od każdej innej roli, zwraca goły JSON,
+                # nie ludzką prozę — pokazywanie go w tej samej
+                # ramce "rozmowy zespołu" wyświetlało surowy JSON
+                # jako wypowiedź MAIN-a. Kompaktowy log zostaje (do
+                # wklejania/debugowania), ale czytelne zdanie widoczne
+                # jako "MAIN — decyzja" buduje run_agent() z JUŻ
+                # SPARSOWANYCH pól (task/reason/...), patrz
+                # _main_human_line() — sam kontrakt JSON między MAIN
+                # a Pythonem się nie zmienia, znika tylko jego
+                # surowy podgląd w terminalu.
+                if name == "MAIN":
+                    log(
+                        "DEEPSEEK",
+                        name + ": " + str(len(text)) + " znaków "
+                        "(JSON — czytelna decyzja pojawi się "
+                        "osobno)."
+                    )
+                else:
+                    _speak(name, text)
 
                 health = _get_health(_account_of(name))
                 health["consecutive_failures"] = 0
@@ -14254,6 +14275,35 @@ _MAIN_ASK_ALLOWED_ROLES = (
 )
 
 
+def _main_human_line(decision, dtype):
+    """
+    Buduje JEDNO czytelne zdanie z JUŻ SPARSOWANEJ decyzji MAIN —
+    do pokazania człowiekowi zamiast surowego JSON (patrz komentarz
+    przy _speak(name, text) w deepseek()). Nie zmienia kontraktu
+    JSON między MAIN a Pythonem, tylko to, co widać w terminalu.
+    """
+
+    reason = str(decision.get("reason", "")).strip()
+
+    if dtype == "TASK":
+        task_text = str(decision.get("task", "")).strip()
+        return task_text or reason or "(brak treści zadania)"
+
+    if dtype == "DONE":
+        return ("Gotowe — " + reason) if reason else "Gotowe."
+
+    if dtype == "FAILED":
+        return ("Nie da się tego zrobić — " + reason) if reason else (
+            "Nie da się tego zrobić."
+        )
+
+    if dtype == "NEED_USER_LOGIN":
+        instructions = str(decision.get("instructions", "")).strip()
+        return instructions or reason or "Potrzebna Twoja pomoc."
+
+    return reason or (dtype or "(brak decyzji)")
+
+
 def main_decide(
     goal,
     step,
@@ -16606,6 +16656,13 @@ Zwróć tylko JSON.
                 ).upper()
 
                 signatures = []
+
+        # Czytelne zdanie zamiast surowego JSON — patrz
+        # _main_human_line() i komentarz przy _speak(name, text)
+        # w deepseek(). Pokazywane RAZ, tu, dla każdej ostatecznej
+        # decyzji (TASK/DONE/FAILED/NEED_USER_LOGIN) — ASK ma już
+        # własny, czytelny log w _handle_main_ask().
+        _speak("MAIN", _main_human_line(decision, dtype))
 
         # ------------------------------------------------------
         # TASK
