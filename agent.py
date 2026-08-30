@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v179
+AEL-MINI AUTONOMOUS AGENT v180
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v179")
+    print("             AEL-MINI AUTONOMOUS AGENT v180")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15729,6 +15729,16 @@ ZASADY DECYZJI:
   słownie w "task". Nie jest to opcja do rozważenia. Wtedy "task"
   dotyczy TYLKO uruchomienia/testowania już zapisanego pliku, nie
   jego tworzenia (patrz pełny opis w Twoim prompcie systemowym).
+- "task" TRAFIA BEZPOŚREDNIO DO GEMINI, które traktuje je jako
+  wiadomość od człowieka — napisz je Twoimi słowami, jakbyś Ty
+  sam/sama prosił/a kogoś o zrobienie tego, NIE jako kopię
+  wewnętrznej notatki zespołu. Zaobserwowany realny wzorzec: ENGINEER
+  odpowiada nagłówkami w stylu "KONKRETNY KROK (dla Gemini):" albo
+  "Wklej w Termux cały ten blok" — to zapis DLA ZESPOŁU, nie treść do
+  przeklejenia. Wyciągnij z tego SEDNO polecenia, nie format. Jedyny
+  wyjątek: gotowy blok kodu/komend (```...```) przepisz DOKŁADNIE bez
+  zmian — zmienia się narracja wokół niego, nie sama treść do
+  wykonania.
 
 Zwróć WYŁĄCZNIE JSON.
 
