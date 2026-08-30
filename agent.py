@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v184
+AEL-MINI AUTONOMOUS AGENT v185
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v184")
+    print("             AEL-MINI AUTONOMOUS AGENT v185")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3290,6 +3290,24 @@ _ANDROID_CLICK_TEXT_SYNONYMS = {
 }
 
 
+# v185 — zaobserwowany realny bug (log 2026-08-30): Gemini szukał
+# "Zobacz 1 kartę", element FAKTYCZNIE istniał na ekranie (widoczny
+# w clickable_nearby), ale dopasowanie zawodziło — prawdziwa etykieta
+# Chrome ma twardą spację (U+00A0) między "1" a "kartę", a szukany
+# tekst zwykłą spację (U+0020). Wizualnie identyczne, bajt-w-bajt
+# różne, więc `node_text == target` i `target in node_text` zawsze
+# zawodziły. Normalizacja białych znaków przed porównaniem naprawia
+# to (i inne warianty spacji) raz na zawsze, bez zgadywania konkretnej
+# etykiety z wyprzedzeniem w prompcie.
+_CLICK_TEXT_WHITESPACE_RE = re.compile(
+    "[\\s\u00a0\u2000-\u200a\u202f\u3000]+"
+)
+
+
+def _normalize_click_text(s):
+    return _CLICK_TEXT_WHITESPACE_RE.sub(" ", str(s or "")).strip()
+
+
 def android_click_text(text):
     """
     Inteligentne kliknięcie elementu Android — próbuje podanego
@@ -3498,11 +3516,20 @@ def _android_click_single_text(text):
                 seen_candidates.add(candidate_label)
                 clickable_candidates.append(candidate_label)
 
+            # v185: porównanie na ZNORMALIZOWANYCH białych znakach
+            # (patrz _normalize_click_text) — inaczej wizualnie
+            # identyczny tekst z twardą spacją (U+00A0) zamiast
+            # zwykłej nigdy nie pasuje, mimo że jest dokładnie tym,
+            # czego szukamy (patrz komentarz przy definicji funkcji).
+            norm_target = _normalize_click_text(target)
+            norm_node_text = _normalize_click_text(node_text)
+            norm_node_desc = _normalize_click_text(node_desc)
+
             matched = (
-                node_text == target
-                or node_desc == target
-                or target in node_text
-                or target in node_desc
+                norm_node_text == norm_target
+                or norm_node_desc == norm_target
+                or norm_target in norm_node_text
+                or norm_target in norm_node_desc
             )
 
             if not matched:
@@ -3690,11 +3717,20 @@ def android_long_click_text(text):
                 seen_texts.add(candidate_label)
                 visible_texts_nearby.append(candidate_label)
 
+            # v185: porównanie na ZNORMALIZOWANYCH białych znakach
+            # (patrz _normalize_click_text) — inaczej wizualnie
+            # identyczny tekst z twardą spacją (U+00A0) zamiast
+            # zwykłej nigdy nie pasuje, mimo że jest dokładnie tym,
+            # czego szukamy (patrz komentarz przy definicji funkcji).
+            norm_target = _normalize_click_text(target)
+            norm_node_text = _normalize_click_text(node_text)
+            norm_node_desc = _normalize_click_text(node_desc)
+
             matched = (
-                node_text == target
-                or node_desc == target
-                or target in node_text
-                or target in node_desc
+                norm_node_text == norm_target
+                or norm_node_desc == norm_target
+                or norm_target in norm_node_text
+                or norm_target in norm_node_desc
             )
 
             if not matched:
@@ -6064,6 +6100,66 @@ def chrome_type(
 # karty (z prawdziwymi ciasteczkami sesji), zamiast pisać taki kod
 # do pliku, którego i tak nic nie uruchomi.
 
+def _detect_empty_js_fields(value):
+    """
+    v185 — zaobserwowany realny problem (log 2026-08-30, cel "Neat"):
+    zespół wielokrotnie zakładał, że na stronie istnieją pola "host"/
+    "input_area", mimo że chrome_execute_js WPROST zwrócił dla nich
+    identyczną wartość-zaślepkę ("BRAK") dla obu — czyli selektor JS
+    nie trafił w ŻADEN prawdziwy element. To nie zostało wystarczająco
+    mocno podkreślone: informacja utonęła w kolejnych akapitach prozy
+    i zespół zrobił jeszcze jedną pełną rundę tej samej hipotezy.
+
+    Nie zgadujemy KONKRETNEGO słowa-zaślepki (mogło być "BRAK", "null",
+    "N/A", cokolwiek — to zależy od JS, które napisał zespół) — zamiast
+    tego wykrywamy WZORZEC: kilka RÓŻNIE nazwanych kluczy zwraca
+    IDENTYCZNĄ, krótką wartość (albo puste/None). To silny sygnał
+    "selektor nic nie znalazł", niezależnie od użytego słowa.
+    Ignorujemy długie wartości (np. treść strony) — to zwykle
+    faktycznie pobrana treść, nie zaślepka.
+    """
+
+    if not isinstance(value, dict) or len(value) < 2:
+        return None
+
+    sentinel_like = {}
+
+    for key, val in value.items():
+        if val is None:
+            sentinel_like[key] = ""
+        elif isinstance(val, str) and len(val) <= 20:
+            sentinel_like[key] = val
+
+    if len(sentinel_like) < 2:
+        return None
+
+    counts = {}
+    for val in sentinel_like.values():
+        counts[val] = counts.get(val, 0) + 1
+
+    repeated_value, repeated_count = max(
+        counts.items(), key=lambda item: item[1]
+    )
+
+    if repeated_count < 2:
+        return None
+
+    repeated_keys = [
+        k for k, v in sentinel_like.items() if v == repeated_value
+    ]
+
+    return (
+        "UWAGA: pola " + ", ".join(repeated_keys) + " zwrócone przez "
+        "ten skrypt JS mają IDENTYCZNĄ, pustą/zaślepkową wartość ("
+        + repr(repeated_value) + ") — to silny sygnał, że selektor "
+        "nie trafił w ŻADEN prawdziwy element na tej stronie, a NIE że "
+        "dane akurat są puste. Nie zakładaj dalej, że te konkretne pola "
+        "istnieją na tym ekranie — sprawdź inny adres/kartę, albo "
+        "poproś o inny, niezależny dowód, zamiast ponawiać tę samą "
+        "hipotezę."
+    )
+
+
 def chrome_execute_js(
     javascript,
     tab_id=None,
@@ -6114,10 +6210,17 @@ def chrome_execute_js(
     ):
         return result
 
-    return {
+    dom_fields_warning = _detect_empty_js_fields(result)
+
+    final = {
         "ok": True,
         "value": result
     }
+
+    if dom_fields_warning:
+        final["dom_fields_warning"] = dom_fields_warning
+
+    return final
 
 
 # ============================================================
@@ -10643,6 +10746,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "call_audio_warning",
                         "contact_schema_warning",
                         "placeholder_phone_warning",
+                        "dom_fields_warning",
                         "stale_warning"
                     ):
 
@@ -13095,6 +13199,17 @@ _critic_block_streak = 0
 
 # Po ilu zastrzeżeniach Z RZĘDU MAIN dostaje tę notatkę.
 CRITIC_STREAK_ESCALATION = 3
+
+# v185 (na wyraźną prośbę użytkownika, 2026-08-30: "musimy system
+# zmieniać, nie prompty" — realny log pokazał Marka blokującego 5-6
+# razy z rzędu ten sam, niepotwierdzony domysł, a CRITIC_STREAK_
+# ESCALATION to WYŁĄCZNIE notatka w prompcie MAIN-a, którą MAIN mógł
+# (i robił) zbyć jednym zdaniem i jechać dalej z tym samym planem).
+# Po tylu zastrzeżeniach Z RZĘDU Python PRZESTAJE prosić MAIN-a ładnie
+# i SAM wymusza NEED_USER_LOGIN — realną pauzę do człowieka zamiast
+# kolejnej rundy tego samego zgadywania. Wyżej niż ESCALATION, żeby
+# MAIN dostał najpierw szansę się poprawić.
+CRITIC_STREAK_HARD_STOP = 6
 
 
 def _condense_last_result_for_team(last_result, limit=2500):
@@ -16216,6 +16331,8 @@ def _handle_need_user_login(decision):
 
 def run_agent(goal):
 
+    global _critic_block_streak
+
     # Zapamiętujemy cel NA DYSKU. Jeśli sesja zostanie przerwana
     # (Ctrl+C, awaria) zanim padnie DONE albo ostateczne FAILED,
     # main() przy kolejnym starcie zaproponuje jej wznowienie
@@ -16617,6 +16734,55 @@ Zwróć tylko JSON.
                 ).upper()
 
                 signatures = []
+
+        # ------------------------------------------------------
+        # TWARDY STOP PO SERII BLOKAD MARKA (v185)
+        # ------------------------------------------------------
+        # Zaobserwowany realny problem (log 2026-08-30, cel "Neat"):
+        # CRITIC zablokował ten sam, niepotwierdzony domysł 5-6 razy
+        # z rzędu, a CRITIC_STREAK_ESCALATION (notatka w prompcie
+        # MAIN-a, patrz main_decide()) nie miała żadnej mocy — MAIN
+        # zbywał ją jednym zdaniem i jechał dalej z tym samym planem.
+        # Zamiast kolejnej prośby w tekście, Python SAM przejmuje
+        # decyzję: DONE/FAILED/NEED_USER_LOGIN i tak kończą krążenie,
+        # więc nadpisujemy tylko żywy TASK/ASK.
+        if (
+            _critic_block_streak >= CRITIC_STREAK_HARD_STOP
+            and dtype not in ("DONE", "FAILED", "NEED_USER_LOGIN")
+        ):
+
+            log(
+                "MAIN",
+                "TWARDY STOP: Marek zablokował "
+                + str(_critic_block_streak)
+                + " razy z rzędu bez przełamania — Python wymusza "
+                "pytanie do użytkownika zamiast kolejnego TASK."
+            )
+
+            decision = {
+                "type": "NEED_USER_LOGIN",
+                "reason": (
+                    "Marek (ocena zespołu) zablokował plan "
+                    + str(_critic_block_streak)
+                    + " razy z rzędu z tego samego powodu — zespół "
+                    "sam nie potrafi dalej ustalić faktów."
+                ),
+                "url": "",
+                "instructions": (
+                    "Zespół utknął w pętli. Ostatnie zastrzeżenie "
+                    "Marka:\n\n"
+                    + short(team.get("critic", ""), 1200)
+                    + "\n\nOdpowiedz na to wprost (co jest prawdą, "
+                    "czego brakuje), żeby zespół mógł ruszyć dalej."
+                )
+            }
+
+            dtype = "NEED_USER_LOGIN"
+
+            # Reset — po wymuszonej eskalacji zespół dostaje czysty
+            # start, zamiast natychmiast wpadać w tę samą blokadę na
+            # kolejnym kroku.
+            _critic_block_streak = 0
 
         # Czytelne zdanie zamiast surowego JSON — patrz
         # _main_human_line() i komentarz przy _speak(name, text)
