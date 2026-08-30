@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v183
+AEL-MINI AUTONOMOUS AGENT v184
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v183")
+    print("             AEL-MINI AUTONOMOUS AGENT v184")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13793,57 +13793,18 @@ OSTATNI RAPORT:
         + "\n"
     )
 
-    # Krótkie przypomnienie roli DOPISANE DO WIADOMOŚCI (nie tylko
-    # do stałego system_prompt sesji) — użytkownik prosił wprost,
-    # żeby każda rola wiedziała, że ma INNĄ rolę niż pozostałe, nie
-    # tylko dostawała identyczny zrzut faktów.
-    # UWAGA (zaobserwowany realny problem, 2026-08-27): system_prompt
-    # każdej roli od v116 zaczyna się od ludzkiego imienia ("Nazywasz
-    # się Tomek..."), ale to przypomnienie roli — DOKLEJANE DO KAŻDEJ
-    # WIADOMOŚCI, nie tylko do system_prompt — nadal używało sztywnej,
-    # mechanicznej etykiety ("TWOJA ROLA: PLANNER", "to CRITIC" itd.).
-    # Efekt: cała "ludzka" ramka wracała tylnymi drzwiami na każdym
-    # kroku. Poprawiono, żeby konsekwentnie używać imion wszędzie.
-    _ROLE_FOCUS_REMINDER = {
-        "RESEARCHER": (
-            "Tu Kamil. Szukaj w sieci KONKRETNEJ "
-            "przyczyny/rozwiązania problemu poniżej. Nie planuj "
-            "kolejnego kroku (to Tomek) i nie oceniaj planu (to "
-            "Marek)."
-        ),
-        "PLANNER": (
-            "Tu Tomek. Zaproponuj JEDEN konkretny "
-            "następny krok na podstawie stanu i ustaleń Kamila "
-            "poniżej. Nie szukaj w sieci (to Kamil) i nie "
-            "oceniaj własnego planu (to Marek)."
-        ),
-        "BROWSER": (
-            "Tu Ola. Oceń WYŁĄCZNIE stan przeglądarki "
-            "Chrome poniżej — czy karty/adresy mają sens względem "
-            "celu. Nie komentuj stanu Androida ani nie planuj "
-            "kroków spoza przeglądarki."
-        ),
-        "ENGINEER": (
-            "Tu Bartek. Dostarcz konkretny "
-            "kod/rozwiązanie techniczne na podstawie planu Tomka "
-            "i ustaleń Kamila poniżej."
-        ),
-        "CRITIC": (
-            "Tu Marek. Oceń KRYTYCZNIE plan Tomka "
-            "poniżej (ryzyka, błędy, brakujące dowody) na podstawie "
-            "STANU FAKTYCZNEGO/checklisty powyżej — nie twórz "
-            "nowego planu od zera. Surowego zrzutu ekranu Chrome/"
-            "Androida celowo NIE dostajesz — Tomek już go użył do "
-            "ułożenia planu poniżej; Twoja praca to ocena LOGIKI i "
-            "DOWODÓW, nie ponowne odczytywanie ekranu."
-        ),
-    }
-
+    # v184 (na wyraźną prośbę użytkownika, 2026-08-30): usunięte
+    # przypomnienie roli doklejane do KAŻDEJ wiadomości ("Tu Tomek.
+    # Zaproponuj JEDEN krok..."). Użytkownik: "jak ja Tobie piszę
+    # pytania, Ty po prostu odpowiadasz — tak samo chcę, żeby im
+    # zadawać pytania, bez przypominania roli". Każda rola i tak ma
+    # swoją tożsamość ustawioną RAZ, na starcie sesji (system_prompt:
+    # "Nazywasz się Tomek..."), więc powtarzanie jej przy każdym
+    # pytaniu było zbędnym spamem starymi informacjami. core_context
+    # (CEL/checklist/OSTATNI RAPORT) zostaje — to są fakty, nie
+    # przypomnienie tożsamości.
     def _team_context(role_name, include_chrome=False, include_android=False, extra=""):
-        pieces = [
-            _ROLE_FOCUS_REMINDER.get(role_name, ""),
-            core_context
-        ]
+        pieces = [core_context]
         if include_chrome:
             pieces.append(chrome_block)
         if include_android:
