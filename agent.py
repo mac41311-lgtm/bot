@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v180
+AEL-MINI AUTONOMOUS AGENT v181
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v180")
+    print("             AEL-MINI AUTONOMOUS AGENT v181")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13912,6 +13912,33 @@ def researcher_web_search(
     # PRZEKAZANIE WYNIKU DO TEJ SAMEJ SESJI RESEARCHER
     # ========================================================
 
+    # WEB_FETCH ma znany, w pełni kontrolowany kształt (ok/url/
+    # title/text albo ok/url/error) — podajemy go Kamilowi jako
+    # zwykły opis strony, nie jako `{"ok": true, "url": "...", ...}`
+    # z cudzysłowami i wcięciami. WEB_SEARCH zostaje surowym JSON-em
+    # CELOWO: jego kształt pochodzi z zewnętrznego modułu
+    # `web_search`, którego dokładnych nazw pól (title/url/snippet
+    # czy inaczej) nie kontrolujemy — zgadywanie ich groziłoby
+    # cichym gubieniem wyników, gorszym niż surowy, ale kompletny
+    # zrzut.
+    if fetch_match:
+        if action_data.get("ok"):
+            result_block = (
+                "Tytuł strony: " + str(action_data.get("title") or "(brak)")
+                + "\nAdres (po przekierowaniach): " + str(action_data.get("url", query))
+                + "\nTreść:\n" + str(action_data.get("text", ""))
+            )
+        else:
+            result_block = "Nie udało się pobrać strony: " + str(
+                action_data.get("error", "nieznany błąd")
+            )
+    else:
+        result_block = json.dumps(
+            action_data,
+            ensure_ascii=False,
+            indent=2
+        )
+
     followup = f"""
 {action} RESULT.
 
@@ -13926,11 +13953,7 @@ Przeanalizuj WYŁĄCZNIE poniższy wynik.
 {query}
 
 RESULT:
-{json.dumps(
-    action_data,
-    ensure_ascii=False,
-    indent=2
-)}
+{result_block}
 
 ORYGINALNY KONTEKST:
 {short(original_context, 5000)}
