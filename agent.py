@@ -2109,6 +2109,23 @@ _TRUNCATION_STATUS_HINTS = (
     "trunc", "length", "limit", "incomplete", "cut", "max_token",
 )
 
+# v190 — eksperyment z action="continue" jest, jak mówi komentarz
+# wyżej, ZGADYWANĄ wartością pola. Produkcja zdążyła go już
+# rozstrzygnąć: w realnych logach (2026-08-30) KAŻDA próba kończyła
+# się tym samym błędem serwera (422 Unprocessable Entity), bez ani
+# jednego sukcesu. Mimo to kod próbował od nowa przy każdej uciętej
+# odpowiedzi, a każda taka próba to PRAWDZIWE, dodatkowe żądanie do
+# DeepSeeka — dokładnie to, czego mamy unikać (darmowa sesja
+# przeglądarkowa, realne ryzyko zablokowania konta). Płaciliśmy więc
+# żądaniami za hipotezę, która została już obalona.
+#
+# Nie usuwamy mechanizmu (gdyby DeepSeek kiedyś to wsparł, wróci sam
+# przy następnym uruchomieniu) — ale po PIERWSZEJ nieudanej próbie w
+# danym procesie przestajemy go ponawiać. Jedna próba na uruchomienie
+# wystarczy, żeby się dowiedzieć; kolejne kilkanaście tylko pali
+# limit.
+_continue_action_supported = True
+
 
 def _deepseek_raw_post_with_action(session, prompt, action):
 
@@ -2405,6 +2422,8 @@ def deepseek(name, message):
     za normalną odpowiedź.
     """
 
+    global _continue_action_supported
+
     _deepseek_circuit_wait(name)
 
     lock = _get_session_lock(name)
@@ -2494,7 +2513,22 @@ def deepseek(name, message):
                     text, status
                 )
 
-                if truncated:
+                if truncated and not _continue_action_supported:
+
+                    # v190: już wiemy z TEJ sesji, że serwer tego nie
+                    # przyjmuje (patrz _continue_action_supported).
+                    # Nie palimy kolejnego żądania na obaloną
+                    # hipotezę — mówimy tylko, co się dzieje.
+                    log(
+                        "DEEPSEEK",
+                        name + ": odpowiedz wyglada na ucieta ("
+                        + str(reason) + "). Nie probuje juz "
+                        "action='continue' — serwer odrzucil to "
+                        "wczesniej w tym uruchomieniu, a kazda proba "
+                        "to dodatkowe zadanie do DeepSeeka."
+                    )
+
+                elif truncated:
 
                     log(
                         "DEEPSEEK",
@@ -2539,13 +2573,22 @@ def deepseek(name, message):
                             )
 
                     except Exception as continue_error:
+
+                        # v190: pierwsza nieudana proba w tym
+                        # uruchomieniu wylacza mechanizm do konca
+                        # procesu — patrz _continue_action_supported.
+                        _continue_action_supported = False
+
                         log(
                             "DEEPSEEK",
                             name + ": EKSPERYMENT — probe "
                             "'continue' zakonczyl blad ("
                             + str(continue_error) + "), zostaje "
                             "oryginalna (mozliwe ze ucieta) "
-                            "odpowiedz."
+                            "odpowiedz. Wylaczam te probe do konca "
+                            "tego uruchomienia, zeby nie palic "
+                            "kolejnych zadan do DeepSeeka na cos, "
+                            "czego serwer nie przyjmuje."
                         )
 
                 if not text:
