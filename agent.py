@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v191
+AEL-MINI AUTONOMOUS AGENT v192
 
 ARCHITEKTURA:
 
@@ -897,6 +897,27 @@ def _speak(role, text, preview_chars=400):
         log("DEEPSEEK", f"{role}: " + body.replace("\n", " "))
 
 
+# v192 -- zaobserwowany realny, kosztowny bug (log 2026-09-04, cel
+# "zrob interakcje glosowa, zadzwon do Beaty"). MAIN kazal zapisac
+# skrypt do "~/zadzwon_do_beaty.sh". Ta tresc zadania trafila do
+# checklisty przez short(task, 100) -- a 100. znak wypada DOKLADNIE
+# w srodku sciezki:
+#
+#   "...do pliku ~/zad" + "\n...[skrócono]..."
+#
+# Znacznik obciecia wyladowal w NOWEJ LINII, wiec "~/zad" wygladalo
+# jak kompletna, poprawna nazwa pliku. Zespol przeczytal to jako
+# fakt: Marek nazwal to wprost "zweryfikowanym dowodem, ze skrypt
+# zostal zapisany do ~/zad", MAIN zlecil `cat ~/zad`, Gemini
+# zwrocilo "Plik nie istnieje" i caly krok poszedl w kosz.
+#
+# Ucinanie W SRODKU slowa nie produkuje informacji niepelnej --
+# produkuje informacje FALSZYWA, ktora wyglada na kompletna. Tniemy
+# wiec na granicy bialego znaku, a gdy jej nie ma w poblizu (jeden
+# dlugi token), mowimy wprost, ze ostatnie slowo jest urwane.
+_SHORT_BOUNDARY_LOOKBACK = 60
+
+
 def short(value, limit=1000):
 
     if value is None:
@@ -907,9 +928,31 @@ def short(value, limit=1000):
     if len(value) <= limit:
         return value
 
+    cut = value[:limit]
+
+    boundary = max(
+        cut.rfind(" "),
+        cut.rfind("\n"),
+        cut.rfind("\t"),
+    )
+
+    if boundary >= limit - _SHORT_BOUNDARY_LOOKBACK and boundary > 0:
+        # Udalo sie cofnac do granicy slowa -- nic nie jest urwane
+        # w polowie, wiec zaden fragment nie udaje calosci.
+        return (
+            cut[:boundary].rstrip()
+            + "\n...[skrócono]..."
+        )
+
+    # Jeden bardzo dlugi token (np. base64, dluga sciezka bez spacji)
+    # -- nie da sie cofnac sensownie, wiec OSTRZEGAMY WPROST, ze
+    # ostatnie slowo jest niepelne. Bez tego czytajacy nie ma jak
+    # tego poznac.
     return (
-        value[:limit]
-        + "\n...[skrócono]..."
+        cut
+        + "\n...[skrócono — UWAGA: ostatnie słowo powyżej jest "
+        "URWANE W POŁOWIE, nie traktuj go jako pełnej nazwy/"
+        "ścieżki]..."
     )
 
 
@@ -1219,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v191")
+    print("             AEL-MINI AUTONOMOUS AGENT v192")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10395,6 +10438,69 @@ def _shell_exit_1_may_be_benign(tool_name, result):
     return bool(_BENIGN_NONZERO_EXIT_COMMAND_RE.search(command))
 
 
+# v192 -- zaobserwowany realny bug (log 2026-09-04). Zespol chcial
+# sprawdzic, czy pliki juz istnieja, wiec Gemini wykonalo:
+#
+#   ls -la ~/.retell_creds ~/call_progress.log
+#
+# Pliki nie istnialy, wiec `ls` zwrocilo kod 2 i napisalo na stderr
+# "No such file or directory". To jest DOKLADNIE TA ODPOWIEDZ, o
+# ktora pytano -- ale Python potraktowal to jako GEMINI_TOOL_ERROR,
+# przerwal zadanie i wyslal MAIN-a sciezka "narzedzie sie zepsulo,
+# zmien podejscie". Caly krok poszedl w kosz na pytanie, na ktore
+# odpowiedz FAKTYCZNIE zostala udzielona.
+#
+# `ls`/`stat`/`test`/`cat`, ktore koncza sie wylacznie komunikatem
+# "nie ma takiego pliku", nie sa awaria narzedzia -- sa negatywna
+# odpowiedzia. Rozne od _shell_exit_1_may_be_benign(), ktore wymaga
+# kodu 1 i PUSTEGO stderr.
+_FILE_PROBE_COMMAND_RE = re.compile(
+    r"\b(ls|stat|test|cat|head|tail|readlink|file)\b"
+)
+
+_NO_SUCH_FILE_RE = re.compile(
+    r"no such file or directory|nie ma takiego pliku",
+    re.IGNORECASE
+)
+
+
+def _shell_failure_is_just_missing_file(tool_name, result):
+    """
+    Czy niezerowy kod wyjscia to w istocie ODPOWIEDZ "tego pliku nie
+    ma", a nie awaria narzedzia?
+
+    Wymagamy, zeby KAZDA niepusta linia stderr mowila o braku pliku
+    -- jesli obok jest jakikolwiek inny blad (brak uprawnien, zly
+    argument), to juz nie jest czysta odpowiedz i nie udajemy, ze
+    jest.
+    """
+
+    if tool_name not in ("termux_run", "termux_run_background"):
+        return False
+
+    if not isinstance(result, dict):
+        return False
+
+    if result.get("returncode") in (0, None):
+        return False
+
+    command = str(result.get("command") or "")
+
+    if not _FILE_PROBE_COMMAND_RE.search(command):
+        return False
+
+    stderr_lines = [
+        line.strip()
+        for line in str(result.get("stderr") or "").splitlines()
+        if line.strip()
+    ]
+
+    if not stderr_lines:
+        return False
+
+    return all(_NO_SUCH_FILE_RE.search(line) for line in stderr_lines)
+
+
 # Zaobserwowany realny wzorzec (log 2026-08-30, cel "zadzwoń do
 # Beaty przez Bland AI"): Marek POPRAWNIE nie ufa gołej prozie
 # Gemini ("RAPORT: zrobiłem X, Y, Z") — to jego zadanie (patrz
@@ -11069,6 +11175,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "placeholder_phone_warning",
                         "dom_fields_warning",
                         "screen_unreadable_warning",
+                        "missing_file_answer",
                         "stale_warning"
                     ):
 
@@ -11139,6 +11246,34 @@ CO POWINIEN ZROBIĆ MAIN:
                     )
                 else:
                     tool_failed = False
+
+                # v192: "pliku nie ma" to ODPOWIEDZ, nie awaria --
+                # patrz _shell_failure_is_just_missing_file(). Bez
+                # tego `ls ~/brak.txt` przerywalo cale zadanie i
+                # wysylalo MAIN-a sciezka "narzedzie sie zepsulo",
+                # mimo ze pytanie zostalo wlasnie rozstrzygniete.
+                if tool_failed and _shell_failure_is_just_missing_file(
+                    name, result
+                ):
+                    tool_failed = False
+
+                    if isinstance(result, dict):
+                        result["missing_file_answer"] = (
+                            "Polecenie zakonczylo sie kodem "
+                            + str(result.get("returncode"))
+                            + ", ale JEDYNY komunikat to 'nie ma "
+                            "takiego pliku'. To nie jest awaria "
+                            "narzedzia — to ODPOWIEDZ na zadane "
+                            "pytanie: tych plikow NIE MA. Traktuj to "
+                            "jako ustalony fakt i idz dalej, nie "
+                            "zmieniaj z tego powodu podejscia."
+                        )
+
+                    log(
+                        "GEMINI",
+                        "termux_run: kod != 0, ale to tylko 'brak "
+                        "pliku' — traktuje jako ODPOWIEDZ, nie awarie."
+                    )
 
                 if tool_failed:
 
@@ -12413,18 +12548,47 @@ def extract_code_block(text):
     W ŚRODKU kodu (tylko sam początek bloku).
     """
 
-    match = re.search(
+    # v192 -- zaobserwowany realny, katastrofalny bug (log 2026-09-04,
+    # cel "zadzwon do Beaty"). Bartek napisal 4947 znakow zawierajacych
+    # KILKA blokow ```...```: najpierw drobny blok przygotowawczy
+    # (instalacja zaleznosci), a dopiero potem wlasciwy skrypt. Ta
+    # funkcja brala BEZWARUNKOWO PIERWSZY blok, wiec do
+    # ~/zadzwon_do_beaty.sh trafily 22 ZNAKI komendy instalacyjnej
+    # zamiast calego skryptu. Python zameldowal sukces ("Zapisano kod
+    # ENGINEER... 22 znakow"), a wszystko dalej bylo juz fikcja
+    # zbudowana na pliku, ktory nie robil tego, co mysleli.
+    #
+    # Wybieramy wiec blok, ktory NAPRAWDE wyglada na tresc pliku, a
+    # nie pierwszy z brzegu:
+    #   1. shebang (#!) -- najmocniejszy sygnal "to jest skrypt",
+    #   2. przy remisie: blok NAJDLUZSZY.
+    # Gdy blok jest tylko jeden, zachowanie jest identyczne jak dotad.
+    blocks = re.findall(
         r"```[a-zA-Z0-9_+-]*\n(.*?)```",
         text or "",
         re.DOTALL
     )
 
-    if not match:
+    candidates = []
+
+    for raw in blocks:
+        code = raw.lstrip(" \t").rstrip("\n")
+        if code.strip():
+            candidates.append(code)
+
+    if not candidates:
         return None
 
-    code = match.group(1).lstrip(" \t").rstrip("\n")
+    if len(candidates) == 1:
+        return candidates[0]
 
-    return code if code.strip() else None
+    def _score(code):
+        return (
+            1 if code.lstrip().startswith("#!") else 0,
+            len(code),
+        )
+
+    return max(candidates, key=_score)
 
 
 # v191 — na wyraźną prośbę użytkownika (2026-09-03): "sprawdź, jak są
@@ -12580,18 +12744,40 @@ def _engineer_for_team(text, limit=4000):
     if len(text) <= limit:
         return text
 
-    trimmed = short(text, limit)
+    # v192 (na wyrazna prosbe uzytkownika, 2026-09-04: "nie mozemy
+    # ucinac kodow w wiadomosciach wysylanych pomiedzy czatami").
+    # v189 doklejalo tylko ADNOTACJE, ze kod istnieje, ale sam kod
+    # nadal bywal przeciety w polowie -- a przeciety kod jest gorszy
+    # niz zaden: wyglada na kompletny i mozna go w dobrej wierze
+    # analizowac, cytowac i "poprawiac". Teraz PROZA wokol kodu jest
+    # skracana, a BLOKI KODU ida w calosci, nawet gdy przez to
+    # przekroczymy limit. Integralnosc kodu jest wazniejsza niz
+    # oszczednosc znakow.
+    parts = re.split(r"(```[a-zA-Z0-9_+-]*\n.*?```)", text, flags=re.DOTALL)
 
-    if extract_code_block(text):
-        trimmed += (
-            "\n\n[FAKT OD PYTHONA: powyższa wypowiedź jest tu skrócona "
-            "do podglądu, ale zawiera kompletny blok kodu ```...``` i "
-            "Python MA GO W CAŁOŚCI — potrafi zapisać go do pliku sam, "
-            "bez niczyjego kopiowania. Nie zgaduj, czy kod istnieje: "
-            "istnieje.]"
-        )
+    code_parts = [p for p in parts if p.startswith("```")]
 
-    return trimmed
+    if not code_parts:
+        return short(text, limit)
+
+    code_total = sum(len(p) for p in code_parts)
+    prose_budget = max(limit - code_total, 400)
+    prose_slice = max(prose_budget // max(len(parts) - len(code_parts), 1), 120)
+
+    rebuilt = []
+
+    for part in parts:
+        if part.startswith("```"):
+            rebuilt.append(part)          # kod ZAWSZE w calosci
+        elif part.strip():
+            rebuilt.append(short(part, prose_slice))
+
+    return "".join(rebuilt) + (
+        "\n\n[FAKT OD PYTHONA: proza powyzej moze byc skrocona, ale "
+        "KAZDY blok kodu ```...``` jest tu KOMPLETNY — nic z kodu nie "
+        "zostalo uciete. Python ma go w calosci i potrafi zapisac go "
+        "do pliku sam, bez niczyjego przepisywania.]"
+    )
 
 
 _SHELL_SCRIPT_MARKERS = re.compile(
@@ -14210,6 +14396,13 @@ def consult_team(
         )
         del _pending_team_warnings[:]
 
+    # v192: odpowiedzi na pytania o pliki, ktore zespol zadal w
+    # POPRZEDNIEJ naradzie — patrz _remember_team_file_questions().
+    # To jest ta "druga wiadomosc" w rozmowie: w jednej padlo
+    # pytanie/blad, w tej pada odpowiedz.
+    _file_answers = _team_file_answers_block()
+    file_answers_block = ("\n" + _file_answers + "\n") if _file_answers else ""
+
     progress_snapshot = _goal_progress_snapshot(goal)
     progress_block = ("\n" + progress_snapshot + "\n") if progress_snapshot else ""
 
@@ -14373,7 +14566,7 @@ def consult_team(
     # v191: bez CEL-u. Każda rola dostała go RAZ, przy pierwszej
     # wiadomości w tym celu (patrz _goal_briefing_for), i ma go w
     # historii swojej rozmowy. Tu idzie tylko to, co NOWE.
-    core_context = f"""{progress_block}{checklist_block}{main_decision_block}
+    core_context = f"""{file_answers_block}{progress_block}{checklist_block}{main_decision_block}
 OSTATNI RAPORT:
 {readable_report or raw_report_material}{error_details_block}
 {tool_hint}
@@ -14829,6 +15022,18 @@ OSTATNI RAPORT:
     else:
         # Marek nie ma zastrzeżeń — seria się zeruje.
         _critic_block_streak = 0
+
+    # v192: zapamietujemy sciezki, o ktore zespol pytal w TEJ
+    # naradzie, zeby w NASTEPNEJ dostac na nie konkretna odpowiedz
+    # od Pythona (patrz _remember_team_file_questions).
+    _remember_team_file_questions([
+        results.get("PLANNER", ""),
+        results.get("CRITIC", ""),
+        results.get("ENGINEER", ""),
+        results.get("RESEARCHER", ""),
+        results.get("BROWSER", ""),
+        readable_report,
+    ])
 
     return {
         # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
@@ -15711,6 +15916,30 @@ _GOAL_FILE_NONEXISTENCE_MARKERS = (
 )
 
 
+_FINAL_OK_WAIVER_RE = re.compile(
+    # Wzorzec CELOWO tolerancyjny na literowki -- uzytkownik pisze
+    # szybko i tak, jak mu wygodnie ("filal_oki.txt nienbierz pod
+    # uwage"). Wymaganie poprawnej pisowni znaczyloby, ze jego
+    # wyrazna prosba po cichu nie zadziala.
+    r"(final[_ ]?ok\w*|fina\w*ok\w*|filal[_ ]?ok\w*)[^\n]{0,60}?"
+    r"(nie\s*n?\s*bierz|nie\s*brac|nie\s*uwzgl|pomi[nń]|ignor|"
+    r"nie\s*polegaj|nie\s*sugeruj|bez niego|nie\s*licz)",
+    re.IGNORECASE
+)
+
+
+def _goal_waives_final_ok(goal):
+    """
+    Czy CEL wprost prosi, zeby NIE opierac sie na FINAL_OK.txt?
+
+    Patrz komentarz w verify_final(). Uzytkownik ma prawo powiedziec
+    "nie sprawdzaj tego tym plikiem" — i wtedy ten check nie moze
+    blokowac zakonczenia celu.
+    """
+
+    return bool(_FINAL_OK_WAIVER_RE.search(str(goal or "")))
+
+
 def _extract_goal_mentioned_files(goal):
     """
     Wyciąga z treści CELU/warunku sukcesu ścieżki plików wprost
@@ -15934,6 +16163,112 @@ def _python_written_files_lines(already_listed):
         )
 
     return lines
+
+
+# v192 (na wyrazna prosbe uzytkownika, 2026-09-04: "ktos musi z nimi
+# rozmawiac o systemie, kiedy pytaja... ktos musi im odpowiedziec, na
+# zasadzie: w jednej wiadomosci blad, w drugiej odpowiedz, tak jak
+# normalny czlowiek rozmawia").
+#
+# Zaobserwowany realny przypadek z tego samego logu: Ola napisala
+# "DLA BARTKA: brak pliku ~/zad — trzeba sprawdzic, czy sciezka jest
+# poprawna i czy plik w ogole istnieje". Python ZNAL odpowiedz (sam
+# chwile wczesniej zapisal ~/zadzwon_do_beaty.sh), ale nikt jej nie
+# udzielil. Zespol nie ma dostepu do dysku — jedyne, co wie, to co mu
+# napiszemy. Pytanie bez odpowiedzi wraca wiec w kolejnym kroku jako
+# domysl, a domysly juz nas kosztowaly cale sesje.
+#
+# Tu Python odpowiada sam, konkretnie i bez proszenia: bierze KAZDA
+# sciezke, o ktorej zespol wspomnial, sprawdza ja na dysku i mowi, jak
+# jest naprawde. Gdy pliku nie ma, a obok lezy plik o bardzo podobnej
+# nazwie (dokladnie przypadek ~/zad vs ~/zadzwon_do_beaty.sh),
+# pokazuje go — to jedno zdanie rozbraja cala pomylke.
+_TEAM_MENTIONED_PATH_RE = re.compile(
+    r"(?:~|/data/data/com\.termux/files/home)/[\w./+-]{2,80}"
+)
+
+_team_file_answers = []
+
+
+def _remember_team_file_questions(role_texts):
+    """
+    Zbiera sciezki, o ktorych mowil zespol, i przygotowuje na nie
+    ODPOWIEDZ na nastepna nature. Nigdy nie rzuca wyzej.
+    """
+
+    del _team_file_answers[:]
+
+    seen = []
+
+    for text in role_texts:
+        for match in _TEAM_MENTIONED_PATH_RE.finditer(str(text or "")):
+            candidate = match.group(0).rstrip(".,;:)\'\"`")
+            if candidate not in seen:
+                seen.append(candidate)
+
+    for candidate in seen[:8]:
+
+        try:
+            p = _resolve_home_relative_path(
+                candidate.replace(
+                    "/data/data/com.termux/files/home", "~", 1
+                )
+            )
+        except Exception:
+            continue
+
+        try:
+            if p.exists():
+                size = p.stat().st_size
+                _team_file_answers.append(
+                    "- " + candidate + ": JEST, "
+                    + str(size) + " B."
+                )
+                continue
+        except Exception:
+            continue
+
+        # Pliku nie ma — ale moze ktos mial na mysli podobny?
+        hint = ""
+
+        try:
+            stem = p.name
+            siblings = [
+                f.name for f in p.parent.iterdir()
+                if f.is_file()
+                and f.name != stem
+                and (
+                    f.name.startswith(stem[:5])
+                    or stem.startswith(f.name[:5])
+                )
+            ]
+            if siblings:
+                hint = (
+                    " Ale w tym samym katalogu JEST plik o bardzo "
+                    "podobnej nazwie: "
+                    + ", ".join(sorted(siblings)[:3])
+                    + " — prawdopodobnie chodzilo o niego (nazwa "
+                    "mogla zostac gdzies urwana)."
+                )
+        except Exception:
+            pass
+
+        _team_file_answers.append(
+            "- " + candidate + ": NIE MA takiego pliku." + hint
+        )
+
+
+def _team_file_answers_block():
+
+    if not _team_file_answers:
+        return ""
+
+    return (
+        "ODPOWIEDZI NA WASZE PYTANIA O PLIKI (sprawdzone przez "
+        "Pythona TERAZ, bezposrednio na dysku — to fakty, nie "
+        "domysly):\n"
+        + "\n".join(_team_file_answers)
+    )
 
 
 def _goal_progress_snapshot(goal):
@@ -16183,6 +16518,25 @@ def verify_final(goal=""):
     # stary plik z zupełnie innego, wcześniejszego celu nie mógł już
     # nigdy po cichu "pożyczyć" swojej ważności nowemu zadaniu.
 
+    # v192 -- zaobserwowany realny przypadek (log 2026-09-04).
+    # Uzytkownik napisal w CELU wprost: "final_ok.txt nie bierz pod
+    # uwage, bo sie gubicie, znajdz lepszy sposob na sprawdzenie, czy
+    # wszystko dobrze". Mimo to ten check byl na sztywno required=True,
+    # wiec DONE nie moglo przejsc bez pliku, ktorego uzytkownik
+    # jawnie sobie NIE zyczyl -- a zespol i tak kreci sie wokol niego
+    # (Kamil w kroku 2 oglosil "przelom" na podstawie starego,
+    # niepowiazanego FINAL_OK.txt). Gdy CEL sam odwoluje ten
+    # mechanizm, zostawiamy check jako INFORMACYJNY (required=False):
+    # nie blokuje DONE, ale dalej pokazuje stan faktyczny.
+    final_ok_waived = _goal_waives_final_ok(goal)
+
+    if final_ok_waived:
+        log(
+            "MAIN",
+            "CEL wprost mowi, zeby nie opierac sie na FINAL_OK.txt — "
+            "ten check zostaje informacyjny, nie blokuje DONE."
+        )
+
     expected_final_ok_content = _expected_final_ok_content(goal)
 
     final_ok_candidates = [
@@ -16242,12 +16596,20 @@ def verify_final(goal=""):
 
     checks.append({
         "check": "FINAL_OK.txt",
-        "required": True,
+        "required": not final_ok_waived,
         "ok": final_ok_found,
         "detail": (
             str(final_ok_path)
             if final_ok_found
-            else final_ok_reject_reason
+            else (
+                final_ok_reject_reason
+                + (
+                    " (CEL wprost prosi, zeby na tym pliku nie "
+                    "polegac — ten punkt NIE blokuje DONE, sluzy "
+                    "tylko za informacje.)"
+                    if final_ok_waived else ""
+                )
+            )
         )
     })
 
