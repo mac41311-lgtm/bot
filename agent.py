@@ -3534,6 +3534,22 @@ def _android_click_single_text(text):
     clickable_candidates = []
     seen_candidates = set()
 
+    # v190 -- ta sama klasa błędu, co "Beata" (log 2026-08-30):
+    # Python WIE coś, czego nie mówi, więc zespół zgaduje i zgaduje
+    # źle. Gdy dump_hierarchy() rzuci wyjątkiem (uiautomator2 na
+    # Termuksie potrafi paść, telefon się rozłącza, ekran gaśnie),
+    # ten `except` połykał wyjątek i funkcja kończyła się komunikatem
+    # "Nie znaleziono elementu ani jego współrzędnych" — czyli
+    # twierdzeniem o TREŚCI EKRANU, którego w ogóle nie udało się
+    # odczytać. Zespół dostawał FAŁSZYWĄ diagnozę ("tego tekstu tam
+    # nie ma") i zaczynał szukać rozwiązania problemu z interfejsem —
+    # przewijać, próbować synonimów, robić zrzuty — podczas gdy
+    # prawdziwą przyczyną było zerwane połączenie z telefonem. Nie da
+    # się stwierdzić, że czegoś NA EKRANIE NIE MA, jeśli się tego
+    # ekranu nie zobaczyło; zapamiętujemy więc błąd i mówimy wprost,
+    # co się naprawdę stało.
+    hierarchy_error = None
+
     try:
         import xml.etree.ElementTree as ET
 
@@ -3625,18 +3641,59 @@ def _android_click_single_text(text):
             except Exception:
                 continue
 
-    except Exception:
-        pass
+    except Exception as e:
+        hierarchy_error = str(e) or e.__class__.__name__
 
     # --------------------------------------------------------
     # FAIL
     # --------------------------------------------------------
 
+    # v190: rozróżniamy DWA zupełnie różne przypadki, które dawniej
+    # zwracały ten sam, mylący komunikat (patrz komentarz przy
+    # hierarchy_error).
+    if hierarchy_error is not None:
+        return {
+            "ok": False,
+            "action": "click_text",
+            "text": target,
+            "error": (
+                "NIE UDAŁO SIĘ ODCZYTAĆ EKRANU telefonu (dump "
+                "hierarchii widoków zawiódł: " + hierarchy_error
+                + "), więc NIE WIADOMO, czy tekst '" + target
+                + "' jest na ekranie, czy go nie ma."
+            ),
+            "screen_unreadable": True,
+            # Osobny klucz-ostrzeżenie, żeby ten fakt trafił do
+            # zespołu DETERMINISTYCZNIE (patrz `for warning_key in`
+            # w gemini_execute_task), niezależnie od tego, co Gemini
+            # napisze o tym w swoim raporcie prozą.
+            "screen_unreadable_warning": (
+                "Nie udało się ODCZYTAĆ EKRANU telefonu przy próbie "
+                "kliknięcia '" + target + "' (" + hierarchy_error
+                + "). To NIE znaczy, że tego tekstu nie ma na "
+                "ekranie — znaczy, że ekranu nie było widać. Nie "
+                "wyciągaj z tego wniosków o interfejsie; przyczyna "
+                "jest w połączeniu z telefonem."
+            ),
+            "hint": (
+                "To NIE JEST informacja, że tego tekstu nie ma na "
+                "ekranie — ekranu w ogóle nie udało się zobaczyć. "
+                "Nie szukaj przyczyny w interfejsie (przewijanie, "
+                "inne nazwy przycisków, zrzuty ekranu) — najpierw "
+                "przywróć połączenie z telefonem: sprawdź, czy "
+                "ekran jest włączony i odblokowany, a usługa "
+                "uiautomator2 działa (android_state)."
+            )
+        }
+
     result = {
         "ok": False,
         "action": "click_text",
         "text": target,
-        "error": "Nie znaleziono elementu ani jego współrzędnych."
+        "error": (
+            "Ekran odczytany poprawnie, ale nie ma na nim elementu "
+            "o tym tekście ani jego współrzędnych."
+        )
     }
 
     if clickable_candidates:
@@ -10796,6 +10853,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "contact_schema_warning",
                         "placeholder_phone_warning",
                         "dom_fields_warning",
+                        "screen_unreadable_warning",
                         "stale_warning"
                     ):
 
