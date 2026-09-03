@@ -4335,12 +4335,16 @@ def android_screenshot(path=None):
             }
 
     try:
-        target = Path(
+        # v190: ta sama zasada co v188 — goła względna nazwa podana
+        # przez Gemini ("zrzut.png") musi wylądować w $HOME, tam
+        # gdzie potem szuka jej termux_read_file/termux_ls, a NIE w
+        # katalogu, z którego wystartował proces agent.py.
+        target = _resolve_home_relative_path(
             str(path)
             if path
             else str(AGENT_DIR / "screenshots" /
                 (datetime.now().strftime("%Y%m%d_%H%M%S") + ".png"))
-        ).expanduser()
+        )
 
         target.parent.mkdir(
             parents=True,
@@ -7939,7 +7943,14 @@ def _detect_missing_cat_substitution_file(command):
             continue
 
         try:
-            expanded = Path(raw_path).expanduser()
+            # v190: komenda i tak wykona się z cwd=$HOME (patrz
+            # execute_shell/termux_run_background), więc goła
+            # względna nazwa w niej odnosi się do $HOME. Sprawdzanie
+            # jej względem katalogu procesu agent.py dawało FAŁSZYWE
+            # ostrzeżenie "plik NIE ISTNIEJE" o pliku, który jak
+            # najbardziej istnieje tam, gdzie komenda go poszuka —
+            # ta sama klasa rozjazdu co v188.
+            expanded = _resolve_home_relative_path(raw_path)
         except Exception:
             continue
 
@@ -8393,8 +8404,13 @@ def termux_run_background(
         cwd = str(HOME)
 
         if workdir:
+            # v190: goły względny workdir ("projekt") kotwiczymy do
+            # $HOME, tak samo jak każdą inną ścieżkę od Gemini —
+            # inaczej katalog powstałby (i komenda ruszyłaby) w
+            # katalogu procesu agent.py, a zespół szukałby efektów
+            # w $HOME. Dokładnie ten rozjazd co v188.
             cwd = str(
-                Path(str(workdir)).expanduser()
+                _resolve_home_relative_path(workdir)
             )
 
             Path(cwd).mkdir(
@@ -8403,9 +8419,11 @@ def termux_run_background(
             )
 
         if log_file:
-            log = Path(
-                str(log_file)
-            ).expanduser()
+            # v190: jak wyżej — Gemini odczytuje ten log przez
+            # termux_read_file, które gołą względną nazwę rozwiązuje
+            # względem $HOME. Zapisanie go gdzie indziej znaczyłoby,
+            # że komenda działa, a log "nie istnieje".
+            log = _resolve_home_relative_path(log_file)
         else:
             # WCZEŚNIEJ: stała nazwa "agent_background.log" dla
             # KAŻDEJ komendy w tle, otwierana w trybie append. To
