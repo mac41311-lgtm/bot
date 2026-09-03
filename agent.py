@@ -12255,6 +12255,40 @@ def extract_code_block(text):
     return code if code.strip() else None
 
 
+def _role_output_for_team(role_label, text, limit):
+    """
+    v190 — ta sama klasa błędu, co "Beata": Python WIE, ale nie mówi,
+    więc odbiorca zgaduje.
+
+    Gdy rola została FAKTYCZNIE zapytana, ale odpowiedziała pustym
+    tekstem (co się realnie zdarza — patrz obsługa pustej odpowiedzi
+    i ponowienia w deepseek(), log 2026-08-25: CRITIC zwrócił 0
+    znaków), do zespołu i do MAIN-a szedł po prostu PUSTY STRING.
+    Python odnotowywał awarię w terminalu, ale odbiorca nie miał jak
+    odróżnić "Marek nic nie powiedział, bo mu się nie udało" od
+    "Marka w tym kroku nie pytaliśmy" — jedno i drugie wyglądało
+    identycznie, czyli na nic. MAIN podejmował więc decyzję w
+    przekonaniu, że przegląd kroku się odbył, podczas gdy nie było
+    go wcale.
+
+    Role POMINIĘTE w danym kroku są już opisane wprost ("[NIEAKTUALNE
+    — X nie był pytany w tym kroku...]", patrz consult_team), więc
+    nigdy nie trafiają tutaj jako puste. Ten marker dotyczy WYŁĄCZNIE
+    prawdziwej awarii odpowiedzi.
+    """
+
+    if str(text or "").strip():
+        return short(text, limit)
+
+    return (
+        "[FAKT OD PYTHONA: " + role_label + " ZOSTAŁ zapytany w tym "
+        "kroku, ale odpowiedział PUSTYM tekstem (ponowienie też nic "
+        "nie dało — najpewniej chwilowy problem po stronie sesji "
+        "DeepSeeka). To NIE jest jego opinia ani zgoda — tej opinii "
+        "po prostu NIE MA. Nie traktuj tego jako 'brak zastrzeżeń'.]"
+    )
+
+
 def _engineer_for_team(text, limit=4000):
     """
     Wersja odpowiedzi Bartka pokazywana RESZCIE ZESPOŁU (Tomek, Marek).
@@ -12279,6 +12313,11 @@ def _engineer_for_team(text, limit=4000):
     """
 
     text = str(text or "")
+
+    # v190: pusta odpowiedź Bartka to awaria, nie "nie ma nic do
+    # dodania" — patrz _role_output_for_team().
+    if not text.strip():
+        return _role_output_for_team("Bartek (ENGINEER)", text, limit)
 
     if len(text) <= limit:
         return text
@@ -14514,13 +14553,34 @@ OSTATNI RAPORT:
         _critic_verdict_for_engineer = short(_critic_out_full, 1200)
         _critic_block_streak += 1
 
+    elif not _critic_out_full.strip():
+        # v190: PUSTA odpowiedź Marka to awaria sesji, nie zgoda.
+        # Dawniej wpadała w `else` niżej i ZEROWAŁA serię blokad —
+        # czyli milczenie po awarii kasowało narastające ostrzeżenie
+        # (CRITIC_STREAK_ESCALATION/HARD_STOP), dokładnie tak, jakby
+        # Marek świadomie powiedział "nie mam zastrzeżeń". Brak
+        # opinii nie jest ani zgodą, ani blokadą — zostawiamy serię
+        # nietkniętą i mówimy o tym wprost.
+        log(
+            "DEEPSEEK",
+            "Marek (CRITIC) odpowiedział PUSTO — to nie jest zgoda. "
+            "Seria zastrzeżeń zostaje bez zmian ("
+            + str(_critic_block_streak) + ")."
+        )
+
     else:
         # Marek nie ma zastrzeżeń — seria się zeruje.
         _critic_block_streak = 0
 
     return {
-        "planner":   short(results.get("PLANNER", ""), 4000),
-        "researcher": short(results.get("RESEARCHER", ""), 4000),
+        # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
+        # nie jako milcząca zgoda — patrz _role_output_for_team().
+        "planner":   _role_output_for_team(
+            "Tomek (PLANNER)", results.get("PLANNER", ""), 4000
+        ),
+        "researcher": _role_output_for_team(
+            "Kamil (RESEARCHER)", results.get("RESEARCHER", ""), 4000
+        ),
         "engineer":  _engineer_for_team(results.get("ENGINEER", "")),
         # Pełna, nieskrócona odpowiedź ENGINEER — NIE
         # trafia do prompta MAIN (żeby nie pompować mu kontekstu),
@@ -14528,9 +14588,15 @@ OSTATNI RAPORT:
         # niej blok kodu przy write_engineer_code_to (patrz
         # extract_code_block() / obsługa TASK w run_agent()).
         "engineer_full": results.get("ENGINEER", ""),
-        "critic":    short(results.get("CRITIC", ""), 4000),
-        "browser":   short(results.get("BROWSER", ""), 2000),
-        "wojtek":    short(results.get("WOJTEK", ""), 1500),
+        "critic":    _role_output_for_team(
+            "Marek (CRITIC)", results.get("CRITIC", ""), 4000
+        ),
+        "browser":   _role_output_for_team(
+            "Ola (BROWSER)", results.get("BROWSER", ""), 2000
+        ),
+        "wojtek":    _role_output_for_team(
+            "Wojtek", results.get("WOJTEK", ""), 1500
+        ),
     }
 
 
