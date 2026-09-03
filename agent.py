@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v189
+AEL-MINI AUTONOMOUS AGENT v190
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v189")
+    print("             AEL-MINI AUTONOMOUS AGENT v190")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11212,7 +11212,7 @@ def _verify_success_condition_evidence(success_condition, confirmed_texts=None):
     """
     for rel_path in _extract_goal_mentioned_files(success_condition):
         try:
-            p = Path(rel_path).expanduser()
+            p = _resolve_home_relative_path(rel_path)
         except Exception:
             continue
         if p.exists() and p.stat().st_size > 0:
@@ -11322,7 +11322,7 @@ def _success_condition_already_satisfied_message(task_text, success_condition):
 
     for rel_path in files:
         try:
-            p = Path(rel_path).expanduser()
+            p = _resolve_home_relative_path(rel_path)
         except Exception:
             return None
         if not (p.exists() and p.stat().st_size > 0):
@@ -15476,6 +15476,110 @@ def _head_tail_preview(text, head_chars=150, tail_chars=150):
     )
 
 
+# v190 -- zaobserwowany realny bug (log 2026-08-30, cel "zadzwoń do
+# Beaty", 7 kroków w kółko). Python SAM, własnymi rękami, zapisał
+# gotowy kod ENGINEER na dysk (obsługa write_engineer_code_to w
+# run_agent) i wypisał w terminalu "Zapisano kod ENGINEER
+# bezpośrednio do ...". Ale ta informacja trafiła WYŁĄCZNIE do
+# terminala i do treści zadania dla GEMINI — do faktycznego stanu,
+# który dostaje ZESPÓŁ DeepSeek (_goal_progress_snapshot), nie
+# trafiła NIGDY. Zespół nie ma dostępu do tego telefonu i nie widzi
+# terminala; jedyne, co wie o świecie, to tekst, który mu wkleimy.
+# Skutek w logu: Bartek napisał skrypt, Python go zapisał, a zespół
+# przez kolejne kroki SPIERAŁ SIĘ, czy ten skrypt w ogóle istnieje
+# ("Skrypt od ENGINEER'a NIGDY nie pojawił się w tej rozmowie"),
+# szukając wyjaśnienia w znaczniku obcięcia "...[skrócono]...".
+# Python przez cały ten czas ZNAŁ ODPOWIEDŹ i miał plik na dysku.
+#
+# To ta sama klasa błędu co v188 (ścieżka) i v189 (obcięty kod):
+# Python wykonuje fizyczną czynność, po czym nie mówi o niej
+# zespołowi, więc zespół zgaduje — i zgaduje źle. Naprawa jest
+# systemowa, nie promptowa: rejestrujemy KAŻDY plik, który Python
+# zapisał sam, i dokładamy go do stanu faktycznego, sprawdzanego na
+# nowo na dysku przy każdym kroku (więc to fakt z TERAZ, nie
+# wspomnienie).
+_python_written_files = []
+
+
+def _record_python_written_file(path):
+    """
+    Zapamiętuje plik, który zapisał SAM PYTHON (nie Gemini), żeby
+    _goal_progress_snapshot() mógł pokazać zespołowi jego istnienie
+    jako twardy fakt. Nigdy nie rzuca wyżej — to pomocnicze
+    śledzenie, błąd tutaj nie może wywrócić właściwego zapisu pliku.
+    """
+
+    try:
+        text_path = str(path)
+
+        if text_path not in _python_written_files:
+            _python_written_files.append(text_path)
+
+        # Nie rośniemy w nieskończoność przez długą sesję — liczy
+        # się to, co Python zapisał NIEDAWNO w ramach tego celu.
+        del _python_written_files[:-10]
+
+    except Exception:
+        pass
+
+
+def _python_written_files_lines(already_listed):
+    """
+    Linie stanu faktycznego dla plików zapisanych przez samego
+    Pythona — sprawdzane BEZPOŚREDNIO na dysku przy każdym wywołaniu,
+    więc pokazują stan z TEJ CHWILI (np. gdy Gemini zdążył plik
+    nadpisać albo skasować, zespół to zobaczy, zamiast wierzyć
+    naszemu staremu zapisowi).
+
+    `already_listed` to ścieżki wypisane już wyżej na podstawie
+    treści CELU — nie dublujemy ich.
+    """
+
+    lines = []
+
+    for text_path in _python_written_files:
+
+        try:
+            p = _resolve_home_relative_path(text_path)
+        except Exception:
+            continue
+
+        if str(p) in already_listed:
+            continue
+
+        try:
+            exists = p.exists()
+            size = p.stat().st_size if exists else 0
+        except Exception:
+            continue
+
+        if not exists:
+            lines.append(
+                "- " + str(p) + ": Python zapisał tu plik w tej "
+                "sesji, ale TERAZ GO NIE MA (ktoś go skasował albo "
+                "przeniósł)"
+            )
+            continue
+
+        preview = ""
+
+        try:
+            preview = _head_tail_preview(
+                p.read_text(encoding="utf-8", errors="replace")
+            )
+        except Exception:
+            pass
+
+        lines.append(
+            "- " + str(p) + ": ISTNIEJE (" + str(size) + " B) — "
+            "zapisał go SAM PYTHON (gotowy kod od Bartka), bez "
+            "udziału Gemini i bez niczyjego kopiowania"
+            + (". Treść: " + preview if preview else "")
+        )
+
+    return lines
+
+
 def _goal_progress_snapshot(goal):
     """
     Tani, LOKALNY (zero wywołań LLM) przegląd stanu faktycznego celu
@@ -15494,12 +15598,18 @@ def _goal_progress_snapshot(goal):
 
     lines = []
 
+    # Ścieżki wypisane na podstawie CELU — zbierane, żeby nie
+    # dublować ich w sekcji plików zapisanych przez Pythona.
+    listed_paths = set()
+
     for rel_path in _extract_goal_mentioned_files(goal)[:6]:
 
         try:
-            p = Path(rel_path).expanduser()
+            p = _resolve_home_relative_path(rel_path)
         except Exception:
             continue
+
+        listed_paths.add(str(p))
 
         if not p.exists():
             lines.append("- " + rel_path + ": BRAK")
@@ -15527,6 +15637,11 @@ def _goal_progress_snapshot(goal):
             "- " + rel_path + ": istnieje (" + str(size) + " B)"
             + (" — " + preview if preview else "")
         )
+
+    # v190: pliki, które zapisał SAM PYTHON (patrz komentarz przy
+    # _python_written_files). Zespół nie widzi terminala — jeśli tego
+    # tu nie napiszemy, będzie zgadywał, czy plik istnieje.
+    lines.extend(_python_written_files_lines(listed_paths))
 
     # UWAGA (zaobserwowany realny bug): ta pętla dawniej NIE
     # sprawdzała świeżości pliku względem BIEŻĄCEGO celu — mimo że
@@ -15894,7 +16009,7 @@ def verify_final(goal=""):
 
         for rel_path in mentioned_files:
 
-            p = Path(rel_path).expanduser()
+            p = _resolve_home_relative_path(rel_path)
 
             if not p.exists() or p.stat().st_size == 0:
                 missing_or_empty.append(rel_path)
@@ -16459,6 +16574,11 @@ def run_agent(goal):
     # zamiast zaczynać od zera / czekać, aż użytkownik ręcznie
     # odtworzy kontekst w innym czacie.
     write_text(GOAL_FILE, goal)
+
+    # v190: nowy cel = czysta karta. Pliki zapisane przez Pythona
+    # przy POPRZEDNIM celu nie są stanem faktycznym TEGO celu (ta
+    # sama zasada, co znaczniki "sprzed tego celu" niżej).
+    del _python_written_files[:]
 
     last_result = {
         "status":
@@ -17211,6 +17331,12 @@ Zwróć tylko JSON.
                     )
 
                     _track_project_path(target_path)
+
+                    # v190: to samo, co za chwilę wypiszemy w
+                    # terminalu, MUSI dotrzeć też do zespołu
+                    # DeepSeek — oni terminala nie widzą (patrz
+                    # _python_written_files).
+                    _record_python_written_file(target_path)
 
                     log(
                         "MAIN",
