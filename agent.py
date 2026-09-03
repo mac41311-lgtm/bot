@@ -10723,6 +10723,50 @@ CO POWINIEN ZROBIĆ MAIN:
                         "bez raportu."
                     )
 
+                # v190 — najczystszy przypadek klasy "Python melduje
+                # sukces, choć nic się nie wydarzyło" (log 2026-08-30,
+                # cel "zadzwoń do Beaty"). Ten `return` wykonuje się
+                # ZAWSZE, gdy Gemini przestaje wywoływać narzędzia —
+                # włącznie z PIERWSZYM obiegiem, gdy nie wywołał ich
+                # ANI RAZU. Gemini potrafi wtedy po prostu NAPISAĆ
+                # prozą, że coś zrobił ("zapytałem użytkownika",
+                # "zadzwoniłem"), a Python i tak zwraca ok=True,
+                # status=COMPLETED. Zespół dostaje meldunek o
+                # sukcesie zadania, w którym NIC nie dotknęło
+                # telefonu — i planuje kolejny krok na fikcji.
+                #
+                # v188 naprawiło JEDEN wąski wyzwalacz tego (TASK
+                # będący w istocie pytaniem do człowieka). To jest
+                # ten sam błąd w ogólnej postaci: zero wywołań
+                # narzędzi znaczy zero fizycznych zmian, niezależnie
+                # od tego, jak pewnie brzmi raport.
+                #
+                # Nie zamieniamy tego na błąd — bywają zadania czysto
+                # analityczne, które narzędzi nie potrzebują. Ale
+                # zespół MUSI ten fakt zobaczyć, i to twardo, obok
+                # raportu, a nie zamiast niego.
+                if tool_calls == 0:
+                    collected_warnings.append(
+                        "gemini [brak_wywolan_narzedzi]: Gemini "
+                        "zakończył to zadanie NIE WYWOŁUJĄC ANI "
+                        "JEDNEGO narzędzia — nic nie dotknęło "
+                        "telefonu, dysku ani przeglądarki. Cokolwiek "
+                        "raport poniżej mówi o wykonanych "
+                        "czynnościach (zadzwoniłem, zapisałem, "
+                        "sprawdziłem, zapytałem), FIZYCZNIE się nie "
+                        "wydarzyło — to sam tekst. Jeśli zadanie "
+                        "wymagało realnego działania, potraktuj je "
+                        "jako NIEWYKONANE."
+                    )
+
+                    log(
+                        "GEMINI",
+                        "UWAGA: zadanie zakończone bez ANI JEDNEGO "
+                        "wywołania narzędzia — nic fizycznie się nie "
+                        "wydarzyło. Zespół dostaje to jako twardy "
+                        "fakt obok raportu."
+                    )
+
                 return {
                     "ok": True,
                     "status": "COMPLETED",
