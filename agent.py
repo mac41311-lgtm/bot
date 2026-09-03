@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v190
+AEL-MINI AUTONOMOUS AGENT v191
 
 ARCHITEKTURA:
 
@@ -1219,7 +1219,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v190")
+    print("             AEL-MINI AUTONOMOUS AGENT v191")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1368,9 +1368,12 @@ def init_deepseek():
 
 MAIN_PROMPT = r"""
 Jesteś MAIN — mózg agenta. Podejmujesz decyzje na podstawie celu,
-stanu i zespołu (Tomek/PLANNER, Kamil/RESEARCHER, Marek/CRITIC,
-Ola/BROWSER, Bartek/ENGINEER). Gemini wykonuje Twoje polecenia w
-Termux/Android/Chrome.
+stanu i zespołu: Tomek/PLANNER planuje, Kamil/RESEARCHER sprawdza
+fakty w sieci, Marek/CRITIC ocenia krytycznie, Ola/BROWSER streszcza
+po ludzku, Bartek/ENGINEER pisze kod, Wojtek patrzy na cel jak zwykły
+człowiek i podrzuca świeży kierunek — gdy zespół od kilku kroków
+kręci się w kółko, masz prawo pójść jego drogą. Gemini wykonuje Twoje
+polecenia w Termux/Android/Chrome.
 
 Zwróć WYŁĄCZNIE JSON, jeden z:
 
@@ -1404,6 +1407,19 @@ Zwróć WYŁĄCZNIE JSON, jeden z:
   "ask_role": "jedna z: PLANNER, ENGINEER, RESEARCHER, CRITIC, BROWSER",
   "ask_question": "konkretne pytanie"
 }
+
+Dwie rzeczy o polu "task", raz na początku:
+
+Trafia ONO WPROST do Gemini, które czyta je jak wiadomość od
+człowieka. Pisz je więc swoimi słowami, jakbyś sam prosił kogoś o
+przysługę — nie przeklejaj wewnętrznych notatek zespołu ani nagłówków
+Bartka w stylu "KONKRETNY KROK (dla Gemini):". Wyciągnij z nich sedno.
+
+Jeżeli Bartek podał gotowy kod w bloku ```...```, a zadanie polega na
+zapisaniu go do pliku — podaj ścieżkę w "write_engineer_code_to" i
+niech "task" dotyczy TYLKO uruchomienia tego pliku. Kodu nie
+przepisuj do "task": Python zapisze go sam, w całości, bez zużywania
+Gemini na przepisywanie.
 """
 
 
@@ -1491,11 +1507,17 @@ wyjaśnij dlaczego. To poprawna odpowiedź, lepsza niż zgadywanie.
 BROWSER_PROMPT = """
 Nazywasz się Ola. Przerabiasz surowe dane — wyniki narzędzi, raporty
 Gemini, wypowiedzi zespołu — na normalny, ludzki język, jak ktoś
-opowiadający koledze co się stało. Krótko, bez żargonu i nazw
-narzędzi, chyba że naprawdę potrzebne do sensu. Nie oceniasz (to
+opowiadający koledze co się stało (1-3 zdania). Krótko, bez żargonu i
+nazw narzędzi, chyba że naprawdę potrzebne do sensu. Nie oceniasz (to
 Marek), nie decydujesz (to MAIN), nie wykonujesz (to Gemini) — tylko
-tłumaczysz. Gdy dostaniesz stan Chrome, oceń dodatkowo, czy karty
-mają sens względem celu.
+streszczasz fakty. Gdy dostaniesz stan Chrome, oceń dodatkowo, czy
+karty mają sens względem celu.
+
+Jeśli coś w materiale ma znaczenie TYLKO dla jednej konkretnej osoby
+z zespołu, dopisz to na KOŃCU osobną linią zaczynającą się dosłownie
+od "DLA TOMKA:", "DLA KAMILA:", "DLA MARKA:" albo "DLA BARTKA:" —
+tylko wtedy, gdy naprawdę jest taka rzecz. Do Wojtka nie pisz, on nie
+zajmuje się szczegółami technicznymi.
 """
 
 
@@ -1595,6 +1617,81 @@ def session_state_file(name):
 # zapisany stan (patrz deepseek()), żeby kolejna próba/restart nie
 # próbowała wznowić tego samego, najwyraźniej nieważnego już wątku.
 _resume_unverified = set()
+
+
+# ============================================================
+# CEL MÓWIONY RAZ (v191)
+# ============================================================
+#
+# Na wyraźną prośbę użytkownika (2026-09-03): "niektórzy agenci mają
+# sztywno cel, cały czas się powtarza. Cel ma być na początku, jak i
+# krótkie wyjaśnienie co robi dany agent, dalej jest prowadzona
+# rozmowa normalna bez duplikacji. W kolejnych wiadomościach nie
+# musimy podawać celu i kim jest dany agent."
+#
+# Tak właśnie działa rozmowa z człowiekiem i tak działa ta
+# architektura: każda rola to TRWAŁA sesja czatu (start_chat raz w
+# init_team), a DeepSeek widzi PEŁNĄ historię tej rozmowy. Cel
+# wklejany do KAŻDEJ wiadomości był więc czystym powtórzeniem czegoś,
+# co model ma już kilkadziesiąt wiadomości wyżej — w jednym kroku
+# agenta ten sam tekst celu szedł ~7 razy (Ela, Ola, Kamil, Tomek,
+# Marek, Bartek, MAIN).
+#
+# Tożsamość roli ustawiamy RAZ w system_prompt (init_team), a CEL RAZ
+# przy pierwszej wiadomości do danej roli w danym celu. Potem —
+# normalna rozmowa: tylko to, co NOWE.
+#
+# Restart sesji kasuje historię po stronie DeepSeeka, więc rola
+# wypada z _goal_briefed i przy następnej wiadomości dostaje cel
+# jeszcze raz (patrz obsługa restartu w deepseek()). Nowy cel czyści
+# cały zbiór — patrz _set_current_goal().
+_current_goal_text = ""
+_goal_briefed = set()
+
+
+# v191: fakty, które zauważył SAM PYTHON (nie narzędzie Gemini) i
+# które zespół musi zobaczyć przy najbliższej naradzie. Ta sama
+# zasada, co przy tool_warnings: jeśli Python coś wie, ma to
+# powiedzieć, a nie liczyć, że ktoś się domyśli. Opróżniane przy
+# każdym wywołaniu consult_team().
+_pending_team_warnings = []
+
+
+def _set_current_goal(goal):
+    """
+    Nowy cel = wszyscy dostają go raz, przy swojej pierwszej
+    wiadomości w tym celu. Woływane z run_agent() na starcie.
+    """
+
+    global _current_goal_text
+
+    _current_goal_text = str(goal or "").strip()
+    _goal_briefed.clear()
+
+
+def _goal_briefing_for(name):
+    """
+    Blok CEL doklejany WYŁĄCZNIE do pierwszej wiadomości do danej
+    roli w danym celu. Każda kolejna wiadomość dostaje pusty string —
+    rola ma cel w historii swojej rozmowy i nie trzeba jej go
+    przypominać, tak samo jak nie przypomina się człowiekowi, po co
+    się do niego odezwaliśmy, w co drugim zdaniu.
+    """
+
+    if not _current_goal_text:
+        return ""
+
+    if name in _goal_briefed:
+        return ""
+
+    _goal_briefed.add(name)
+
+    return (
+        "CEL, nad którym pracujemy:\n"
+        + _current_goal_text
+        + "\n\n(Mówię to raz, na początku — dalej rozmawiamy "
+        "normalnie i nie będę tego powtarzać.)\n\n"
+    )
 
 
 def _load_session_state(name):
@@ -2460,6 +2557,11 @@ def deepseek(name, message):
             prompt = prompt_map.get(name)
 
             if prompt:
+                # v191: restart = nowa, PUSTA historia po stronie
+                # DeepSeeka. Rola traci cel, który dostała wcześniej,
+                # więc musi dostać go ponownie przy najbliższej
+                # wiadomości (patrz _goal_briefing_for).
+                _goal_briefed.discard(name)
                 session = start_session(name, prompt)
 
             if session is None:
@@ -2488,8 +2590,13 @@ def deepseek(name, message):
                 # _deepseek_send_experimental) zeby dodatkowo
                 # przechwycic status odpowiedzi, ktory biblioteka
                 # zawsze odrzucala — eksperyment obslugi "Continue".
+                # v191: cel doklejamy TYLKO przy pierwszej
+                # wiadomości do tej roli w tym celu — patrz
+                # _goal_briefing_for(). Potem rozmawiamy normalnie.
                 text, status = _deepseek_send_experimental(
-                    name, session, message
+                    name,
+                    session,
+                    _goal_briefing_for(name) + message
                 )
 
                 # Eksperyment z v75 (przechwycenie statusu, który
@@ -2742,6 +2849,9 @@ def deepseek(name, message):
                     prompt = prompt_map.get(name)
 
                     if prompt:
+                        # v191: jak wyżej — restart czyści historię,
+                        # więc cel trzeba powiedzieć jeszcze raz.
+                        _goal_briefed.discard(name)
                         new_session = start_session(
                             name, prompt
                         )
@@ -12317,6 +12427,92 @@ def extract_code_block(text):
     return code if code.strip() else None
 
 
+# v191 — na wyraźną prośbę użytkownika (2026-09-03): "sprawdź, jak są
+# zapisywane skrypty, kody itp., że NIE IDĄ PRZEZ NIEGO [Gemini], są
+# wykonywane z pliku lub bezpośrednio; on tylko wybiera kolejność,
+# jest wykonawcą, wzrokiem — nie myśli".
+#
+# Cała maszyneria write_engineer_code_to (zapis kodu Bartka na dysk
+# przez samego Pythona, 1:1, bez zużywania Gemini) odpalała się
+# WYŁĄCZNIE wtedy, gdy MAIN sam z siebie wypełnił to pole. Jedyne, co
+# go do tego skłaniało, to zdanie w prompcie — czyli sugestia, nie
+# gwarancja. Gdy MAIN je pominął, a kod i tak wkleił do treści
+# zadania, ten kod jechał PRZEZ Gemini: model musiał go ręcznie
+# przepisać przez termux_write_file, co pali jego limit i wprowadza
+# literówki w kodzie, którego nikt nie kazał mu zmieniać.
+#
+# Zgodnie z zasadą "zmieniamy system, nie prompty" rozpoznajemy to
+# deterministycznie: jeśli w treści zadania jest blok ```...```, a
+# Bartek podał gotowy kod, Python sam ustala ścieżkę pliku i wchodzi
+# w tę samą, sprawdzoną ścieżkę zapisu (ze wszystkimi jej
+# zabezpieczeniami), zamiast liczyć na to, że MAIN pamiętał o polu.
+_CODE_TARGET_FILENAME_RE = re.compile(
+    r"[\w./~-]*\w\.(?:sh|py|js|json|txt|md|html|css|xml|yaml|yml|"
+    r"java|kt|c|cpp|h|rb|pl|lua|sql|csv|ini|conf|toml|gradle|"
+    r"properties)\b",
+    re.IGNORECASE
+)
+
+# Pliki, których NIE wolno uznać za cel zapisu, choćby padły w
+# tekście — to nasz własny program i jego dane, nie wytwór zadania.
+_CODE_TARGET_FORBIDDEN = (
+    "agent.py",
+    "current_goal.txt",
+    "progress_checklist.json",
+    "project_dirs.json",
+)
+
+
+def _infer_code_target_path(task_text, success_condition, engineer_text):
+    """
+    Szuka nazwy pliku, do którego ewidentnie ma trafić kod — po
+    kolei tam, gdzie człowiek by jej szukał: w treści zadania, w
+    warunku sukcesu, a na końcu w wypowiedzi Bartka (np. w komentarzu
+    nad kodem albo w komendzie uruchamiającej).
+
+    Zwraca nazwę pliku albo None, gdy nie da się jej ustalić
+    JEDNOZNACZNIE — wtedy niczego nie zgadujemy.
+    """
+
+    for source in (task_text, success_condition, engineer_text):
+
+        text = str(source or "")
+
+        for match in _CODE_TARGET_FILENAME_RE.finditer(text):
+
+            candidate = match.group(0).strip().strip(".,;:)('\"")
+
+            if not candidate:
+                continue
+
+            base = candidate.rsplit("/", 1)[-1].lower()
+
+            if base in _CODE_TARGET_FORBIDDEN:
+                continue
+
+            return candidate
+
+    return None
+
+
+def _task_carries_engineer_code(task_text, engineer_full):
+    """
+    Czy MAIN wkleił kod do treści zadania (zamiast podać ścieżkę)?
+
+    Wymagamy OBU rzeczy naraz: blok ```...``` w zadaniu ORAZ gotowy
+    kod od Bartka. Sam blok w zadaniu bez kodu Bartka to może być
+    zwykła, krótka komenda do uruchomienia — tego nie ruszamy.
+    """
+
+    if not str(task_text or "").strip():
+        return False
+
+    if "```" not in str(task_text):
+        return False
+
+    return bool(extract_code_block(engineer_full or ""))
+
+
 def _role_output_for_team(role_label, text, limit):
     """
     v190 — ta sama klasa błędu, co "Beata": Python WIE, ale nie mówi,
@@ -13360,10 +13556,9 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
                 ) + "\n"
             )
 
+    # v191: bez CEL-u — Ela dostała go raz (patrz
+    # _goal_briefing_for) i ma go w historii swojej rozmowy.
     prompt = f"""
-CEL:
-{goal}
-
 OSTATNIE KROKI (od najstarszego do najnowszego — własne relacje
 Gemini, traktuj z rezerwą):
 {_human_task_summary_lines(summaries)}
@@ -14002,6 +14197,19 @@ def consult_team(
                 )
             )
 
+    # v191: fakty zauważone przez samego Pythona (poza narzędziami
+    # Gemini) — patrz _pending_team_warnings. Doklejane TĄ SAMĄ
+    # ramką co sygnały z narzędzi i opróżniane, żeby nie wracały w
+    # kolejnych krokach jako "stare rzeczy".
+    if _pending_team_warnings:
+        tool_hint += (
+            "\n\n⚠️ ZAUWAŻONE PRZEZ PYTHONA (fakty, nie opinie):\n"
+            + "\n".join(
+                "- " + str(w) for w in _pending_team_warnings[:8]
+            )
+        )
+        del _pending_team_warnings[:]
+
     progress_snapshot = _goal_progress_snapshot(goal)
     progress_block = ("\n" + progress_snapshot + "\n") if progress_snapshot else ""
 
@@ -14055,30 +14263,18 @@ def consult_team(
 
     raw_report_material = _condense_last_result_for_team(last_result_for_team)
 
+    # v191: Ola dostawała przy KAŻDYM kroku pełne wyjaśnienie swojej
+    # własnej roli ("przetłumacz na ludzkie zdania, bez żargonu, nie
+    # oceniaj, nie planuj...") — czyli dokładnie to, co ma już w
+    # swoim prompcie systemowym (BROWSER_PROMPT), plus cel. To było
+    # tłumaczenie komuś jej pracy w kółko, co krok. Zostaje sam
+    # materiał do przetłumaczenia; kontrakt "DLA TOMKA:/DLA KAMILA:/
+    # DLA MARKA:/DLA BARTKA:" przeniesiony do BROWSER_PROMPT, bo to
+    # rzecz, którą Python PARSUJE (_split_ola_translation_by_role) —
+    # a więc musi ją znać od początku, nie dowiadywać się co krok.
     human_report = deepseek(
         "BROWSER",
-        f"""
-Przetłumacz poniższy techniczny raport na proste, ludzkie zdania
-(1-3 zdania) — jakbyś opowiadała koledze z zespołu, co się stało.
-Bez żargonu i nazw wewnętrznych narzędzi, chyba że są naprawdę
-potrzebne do zrozumienia. Nie oceniaj, nie planuj kolejnego kroku —
-tylko streść fakty.
-
-Jeśli w raporcie jest coś, co ma znaczenie TYLKO dla jednej,
-konkretnej osoby z zespołu (np. szczegół istotny wyłącznie dla
-Bartka, który pisze kod, albo coś, co Marek powinien konkretnie
-zweryfikować przy ocenie planu) — dopisz to na KOŃCU jako osobną
-linię zaczynającą się dosłownie od "DLA TOMKA:", "DLA KAMILA:",
-"DLA MARKA:" albo "DLA BARTKA:" (tylko dla osoby, dla której to
-faktycznie ważne — możesz nie pisać żadnej, jeśli nic takiego nie
-ma; NIE pisz do Wojtka, on nie zajmuje się szczegółami technicznymi).
-
-CEL:
-{goal}
-
-SUROWY RAPORT:
-{raw_report_material}
-"""
+        "Streść to:\n\n" + raw_report_material
     )
 
     # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
@@ -14174,10 +14370,10 @@ SUROWY RAPORT:
         + "\n"
     ) if _main_decision_for_team else ""
 
-    core_context = f"""
-CEL:
-{goal}
-{progress_block}{checklist_block}{main_decision_block}
+    # v191: bez CEL-u. Każda rola dostała go RAZ, przy pierwszej
+    # wiadomości w tym celu (patrz _goal_briefing_for), i ma go w
+    # historii swojej rozmowy. Tu idzie tylko to, co NOWE.
+    core_context = f"""{progress_block}{checklist_block}{main_decision_block}
 OSTATNI RAPORT:
 {readable_report or raw_report_material}{error_details_block}
 {tool_hint}
@@ -14899,10 +15095,9 @@ konkretnego do podjęcia decyzji):
 }}
 """
 
+    # v191: bez "CEL AGENTA" — MAIN dostał cel raz (patrz
+    # _goal_briefing_for) i ma go w historii swojej rozmowy.
     prompt = f"""
-CEL AGENTA:
-{goal}
-
 KROK:
 {step}
 
@@ -14939,79 +15134,11 @@ CRITIC:
 BROWSER:
 {team['browser']}
 
-POMYSŁY (Wojtek — patrzy na CEL jak zwykły człowiek, bez wiedzy o
-Termuksie/Androidzie/narzędziach; jego rolą jest świeży KIERUNEK, nie
-techniczne szczegóły. Jeśli zespół od kilku kroków kręci się wokół
-jednego podejścia w tym samym środowisku, rozważ WPROST, czy któryś z
-tych kierunków nie prowadzi prościej do celu — masz prawo zmienić
-podejście na jego):
+WOJTEK:
 {team.get('wojtek', '')}
 {chrome_block}{android_block}
 {ask_block}
-ZASADY DECYZJI:
-- Nie powtarzaj tego samego kroku po raz trzeci.
-- TASK ma być JEDNYM konkretnym blokiem (nie ogólnym "zrób grę"
-  / "zrób program").
-- Warunek sukcesu musi być MIERZALNY.
-- DONE wolno zgłosić tylko gdy fizyczne dowody WŁAŚCIWE DLA TEGO
-  CELU będą zweryfikowane — zawsze FINAL_OK.txt, a dodatkowo APK
-  tylko jeśli cel faktycznie dotyczy budowy apki/gry Android.
-  Agent sprawdzi to sam i sam rozpozna, czy APK jest wymagany.
-- EXECUTED = Gemini skończył TASK, NIE = cel projektu zakończony.
-- Jeżeli CRITIC mówi BLOKUJ — weź to poważnie i zmień podejście.
-- OBOWIĄZKOWE: jeżeli ENGINEER powyżej podał gotowy
-  blok kodu, a Twój TASK ma go zapisać do pliku — MUSISZ użyć
-  "write_engineer_code_to" (ścieżka pliku) zamiast opisywać kod
-  słownie w "task". Nie jest to opcja do rozważenia. Wtedy "task"
-  dotyczy TYLKO uruchomienia/testowania już zapisanego pliku, nie
-  jego tworzenia (patrz pełny opis w Twoim prompcie systemowym).
-- "task" TRAFIA BEZPOŚREDNIO DO GEMINI, które traktuje je jako
-  wiadomość od człowieka — napisz je Twoimi słowami, jakbyś Ty
-  sam/sama prosił/a kogoś o zrobienie tego, NIE jako kopię
-  wewnętrznej notatki zespołu. Zaobserwowany realny wzorzec: ENGINEER
-  odpowiada nagłówkami w stylu "KONKRETNY KROK (dla Gemini):" albo
-  "Wklej w Termux cały ten blok" — to zapis DLA ZESPOŁU, nie treść do
-  przeklejenia. Wyciągnij z tego SEDNO polecenia, nie format. Jedyny
-  wyjątek: gotowy blok kodu/komend (```...```) przepisz DOKŁADNIE bez
-  zmian — zmienia się narracja wokół niego, nie sama treść do
-  wykonania.
-
-Zwróć WYŁĄCZNIE JSON.
-
-TASK:
-{{
-  "type": "TASK",
-  "reason": "...",
-  "task": "...",
-  "success_condition": "...",
-  "write_engineer_code_to": "WYMAGANE gdy dotyczy, patrz wyżej"
-}}
-
-DONE:
-{{
-  "type": "DONE",
-  "reason": "..."
-}}
-
-FAILED:
-{{
-  "type": "FAILED",
-  "reason": "..."
-}}
-
-NEED_USER_LOGIN (zamiast FAILED, gdy jedynym blokerem jest czynność,
-którą fizycznie musi kliknąć/wpisać człowiek — login, kod SMS,
-CAPTCHA, zgoda na koncie zewnętrznej usługi — patrz pełny opis w
-Twoim prompcie systemowym). "url" TYLKO prawdziwy http(s) adres strony
-— jeśli chodzi o Ustawienia Androida/systemu (nie stronę w
-przeglądarce), zostaw "url" puste i opisz ścieżkę menu w
-"instructions":
-{{
-  "type": "NEED_USER_LOGIN",
-  "reason": "...",
-  "url": "... (http(s) albo puste)",
-  "instructions": "..."
-}}
+Zwróć WYŁĄCZNIE JSON — formaty (TASK/DONE/FAILED/NEED_USER_LOGIN/ASK) masz w swoim prompcie systemowym.
 {ask_contract_block}"""
 
     return deepseek(
@@ -16809,6 +16936,10 @@ def run_agent(goal):
     # sama zasada, co znaczniki "sprzed tego celu" niżej).
     del _python_written_files[:]
 
+    # v191: nowy cel = każda rola usłyszy go RAZ, przy swojej
+    # pierwszej wiadomości w tym celu (patrz _goal_briefing_for).
+    _set_current_goal(goal)
+
     last_result = {
         "status":
             "START",
@@ -17162,9 +17293,6 @@ Wykryto pętlę.
 Powtarzana decyzja:
 {signature}
 
-CEL:
-{goal}
-
 Ostatni wynik:
 {short(
     json.dumps(
@@ -17330,6 +17458,56 @@ Zwróć tylko JSON.
             write_target = str(
                 decision.get("write_engineer_code_to", "")
             ).strip()
+
+            # v191: MAIN pominął pole, ale wkleił kod do treści
+            # zadania — patrz _task_carries_engineer_code(). Bez tego
+            # kod jechałby PRZEZ Gemini, które musiałoby go
+            # przepisać ręcznie (jego limit + literówki w kodzie,
+            # którego nikt nie kazał zmieniać). Ustalamy ścieżkę sami
+            # i wchodzimy w tę samą, sprawdzoną ścieżkę zapisu.
+            if not write_target and _task_carries_engineer_code(
+                task_text, team.get("engineer_full", "")
+            ):
+
+                inferred_target = _infer_code_target_path(
+                    task_text,
+                    decision.get("success_condition", ""),
+                    team.get("engineer_full", "")
+                )
+
+                if inferred_target:
+
+                    write_target = inferred_target
+
+                    log(
+                        "MAIN",
+                        "MAIN wkleił kod do treści zadania zamiast "
+                        "podać ścieżkę. Zapisuję go sam do "
+                        + inferred_target + " — Gemini nie będzie "
+                        "go przepisywać."
+                    )
+
+                else:
+
+                    log(
+                        "MAIN",
+                        "MAIN wkleił kod do treści zadania i nie da "
+                        "się ustalić nazwy pliku — Gemini będzie "
+                        "musiało przepisać go ręcznie. Zgłaszam to "
+                        "zespołowi."
+                    )
+
+                    _pending_team_warnings.append(
+                        "python [kod_przez_gemini]: MAIN umieścił "
+                        "gotowy kod w treści zadania zamiast podać "
+                        "ścieżkę pliku w \"write_engineer_code_to\", "
+                        "a z tekstu nie da się wyczytać nazwy pliku. "
+                        "Python NIE MÓGŁ zapisać kodu sam, więc "
+                        "Gemini musi go przepisywać ręcznie — to "
+                        "pali jego limit i grozi literówkami w "
+                        "kodzie. W następnej decyzji podaj ścieżkę "
+                        "pliku wprost."
+                    )
 
             if write_target:
 
@@ -17906,9 +18084,6 @@ Zwróć tylko JSON.
                 "MAIN",
                 f"""
 MAIN zaproponował FAILED.
-
-CEL:
-{goal}
 
 POWÓD:
 {reason}
