@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v200
+AEL-MINI AUTONOMOUS AGENT v201
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v200")
+    print("             AEL-MINI AUTONOMOUS AGENT v201")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1698,6 +1698,42 @@ _goal_briefed = set()
 # powiedzieć, a nie liczyć, że ktoś się domyśli. Opróżniane przy
 # każdym wywołaniu consult_team().
 _pending_team_warnings = []
+
+
+# v201 -- zaobserwowany realny, kosztowny bug (log 2026-09-04, v200,
+# KROK 1). Marek trzy razy z rzedu dal BLOKUJ, za kazdym razem z tego
+# samego powodu:
+#
+#   "Krok #3 zostal uciety"
+#   "po linijce # === pojawia sie ......, a caly fallback pozostaje
+#    niewidoczny"
+#   "Twoja komenda jest ucieta w kluczowym miejscu - po echo \"deb
+#    nie ma dalszego ciagu"
+#
+# Marek NIE wymyslal. Odpowiedz Tomka byla FAKTYCZNIE ucieta przez
+# DeepSeeka w polowie generowania. Python to WYKRYWA
+# (_deepseek_looks_truncated), wypisuje w terminalu... i nie mowi o
+# tym nikomu. A od v190c nie ponawia proby "continue" (serwer ja
+# odrzuca), wiec ucieta wypowiedz idzie dalej po cichu.
+#
+# Skutek: Marek slusznie widzi niekompletny plan i blokuje, Tomek
+# tlumaczy sie z czegos, czego nie zawinil ("moj Krok #3 zostal
+# obciety w widoku"), i tak w kolko. Trzy rundy wymiany, szesc
+# zapytan do DeepSeeka spalonych na artefakt naszego wlasnego
+# potoku.
+#
+# To ta sama klasa co zawsze: Python WIE, nie mowi, odbiorca zgaduje
+# i obwinia autora. Wiec mowimy.
+_role_truncated = set()
+
+
+def _mark_role_truncated(name, truncated):
+    """Zapamietuje, czy OSTATNIA odpowiedz tej roli zostala ucieta."""
+
+    if truncated:
+        _role_truncated.add(str(name))
+    else:
+        _role_truncated.discard(str(name))
 
 
 # ============================================================
@@ -2782,6 +2818,11 @@ def deepseek(name, message):
                 truncated, reason = _deepseek_looks_truncated(
                     text, status
                 )
+
+                # v201: zapamietujemy to DLA ODBIORCOW tej wypowiedzi
+                # (patrz _role_truncated) — inaczej beda ja czytac jak
+                # niedbalosc autora.
+                _mark_role_truncated(name, truncated)
 
                 if truncated and not _continue_action_supported:
 
@@ -13245,7 +13286,7 @@ def _task_carries_engineer_code(task_text, engineer_full):
     return bool(extract_code_block(engineer_full or ""))
 
 
-def _role_output_for_team(role_label, text, limit):
+def _role_output_for_team(role_label, text, limit, role_key=None):
     """
     v190 — ta sama klasa błędu, co "Beata": Python WIE, ale nie mówi,
     więc odbiorca zgaduje.
@@ -13268,7 +13309,25 @@ def _role_output_for_team(role_label, text, limit):
     """
 
     if str(text or "").strip():
-        return short(text, limit)
+
+        out = short(text, limit)
+
+        # v201: jesli DeepSeek uciął tę wypowiedź w połowie, odbiorca
+        # MUSI to wiedzieć. Inaczej — jak w logu 2026-09-04 — czyta
+        # urwany plan jako niedbalstwo autora i blokuje go trzy razy
+        # z rzedu (patrz _role_truncated).
+        if role_key and str(role_key) in _role_truncated:
+            out += (
+                "\n\n[FAKT OD PYTHONA: ta wypowiedź została URWANA "
+                "W POŁOWIE przez DeepSeeka (limit długości "
+                "odpowiedzi), a nie przez jej autora. Brakującego "
+                "końca NIE MA — nikt go nie ukrywa i nikt nie był "
+                "niedbały. Oceniaj to, co jest, albo poproś wprost o "
+                "sam brakujący fragment. NIE blokuj z powodu samego "
+                "urwania.]"
+            )
+
+        return out
 
     return (
         "[FAKT OD PYTHONA: " + role_label + " ZOSTAŁ zapytany w tym "
@@ -13307,10 +13366,24 @@ def _engineer_for_team(text, limit=4000):
     # v190: pusta odpowiedź Bartka to awaria, nie "nie ma nic do
     # dodania" — patrz _role_output_for_team().
     if not text.strip():
-        return _role_output_for_team("Bartek (ENGINEER)", text, limit)
+        return _role_output_for_team(
+            "Bartek (ENGINEER)", text, limit, "ENGINEER"
+        )
+
+    # v201: Bartek tez bywa ucinany w polowie przez DeepSeeka —
+    # a jego wypowiedz to zwykle KOD, wiec urwanie jest tu jeszcze
+    # grozniejsze niz w prozie.
+    _cut = (
+        "\n\n[FAKT OD PYTHONA: ta wypowiedź została URWANA W POŁOWIE "
+        "przez DeepSeeka (limit długości odpowiedzi), nie przez "
+        "Bartka. Jeśli kod poniżej wygląda na niedokończony — bo "
+        "jest. Poproś wprost o brakujący fragment zamiast blokować "
+        "całość.]"
+        if "ENGINEER" in _role_truncated else ""
+    )
 
     if len(text) <= limit:
-        return text
+        return text + _cut
 
     # v192 (na wyrazna prosbe uzytkownika, 2026-09-04: "nie mozemy
     # ucinac kodow w wiadomosciach wysylanych pomiedzy czatami").
@@ -13326,7 +13399,7 @@ def _engineer_for_team(text, limit=4000):
     code_parts = [p for p in parts if p.startswith("```")]
 
     if not code_parts:
-        return short(text, limit)
+        return short(text, limit) + _cut
 
     code_total = sum(len(p) for p in code_parts)
     prose_budget = max(limit - code_total, 400)
@@ -13340,7 +13413,7 @@ def _engineer_for_team(text, limit=4000):
         elif part.strip():
             rebuilt.append(short(part, prose_slice))
 
-    return "".join(rebuilt) + (
+    return "".join(rebuilt) + _cut + (
         "\n\n[FAKT OD PYTHONA: proza powyzej moze byc skrocona, ale "
         "KAZDY blok kodu ```...``` jest tu KOMPLETNY — nic z kodu nie "
         "zostalo uciete. Python ma go w calosci i potrafi zapisac go "
@@ -15828,10 +15901,10 @@ def consult_team(
         # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
         # nie jako milcząca zgoda — patrz _role_output_for_team().
         "planner":   _role_output_for_team(
-            "Tomek (PLANNER)", results.get("PLANNER", ""), 4000
+            "Tomek (PLANNER)", results.get("PLANNER", ""), 4000, "PLANNER"
         ),
         "researcher": _role_output_for_team(
-            "Kamil (RESEARCHER)", results.get("RESEARCHER", ""), 4000
+            "Kamil (RESEARCHER)", results.get("RESEARCHER", ""), 4000, "RESEARCHER"
         ),
         "engineer":  _engineer_for_team(results.get("ENGINEER", "")),
         # Pełna, nieskrócona odpowiedź ENGINEER — NIE
@@ -15841,13 +15914,13 @@ def consult_team(
         # extract_code_block() / obsługa TASK w run_agent()).
         "engineer_full": results.get("ENGINEER", ""),
         "critic":    _role_output_for_team(
-            "Marek (CRITIC)", results.get("CRITIC", ""), 4000
+            "Marek (CRITIC)", results.get("CRITIC", ""), 4000, "CRITIC"
         ),
         "browser":   _role_output_for_team(
-            "Ola (BROWSER)", results.get("BROWSER", ""), 2000
+            "Ola (BROWSER)", results.get("BROWSER", ""), 2000, "BROWSER"
         ),
         "wojtek":    _role_output_for_team(
-            "Wojtek", results.get("WOJTEK", ""), 1500
+            "Wojtek", results.get("WOJTEK", ""), 1500, "WOJTEK"
         ),
         # v195: zapis wymiany zdan Marek <-> Tomek/Bartek, ktora
         # odbyla sie w TYM kroku. MAIN musi widziec nie tylko koncowy
