@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v208
+AEL-MINI AUTONOMOUS AGENT v209
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v208")
+    print("             AEL-MINI AUTONOMOUS AGENT v209")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16636,6 +16636,41 @@ def consult_team(
     # Streszczenie Oli zostaje (to ona robi z tego zdanie po
     # ludzku), surowe fakty idą pod spodem. Doklejane WYŁĄCZNIE przy
     # faktycznym błędzie, żeby nie rozdymać każdego udanego kroku.
+    # v209: to samo, ale dla kroku, ktory SIE UDAL.
+    #
+    # report_body budowalo sie jako `readable_report or
+    # raw_report_material` — wiec gdy Ola cokolwiek napisala,
+    # surowe wyjscie narzedzia znikalo, a doklejalismy je z
+    # powrotem TYLKO przy bledzie (nizej). Log 2026-09-04, krok 20:
+    # `termux-contact-list | grep -i beata` ZADZIALAL i wypisal piec
+    # kontaktow z Beata, a potem `cat ~/beata_contact.txt` wypisal
+    # wprost "Beata: +48514590110". Zespol nie zobaczyl ani jednej z
+    # tych wartosci — dostal zdanie Oli "te dane sa dostepne inna
+    # droga" i dalej pytal, gdzie jest numer.
+    #
+    # Uzytkownik: "nie widza. Ola widziala lepiej niz inni, ale nie
+    # wiem czy ta wiedze im przekazywala". Przekazywala streszczenie.
+    # Konkret zostawal w Pythonie.
+    #
+    # Sukces bez wyniku jest tyle wart, co porazka bez bledu.
+    success_values_block = ""
+
+    if (
+        readable_report
+        and isinstance(last_result, dict)
+        and last_result.get("ok") is not False
+        and last_result.get("status") != "GEMINI_TOOL_ERROR"
+    ):
+        _wypisane = _tool_stdout_values(last_result)
+
+        if _wypisane:
+            success_values_block = (
+                "\n\nDOKŁADNIE TO, CO WYPISAŁO NARZĘDZIE (surowe, "
+                "nieprzetworzone — jeśli szukacie jakiejś wartości, "
+                "ona jest tutaj, nie w streszczeniu powyżej):\n"
+                + _wypisane
+            )
+
     error_details_block = ""
 
     if (
@@ -16696,7 +16731,8 @@ def consult_team(
             _progress_for_role(role_name, progress_snapshot),
             _only_if_new(role_name, "checklist", checklist_block),
             _only_if_new(role_name, "main_decision", main_decision_block),
-            "\nOSTATNI RAPORT:\n" + report_body + error_details_block + "\n",
+            "\nOSTATNI RAPORT:\n" + report_body
+            + success_values_block + error_details_block + "\n",
             _only_if_new(role_name, "tool_hint", tool_hint),
         ]
         return "".join(p for p in pieces if p)
@@ -18509,6 +18545,146 @@ _TEAM_MENTIONED_PATH_RE = re.compile(
 _team_file_answers = []
 
 
+# ============================================================
+# PYTAJA O PLIK -> DOSTAJA TRESC, NIE ROZMIAR (v209)
+# ============================================================
+#
+# Uzytkownik pokazal, jak ma wygladac rozmowa (2026-09-04):
+#
+#   BOT:  "Jaka jest powierzchnia w m2?"
+#   USER: "45 m2, Warszawa."
+#   BOT:  "Przy 45 m2 moge przygotowac wstepna wycene."
+#
+# Pytanie -> KONKRETNA WARTOSC -> praca dalej. Nie "podano
+# powierzchnie, 4 znaki".
+#
+# U nas kanal pytanie->odpowiedz istnieje od v192
+# (_remember_team_file_questions), ale odpowiadal ROZMIAREM:
+#
+#   "- ~/beata_number.txt: JEST, 13 B."
+#
+# Czyli zespol pytal "co jest w tym pliku?", a dostawal "jest i ma
+# 13 bajtow". W logu z krokow 15-24 widac tego skutek wprost: Kamil
+# pytal o call_result.txt, dostal "797 B" i dalej nie wiedzial, czy
+# rozmowa sie odbyla; Marek pytal o beata_number.txt, dostal rozmiar
+# i musial ZGADYWAC, ze w srodku jest polecenie zamiast numeru.
+# Numer Beaty (+48514590110) lezal na dysku przez wiele krokow, a
+# zespol go nie zobaczyl ANI RAZU — bo Python konsekwentnie
+# odpowiadal etykieta zamiast wartoscia.
+#
+# Python ma ten plik pod reka. Wiec go otwiera i mowi, co w nim
+# jest — tak jak czlowiek, ktory zamiast "plik ma 13 bajtow"
+# odpowiada "jest tam +48514590110".
+
+# Ile tresci pliku pokazujemy w odpowiedzi na pytanie zespolu.
+_FILE_ANSWER_MAX = 500
+
+
+def _file_answer_body(p):
+    """Odpowiedz o pliku: CO w nim jest, nie ile ma bajtow."""
+
+    try:
+        size = p.stat().st_size
+    except Exception:
+        size = 0
+
+    if size == 0:
+        return "JEST, ale PUSTY (0 B)."
+
+    try:
+        tresc = p.read_text(encoding="utf-8", errors="strict")
+    except Exception:
+        # Plik binarny albo w nieczytelnym kodowaniu — tu rozmiar
+        # jest juz jedyna sensowna odpowiedzia.
+        return "JEST (" + str(size) + " B), plik binarny."
+
+    tresc = tresc.strip()
+
+    if not tresc:
+        return "JEST (" + str(size) + " B), same białe znaki."
+
+    if len(tresc) <= _FILE_ANSWER_MAX:
+        return (
+            "JEST (" + str(size) + " B). Zawiera dokładnie to:\n"
+            + tresc
+        )
+
+    return (
+        "JEST (" + str(size) + " B). Początek i koniec:\n"
+        + _head_tail_preview(
+            tresc, _FILE_ANSWER_MAX // 2, _FILE_ANSWER_MAX // 2
+        )
+    )
+
+
+# Ile surowego wyjscia UDANEGO narzedzia oddajemy zespolowi.
+# Celowo malo: chodzi o konkretna wartosc (numer, sciezka, id), a
+# nie o kolejna sciane tekstu — te wlasnie usunelismy w v208.
+_SUCCESS_VALUES_MAX = 700
+
+# Wyjscia, ktore sa z natury gigantyczne i nie niosa "wartosci do
+# uzycia", tylko opis ekranu. Ich nie doklejamy nigdy.
+_BULK_OUTPUT_MARKERS = (
+    "click=false",
+    "bounds=[",
+    "resource_name_obfuscated",
+    "webSocketDebuggerUrl",
+)
+
+
+def _tool_stdout_values(last_result):
+    """
+    Konkret z UDANEGO narzedzia: to, co realnie wypisalo na wyjscie.
+
+    Zwraca "" gdy nie ma nic sensownego albo gdy to zrzut ekranu /
+    hierarchia widokow (wtedy wartosci tam nie ma, a objetosc jest
+    ogromna — patrz _BULK_OUTPUT_MARKERS).
+    """
+
+    if not isinstance(last_result, dict):
+        return ""
+
+    kawalki = []
+
+    for klucz in ("stdout", "value", "output"):
+
+        tresc = last_result.get(klucz)
+
+        if isinstance(tresc, (dict, list)):
+            continue
+
+        tresc = str(tresc or "").strip()
+
+        if not tresc:
+            continue
+
+        if any(m in tresc for m in _BULK_OUTPUT_MARKERS):
+            continue
+
+        kawalki.append(tresc)
+
+    # Wynik narzedzia bywa zagniezdzony (tool_result), a to wlasnie
+    # tam siedzial "Beata: +48514590110".
+    zagniezdzony = last_result.get("tool_result")
+
+    if isinstance(zagniezdzony, dict):
+        glebiej = _tool_stdout_values(zagniezdzony)
+        if glebiej:
+            kawalki.append(glebiej)
+
+    if not kawalki:
+        return ""
+
+    razem = "\n".join(kawalki).strip()
+
+    if len(razem) <= _SUCCESS_VALUES_MAX:
+        return razem
+
+    return _head_tail_preview(
+        razem, _SUCCESS_VALUES_MAX // 2, _SUCCESS_VALUES_MAX // 2
+    )
+
+
 def _remember_team_file_questions(role_texts):
     """
     Zbiera sciezki, o ktorych mowil zespol, i przygotowuje na nie
@@ -18538,10 +18714,8 @@ def _remember_team_file_questions(role_texts):
 
         try:
             if p.exists():
-                size = p.stat().st_size
                 _team_file_answers.append(
-                    "- " + candidate + ": JEST, "
-                    + str(size) + " B."
+                    "- " + candidate + ": " + _file_answer_body(p)
                 )
                 continue
         except Exception:
