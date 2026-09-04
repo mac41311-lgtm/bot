@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v197
+AEL-MINI AUTONOMOUS AGENT v198
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v197")
+    print("             AEL-MINI AUTONOMOUS AGENT v198")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5512,6 +5512,18 @@ def execute_shell(command, timeout=None):
         # lądowała tam, gdzie zespół i tak zakłada — niezależnie od
         # tego, z jakiego katalogu faktycznie wystartował sam
         # agent.py.
+        # v198 -- zaobserwowany realny bug (log 2026-09-04, v197).
+        # Bartek napisal skrypt z `read -p "Podaj klucz API: "`, a
+        # capture_output=True NIE przekierowuje stdin -- podproces
+        # dziedziczyl wiec TERMINAL UZYTKOWNIKA. `read` albo kradl
+        # wejscie przeznaczone dla samego agenta (ten sam stdin, na
+        # ktorym agent robi input()/_read_full_input), albo wisial do
+        # konca timeoutu. Oba warianty sa ciche i mylace.
+        #
+        # stdin=DEVNULL: `read` dostaje EOF NATYCHMIAST, skrypt konczy
+        # sie od razu i czytelnie, a terminal uzytkownika zostaje
+        # nietkniety. Wykonawca i tak nie ma klawiatury -- udawanie,
+        # ze ma, moglo tylko zaszkodzic.
         result = subprocess.run(
             command,
             shell=True,
@@ -5519,7 +5531,8 @@ def execute_shell(command, timeout=None):
             capture_output=True,
             text=True,
             timeout=effective_timeout,
-            cwd=str(HOME)
+            cwd=str(HOME),
+            stdin=subprocess.DEVNULL
         )
 
         return {
@@ -7646,13 +7659,75 @@ def _gemini_tools_legacy():
 
 
 
-def gemini_tools():
+# v198 -- zaobserwowany realny problem (log 2026-09-04, zgloszony
+# przez uzytkownika: "czeka dlugo do wykonania czegos, zatrzymuje sie
+# na 'Interactions tools: 41'"). Miedzy wywolaniami narzedzi mijalo
+# 60-183 sekund.
+#
+# Historia rozmowy z Gemini siedzi po stronie serwera
+# (previous_interaction_id), ale DEFINICJE NARZEDZI szly od nowa w
+# KAZDYM obiegu: 17,5 KB (~4400 tokenow) na runde, przy 6 rundach
+# ponad 100 KB samych schematow. Z tego prawie 10 KB to rodzina
+# android_* — kompletnie martwa przy zadaniu typu "uruchom skrypt
+# curl w Termuksie".
+#
+# Wysylamy wiec rodziny narzedzi, ktore dla TEGO zadania maja sens.
+# Rdzen (termux/shell/ask_deepseek) idzie ZAWSZE, bo prawie kazde
+# zadanie go dotyka. Dochodza tez zawsze dwa TANIE narzedzia "rozejrzyj
+# sie" (android_state, chrome_tabs) — dzieki nim Gemini moze zobaczyc
+# ekran/karty i zglosic, ze potrzebuje wiecej, zamiast utknac.
+#
+# UWAGA: w razie watpliwosci DOKLADAMY rodzine, nie ucinamy. Lepiej
+# wyslac kilka KB za duzo niz odebrac wykonawcy narzedzie, ktorego
+# naprawde potrzebuje.
+_ANDROID_TOOL_KEYWORDS = (
+    "android", "telefon", "ekran", "aplikacj", "kliknij", "klikni",
+    "wpisz", "przycisk", "dotknij", "przewin", "zrzut", "screenshot",
+    "kalkulator", "zegar", "kalendarz", "kontakt", "sms", "zadzwo",
+    "polacz", "połącz", "dzwoni", "apk", "zainstaluj", "logcat",
+    "schowek", "wklej", "ocr", "uprawnien",
+)
+
+_CHROME_TOOL_KEYWORDS = (
+    "chrome", "przegladar", "przeglądar", "strona", "stronie", "www",
+    "http", "url", "karta", "zakladk", "zakładk", "javascript", "dom",
+    "localstorage", "panel", "zaloguj", "logowan", "formular",
+)
+
+_ALWAYS_ON_TOOLS = ("android_state", "chrome_tabs")
+
+
+def _tool_families_for_task(task_haystack):
+    """
+    Ktore rodziny narzedzi wyslac dla tego zadania. Pusty haystack =
+    wszystko (nie zgadujemy, gdy nic nie wiemy).
+    """
+
+    text = str(task_haystack or "").lower()
+
+    if not text.strip():
+        return {"android": True, "chrome": True}
+
+    return {
+        "android": any(k in text for k in _ANDROID_TOOL_KEYWORDS),
+        "chrome": any(k in text for k in _CHROME_TOOL_KEYWORDS),
+    }
+
+
+def gemini_tools(task_haystack=""):
     """
     Adapter narzędzi dla Gemini Interactions API.
 
     Oryginalne deklaracje narzędzi są zachowane.
     FunctionDeclaration jest konwertowane do zwykłego dict.
+
+    v198: `task_haystack` (tresc zadania + warunek sukcesu) pozwala
+    pominac rodziny narzedzi bez zwiazku z zadaniem — patrz komentarz
+    przy _tool_families_for_task(). Bez argumentu zachowanie jest
+    identyczne jak dotad: idzie komplet.
     """
+
+    families = _tool_families_for_task(task_haystack)
 
     declarations = _gemini_tools_legacy()
 
@@ -7754,14 +7829,41 @@ def gemini_tools():
             )
         })
 
+    _wszystkich = len(result)
+
+    if not (families["android"] and families["chrome"]):
+
+        kept = []
+
+        for entry in result:
+            nazwa = str(entry.get("name", ""))
+            if nazwa in _ALWAYS_ON_TOOLS:
+                kept.append(entry)
+            elif nazwa.startswith("android_") and not families["android"]:
+                continue
+            elif nazwa.startswith("chrome_") and not families["chrome"]:
+                continue
+            else:
+                kept.append(entry)
+
+        result = kept
+
+    # v198: log pokazuje, ile narzedzi FAKTYCZNIE poszlo w tym
+    # obiegu. Wczesniej zawsze drukowal 41, takze wtedy, gdy realnie
+    # wysylalismy mniej — a to jest dokladnie ta linia, na ktorej
+    # uzytkownik widzi, ze agent "stoi".
     print(
         "[GEMINI] Interactions tools:",
         len(result),
+        ("z " + str(_wszystkich) + " — reszta bez związku z tym "
+         "zadaniem") if len(result) < _wszystkich else "(komplet)",
         "(w tym niestandardowe:",
         str(len(CUSTOM_TOOLS)) + ")"
     )
 
     return result
+
+
 def termux_mkdir(path):
     try:
         p = _resolve_home_relative_path(path)
@@ -10699,6 +10801,59 @@ _NO_SUCH_FILE_RE = re.compile(
 )
 
 
+# v198 -- zaobserwowany realny bug (log 2026-09-04, v197, KROK 1).
+# Bartek napisal skrypt zadzwon_do_beaty.sh, ktory pyta czlowieka:
+#
+#   read -p "Podaj klucz API Retell: " API_KEY
+#   read -p "Podaj ID agenta: " AGENT_ID
+#   read -p "Numer Beaty: " PHONE
+#
+# ...po czym MAIN kazal Gemini go URUCHOMIC. Tylko ze Gemini nie ma
+# klawiatury: to proces bez terminala. Skrypt albo kradl stdin samemu
+# agentowi, albo wisial do timeoutu, a potem konczyl sie "Wszystkie
+# pola sa wymagane" -- czyli porazka, ktorej nikt nie umial
+# wytlumaczyc, bo z pozoru skrypt byl poprawny.
+#
+# To ta sama klasa bledu co v188 (TASK bedacy w istocie pytaniem do
+# czlowieka): zespol projektuje krok, w ktorym KTOS ma cos wpisac, w
+# miejscu, gdzie nikogo nie ma. Wylapujemy to ZANIM skrypt ruszy i
+# mowimy wprost, ktora droga dane od czlowieka faktycznie dochodza
+# (NEED_USER_LOGIN -> plik user_provided_value.txt).
+_INTERACTIVE_SCRIPT_RE = re.compile(
+    r"^\s*read\s+(-[a-zA-Z]+\s+)*", re.MULTILINE
+)
+
+
+def _detect_interactive_script(text):
+    """
+    Czy skrypt zatrzyma sie, czekajac az czlowiek cos wpisze?
+
+    Zwraca opis problemu albo "" gdy skrypt jest samodzielny.
+    """
+
+    body = str(text or "")
+
+    if not _INTERACTIVE_SCRIPT_RE.search(body):
+        return ""
+
+    return (
+        "Ten skrypt PYTA CZLOWIEKA o dane (`read` w tresci), a "
+        "uruchamia go Gemini — proces BEZ KLAWIATURY I BEZ "
+        "TERMINALA. Nikt tam nic nie wpisze: `read` dostanie od razu "
+        "koniec wejscia, zmienne zostana puste i skrypt polegnie na "
+        "wlasnej walidacji (\"wszystkie pola sa wymagane\") albo "
+        "pojdzie dalej z pustymi wartosciami. To NIE jest blad "
+        "skladni ani srodowiska — to skrypt zaprojektowany dla "
+        "czlowieka siedzacego przy terminalu.\n\n"
+        "Dane od uzytkownika dochodza TYLKO jedna droga: MAIN zwraca "
+        "NEED_USER_LOGIN, uzytkownik podaje wartosc, Python zapisuje "
+        "ja do pliku, a skrypt CZYTA JA Z PLIKU albo ze zmiennej "
+        "srodowiskowej — bez zadnego `read`. Przerobcie skrypt tak, "
+        "zeby bral wartosci z pliku/zmiennych, i dopiero wtedy go "
+        "uruchamiajcie."
+    )
+
+
 def _shell_failure_is_just_missing_file(tool_name, result):
     """
     Czy niezerowy kod wyjscia to w istocie ODPOWIEDZ "tego pliku nie
@@ -11076,7 +11231,7 @@ CO POWINIEN ZROBIĆ MAIN:
         interaction = client.interactions.create(
             model=GEMINI_MODEL,
             input=prompt,
-            tools=gemini_tools()
+            tools=gemini_tools(_task_haystack)
         )
 
         interaction_id = getattr(
@@ -11623,7 +11778,7 @@ CO POWINIEN ZROBIĆ MAIN:
                 model=GEMINI_MODEL,
                 input=responses,
                 previous_interaction_id=interaction_id,
-                tools=gemini_tools()
+                tools=gemini_tools(_task_haystack)
             )
 
             new_id = getattr(
@@ -18840,6 +18995,30 @@ Zwróć tylko JSON.
                     # DeepSeek — oni terminala nie widzą (patrz
                     # _python_written_files).
                     _record_python_written_file(target_path)
+
+                    # v198: skrypt pytajacy czlowieka o dane (`read`)
+                    # nie ma szans zadzialac -- uruchamia go proces
+                    # bez klawiatury. Mowimy o tym ZARAZ po zapisie,
+                    # zanim Gemini zmarnuje na to kolejne kroki i
+                    # timeout (patrz _detect_interactive_script).
+                    _interactive = _detect_interactive_script(
+                        engineer_code
+                    )
+
+                    if _interactive:
+
+                        log(
+                            "MAIN",
+                            "UWAGA: zapisany skrypt pyta człowieka "
+                            "o dane (`read`), a uruchomi go Gemini — "
+                            "proces bez klawiatury. Zgłaszam to "
+                            "zespołowi teraz, zanim krok się zmarnuje."
+                        )
+
+                        _pending_team_warnings.append(
+                            "python [skrypt_pyta_czlowieka]: "
+                            + str(target_path) + " — " + _interactive
+                        )
 
                     log(
                         "MAIN",
