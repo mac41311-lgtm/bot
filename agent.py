@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v207
+AEL-MINI AUTONOMOUS AGENT v208
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v207")
+    print("             AEL-MINI AUTONOMOUS AGENT v208")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1995,6 +1995,117 @@ def _only_if_new(role, key, block):
     return block
 
 
+# ============================================================
+# STAN FAKTYCZNY: TYLKO TO, CO SIE ZMIENILO (v208)
+# ============================================================
+#
+# Uzytkownik, 2026-09-04, po logu z krokow 15-24:
+#
+#   "wkurza mnie ciagle powtarzanie (...) jak potrzebuja maja cale
+#    logi po co im pliki itp (...) musza wiedziec co juz zrobione
+#    ale mielenie tego ciagle to przesada, nie skupiaja sie na
+#    zadaniu tylko miela (...) miala byc normalna komunikacja"
+#
+# Ma racje i widac to w logu co do slowa. STAN FAKTYCZNY szedl do
+# KAZDEJ roli w KAZDYM kroku, a _only_if_new() go nie wycinalo, bo
+# blok porownuje sie w calosci — a rozmiary plikow i podglady drgaja
+# bez przerwy (Python sam nadpisywal beata_number.txt, FINAL_OK.txt
+# dostaje nowa date). Wiec praktycznie zawsze "byl nowy" i szedl.
+#
+# Efekt: cztery role, co krok, recytuja nam z powrotem nasza wlasna
+# liste plikow zamiast myslec o zadaniu:
+#
+#   Tomek:  "Klucz Bland istnieje (~/.bland_key, 40 B), numer Beaty
+#            jest poprawny (~/beata_number.txt, 13 B), a
+#            call_result.txt (74 B)..."
+#   Marek:  "Klucz Bland istnieje (~/.bland_key, 40 B) - mozna
+#            sprobowac. Numer Beaty jest poprawny (13 B)."
+#   Bartek: "~/.bland_key - istnieje (40 B) - mamy klucz API"
+#   Kamil:  "call_result.txt - istnieje, 797 B... FINAL_OK.txt -
+#            znow nowa data"
+#
+# Zaden czlowiek tak nie pracuje. Kolega nie odczytuje na glos calego
+# listingu katalogu co kwadrans — mowi raz "numer jest juz w pliku",
+# a potem odzywa sie TYLKO wtedy, gdy cos sie zmienilo.
+#
+# Wiec: pelny stan raz, przy pierwszym kontakcie roli z celem. Potem
+# WYLACZNIE roznica — i to opisana jednym zdaniem, nie sekcja. Gdy
+# nic sie nie zmienilo, nie idzie nic.
+#
+# To jest zmiana w systemie, nie w prompcie: Python i tak zna oba
+# stany, wiec sam liczy roznice, zamiast kazac rolom porownywac
+# dwie sciany tekstu w pamieci.
+_role_seen_progress = {}
+
+
+def _progress_lines_to_map(snapshot):
+    """Rozbija STAN FAKTYCZNY na {czego dotyczy: cala linia}."""
+
+    mapa = {}
+
+    for linia in str(snapshot or "").split("\n"):
+
+        linia = linia.rstrip()
+
+        if not linia.startswith("- "):
+            continue
+
+        klucz = linia[2:].split(":", 1)[0].strip()
+
+        mapa[klucz or linia] = linia
+
+    return mapa
+
+
+def _progress_for_role(role_name, snapshot):
+    """
+    Co z aktualnego stanu faktycznego ma isc DO TEJ ROLI.
+
+    Pierwszy raz — calosc (potrzebuje punktu odniesienia).
+    Potem — tylko to, co sie zmienilo, zniklo albo doszlo.
+    Nic sie nie zmienilo — pusty string.
+    """
+
+    snapshot = str(snapshot or "")
+
+    if not snapshot.strip():
+        return ""
+
+    teraz = _progress_lines_to_map(snapshot)
+    poprzednio = _role_seen_progress.get(role_name)
+
+    _role_seen_progress[role_name] = teraz
+
+    if poprzednio is None:
+        return "\n" + snapshot + "\n"
+
+    zmiany = []
+
+    for klucz, linia in teraz.items():
+        if poprzednio.get(klucz) != linia:
+            zmiany.append(linia)
+
+    for klucz, linia in poprzednio.items():
+        if klucz not in teraz:
+            zmiany.append("- " + klucz + ": już tego nie ma")
+
+    if not zmiany:
+        return ""
+
+    return (
+        "\nOd ostatniego razu zmieniło się tylko tyle (reszta stanu "
+        "bez zmian — nie wracaj do niej):\n"
+        + "\n".join(zmiany)
+        + "\n"
+    )
+
+
+def _reset_progress_memory():
+    """Nowy cel = kazda rola dostaje pelny stan raz, od nowa."""
+
+    _role_seen_progress.clear()
+
+
 def _current_topic(last_result, critic_streak):
     """
     Jedno zdanie: czym zajmujemy sie TERAZ. Kolejnosc wynika z tego,
@@ -2066,6 +2177,7 @@ def _set_current_goal(goal):
     _set_current_project_file(None)
     _reset_code_review_budget()
     _reset_critic_objection_memory()
+    _reset_progress_memory()
 
 
 def _goal_briefing_for(name):
@@ -16396,7 +16508,6 @@ def consult_team(
     file_answers_block = ("\n" + _file_answers + "\n") if _file_answers else ""
 
     progress_snapshot = _goal_progress_snapshot(goal)
-    progress_block = ("\n" + progress_snapshot + "\n") if progress_snapshot else ""
 
     checklist_summary = _checklist_summary_block()
     checklist_block = ("\n" + checklist_summary + "\n") if checklist_summary else ""
@@ -16580,7 +16691,9 @@ def consult_team(
             _only_if_new(role_name, "topic", topic_line + "\n\n")
             if topic_line else "",
             _only_if_new(role_name, "files", file_answers_block),
-            _only_if_new(role_name, "progress", progress_block),
+            # v208: nie caly listing co krok, tylko roznica —
+            # patrz _progress_for_role().
+            _progress_for_role(role_name, progress_snapshot),
             _only_if_new(role_name, "checklist", checklist_block),
             _only_if_new(role_name, "main_decision", main_decision_block),
             "\nOSTATNI RAPORT:\n" + report_body + error_details_block + "\n",
