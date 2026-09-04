@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v203
+AEL-MINI AUTONOMOUS AGENT v204
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v203")
+    print("             AEL-MINI AUTONOMOUS AGENT v204")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1749,6 +1749,97 @@ _role_truncated = set()
 _engineer_code_feedback = None
 
 
+# v204 -- z przykladu uzytkownika (2026-09-04), jego wlasne
+# podsumowanie: "CODE_REVIEWER nie musi dostac kodu od ENGINEER-a...
+# sam czyta serwer. Kazdy agent ma swoja pamiec roli w swoim czacie,
+# a WSPOLNY SERWER JEST PAMIECIA PROJEKTU. Dzieki temu nie trzeba
+# kopiowac kodu z jednego agenta do drugiego."
+#
+# U nas role nie maja narzedzi i dysku nie zobacza — ale czyta go
+# Python i to on jest ich oczami. Roznica jest zasadnicza: zamiast
+# przekazywac sobie kod z ust do ust (i pracowac na tym, co ktos
+# PAMIETA), kazdy dostaje to, co NAPRAWDE jest teraz w pliku.
+#
+# To nie jest ozdobnik. v203 dal Bartkowi poprawki SZUKAJ/ZAMIEN, a
+# one wymagaja fragmentu pasujacego CO DO ZNAKU. Bartek nie widzial
+# pliku od momentu, w ktorym go napisal — po pierwszej poprawce albo
+# zmianie przez Gemini pracowalby z pamieci i jego latki bylyby
+# odrzucane ("Fragment SZUKAJ nie wystepuje w pliku dokladnie").
+# Bez tego v203 dzialaloby raz, a potem juz nie.
+#
+# Plik idzie W CALOSCI (v192: kodu nie tniemy) i tylko wtedy, gdy sie
+# ZMIENIL od ostatniego razu (v193: nie powtarzamy scian tekstu).
+_engineer_current_file = None
+
+_PROJECT_FILE_MAX = 12000
+
+
+def _set_current_project_file(path):
+    """Plik, nad ktorym zespol wlasnie pracuje."""
+
+    global _engineer_current_file
+
+    _engineer_current_file = str(path) if path else None
+
+
+def _current_project_file_block():
+    """
+    Aktualna tresc pliku, odczytana Z DYSKU TERAZ.
+
+    Zwraca "" gdy nie ma nad czym pracowac albo pliku nie da sie
+    odczytac — nigdy nie zgadujemy, co w nim jest.
+    """
+
+    if not _engineer_current_file:
+        return ""
+
+    try:
+        p = _resolve_home_relative_path(_engineer_current_file)
+
+        if not p.exists():
+            return (
+                "\n\nAKTUALNY STAN PLIKU " + str(p) + ": PLIKU NIE MA "
+                "na dysku (sprawdzone teraz). Jeśli miał tam być — "
+                "trzeba go utworzyć od zera, nie poprawiać.\n"
+            )
+
+        tresc = p.read_text(encoding="utf-8", errors="replace")
+
+    except Exception:
+        return ""
+
+    naglowek = (
+        "\n\nTAK WYGLĄDA TEN PLIK TERAZ — " + str(p) + " ("
+        + str(len(tresc)) + " B, odczytane z dysku w tej chwili, nie "
+        "z czyjejś pamięci):\n"
+    )
+
+    stopka = (
+        "\n[To jest STAN FAKTYCZNY pliku. Jeśli poprawiasz go przez "
+        "SZUKAJ/ZAMIEŃ — skopiuj fragment DOKŁADNIE stąd, znak w "
+        "znak, razem z wcięciami. Fragment musi występować w pliku "
+        "dokładnie raz, inaczej poprawka zostanie odrzucona.]\n"
+    )
+
+    if len(tresc) <= _PROJECT_FILE_MAX:
+        return naglowek + tresc + stopka
+
+    polowa = _PROJECT_FILE_MAX // 2
+
+    return (
+        naglowek
+        + tresc[:polowa]
+        + "\n\n[...POMINIĘTO ŚRODEK PLIKU ("
+        + str(len(tresc) - _PROJECT_FILE_MAX)
+        + " B) — jest za duży, żeby pokazać go w całości. Poniżej "
+        "koniec pliku. Jeśli poprawiasz fragment ze środka, poproś "
+        "najpierw o odczytanie tej konkretnej części...]\n\n"
+        + tresc[-polowa:]
+        + stopka
+    )
+
+
+
 def _remember_engineer_code_result(path, result):
     """
     Zapamietuje, jak zachowal sie kod Bartka, zeby oddac mu to wprost.
@@ -1972,6 +2063,7 @@ def _set_current_goal(goal):
     # v193: nowy cel = rozmowa od zera, wiec nikt niczego jeszcze
     # "nie widzial" (patrz _only_if_new).
     _reset_step_by_step_memory()
+    _set_current_project_file(None)
 
 
 def _goal_briefing_for(name):
@@ -15971,6 +16063,10 @@ def consult_team(
                 "\nPLAN TOMKA:\n" + planner_out
                 + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                + _only_if_new(
+                    "ENGINEER", "project_file",
+                    _current_project_file_block()
+                )
                 + _engineer_feedback_block()
                 + engineer_critic_block
                 + engineer_question_block
@@ -16009,6 +16105,10 @@ def consult_team(
             "CRITIC",
             extra=(
                 "\nPLAN TOMKA:\n" + planner_out
+                + _only_if_new(
+                    "CRITIC", "project_file",
+                    _current_project_file_block()
+                )
                 + critic_answer_block
                 + (
                     "\n\nOD OLI (tylko dla Ciebie): "
@@ -19406,6 +19506,7 @@ Zwróć tylko JSON.
                     # zwyklym zapisie. Sluzy do tego _code_ready_path.
                     write_target = ""
                     _code_ready_path = target_path
+                    _set_current_project_file(target_path)
 
                 engineer_code = (
                     None
@@ -19648,6 +19749,7 @@ Zwróć tylko JSON.
                     _record_python_written_file(target_path)
 
                     _code_ready_path = target_path
+                    _set_current_project_file(target_path)
 
                     # v198: skrypt pytajacy czlowieka o dane (`read`)
                     # nie ma szans zadzialac -- uruchamia go proces
