@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v195
+AEL-MINI AUTONOMOUS AGENT v196
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v195")
+    print("             AEL-MINI AUTONOMOUS AGENT v196")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7898,6 +7898,40 @@ def termux_write_file(path, content, append=False):
             "bytes": new_size
         }
 
+        # v196 -- zaobserwowany realny bug (log 2026-09-04, KROK 1).
+        # Gemini dostalo zadanie "zapisz skrypt, nadaj prawa, URUCHOM
+        # go", zrobilo 6 wywolan narzedzi (file_exists, chmod, read,
+        # read, write, file_exists) i... NIGDY nie uruchomilo skryptu.
+        # Zamiast tego samo napisalo FINAL_OK.txt z trescia
+        # "FINAL_OK: true" i zglosilo COMPLETED. A verify_final()
+        # traktuje FINAL_OK.txt jako DOWOD ukonczenia celu -- czyli
+        # wykonawca sam sobie wystawil zaswiadczenie o sukcesie.
+        # Krok 2 pokazal skutek: Tomek uznal "FINAL_OK.txt istnieje"
+        # za dowod, ze wszystko dziala, i chcial isc dalej.
+        #
+        # Napisanie pliku-dowodu NIE JEST dowodem niczego poza tym, ze
+        # ktos napisal plik. Mowimy o tym zespolowi twardo, tym samym
+        # kanalem co reszta sygnalow z narzedzi.
+        if p.name.lower() == "final_ok.txt":
+            result["fabricated_evidence_warning"] = (
+                "UWAGA: to GEMINI wlasnie utworzylo plik-dowod "
+                + p.name + " wlasna reka (termux_write_file). To NIE "
+                "jest dowod, ze cel zostal osiagniety — to tylko "
+                "dowod, ze zapisano plik. Jesli zadanie wymagalo "
+                "realnego dzialania (uruchomienia skryptu, "
+                "polaczenia, zbudowania czegos), sprawdz, czy TO "
+                "faktycznie sie wydarzylo, zanim uznasz cel za "
+                "zamkniety. Nie traktuj istnienia tego pliku jako "
+                "potwierdzenia."
+            )
+
+            log(
+                "GEMINI",
+                "UWAGA: Gemini samo zapisało plik-dowód " + p.name
+                + " — to nie jest dowód wykonania zadania. Zespół "
+                "dostaje o tym twardy sygnał."
+            )
+
         # Sygnał ostrzegawczy zamiast cichej utraty danych: nadpisanie
         # (nie dopisanie) pliku, który miał już niebagatelną zawartość,
         # nowszą treścią WYRAŹNIE mniejszą niż poprzednia, to mocny
@@ -11295,6 +11329,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "placeholder_phone_warning",
                         "dom_fields_warning",
                         "screen_unreadable_warning",
+                        "fabricated_evidence_warning",
                         "missing_file_answer",
                         "stale_warning"
                     ):
@@ -12744,7 +12779,51 @@ _CODE_TARGET_FORBIDDEN = (
     "current_goal.txt",
     "progress_checklist.json",
     "project_dirs.json",
+    # v196 -- zaobserwowany realny, GROZNY bug (log 2026-09-04, krok 3):
+    # zadanie MAIN-a brzmialo "uruchom polecenie...", a w warunku
+    # sukcesu padlo "plik FINAL_OK.txt ma istniec". _infer_code_target_
+    # path() wzielo pierwsza napotkana nazwe pliku i Python zapisal
+    # SKRYPT BASHA do FINAL_OK.txt -- czyli do pliku, ktory jest
+    # DOWODEM UKONCZENIA CELU i ktory czyta verify_final(). To
+    # jednoczesnie niszczylo dowod i podkladalo smieci pod
+    # weryfikacje. Pliki-dowody i stan agenta NIGDY nie moga byc celem
+    # zapisu kodu.
+    "final_ok.txt",
+    "user_provided_value.txt",
+    "gemini_state.json",
+    "approaches.json",
 )
+
+# v196 -- druga polowa tej samej naprawy. Sama obecnosc nazwy pliku w
+# tekscie NIE znaczy, ze kod ma tam trafic: w logu nazwy padaly w
+# zdaniach typu "sprawdz, czy pojawil sie plik FINAL_OK.txt" albo
+# "nie uruchamiaj call_beata.sh" -- czyli jako rzecz do SPRAWDZENIA,
+# nie do NADPISANIA. Skutek: Python nadpisywal dobry, kompletny
+# skrypt (2764 B) fragmentem (606 B) i robil to w kolko przez trzy
+# kroki, bo MAIN za kazdym razem prosil tylko o URUCHOMIENIE komendy.
+#
+# Wymagamy wiec jawnej INTENCJI ZAPISU w poblizu nazwy pliku. Gdy
+# zadanie mowi "uruchom to polecenie", blok ```...``` jest komenda do
+# WYKONANIA, a nie trescia pliku -- i nie ruszamy go w ogole.
+_CODE_SAVE_INTENT_RE = re.compile(
+    r"(zapisz|zapisa[cć]|zapisuj|utw[oó]rz|stw[oó]rz|nadpisz|"
+    r"wklej\s+do|umie[sś][cć]|save\s+to|write\s+to|"
+    r"do\s+pliku|w\s+pliku\s+o\s+nazwie)",
+    re.IGNORECASE
+)
+
+
+def _task_wants_code_saved(task_text, success_condition=""):
+    """
+    Czy zadanie faktycznie prosi o ZAPISANIE kodu do pliku?
+
+    Sprawdzamy WYLACZNIE tresc zadania (nie warunek sukcesu): warunek
+    sukcesu opisuje, co ma byc PRAWDA na koncu ("plik FINAL_OK.txt
+    istnieje"), a nie co mamy teraz zapisac -- mylenie tych dwoch
+    rzeczy bylo dokladnie przyczyna buga z FINAL_OK.txt.
+    """
+
+    return bool(_CODE_SAVE_INTENT_RE.search(str(task_text or "")))
 
 
 def _infer_code_target_path(task_text, success_condition, engineer_text):
@@ -12758,7 +12837,10 @@ def _infer_code_target_path(task_text, success_condition, engineer_text):
     JEDNOZNACZNIE — wtedy niczego nie zgadujemy.
     """
 
-    for source in (task_text, success_condition, engineer_text):
+    # v196: warunek sukcesu CELOWO wypadl z tej listy -- opisuje stan
+    # koncowy ("plik X ma istniec"), nie cel zapisu. To on podsunal
+    # FINAL_OK.txt jako "miejsce na kod".
+    for source in (task_text, engineer_text):
 
         text = str(source or "")
 
@@ -18388,8 +18470,17 @@ Zwróć tylko JSON.
             # przepisać ręcznie (jego limit + literówki w kodzie,
             # którego nikt nie kazał zmieniać). Ustalamy ścieżkę sami
             # i wchodzimy w tę samą, sprawdzoną ścieżkę zapisu.
-            if not write_target and _task_carries_engineer_code(
-                task_text, team.get("engineer_full", "")
+            # v196: dzialamy TYLKO gdy zadanie faktycznie prosi o
+            # ZAPIS kodu do pliku. "Uruchom to polecenie" z blokiem
+            # ```...``` to komenda do WYKONANIA, nie tresc pliku --
+            # mylenie tego kosztowalo w logu trzy kroki i nadpisany
+            # skrypt (patrz _task_wants_code_saved).
+            if (
+                not write_target
+                and _task_wants_code_saved(task_text)
+                and _task_carries_engineer_code(
+                    task_text, team.get("engineer_full", "")
+                )
             ):
 
                 inferred_target = _infer_code_target_path(
