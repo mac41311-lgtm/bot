@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v202
+AEL-MINI AUTONOMOUS AGENT v203
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v202")
+    print("             AEL-MINI AUTONOMOUS AGENT v203")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13625,6 +13625,183 @@ def _python_syntax_error(code):
     return None
 
 
+# v203 -- na wyrazna prosbe uzytkownika (2026-09-04): "zrob te
+# poprawki SZUKAJ/ZAMIEN dla plikow projektu... przepisywac od nowa
+# to szkoda".
+#
+# Dotad Bartek mial tylko jedna droge poprawienia wlasnego pliku:
+# przyslac go CALEGO od nowa przez write_engineer_code_to. A gdy
+# przyslal sam poprawiony FRAGMENT, Python go ODRZUCAL — bo
+# zabezpieczenie ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX slusznie widzi
+# w krotszej tresci ryzyko skasowania reszty pliku (log 2026-09-04:
+# "kod od inzyniera byl znacznie krotszy... system uznal, ze to
+# poprawka, a nie caly plik"). Efekt: albo 2700 znakow od nowa za
+# kazda literowke, albo poprawka nie przechodzila w ogole.
+#
+# Ten sam kontrakt SZUKAJ/ZAMIEN, ktorym Ania lata agent.py, dziala
+# teraz dla plikow projektu — z tymi samymi zabezpieczeniami: backup,
+# dopasowanie musi byc JEDNOZNACZNE, weryfikacja skladni po zmianie i
+# automatyczny rollback, gdy cos pojdzie nie tak.
+_SEARCH_REPLACE_RE = re.compile(
+    r"<<<<<<<\s*SZUKAJ\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>>\s*ZAMIEŃ",
+    re.DOTALL
+)
+
+
+def extract_search_replace_blocks(text):
+    """
+    Wyciaga WSZYSTKIE bloki SZUKAJ/ZAMIEN z wypowiedzi. Jedna
+    poprawka moze dotyczyc kilku miejsc w pliku.
+    """
+
+    return [
+        (m.group(1), m.group(2))
+        for m in _SEARCH_REPLACE_RE.finditer(str(text or ""))
+    ]
+
+
+def _verify_patched_syntax(path, content):
+    """
+    Sprawdza skladnie po naniesieniu poprawki — na tyle, na ile da
+    sie to zrobic lokalnie i tanio. Zwraca opis bledu albo "".
+    """
+
+    suffix = Path(path).suffix.lower()
+
+    if suffix == ".py":
+        return _python_syntax_error(content) or ""
+
+    if suffix in (".sh", ".bash"):
+        try:
+            check = subprocess.run(
+                ["bash", "-n"],
+                input=content,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception:
+            return ""          # nie da sie sprawdzic — nie blokujemy
+        if check.returncode != 0:
+            return str(check.stderr or "").strip()
+
+    return ""
+
+
+def apply_engineer_patch_to_project_file(path, engineer_text):
+    """
+    Naklada poprawke SZUKAJ/ZAMIEN Bartka na PLIK PROJEKTU.
+
+    Te same zasady co przy lataniu agent.py:
+      1. backup ze znacznikiem czasu,
+      2. fragment SZUKAJ musi wystapic DOKLADNIE RAZ (inaczej nie
+         wiadomo, ktore miejsce poprawiamy — odrzucamy),
+      3. weryfikacja skladni po zmianie,
+      4. rollback, gdy weryfikacja nie przejdzie.
+
+    Zwraca slownik z "applied" i czytelnym powodem.
+    """
+
+    bloki = extract_search_replace_blocks(engineer_text)
+
+    if not bloki:
+        return {"applied": False, "reason": "Brak bloku SZUKAJ/ZAMIEŃ."}
+
+    target = _resolve_home_relative_path(path)
+
+    if not target.exists():
+        return {
+            "applied": False,
+            "reason": (
+                "Pliku " + str(target) + " NIE MA na dysku — poprawka "
+                "fragmentu nie ma czego poprawić. Podaj cały plik."
+            ),
+        }
+
+    try:
+        original = target.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        return {"applied": False, "reason": "Nie udało się odczytać: " + str(e)}
+
+    zmieniony = original
+    naniesione = 0
+
+    for stary, nowy in bloki:
+
+        wystapienia = zmieniony.count(stary)
+
+        if wystapienia == 0:
+            return {
+                "applied": False,
+                "reason": (
+                    "Fragment SZUKAJ nie występuje w pliku dokładnie "
+                    "tak, jak go podano (prawdopodobnie inne wcięcia "
+                    "albo skopiowany z pamięci, nie z pliku). Nic nie "
+                    "zmieniono. Poproś o odczytanie pliku i skopiowanie "
+                    "fragmentu 1:1."
+                ),
+            }
+
+        if wystapienia > 1:
+            return {
+                "applied": False,
+                "reason": (
+                    "Fragment SZUKAJ występuje w pliku "
+                    + str(wystapienia) + " razy — nie wiadomo, które "
+                    "miejsce poprawić. Nic nie zmieniono. Podaj dłuższy, "
+                    "jednoznaczny fragment."
+                ),
+            }
+
+        zmieniony = zmieniony.replace(stary, nowy, 1)
+        naniesione += 1
+
+    if zmieniony == original:
+        return {
+            "applied": False,
+            "reason": "Poprawka nic nie zmienia — plik już tak wygląda.",
+        }
+
+    blad = _verify_patched_syntax(target, zmieniony)
+
+    if blad:
+        return {
+            "applied": False,
+            "reason": (
+                "Po naniesieniu poprawki plik ma BŁĄD SKŁADNI: "
+                + short(blad, 600) + ". Nic nie zapisano — plik "
+                "pozostaje w poprzedniej, działającej wersji."
+            ),
+        }
+
+    kopia = target.with_name(
+        target.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    )
+
+    try:
+        kopia.write_text(original, encoding="utf-8")
+        target.write_text(zmieniony, encoding="utf-8")
+    except Exception as e:
+        return {"applied": False, "reason": "Nie udało się zapisać: " + str(e)}
+
+    log(
+        "MAIN",
+        "Poprawka Bartka naniesiona na " + target.name + " ("
+        + str(naniesione) + " x SZUKAJ/ZAMIEŃ, "
+        + str(len(original)) + " B -> " + str(len(zmieniony))
+        + " B). Backup: " + kopia.name
+    )
+
+    return {
+        "applied": True,
+        "path": str(target),
+        "blocks": naniesione,
+        "backup": str(kopia),
+        "size_before": len(original),
+        "size_after": len(zmieniony),
+    }
+
+
 def apply_patch_from_fixer_text(fixer_text):
     """
     Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
@@ -19091,6 +19268,11 @@ Zwróć tylko JSON.
                 decision.get("write_engineer_code_to", "")
             ).strip()
 
+            # v203: sciezka pliku, ktory JEST gotowy do uruchomienia —
+            # niezaleznie od tego, czy powstal z calego zapisu, czy z
+            # poprawki fragmentu SZUKAJ/ZAMIEŃ.
+            _code_ready_path = None
+
             # v191: MAIN pominął pole, ale wkleił kod do treści
             # zadania — patrz _task_carries_engineer_code(). Bez tego
             # kod jechałby PRZEZ Gemini, które musiałoby go
@@ -19152,9 +19334,88 @@ Zwróć tylko JSON.
 
             if write_target:
 
-                engineer_code = extract_code_block(
+                # v203: zanim czegokolwiek zazadamy — sprawdz, czy
+                # Bartek przyslal POPRAWKE FRAGMENTU (SZUKAJ/ZAMIEŃ).
+                # Wtedy nie potrzebujemy calego pliku od nowa: nakladamy
+                # sama zmiane, z backupem i weryfikacja skladni.
+                _patch_wynik = apply_engineer_patch_to_project_file(
+                    write_target,
                     team.get("engineer_full", "")
                 )
+
+                if _patch_wynik.get("applied"):
+
+                    _record_python_written_file(_patch_wynik["path"])
+
+                    task_text += (
+                        "\n\n[AUTOMATYCZNA NOTATKA — PRZECZYTAJ]: "
+                        "plik " + _patch_wynik["path"] + " ZOSTAŁ JUŻ "
+                        "POPRAWIONY przed tym zadaniem (naniesiono "
+                        + str(_patch_wynik["blocks"]) + " zmianę/zmiany "
+                        "w konkretnych fragmentach, reszta pliku "
+                        "nietknięta). NIE twórz go ponownie i nie "
+                        "nadpisuj — to zadanie dotyczy WYŁĄCZNIE "
+                        "uruchomienia i sprawdzenia poprawionego pliku."
+                    )
+
+                    _pending_team_warnings.append(
+                        "python [poprawka_fragmentu]: Bartek podał "
+                        "poprawkę przez SZUKAJ/ZAMIEŃ i Python naniósł "
+                        "ją na " + _patch_wynik["path"] + " ("
+                        + str(_patch_wynik["size_before"]) + " B -> "
+                        + str(_patch_wynik["size_after"]) + " B). "
+                        "Reszta pliku została nietknięta, backup: "
+                        + Path(_patch_wynik["backup"]).name + ". "
+                        "Nikt nie musi przepisywać całości."
+                    )
+
+                elif extract_search_replace_blocks(
+                    team.get("engineer_full", "")
+                ):
+
+                    # Blok byl, ale sie nie nalozyl — to jest FAKT,
+                    # ktory zespol musi poznac, inaczej bedzie czekal
+                    # na poprawke, ktorej nie ma.
+                    log(
+                        "MAIN",
+                        "Poprawka SZUKAJ/ZAMIEŃ NIE nałożona: "
+                        + str(_patch_wynik.get("reason"))
+                    )
+
+                    _pending_team_warnings.append(
+                        "python [poprawka_odrzucona]: Bartek podał "
+                        "poprawkę SZUKAJ/ZAMIEŃ dla " + str(write_target)
+                        + ", ale NIE dało się jej nanieść — "
+                        + str(_patch_wynik.get("reason"))
+                        + " Plik jest NIEZMIENIONY."
+                    )
+
+                # Latka nalozona -> plik jest juz poprawny. Cala
+                # dalsza logika zapisu (nadpisanie calym plikiem)
+                # musi zostac POMINIETA, inaczej skasowalaby wlasnie
+                # naniesiona zmiane.
+                if _patch_wynik.get("applied"):
+
+                    target_path = _resolve_home_relative_path(
+                        write_target
+                    )
+
+                    # Zapis calego pliku juz niepotrzebny, ale plik
+                    # JEST gotowy — reszta kroku (uruchomienie, zwrot
+                    # wyniku do Bartka) ma dzialac tak samo jak po
+                    # zwyklym zapisie. Sluzy do tego _code_ready_path.
+                    write_target = ""
+                    _code_ready_path = target_path
+
+                engineer_code = (
+                    None
+                    if _patch_wynik.get("applied")
+                    else extract_code_block(
+                        team.get("engineer_full", "")
+                    )
+                )
+
+            if write_target:
 
                 if not engineer_code:
 
@@ -19386,6 +19647,8 @@ Zwróć tylko JSON.
                     # _python_written_files).
                     _record_python_written_file(target_path)
 
+                    _code_ready_path = target_path
+
                     # v198: skrypt pytajacy czlowieka o dane (`read`)
                     # nie ma szans zadzialac -- uruchamia go proces
                     # bez klawiatury. Mowimy o tym ZARAZ po zapisie,
@@ -19493,7 +19756,7 @@ Zwróć tylko JSON.
             _self_run_path = _task_is_simple_run(
                 task_text,
                 decision.get("success_condition", ""),
-                target_path if write_target else None
+                _code_ready_path
             )
 
             if _self_run_path and not gemini_disabled:
@@ -19630,9 +19893,9 @@ Zwróć tylko JSON.
 
                 # v202: jesli to zadanie dotyczylo kodu, ktory Python
                 # wlasnie zapisal od Bartka — oddaj mu wynik wprost.
-                if write_target:
+                if _code_ready_path:
                     _remember_engineer_code_result(
-                        target_path, result
+                        _code_ready_path, result
                     )
 
             continue
