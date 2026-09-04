@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v199
+AEL-MINI AUTONOMOUS AGENT v200
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v199")
+    print("             AEL-MINI AUTONOMOUS AGENT v200")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14808,8 +14808,68 @@ _answer_for_critic = None
 TEAM_EXCHANGE_MAX_ROUNDS = 2
 
 
+# v200 -- zaobserwowany realny bug (log 2026-09-04, v195, KROK 3).
+# Marek napisal:
+#
+#   "OCENA: OK ... - Nie proponuje ponownie chrome_execute_js, co jest
+#    zgodne z wyraznym OSTRZEZENIEM (narzedzie zawiodlo 1x)."
+#
+# ...a kod ogłosił "Marek ma zastrzezenie (runda 1)" i odpalil cala
+# wymiane zdan. Bo szukal slowa "OSTRZEZENIE" GDZIEKOLWIEK w tekscie,
+# a Marek uzyl go w PROZIE, opisujac cudze ostrzezenie.
+#
+# Koszt: dwa spalone zapytania do DeepSeeka za kazdym razem (darmowa
+# sesja przegladarkowa) — dokladnie ten spam, ktorego mamy unikac. I
+# gorzej: ta sama luzna zasada napedzala _critic_block_streak, wiec
+# ZGODA Marka podbijala licznik blokad w strone twardego stopu.
+#
+# Marek ma kontrakt: "Odpowiedz zaczynajac od OCENA: OK/OSTRZEZENIE/
+# BLOKUJ". Czytamy wiec WERDYKT, a nie przypadkowe wystapienie slowa.
+_CRITIC_VERDICT_RE = re.compile(
+    r"OCENA\s*:?\s*\**\s*(OK|OSTRZE[ŻZ]ENIE|BLOKUJ)",
+    re.IGNORECASE
+)
+
+
+def _critic_verdict(text):
+    """
+    Werdykt Marka: "OK", "OSTRZEŻENIE", "BLOKUJ" albo None gdy nie
+    da sie go odczytac.
+
+    Bierzemy PIERWSZE "OCENA:" — to jest jego werdykt. Wszystko
+    ponizej to uzasadnienie, w ktorym te same slowa moga pasc w
+    zupelnie innym znaczeniu.
+    """
+
+    match = _CRITIC_VERDICT_RE.search(str(text or ""))
+
+    if not match:
+        return None
+
+    slowo = match.group(1).upper().replace("Z", "Ż")
+
+    if slowo.startswith("OK"):
+        return "OK"
+
+    if slowo.startswith("BLOKUJ"):
+        return "BLOKUJ"
+
+    return "OSTRZEŻENIE"
+
+
 def _critic_objects(text):
-    """Czy Marek faktycznie zglasza zastrzezenie (a nie 'OCENA: OK')?"""
+    """
+    Czy Marek faktycznie zglasza zastrzezenie?
+
+    Gdy werdyktu NIE da sie odczytac, wracamy do starego, luznego
+    dopasowania — lepiej raz zapytac o wyjasnienie niz przeoczyc
+    prawdziwa blokade zapisana nietypowo.
+    """
+
+    verdict = _critic_verdict(text)
+
+    if verdict is not None:
+        return verdict != "OK"
 
     return any(
         marker in str(text or "").upper()
@@ -15174,7 +15234,6 @@ def consult_team(
     # blokada Marka, mowimy o tym wprost i po kolei, zamiast
     # wysypywac wszystko naraz.
     topic_line = _current_topic(last_result, _critic_block_streak)
-    topic_block = (topic_line + "\n\n") if topic_line else ""
 
     report_body = readable_report or raw_report_material
 
@@ -15185,7 +15244,12 @@ def consult_team(
     # "biezaca wiadomosc" w rozmowie, a nie tlo.
     def _core_context_for(role_name):
         pieces = [
-            topic_block,
+            # v200: temat tez nie moze byc sztywna formulka wracajaca
+            # co krok. Gdy sytuacja sie NIE zmienila, rola ma to zdanie
+            # w historii swojej rozmowy — powtarzanie go jest dokladnie
+            # tym szablonem, ktorego mielismy sie pozbyc (v191/v193).
+            _only_if_new(role_name, "topic", topic_line + "\n\n")
+            if topic_line else "",
             _only_if_new(role_name, "files", file_answers_block),
             _only_if_new(role_name, "progress", progress_block),
             _only_if_new(role_name, "checklist", checklist_block),
@@ -15636,13 +15700,11 @@ def consult_team(
         # tla (patrz v193).
         _reply = deepseek(
             _addressee,
-            _who + ", Marek ma zastrzeżenie do tego, co "
-            "zaproponowaliście:\n\n"
+            # v200: krotko i bez formulki. To jest ciag dalszy
+            # rozmowy, ktora ta rola juz prowadzi — nie odprawa.
+            _who + ", Marek na to:\n\n"
             + short(_critic_out_full, 1500)
-            + "\n\nOdpowiedz mu wprost: albo wyjaśnij, dlaczego "
-            "jego obawa nie dotyczy tego przypadku, albo przyznaj mu "
-            "rację i podaj poprawioną wersję. Krótko i na temat — "
-            "to jedno konkretne pytanie, nie nowa narada."
+            + "\n\nCo Ty na to?"
         )
 
         team_exchange.append(("Marek", short(_critic_out_full, 900)))
@@ -15664,11 +15726,9 @@ def consult_team(
         _verdict = deepseek(
             "CRITIC",
             ("Tomek" if _addressee == "PLANNER" else "Bartek")
-            + " odpowiedział na Twoje zastrzeżenie:\n\n"
+            + " na to:\n\n"
             + short(_reply, 1500)
-            + "\n\nI co teraz — przyjmujesz to wyjaśnienie, czy "
-            "podtrzymujesz zastrzeżenie? Odpowiedz jak zwykle, "
-            "zaczynając od OCENA: OK / OSTRZEŻENIE / BLOKUJ."
+            + "\n\nI co teraz?"
         )
 
         if not str(_verdict or "").strip():
@@ -15680,6 +15740,21 @@ def consult_team(
             break
 
         team_exchange.append(("Marek", short(_verdict, 900)))
+
+        # v200: kontrakt "OCENA: ..." zostal w prompcie systemowym
+        # Marka i nie powtarzamy go w kazdym pytaniu (v191). Gdyby
+        # jednak w tej jednej odpowiedzi go pominal, NIE zgadujemy z
+        # prozy — konczymy wymiane i zostawiamy poprzedni werdykt.
+        # Zgadywanie po slowach kosztowalo nas juz dwa spalone
+        # zapytania na krok (patrz _critic_verdict).
+        if _critic_verdict(_verdict) is None:
+            log(
+                "DEEPSEEK",
+                "Marek odpowiedział bez wyraźnego 'OCENA: ...' — "
+                "nie zgaduję z treści, kończę wymianę i zostawiam "
+                "jego poprzednią ocenę."
+            )
+            break
 
         _critic_out_full = _verdict
         results["CRITIC"] = _verdict
@@ -15711,10 +15786,9 @@ def consult_team(
         if _critic_question["wiek"] > CRITIC_QUESTION_MAX_AGE:
             _critic_question = None
 
-    if any(
-        marker in _critic_out_full.upper()
-        for marker in ("BLOKUJ", "OSTRZEŻENIE")
-    ):
+    # v200: ten sam werdykt co wyzej — nie szukamy slowa w prozie
+    # (patrz _critic_verdict). Zgoda Marka podbijala licznik blokad.
+    if _critic_objects(_critic_out_full):
         _critic_verdict_for_planner = short(_critic_out_full, 1200)
         _critic_verdict_for_engineer = short(_critic_out_full, 1200)
         _critic_block_streak += 1
@@ -16034,7 +16108,9 @@ konkretnego do podjęcia decyzji):
     ) if _exchange else ""
 
     _main_topic = _current_topic(last_result, _critic_block_streak)
-    _main_topic_block = ("\n" + _main_topic + "\n") if _main_topic else ""
+    _main_topic_block = _only_if_new(
+        "MAIN", "topic", "\n" + _main_topic + "\n"
+    ) if _main_topic else ""
 
     # v191: bez "CEL AGENTA" — MAIN dostał cel raz (patrz
     # _goal_briefing_for) i ma go w historii swojej rozmowy.
