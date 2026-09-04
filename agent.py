@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v209
+AEL-MINI AUTONOMOUS AGENT v210
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v209")
+    print("             AEL-MINI AUTONOMOUS AGENT v210")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -18685,6 +18685,194 @@ def _tool_stdout_values(last_result):
     )
 
 
+# ============================================================
+# ZESPOL PYTA KOMENDA -- TERMUX ODPOWIADA (v210)
+# ============================================================
+#
+# Uzytkownik: "nie robimy nic sztywnego, trzeba ich odczytywac (...)
+# i mu to dosylac, wtedy bedzie lepiej niz sztywne dlugie logi (...)
+# mamy tylu agentow, wiec do dziela".
+#
+# Kluczowa obserwacja z logu 2026-09-04, krok 16. Trzy role w JEDNYM
+# kroku napisaly doslownie to samo:
+#
+#   Kamil:  "Musze go odczytac, zeby wiedziec, czy cos juz zadzwonilo"
+#           + `cat ~/agent/call_result.txt`
+#   Tomek:  "Krok 1 - odczytaj call_result.txt"
+#           + ```bash cat ~/agent/call_result.txt ```
+#   Bartek: "Mam odczytac call_result.txt i sprawdzic, co zawiera"
+#           + ```bash cat ~/agent/call_result.txt ```
+#
+# I co sie stalo? Poszla pelna decyzja MAIN-a, zadanie do kolejki,
+# obieg Gemini z 41 narzedziami i kilkadziesiat sekund czekania --
+# zeby wykonac `cat`. Polecenie, ktore trwa 0.01 s i nic nie zmienia.
+#
+# Nie trzeba tego "odczytywac" zadnym rozpoznawaniem intencji ani
+# lista slow kluczowych -- czyli niczym sztywnym. Role SAME pisza,
+# czego chca, w najbardziej jednoznacznej formie, jaka istnieje: w
+# postaci komendy. Python ma ja po prostu URUCHOMIC i oddac wynik w
+# nastepnej turze -- tak jak czlowiek, ktory na "sprawdz, co jest w
+# tym pliku" nie odpowiada "dobrze, umowmy sie na spotkanie", tylko
+# zaglada i mowi.
+#
+# Warunek: TYLKO polecenia, ktore CZYTAJA. Zadnego zapisu,
+# usuwania, siec, przekierowan. Lista dozwolonych jest zamknieta i
+# krotka, a wszystko poza nia po prostu nie zostaje uruchomione --
+# wtedy idzie normalna droga przez MAIN i Gemini, jak dotad.
+#
+# Koszt: ZERO dodatkowych zadan do DeepSeeka i ZERO do Gemini.
+
+# Polecenia, ktore tylko czytaja. Nic tu nie zmienia stanu telefonu.
+_READONLY_COMMANDS = frozenset((
+    "cat", "head", "tail", "ls", "wc", "stat", "file", "du", "df",
+    "grep", "egrep", "fgrep", "find", "which", "type", "basename",
+    "dirname", "realpath", "readlink", "pwd", "date", "echo",
+    "sort", "uniq", "cut", "tr", "awk", "sed", "diff", "md5sum",
+    "sha256sum", "printf", "env", "id", "whoami", "uname",
+    "termux-contact-list", "termux-clipboard-get", "termux-info",
+    "termux-telephony-deviceinfo", "termux-battery-status",
+    "termux-wifi-connectioninfo", "termux-notification-list",
+))
+
+# Znaki i slowa, ktore wykluczaja komende bez dalszej analizy --
+# przekierowanie, zapis, siec, uruchomienie czegokolwiek innego.
+_UNSAFE_SHELL_MARKERS = (
+    ">", "<", "$(", "`", ";", "&", "\n",
+)
+
+_UNSAFE_WORDS = frozenset((
+    "rm", "mv", "cp", "chmod", "chown", "mkdir", "rmdir", "touch",
+    "ln", "dd", "curl", "wget", "git", "pip", "apt", "pkg", "npm",
+    "python", "python3", "bash", "sh", "source", "eval", "exec",
+    "kill", "reboot", "su", "sudo", "tee", "install", "make",
+))
+
+# Ile takich pytan obslugujemy w jednej naradzie. Wiecej to juz nie
+# pytanie, tylko robota -- ta idzie normalna droga.
+_READONLY_MAX_PER_STEP = 4
+
+# Ile wyniku oddajemy. Tyle, ile potrzeba na wartosc, nie na sciane.
+_READONLY_OUTPUT_MAX = 600
+
+
+def _is_readonly_command(command):
+    """
+    Czy to polecenie tylko CZYTA i mozna je bezpiecznie wykonac
+    samemu, bez pytania kogokolwiek o zgode.
+
+    Zamkniety zbior dozwolonych, wszystko inne odpada. Wolimy
+    przepuscic za malo niz cokolwiek zmienic po cichu.
+    """
+
+    command = str(command or "").strip()
+
+    if not command or len(command) > 300:
+        return False
+
+    if any(m in command for m in _UNSAFE_SHELL_MARKERS):
+        return False
+
+    # Potok jest dozwolony, ale KAZDY jego czlon musi byc czytajacy
+    # ("termux-contact-list | grep -i beata" -- dokladnie to, co
+    # pisal Tomek).
+    for czlon in command.split("|"):
+
+        slowa = czlon.split()
+
+        if not slowa:
+            return False
+
+        program = slowa[0]
+
+        if program not in _READONLY_COMMANDS:
+            return False
+
+        if any(s in _UNSAFE_WORDS for s in slowa):
+            return False
+
+    return True
+
+
+def _extract_commands_from_text(text):
+    """Komendy, ktore rola napisala -- w bloku ``` albo w `...`."""
+
+    text = str(text or "")
+    znalezione = []
+
+    for blok in re.findall(r"```(?:bash|sh|shell)?\s*\n(.*?)```",
+                           text, re.DOTALL):
+        for linia in blok.split("\n"):
+            linia = linia.strip()
+            if linia and not linia.startswith("#"):
+                znalezione.append(linia)
+
+    for inline in re.findall(r"`([^`\n]{3,200})`", text):
+        znalezione.append(inline.strip())
+
+    return znalezione
+
+
+def _answer_readonly_requests(role_texts):
+    """
+    Wykonuje czytajace polecenia, ktore zespol sam napisal, i zwraca
+    gotowe odpowiedzi. Zero zadan do DeepSeeka, zero do Gemini.
+    """
+
+    odpowiedzi = []
+    zrobione = []
+
+    for text in role_texts:
+
+        for command in _extract_commands_from_text(text):
+
+            if len(zrobione) >= _READONLY_MAX_PER_STEP:
+                break
+
+            if command in zrobione:
+                continue
+
+            if not _is_readonly_command(command):
+                continue
+
+            zrobione.append(command)
+
+            try:
+                wynik = execute_shell(command, timeout=15)
+            except Exception as e:
+                odpowiedzi.append(
+                    "- `" + command + "` -> nie udalo sie uruchomic ("
+                    + str(e) + ")"
+                )
+                continue
+
+            out = str(wynik.get("stdout", "") or "").strip()
+            err = str(wynik.get("stderr", "") or "").strip()
+
+            if out:
+                odpowiedzi.append(
+                    "- `" + command + "` wypisało:\n"
+                    + short(out, _READONLY_OUTPUT_MAX)
+                )
+            elif err:
+                odpowiedzi.append(
+                    "- `" + command + "` nie zadziałało:\n"
+                    + short(err, 300)
+                )
+            else:
+                odpowiedzi.append(
+                    "- `" + command + "` wykonało się, ale nic nie "
+                    "wypisało (pusty wynik)."
+                )
+
+            log(
+                "TERMUX",
+                "Zespol chcial wiedziec, co da `" + command
+                + "` — uruchomilem to sam (bez Gemini, bez MAIN-a)."
+            )
+
+    return odpowiedzi
+
+
 def _remember_team_file_questions(role_texts):
     """
     Zbiera sciezki, o ktorych mowil zespol, i przygotowuje na nie
@@ -18692,6 +18880,21 @@ def _remember_team_file_questions(role_texts):
     """
 
     del _team_file_answers[:]
+
+    # v210: zanim policzymy pliki — po prostu wykonujemy czytajace
+    # polecenia, ktore zespol sam napisal. Patrz
+    # _answer_readonly_requests(). To jest ta "wiedza dosylana, kiedy
+    # jej chca", zamiast kazania im czekac caly obieg na `cat`.
+    try:
+        _team_file_answers.extend(
+            _answer_readonly_requests(role_texts)
+        )
+    except Exception as _e:
+        log(
+            "TERMUX",
+            "Nie udalo sie odpowiedziec na pytania zespolu "
+            "komendami: " + str(_e)
+        )
 
     seen = []
 
@@ -18757,9 +18960,9 @@ def _team_file_answers_block():
         return ""
 
     return (
-        "ODPOWIEDZI NA WASZE PYTANIA O PLIKI (sprawdzone przez "
-        "Pythona TERAZ, bezposrednio na dysku — to fakty, nie "
-        "domysly):\n"
+        "SPRAWDZIŁEM TO, O CO PYTALIŚCIE (uruchomione przez Pythona "
+        "TERAZ, bezpośrednio w Termux — to fakty, nie domysły; nie "
+        "proście już o wykonanie tych poleceń, masz wynik niżej):\n"
         + "\n".join(_team_file_answers)
     )
 
