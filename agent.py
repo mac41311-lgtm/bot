@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v192
+AEL-MINI AUTONOMOUS AGENT v193
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v192")
+    print("             AEL-MINI AUTONOMOUS AGENT v193")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1700,6 +1700,122 @@ _goal_briefed = set()
 _pending_team_warnings = []
 
 
+# ============================================================
+# ROZMOWA KROK PO KROKU (v193)
+# ============================================================
+#
+# Na wyrazna prosbe uzytkownika (2026-09-04): "komunikacja: nie
+# wszystko na raz w calych blokach, po kolei rozwiazujemy, jak tu czat
+# za czatem, bez wielkich szablonow... w jednej wiadomosci blad, w
+# drugiej odpowiedz, tak jak normalny czlowiek rozmawia".
+#
+# Kazda rola dostawala przy KAZDYM kroku ten sam zestaw sekcji:
+# odpowiedzi o pliki, stan faktyczny, checklista, decyzja MAIN-a,
+# ostatni raport, ostrzezenia z narzedzi. Wiekszosc z nich w
+# wiekszosci krokow byla IDENTYCZNA jak poprzednio -- czyli rola
+# dostawala co krok te sama sciane tekstu i musiala sama zgadywac,
+# co sie wlasciwie zmienilo i o czym teraz mowimy.
+#
+# Dwa mechanizmy to prostuja, oba deterministyczne i oba BEZ ani
+# jednego dodatkowego zapytania do DeepSeeka (liczba wiadomosci na
+# krok sie nie zmienia -- zmienia sie ich TRESC):
+#
+#   1. _only_if_new() -- blok, ktory dla TEJ roli jest bajt w bajt
+#      taki sam jak ostatnio, nie jest wysylany ponownie. Rola ma go
+#      w historii rozmowy (sesje sa trwale), wiec powtarzanie go
+#      niczego nie wnosi, a zaglusza to, co faktycznie nowe.
+#
+#   2. _current_topic() -- JEDNO zdanie na samej gorze: czym sie
+#      teraz zajmujemy. Gdy wisi nierozwiazany blad albo blokada
+#      Marka, mowimy wprost "najpierw to", zamiast wysypywac
+#      wszystko naraz i liczyc, ze kazdy sam wybierze wlasciwy watek.
+_role_seen_blocks = {}
+
+
+def _reset_step_by_step_memory():
+    """Nowy cel = zaczynamy rozmowe od zera."""
+    _role_seen_blocks.clear()
+
+
+def _only_if_new(role, key, block):
+    """
+    Zwraca blok tylko wtedy, gdy dla TEJ roli rozni sie od tego, co
+    juz widziala. Inaczej pusty string -- nie powtarzamy sie.
+
+    Pusty blok nie kasuje pamieci: gdy cos chwilowo znika z kontekstu
+    (np. checklista pusta w jednym kroku), a potem wraca w tej samej
+    postaci, nadal jest to dla roli powtorka.
+    """
+
+    block = str(block or "")
+
+    if not block.strip():
+        return ""
+
+    slot = (str(role), str(key))
+
+    if _role_seen_blocks.get(slot) == block:
+        return ""
+
+    _role_seen_blocks[slot] = block
+
+    return block
+
+
+def _current_topic(last_result, critic_streak):
+    """
+    Jedno zdanie: czym zajmujemy sie TERAZ. Kolejnosc wynika z tego,
+    co realnie blokuje postep -- najpierw rzeczy, ktore trzeba
+    domknac, zanim cokolwiek innego ma sens.
+
+    Zwraca "" gdy nic nie wisi -- wtedy nie ma o czym mowic i nie
+    dokladamy szumu.
+    """
+
+    if isinstance(last_result, dict):
+
+        status = last_result.get("status")
+
+        if status == "GEMINI_TOOL_ERROR":
+
+            tool = str(last_result.get("tool") or "narzędzie")
+            err = str(
+                (last_result.get("tool_result") or {}).get("error")
+                or last_result.get("error")
+                or ""
+            ).strip()
+
+            line = (
+                "Zajmijmy się najpierw jedną rzeczą: ostatnia próba "
+                "(" + tool + ") nie wyszła"
+            )
+
+            if err:
+                line += " — " + short(err, 200).replace("\n", " ")
+
+            return (
+                line + ". Domknijmy to, zanim pójdziemy dalej — "
+                "reszta poczeka."
+            )
+
+        if status == "TOOL_LIMIT":
+            return (
+                "Jedna rzecz na teraz: poprzednie zadanie było za "
+                "duże i skończyły się na nim wywołania narzędzi. "
+                "Potrzebny mniejszy, węższy krok — nie kolejny "
+                "szeroki plan."
+            )
+
+    if critic_streak >= 2:
+        return (
+            "Zanim pójdziemy dalej: Marek zgłasza zastrzeżenie już "
+            + str(critic_streak) + " raz z rzędu. Rozstrzygnijmy "
+            "najpierw JEGO wątpliwość, a nie kolejny nowy pomysł."
+        )
+
+    return ""
+
+
 def _set_current_goal(goal):
     """
     Nowy cel = wszyscy dostają go raz, przy swojej pierwszej
@@ -1710,6 +1826,10 @@ def _set_current_goal(goal):
 
     _current_goal_text = str(goal or "").strip()
     _goal_briefed.clear()
+
+    # v193: nowy cel = rozmowa od zera, wiec nikt niczego jeszcze
+    # "nie widzial" (patrz _only_if_new).
+    _reset_step_by_step_memory()
 
 
 def _goal_briefing_for(name):
@@ -14566,11 +14686,31 @@ def consult_team(
     # v191: bez CEL-u. Każda rola dostała go RAZ, przy pierwszej
     # wiadomości w tym celu (patrz _goal_briefing_for), i ma go w
     # historii swojej rozmowy. Tu idzie tylko to, co NOWE.
-    core_context = f"""{file_answers_block}{progress_block}{checklist_block}{main_decision_block}
-OSTATNI RAPORT:
-{readable_report or raw_report_material}{error_details_block}
-{tool_hint}
-"""
+    # v193: JEDNO zdanie na gorze -- czym sie teraz zajmujemy.
+    # Patrz _current_topic(): gdy wisi nierozwiazany blad albo
+    # blokada Marka, mowimy o tym wprost i po kolei, zamiast
+    # wysypywac wszystko naraz.
+    topic_line = _current_topic(last_result, _critic_block_streak)
+    topic_block = (topic_line + "\n\n") if topic_line else ""
+
+    report_body = readable_report or raw_report_material
+
+    # v193: kazda rola dostaje TYLKO to, czego jeszcze nie widziala.
+    # Bloki identyczne z poprzednim krokiem sa juz w historii jej
+    # rozmowy -- powtarzanie ich zaglusza to, co naprawde nowe.
+    # Sam raport nie przechodzi przez ten filtr celowo: to jest
+    # "biezaca wiadomosc" w rozmowie, a nie tlo.
+    def _core_context_for(role_name):
+        pieces = [
+            topic_block,
+            _only_if_new(role_name, "files", file_answers_block),
+            _only_if_new(role_name, "progress", progress_block),
+            _only_if_new(role_name, "checklist", checklist_block),
+            _only_if_new(role_name, "main_decision", main_decision_block),
+            "\nOSTATNI RAPORT:\n" + report_body + error_details_block + "\n",
+            _only_if_new(role_name, "tool_hint", tool_hint),
+        ]
+        return "".join(p for p in pieces if p)
 
     chrome_block = (
         "\nAKTUALNY CHROME:\n"
@@ -14601,7 +14741,7 @@ OSTATNI RAPORT:
     # (CEL/checklist/OSTATNI RAPORT) zostaje — to są fakty, nie
     # przypomnienie tożsamości.
     def _team_context(role_name, include_chrome=False, include_android=False, extra=""):
-        pieces = [core_context]
+        pieces = [_core_context_for(role_name)]
         if include_chrome:
             pieces.append(chrome_block)
         if include_android:
@@ -15300,9 +15440,15 @@ konkretnego do podjęcia decyzji):
 }}
 """
 
+    # v193: MAIN tez zaczyna od JEDNEJ rzeczy, ktora teraz blokuje
+    # postep -- to on podejmuje decyzje, wiec najbardziej potrzebuje
+    # jasnosci, o czym w tym kroku w ogole rozmawiamy.
+    _main_topic = _current_topic(last_result, _critic_block_streak)
+    _main_topic_block = ("\n" + _main_topic + "\n") if _main_topic else ""
+
     # v191: bez "CEL AGENTA" — MAIN dostał cel raz (patrz
     # _goal_briefing_for) i ma go w historii swojej rozmowy.
-    prompt = f"""
+    prompt = f"""{_main_topic_block}
 KROK:
 {step}
 
