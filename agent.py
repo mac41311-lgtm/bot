@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v201
+AEL-MINI AUTONOMOUS AGENT v202
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v201")
+    print("             AEL-MINI AUTONOMOUS AGENT v202")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1725,6 +1725,112 @@ _pending_team_warnings = []
 # To ta sama klasa co zawsze: Python WIE, nie mowi, odbiorca zgaduje
 # i obwinia autora. Wiec mowimy.
 _role_truncated = set()
+
+
+# v202 -- na wyrazna prosbe uzytkownika (2026-09-04), wzorowana na
+# jego wlasnym przykladzie rozmowy:
+#
+#   ENGINEER -> EXECUTOR: "Uruchom pytest tests/test_auth.py"
+#   EXECUTOR -> ENGINEER: "Wynik: 7 passed, 2 failed"
+#   ENGINEER -> MAIN:     "Implementacja jest, ale 2 testy nie przechodza"
+#
+# U nas tej strzalki POWROTNEJ nie bylo. Bartek pisal skrypt, Python
+# go zapisywal i uruchamial, a wynik wracal do MAIN-a i do Oli — nigdy
+# do samego Bartka. Autor kodu nie widzial, jak jego kod sie zachowal;
+# dowiadywal sie o tym najwyzej z cudzego streszczenia, krok pozniej.
+# Petli "napisz -> uruchom -> zobacz blad -> popraw" po prostu nie bylo.
+#
+# Teraz surowy wynik uruchomienia JEGO kodu wraca prosto do niego, przy
+# nastepnym pytaniu. Zero dodatkowych zapytan do DeepSeeka: to samo
+# pytanie, ktore i tak by poszlo, niesie tylko wiecej prawdy.
+#
+# Podawane RAZ (potem opróżniane) — zgodnie z v191/v193 nie zamieniamy
+# tego w kolejna sztywna sekcje wracajaca co krok.
+_engineer_code_feedback = None
+
+
+def _remember_engineer_code_result(path, result):
+    """
+    Zapamietuje, jak zachowal sie kod Bartka, zeby oddac mu to wprost.
+    Nigdy nie rzuca wyzej — to informacja, nie warunek dzialania.
+    """
+
+    global _engineer_code_feedback
+
+    try:
+        if not isinstance(result, dict):
+            return
+
+        tool_result = result.get("tool_result")
+
+        if not isinstance(tool_result, dict):
+            # Przy sukcesie tool_result jest pusty (patrz
+            # _run_script_directly) — surowy wynik lezy obok.
+            tool_result = result.get("shell_result")
+
+        if not isinstance(tool_result, dict):
+            tool_result = {}
+
+        _engineer_code_feedback = {
+            "path": str(path),
+            "ok": bool(result.get("ok")),
+            "returncode": tool_result.get("returncode"),
+            "stdout": str(tool_result.get("stdout") or ""),
+            "stderr": str(tool_result.get("stderr") or ""),
+            "report": str(result.get("report") or ""),
+        }
+
+    except Exception:
+        _engineer_code_feedback = None
+
+
+def _engineer_feedback_block():
+    """
+    Blok oddawany Bartkowi: co realnie zrobil jego kod. Opróżnia sam
+    siebie — mowimy o tym raz, przy najblizszej okazji.
+    """
+
+    global _engineer_code_feedback
+
+    dane = _engineer_code_feedback
+    _engineer_code_feedback = None
+
+    if not dane:
+        return ""
+
+    naglowek = (
+        "\n\nURUCHOMILISMY TWOJ KOD (" + dane["path"] + ") — oto co "
+        "z niego wyszlo NAPRAWDE"
+    )
+
+    if dane["ok"]:
+        naglowek += " (zakonczyl sie bez bledu):"
+    else:
+        naglowek += (
+            " (NIE POWIODL SIE, kod wyjscia "
+            + str(dane.get("returncode")) + "):"
+        )
+
+    czesci = [naglowek]
+
+    if dane["stdout"].strip():
+        czesci.append("\nWYJSCIE:\n" + short(dane["stdout"], 2500))
+
+    if dane["stderr"].strip():
+        czesci.append("\nBLEDY:\n" + short(dane["stderr"], 2000))
+
+    if not dane["stdout"].strip() and not dane["stderr"].strip():
+        czesci.append("\n" + short(dane["report"], 1500))
+
+    czesci.append(
+        "\nTo jest surowy wynik z urzadzenia, nie czyjes streszczenie. "
+        "Jesli cos nie zadzialalo — popraw to, ale podaj TYLKO "
+        "zmieniony fragment przez SZUKAJ/ZAMIEN albo caly plik, gdy "
+        "poprawka jest wieksza niz polowa. Nie przepisuj calosci bez "
+        "potrzeby."
+    )
+
+    return "".join(czesci)
 
 
 def _mark_role_truncated(name, truncated):
@@ -13208,6 +13314,11 @@ def _run_script_directly(path, task_text):
         "executed_by": "python",
         "tool": None if ok else "termux_run",
         "tool_result": None if ok else shell_result,
+        # v202: surowy wynik powloki zostaje ZAWSZE — tool_result jest
+        # celowo pusty przy sukcesie (taki sam ksztalt jak u Gemini),
+        # ale Bartek ma dostac prawdziwe wyjscie swojego kodu takze
+        # wtedy, gdy wszystko poszlo dobrze.
+        "shell_result": shell_result,
         "report": raport,
         "tool_calls": 1,
         "tool_trace": [{
@@ -15683,6 +15794,7 @@ def consult_team(
                 "\nPLAN TOMKA:\n" + planner_out
                 + "\nINFO KAMILA:\n" + researcher_out
                 + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                + _engineer_feedback_block()
                 + engineer_critic_block
                 + engineer_question_block
                 + engineer_value_handoff
@@ -19398,6 +19510,12 @@ Zwróć tylko JSON.
                     task_text
                 )
 
+                # v202: wynik JEGO kodu wraca do Bartka, nie tylko do
+                # MAIN-a (patrz _engineer_code_feedback).
+                _remember_engineer_code_result(
+                    _self_run_path, last_result
+                )
+
                 sep = "─" * 60
                 print()
                 print(sep)
@@ -19509,6 +19627,13 @@ Zwróć tylko JSON.
             if result:
 
                 last_result = result
+
+                # v202: jesli to zadanie dotyczylo kodu, ktory Python
+                # wlasnie zapisal od Bartka — oddaj mu wynik wprost.
+                if write_target:
+                    _remember_engineer_code_result(
+                        target_path, result
+                    )
 
             continue
 
