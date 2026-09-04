@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v205
+AEL-MINI AUTONOMOUS AGENT v206
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v205")
+    print("             AEL-MINI AUTONOMOUS AGENT v206")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2065,6 +2065,7 @@ def _set_current_goal(goal):
     _reset_step_by_step_memory()
     _set_current_project_file(None)
     _reset_code_review_budget()
+    _reset_critic_objection_memory()
 
 
 def _goal_briefing_for(name):
@@ -13490,6 +13491,60 @@ def _task_carries_engineer_code(task_text, engineer_full):
     return bool(extract_code_block(engineer_full or ""))
 
 
+# ============================================================
+# ILE WYPOWIEDZI ROLI PRZEKAZUJEMY DALEJ (v206)
+# ============================================================
+#
+# Realny log 2026-09-04 (v205). Marek (CRITIC) wydal BLOKUJ SZESC
+# razy w trzech krokach i za kazdym razem z DOKLADNIE tego samego
+# powodu:
+#
+#   "Plan Tomka jest NIEKOMPLETNY - urywa sie w polowie Kroku 2"
+#   "urywa sie po Kroku 1, a zapowiedziane Kroki 2 i 3 nie zostaly
+#    dostarczone"
+#   "urywa sie w polowie Kroku 3 (przy 'Opcja B (hybrydowa...)')"
+#
+# Marek mial racje za kazdym razem — i to NIE byla wina Tomka.
+# Tomek odpowiadal 3423, 4664, 3947, 3077, 3315 i 3986 znakow, a
+# planner_out budowalo sie przez gole short(..., 2000). Kazdy jeden
+# plan przecinalismy MNIEJ WIECEJ W POLOWIE my sami, po czym
+# oddawalismy go recenzentowi jako caloc, z samym "[skrocono]" na
+# koncu. Zespol spalil trzy kroki (~12 zadan do DeepSeeka) na
+# klotnie o artefakt, ktory wyprodukowal Python.
+#
+# To ta sama klasa bledu, ktora naprawiamy od v190: Python WIE
+# (zna dlugosc oryginalu, wie ze to on cial), nie mowi tego, wiec
+# odbiorca zgaduje — i zgaduje zle, bo najbardziej naturalny
+# wniosek z urwanego planu to "autor nie dokonczyl".
+#
+# Dwie zmiany, obie deterministyczne, po stronie Pythona:
+#   1) limity podniesione tak, zeby NORMALNA wypowiedz przechodzila
+#      w CALOSCI (te same wartosci co realne dlugosci z logow, z
+#      zapasem). To nie kosztuje ani jednego dodatkowego zadania —
+#      to ten sam jeden prompt, tylko nieokaleczony;
+#   2) gdy mimo to musimy skrocic, mowimy WPROST kto skrocil i ile
+#      zostalo — patrz _role_output_for_team().
+#
+# Zasada jest ta sama, ktora uzytkownik postawil przy kodzie
+# (v192): "nie mozemy ucinac kodow w plikach wiadomosciach
+# wysylanych po miedzy czatami". Plan Tomka jest dla Marka
+# dokladnie tym, czym kod Bartka dla Piotra — przedmiotem oceny.
+# Przedmiotu oceny sie nie przycina.
+
+# Plan jest OCENIANYM artefaktem — ma przechodzic caly.
+ROLE_LIMIT_PLANNER = 8000
+
+# Ustalenia Kamila bywaja dluga lista zrodel; scinamy pozno.
+ROLE_LIMIT_RESEARCHER = 4000
+
+# Wojtek to jeden pomysl/jedno pytanie — tu 2000 realnie starcza.
+ROLE_LIMIT_WOJTEK = 2000
+
+# Zarzut Marka jest dla Tomka/Bartka tym, czym plan dla Marka —
+# przedmiotem odpowiedzi. Ucieta polowa zarzutu = odpowiedz obok.
+ROLE_LIMIT_CRITIC = 4000
+
+
 def _role_output_for_team(role_label, text, limit, role_key=None):
     """
     v190 — ta sama klasa błędu, co "Beata": Python WIE, ale nie mówi,
@@ -13515,6 +13570,27 @@ def _role_output_for_team(role_label, text, limit, role_key=None):
     if str(text or "").strip():
 
         out = short(text, limit)
+
+        # v206: jeśli to MY skróciliśmy tę wypowiedź, odbiorca musi
+        # wiedzieć, że skrócił ją Python przy przekazywaniu — a nie
+        # że autor nie dokończył pracy. Bez tego zdania recenzent
+        # czyta własny artefakt Pythona jako niedbalstwo kolegi i
+        # blokuje go w kółko (log 2026-09-04: sześć razy BLOKUJ za
+        # "plan urywa się w połowie Kroku 2").
+        _pelna_dlugosc = len(str(text))
+
+        if _pelna_dlugosc > int(limit):
+            out += (
+                "\n\n[FAKT OD PYTHONA: powyższe to PIERWSZE "
+                + str(int(limit)) + " z " + str(_pelna_dlugosc)
+                + " znaków tej wypowiedzi. To PYTHON ją skrócił "
+                "przy przekazywaniu Ci jej — autor napisał ją do "
+                "końca i reszta istnieje. Urwanie w połowie zdania "
+                "czy kroku NIE jest jego błędem i NIE jest powodem "
+                "do blokady. Oceniaj to, co widzisz; jeśli "
+                "potrzebujesz akurat brakującego fragmentu, poproś "
+                "wprost o sam ten fragment.]"
+            )
 
         # v201: jesli DeepSeek uciął tę wypowiedź w połowie, odbiorca
         # MUSI to wiedzieć. Inaczej — jak w logu 2026-09-04 — czyta
@@ -15099,6 +15175,143 @@ CRITIC_STREAK_ESCALATION = 3
 CRITIC_STREAK_HARD_STOP = 6
 
 
+# ============================================================
+# TEN SAM ZARZUT PO RAZ N-TY (v206)
+# ============================================================
+#
+# Log 2026-09-04 (v205): Marek zglosil BLOKUJ szesc razy, za kazdym
+# razem o to samo (plan urywa sie w polowie). Przyczyne usuwamy
+# wyzej (ROLE_LIMIT_PLANNER), ale sam MECHANIZM patowy zostaje i
+# powtorzy sie przy nastepnym nieporozumieniu: kazda rola widzi
+# tylko biezacy krok, wiec nikt w zespole nie ma jak zauwazyc, ze
+# to juz trzecia identyczna runda. Python ma — trzyma poprzedni
+# zarzut i moze go porownac. Wiec mowi.
+#
+# To nie jest sztywny szablon w prompcie, tylko jedno zdanie faktu
+# doklejane WYLACZNIE wtedy, gdy powtorzenie naprawde nastapilo.
+#
+# Trzymamy KILKA ostatnich zarzutow (znormalizowanych), a nie tylko
+# poprzedni: zastrzezenie potrafi wracac naprzemiennie (A, B, A), a
+# wtedy porownanie wylacznie z ostatnim nigdy niczego nie wychwyci.
+_critic_recent_objections = []
+_critic_same_objection_count = 0
+
+CRITIC_OBJECTION_MEMORY = 3
+
+# Dwie miary, bo zadna sama nie wystarcza. Na REALNYCH zarzutach z
+# logu 2026-09-04 (trzy sformulowania tej samej uwagi o urwanym
+# planie) wyszlo:
+#
+#   z1~z2  seq 0.96  slowa 0.92     <- ten sam zarzut
+#   z2~z3  seq 0.66  slowa 0.44     <- ten sam zarzut, inaczej ujety
+#   z1~z3  seq 0.71  slowa 0.50     <- ten sam zarzut, inaczej ujety
+#   zarzut o formacie numeru:
+#          seq 0.23  slowa 0.04     <- INNY zarzut
+#
+# Czyli: przeredagowanie potrafi zbic podobienstwo znakowe do 0.66,
+# ale wspolne slowa trescowe zostaja (0.44+), a przy naprawde innym
+# zarzucie spadaja do 0.04. Zapas jest ogromny, wiec progi ustawiamy
+# nisko po stronie slow i wysoko po stronie znakow.
+CRITIC_SAME_OBJECTION_RATIO = 0.72
+CRITIC_SAME_OBJECTION_WORDS = 0.35
+
+
+def _normalize_objection(text):
+    """Goly sens zarzutu: bez liczb kroku, bez formatowania."""
+
+    t = str(text or "").lower()
+    t = re.sub(r"[0-9]+", "", t)
+    t = re.sub(r"[^a-ząćęłńóśźż ]+", " ", t)
+
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _objection_words(normalized):
+    """Slowa trescowe — krotkie (spojniki, przyimki) odpadaja."""
+
+    return set(w for w in str(normalized).split() if len(w) > 3)
+
+
+def _objections_are_same(a, b):
+    """Czy to ten sam zarzut? Dwie miary, wystarczy jedna."""
+
+    if not a or not b:
+        return False
+
+    if difflib.SequenceMatcher(None, a, b).ratio() >= (
+        CRITIC_SAME_OBJECTION_RATIO
+    ):
+        return True
+
+    slowa_a = _objection_words(a)
+    slowa_b = _objection_words(b)
+    wspolne = slowa_a & slowa_b
+    razem = slowa_a | slowa_b
+
+    if not razem:
+        return False
+
+    return (len(wspolne) / len(razem)) >= CRITIC_SAME_OBJECTION_WORDS
+
+
+def _critic_repeats_objection(text):
+    """
+    Zwraca zdanie faktu, gdy Marek powtarza zarzut co najmniej po
+    raz DRUGI. W przeciwnym razie "".
+    """
+
+    global _critic_same_objection_count
+
+    teraz = _normalize_objection(text)
+
+    if not teraz:
+        return ""
+
+    powtorka = any(
+        _objections_are_same(wczesniej, teraz)
+        for wczesniej in _critic_recent_objections
+    )
+
+    if powtorka:
+        _critic_same_objection_count += 1
+    else:
+        _critic_same_objection_count = 1
+
+    _critic_recent_objections.append(teraz)
+
+    del _critic_recent_objections[:-CRITIC_OBJECTION_MEMORY]
+
+    if _critic_same_objection_count < 2:
+        return ""
+
+    log(
+        "DEEPSEEK",
+        "Marek zglasza TEN SAM zarzut po raz "
+        + str(_critic_same_objection_count)
+        + " — mowie o tym wprost zamiast puscic kolejna runde."
+    )
+
+    return (
+        "[FAKT OD PYTHONA: to jest ten SAM zarzut Marka po raz "
+        + str(_critic_same_objection_count) + " z rzędu — "
+        "porównałem treść jego poprzednich i obecnej uwagi. "
+        "Dotychczasowe tłumaczenia go nie zdjęły, więc powtórzenie "
+        "ich jeszcze raz nic nie zmieni. Zrób jedno z dwóch: albo "
+        "USUŃ przyczynę zarzutu, albo napisz WPROST, że uważasz go "
+        "za nietrafiony i dlaczego — tak, żeby Marek miał się do "
+        "czego odnieść.]"
+    )
+
+
+def _reset_critic_objection_memory():
+    """Nowy cel = nowe zarzuty. Nic nie przenosimy miedzy celami."""
+
+    global _critic_same_objection_count
+
+    _critic_same_objection_count = 0
+    del _critic_recent_objections[:]
+
+
 def _condense_last_result_for_team(last_result, limit=2500):
     """
     Buduje ZWIĘZŁE, czytelne podsumowanie last_result zamiast
@@ -16061,7 +16274,13 @@ def consult_team(
             )
         )
 
-    wojtek_out = short(results.get("WOJTEK", ""), 1500)
+    # v206: przez WSPÓLNY kanał (patrz _role_output_for_team) —
+    # inaczej adnotacje o ucięciu/skróceniu nie docierają do tych,
+    # którzy tę wypowiedź faktycznie czytają i oceniają.
+    wojtek_out = _role_output_for_team(
+        "Wojtek", results.get("WOJTEK", ""),
+        ROLE_LIMIT_WOJTEK, "WOJTEK"
+    )
 
     # RESEARCHER PRZED PLANNEREM — żeby świeże ustalenia (gdy w
     # ogóle konsultowane w tym kroku) mogły od razu wpłynąć na plan
@@ -16129,7 +16348,10 @@ def consult_team(
             )
         )
 
-    researcher_out = short(results.get("RESEARCHER", ""), 2000)
+    researcher_out = _role_output_for_team(
+        "Kamil (RESEARCHER)", results.get("RESEARCHER", ""),
+        ROLE_LIMIT_RESEARCHER, "RESEARCHER"
+    )
 
     # Zarzut Marka do POPRZEDNIEGO planu Tomka — patrz
     # _critic_verdict_for_planner. Bez tego Tomek planuje obok tej
@@ -16217,7 +16439,13 @@ def consult_team(
         }
         _critic_question = None
 
-    planner_out = short(results.get("PLANNER", ""), 2000)
+    # v206: to WŁAŚNIE ta linia kosztowała trzy kroki w logu
+    # 2026-09-04 — plan Tomka (3400-4700 znaków) szedł do Marka
+    # przecięty na 2000, bez słowa o tym, kto go przeciął.
+    planner_out = _role_output_for_team(
+        "Tomek (PLANNER)", results.get("PLANNER", ""),
+        ROLE_LIMIT_PLANNER, "PLANNER"
+    )
 
     # Zarzut Marka do POPRZEDNIEJ propozycji Bartka — ta sama zasada
     # co przy Tomku (v159): recenzowany ma usłyszeć recenzję.
@@ -16357,7 +16585,13 @@ def consult_team(
             # v200: krotko i bez formulki. To jest ciag dalszy
             # rozmowy, ktora ta rola juz prowadzi — nie odprawa.
             _who + ", Marek na to:\n\n"
-            + short(_critic_out_full, 1500)
+            # v206: wspolny kanal zamiast golego short() — patrz
+            # ROLE_LIMIT_PLANNER. Polowa zarzutu to zarzut, na
+            # ktory nie da sie odpowiedziec.
+            + _role_output_for_team(
+                "Marek (CRITIC)", _critic_out_full,
+                ROLE_LIMIT_CRITIC, "CRITIC"
+            )
             + "\n\nCo Ty na to?"
         )
 
@@ -16377,11 +16611,26 @@ def consult_team(
             )
             break
 
+        # v206: to byla druga polowa petli BLOKUJ z logu
+        # 2026-09-04. Tomek tlumaczyl sie Markowi w 3000+ znakach,
+        # my odsylalismy Markowi pierwsze 1500 — a Marek, zgodnie
+        # ze swoim kontraktem, blokowal PONOWNIE "bo urywa sie w
+        # polowie Kroku 3". Drugi BLOKUJ w kroku byl nasz, nie jego.
+        # Kod Bartka dodatkowo NIGDY nie moze byc ciety (v192),
+        # dlatego dla niego idzie _engineer_for_team().
+        if _addressee == "ENGINEER":
+            _reply_for_critic = _engineer_for_team(_reply)
+        else:
+            _reply_for_critic = _role_output_for_team(
+                "Tomek (PLANNER)", _reply,
+                ROLE_LIMIT_PLANNER, "PLANNER"
+            )
+
         _verdict = deepseek(
             "CRITIC",
             ("Tomek" if _addressee == "PLANNER" else "Bartek")
             + " na to:\n\n"
-            + short(_reply, 1500)
+            + _reply_for_critic
             + "\n\nI co teraz?"
         )
 
@@ -16443,8 +16692,27 @@ def consult_team(
     # v200: ten sam werdykt co wyzej — nie szukamy slowa w prozie
     # (patrz _critic_verdict). Zgoda Marka podbijala licznik blokad.
     if _critic_objects(_critic_out_full):
-        _critic_verdict_for_planner = short(_critic_out_full, 1200)
-        _critic_verdict_for_engineer = short(_critic_out_full, 1200)
+
+        # v206: zarzut niesiony do NASTEPNEGO kroku szedl przez gole
+        # short(..., 1200) — czyli Tomek dostawal rano polowe uwagi,
+        # ktora wieczorem miala go zablokowac. Ten sam kanal co
+        # reszta (patrz ROLE_LIMIT_CRITIC).
+        _critic_carry = _role_output_for_team(
+            "Marek (CRITIC)", _critic_out_full,
+            ROLE_LIMIT_CRITIC, "CRITIC"
+        )
+
+        # v206: czy to JUZ BYLO? Python trzyma poprzedni zarzut i
+        # potrafi porownac — zespol nie potrafi, bo kazdy widzi
+        # tylko biezacy krok. Bez tego trzy kroki z rzedu wygladaja
+        # dla wszystkich jak trzy rozne problemy.
+        _powtorka = _critic_repeats_objection(_critic_out_full)
+
+        if _powtorka:
+            _critic_carry = _powtorka + "\n\n" + _critic_carry
+
+        _critic_verdict_for_planner = _critic_carry
+        _critic_verdict_for_engineer = _critic_carry
         _critic_block_streak += 1
 
     elif not _critic_out_full.strip():
