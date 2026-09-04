@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v196
+AEL-MINI AUTONOMOUS AGENT v197
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v196")
+    print("             AEL-MINI AUTONOMOUS AGENT v197")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7857,13 +7857,94 @@ def termux_write_file(path, content, append=False):
     try:
         p = _resolve_home_relative_path(path)
 
+        data = str(
+            content if content is not None else ""
+        )
+
+        # v197 (na wyrazna decyzje uzytkownika, 2026-09-04): "Gemini ma
+        # nie podejmowac decyzji, wykonywac proste rzeczy, NIC NIE
+        # PISZE — uruchamia, wykonuje, bo ma normalne API, wiec jest
+        # lepszy do operowania, dociskania i uruchamiania. A DeepSeek
+        # robi reszte."
+        #
+        # Log 2026-09-04, KROK 1 pokazal, czym konczy sie mieszanie
+        # tych rol: Gemini dostalo "zapisz skrypt, nadaj prawa,
+        # URUCHOM go", zrobilo 6 wywolan narzedzi (w tym dwa razy
+        # czytanie tego samego pliku) i NIGDY nie uruchomilo skryptu
+        # — zamiast tego samo napisalo plik-dowod. Wykonawca zaczal
+        # decydowac, co napisac, i przestal wykonywac.
+        #
+        # Kod pisze Bartek, a na dysk zapisuje go SAM PYTHON
+        # (write_engineer_code_to) — 1:1, bez przepisywania, bez
+        # literowek i bez zuzywania limitu Gemini. Gemini ma ten plik
+        # URUCHOMIC. Dlatego odmawiamy zapisu KODU, podajac wprost
+        # droge, ktora jest wlasciwa. Zwykle dane (konfiguracja,
+        # wartosc klucza, plik tekstowy) zapisuje dalej normalnie —
+        # blokujemy pisanie PROGRAMOW, nie pisanie w ogole.
+        _code_suffix = p.suffix.lower() in (
+            ".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash"
+        )
+        _has_shebang = data.lstrip().startswith("#!")
+
+        # WYJATEK: custom_tools/ to sankcjonowana sciezka rozszerzania
+        # agenta o TRWALE narzedzia -- Python sam ja waliduje
+        # (TOOL_NAME/run) i rejestruje przy zapisie, a narzedzie
+        # przechodzi potem przez te sama kontrole co wbudowane.
+        # To nie jest "Gemini pisze rozwiazanie zadania", tylko
+        # dokladanie kolejnego przycisku do pulpitu. Gdyby to
+        # zablokowac, agent stracilby mozliwosc rozbudowy o wlasne
+        # narzedzia, a takiego zubozenia uzytkownik nie prosil.
+        try:
+            _is_custom_tool = (
+                CUSTOM_TOOLS_DIR.resolve() in p.resolve().parents
+            )
+        except Exception:
+            _is_custom_tool = False
+
+        if (_code_suffix or _has_shebang) and not _is_custom_tool:
+
+            log(
+                "GEMINI",
+                "ODMOWA zapisu kodu do " + p.name + " — kod pisze "
+                "Bartek, a zapisuje Python. Gemini ma go URUCHOMIC."
+            )
+
+            return {
+                "ok": False,
+                "error": "GEMINI_NIE_PISZE_KODU",
+                "path": str(p),
+                "message": (
+                    "Nie zapisuje kodu — to nie jest Twoje zadanie. "
+                    "Kod pisze Bartek (ENGINEER), a na dysk zapisuje "
+                    "go sam Python, w calosci i 1:1, bez Twojego "
+                    "udzialu. Ty jestes wykonawca: uruchamiasz, "
+                    "klikasz, sprawdzasz wynik.\n\n"
+                    "Co zrobic zamiast tego:\n"
+                    "- Jesli plik JUZ istnieje — po prostu go uruchom "
+                    "(termux_run, np. `bash " + p.name + "`).\n"
+                    "- Jesli pliku nie ma — zakoncz zadanie i zglos "
+                    "MAIN-owi, zeby w kolejnej decyzji podal sciezke "
+                    "w polu \"write_engineer_code_to\". Python "
+                    "zapisze go wtedy sam, zanim dostaniesz zadanie.\n"
+                    "- Jesli chodzilo o POPRAWKE fragmentu "
+                    "istniejacego pliku — uzyj termux_patch_file "
+                    "(search/replace), nie nadpisuj calosci.\n\n"
+                    "Zwykle pliki z danymi (konfiguracja, wartosc, "
+                    "tekst) mozesz zapisywac normalnie — odmowa "
+                    "dotyczy wylacznie KODU/SKRYPTOW."
+                ),
+                "gemini_wrote_code_warning": (
+                    "Gemini probowalo ZAPISAC KOD do " + p.name
+                    + " zamiast go uruchomic. Kod ma pisac Bartek, a "
+                    "zapisywac Python (write_engineer_code_to) — "
+                    "jesli ten plik jest potrzebny, MAIN musi podac "
+                    "jego sciezke w tym polu przy nastepnej decyzji."
+                ),
+            }
+
         p.parent.mkdir(
             parents=True,
             exist_ok=True
-        )
-
-        data = str(
-            content if content is not None else ""
         )
 
         previous_size = None
@@ -11330,6 +11411,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "dom_fields_warning",
                         "screen_unreadable_warning",
                         "fabricated_evidence_warning",
+                        "gemini_wrote_code_warning",
                         "missing_file_answer",
                         "stale_warning"
                     ):
