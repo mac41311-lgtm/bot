@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v193
+AEL-MINI AUTONOMOUS AGENT v194
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v193")
+    print("             AEL-MINI AUTONOMOUS AGENT v194")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -17168,6 +17168,211 @@ def _need_user_login_with_contact_gate(
     )
 
 
+# ============================================================
+# PO ZALOGOWANIU PYTHON WYCIAGA RESZTE SAM (v194)
+# ============================================================
+#
+# Na wyrazna prosbe uzytkownika (2026-09-04): "jak wysyla mi do API
+# zapytanie, ja mu sie zaloguje, ale RESZTE SAM MUSI WYCIAGNAC".
+#
+# Cala dotychczasowa obsluga NEED_USER_LOGIN zakladala, ze czlowiek
+# recznie PRZEPISZE wartosc do okienka -- i realnie kosztowalo to
+# cale kroki (log 2026-08-27: uzytkownik wklejal caly fragment strony
+# Twilio, zespol patrzyl na pierwsza linie "Live credentials", uznawal
+# ja za sama etykiete i prosil o wartosc jeszcze raz).
+#
+# Ale agent MA dostep do tej samej, zalogowanej przegladarki przez
+# CDP. Skoro czlowiek wlasnie sie zalogowal, to Python moze po prostu
+# PRZECZYTAC strone i wyjac z niej klucz sam -- dokladnie tak, jak
+# zrobilby to czlowiek patrzacy na ekran. Rola uzytkownika konczy sie
+# na zalogowaniu.
+#
+# Bezpieczenstwo: znalezione wartosci ida do pliku 0600 i do
+# "user_provided_value", ktore ISTNIEJACY mechanizm redakcji
+# (patrz consult_team) usuwa z materialu dla zespolu -- sekret
+# fizycznie nie trafia do DeepSeeka. W logu terminala pokazujemy
+# wylacznie POCZATEK wartosci, nigdy calosci.
+
+# Ksztalty realnych sekretow. Kolejnosc ma znaczenie: najbardziej
+# charakterystyczne wzorce probujemy pierwsze, zeby etykieta byla
+# trafna.
+_CREDENTIAL_PATTERNS = (
+    ("klucz OpenAI-podobny", re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}")),
+    ("Twilio Account SID", re.compile(r"\bAC[0-9a-fA-F]{32}\b")),
+    ("token typu key_/api_", re.compile(
+        r"\b(?:key|api|token|secret|pk|rk)[_\-][A-Za-z0-9_\-]{12,}",
+        re.IGNORECASE
+    )),
+    ("UUID", re.compile(
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+    )),
+    ("dlugi token alfanumeryczny", re.compile(
+        r"\b[A-Za-z0-9]{32,}\b"
+    )),
+)
+
+# Slowa, ktore w praktyce wygladaja jak token, ale nim nie sa.
+_CREDENTIAL_FALSE_POSITIVES = re.compile(
+    r"^(?:[0-9]+|[a-f0-9]{32,}\.(?:png|jpg|css|js)|"
+    r"[A-Za-z]+)$"
+)
+
+
+def _looks_like_real_credential(value):
+    """
+    Odsiewa rzeczy, ktore pasuja do wzorca, ale sekretem nie sa:
+    same cyfry, same litery (zwykle dlugie slowo), nazwy plikow.
+    Prawdziwy klucz prawie zawsze MIESZA litery i cyfry.
+    """
+
+    value = str(value or "")
+
+    if len(value) < 16:
+        return False
+
+    if _CREDENTIAL_FALSE_POSITIVES.match(value):
+        return False
+
+    has_digit = any(c.isdigit() for c in value)
+    has_alpha = any(c.isalpha() for c in value)
+
+    # "sk-", "key_" itp. same w sobie sa juz mocnym sygnalem, wiec
+    # dla nich nie wymagamy mieszanki.
+    if value[:3].lower() in ("sk-", "pk-") or "_" in value[:8]:
+        return True
+
+    return has_digit and has_alpha
+
+
+def _find_credentials_in_text(text, limit=6):
+    """
+    Wyciaga z tekstu strony wartosci wygladajace na klucz/token, wraz
+    z ETYKIETA z najblizszej poprzedzajacej linii -- zeby zespol
+    wiedzial, co to za wartosc, a nie dostal golego ciagu znakow.
+
+    Zwraca liste slownikow: {"label", "value"}.
+    """
+
+    text = str(text or "")
+    lines = text.splitlines()
+
+    found = []
+    seen_values = set()
+
+    for index, line in enumerate(lines):
+
+        for kind, pattern in _CREDENTIAL_PATTERNS:
+
+            for match in pattern.finditer(line):
+
+                value = match.group(0)
+
+                if value in seen_values:
+                    continue
+
+                if not _looks_like_real_credential(value):
+                    continue
+
+                # Etykieta: to, co stoi w tej samej linii przed
+                # wartoscia, albo poprzednia niepusta linia.
+                before = line[:match.start()].strip(" :\t-|")
+
+                label = before
+
+                if not label:
+                    for back in range(index - 1, max(index - 4, -1), -1):
+                        candidate = lines[back].strip(" :\t-|")
+                        if candidate and not any(
+                            p.search(candidate) for _, p in _CREDENTIAL_PATTERNS
+                        ):
+                            label = candidate
+                            break
+
+                seen_values.add(value)
+
+                found.append({
+                    "label": short(label, 80) or kind,
+                    "kind": kind,
+                    "value": value,
+                })
+
+                if len(found) >= limit:
+                    return found
+
+    return found
+
+
+# JS czytajacy to, co czlowiek WIDZI na stronie, plus wartosci pol
+# formularza (klucze czesto siedza w <input readonly>, gdzie
+# innerText ich nie pokazuje).
+_PAGE_HARVEST_JS = """
+(function () {
+  var out = [];
+  try { out.push(document.body ? document.body.innerText : ""); } catch (e) {}
+  try {
+    var f = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < f.length && i < 200; i++) {
+      var v = f[i].value;
+      if (v && String(v).trim()) {
+        var lab = f[i].getAttribute('aria-label')
+               || f[i].getAttribute('name')
+               || f[i].getAttribute('placeholder') || '';
+        out.push(lab + ': ' + v);
+      }
+    }
+  } catch (e) {}
+  return out.join('\\n');
+})()
+"""
+
+
+def _auto_extract_after_login(login_url):
+    """
+    Po tym, jak uzytkownik potwierdzi zalogowanie, Python sam czyta
+    zalogowana strone przez CDP i wyjmuje z niej klucze/tokeny.
+
+    Zwraca (lista_znalezionych, opis_bledu). Nigdy nie rzuca wyzej --
+    to udogodnienie, a nie warunek dzialania: gdy sie nie uda,
+    zostaje dotychczasowa sciezka z wklejaniem recznym.
+    """
+
+    if not str(login_url or "").startswith(("http://", "https://")):
+        return [], "brak prawdziwego adresu http(s) do odczytania"
+
+    try:
+        domain = urlparse(str(login_url)).netloc
+    except Exception:
+        domain = ""
+
+    try:
+        result = chrome_execute_js(
+            _PAGE_HARVEST_JS,
+            contains=domain or None
+        )
+    except Exception as e:
+        return [], "nie udalo sie odczytac strony: " + str(e)
+
+    if not isinstance(result, dict) or not result.get("ok"):
+        return [], (
+            "nie udalo sie odczytac strony: "
+            + str((result or {}).get("error", "brak odpowiedzi CDP"))
+        )
+
+    page_text = ""
+
+    for key in ("result", "value", "output", "text"):
+        candidate = result.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            page_text = candidate
+            break
+
+    if not page_text:
+        return [], "strona odczytana, ale pusta"
+
+    return _find_credentials_in_text(page_text), ""
+
+
 def _handle_need_user_login(decision):
     """
     Obsługa decyzji NEED_USER_LOGIN — wspólna dla dwóch miejsc w
@@ -17301,13 +17506,80 @@ def _handle_need_user_login(decision):
         )
     )
 
+    # v194 -- na wyrazna prosbe uzytkownika: "ja mu sie zaloguje, ale
+    # RESZTE SAM MUSI WYCIAGNAC". Uzytkownik wlasnie potwierdzil, ze
+    # jest zalogowany, a agent patrzy na TE SAMA przegladarke przez
+    # CDP -- wiec zamiast prosic go o przepisanie klucza, czytamy
+    # strone sami. Robimy to TYLKO gdy nic nie wkleil (czyli powiedzial
+    # "zrobione, dalej"): jak cos podal, to jego wartosc ma
+    # pierwszenstwo i nie ma czego szukac.
+    auto_found = []
+    auto_error = ""
+
     if not user_typed:
+
+        auto_found, auto_error = _auto_extract_after_login(login_url)
+
+        if auto_found:
+            log(
+                "MAIN",
+                "Po zalogowaniu odczytałem stronę sam i znalazłem "
+                + str(len(auto_found)) + " wartość/wartości "
+                "wyglądające na klucz/token: "
+                + ", ".join(
+                    str(f["label"]) + " = "
+                    + str(f["value"])[:6] + "…"
+                    for f in auto_found
+                )
+                + " (pełne wartości NIE są pokazywane w logu ani "
+                "wysyłane do zespołu)."
+            )
+
+            # Wchodzimy w ISTNIEJACA sciezke "wartosc od uzytkownika":
+            # zapis do pliku 0600, redakcja dla zespolu, przekazanie
+            # Bartkowi. Nic nowego nie trzeba zabezpieczac osobno.
+            user_typed = "\n".join(
+                str(f["label"]) + ": " + str(f["value"])
+                for f in auto_found
+            )
+
+        elif auto_error:
+            log(
+                "MAIN",
+                "Próbowałem sam odczytać stronę po zalogowaniu, ale "
+                "się nie udało (" + auto_error + ") — zostaje "
+                "dotychczasowa droga."
+            )
+
+    if auto_found:
+        note = (
+            "Użytkownik potwierdził zalogowanie i NIC nie musiał "
+            "przepisywać — Python SAM odczytał zalogowaną stronę "
+            "przez przeglądarkę i wyjął z niej "
+            + str(len(auto_found)) + " wartość/wartości wyglądające "
+            "na klucz/token (etykiety: "
+            + ", ".join(str(f["label"]) for f in auto_found)
+            + "). Wartości są zapisane w pliku (patrz niżej) — NIE "
+            "proś użytkownika o ich wklejenie, bo już je mamy. "
+            "Kolejny TASK ma odczytać je Z TEGO PLIKU."
+        )
+
+    elif not user_typed:
         note = (
             "Użytkownik nacisnął Enter bez wpisywania tekstu — to "
             "literalny sygnał 'zrobione, kontynuuj' (dokładnie o to "
             "proszono w pytaniu). Sprawdź aktualny stan Chrome i "
             "kontynuuj, ale nadal zweryfikuj po stanie Chrome, czy "
             "czynność faktycznie się udała, zamiast ślepo ufać."
+            + (
+                " Python spróbował też sam odczytać stronę i wyjąć z "
+                "niej klucz/token, ale " + auto_error + " — jeżeli "
+                "kolejny krok potrzebuje konkretnej wartości, "
+                "najpierw spróbuj sięgnąć po nią ze strony "
+                "narzędziami Chrome, a dopiero potem pytaj "
+                "użytkownika."
+                if auto_error else ""
+            )
         )
     elif looks_like_failure:
         note = (
