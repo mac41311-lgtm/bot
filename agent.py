@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v211
+AEL-MINI AUTONOMOUS AGENT v212
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v211")
+    print("             AEL-MINI AUTONOMOUS AGENT v212")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2108,6 +2108,92 @@ def _reset_progress_memory():
     """Nowy cel = kazda rola dostaje pelny stan raz, od nowa."""
 
     _role_seen_progress.clear()
+
+
+# ============================================================
+# KAZDA WIADOMOSC KONCZY SIE PYTANIEM (v212)
+# ============================================================
+#
+# Uzytkownik pokazal, jak wyglada rozmowa, ktora dziala:
+#
+#   BOT: "Jaka jest powierzchnia w m2?"      -> pytanie
+#   BOT: "Czy podloga jest przygotowana?"    -> pytanie
+#   BOT: "W jaki dzien chcialbys montaz?"    -> pytanie
+#
+# KAZDA wiadomosc konczy sie jedna, konkretna rzecza, ktorej
+# oczekujemy od rozmowcy.
+#
+# A potem pokazal JEDEN nasz realny blok (2026-09-05) — dwa ekrany
+# tekstu, ktore koncza sie... cudzym planem. Nie ma w nich ani
+# jednego zdania mowiacego, o co wlasciwie pytamy te osobe. To nie
+# jest rozmowa, tylko teczka podlozona pod nos.
+#
+# Dlatego kazda wiadomosc dostaje na koncu JEDNO zdanie: o co
+# prosimy TE role TERAZ. Nie jest to szablon — tresc wynika z tego,
+# co sie wlasnie stalo (swiezy blad, zastrzezenie Marka, czekanie),
+# wiec zmienia sie z krokiem. Ta sama zasada, co przy _current_topic.
+
+
+def _pytanie_do(rola, last_result, critic_objection=False):
+    """
+    Jedno zdanie na koncu wiadomosci: o co prosimy te role teraz.
+
+    Sytuacja decyduje o tresci — inaczej pytamy po swiezym bledzie,
+    inaczej gdy Marek ma zastrzezenie, inaczej gdy po prostu idziemy
+    dalej.
+    """
+
+    blad = (
+        isinstance(last_result, dict)
+        and (
+            last_result.get("ok") is False
+            or last_result.get("status") in (
+                "GEMINI_TOOL_ERROR", "TOOL_LIMIT", "FAILED"
+            )
+        )
+    )
+
+    if rola == "PLANNER":
+        if critic_objection:
+            return (
+                "\n\nTomku — Marek ma do tego zastrzeżenie (wyżej). "
+                "Co z nim robimy?"
+            )
+        if blad:
+            return (
+                "\n\nTomku — co robimy zamiast tego, co się właśnie "
+                "wywaliło? Jeden krok."
+            )
+        return "\n\nTomku — jaki jest następny krok? Tylko jeden."
+
+    if rola == "CRITIC":
+        return (
+            "\n\nMarku — co sądzisz o tym kroku? Jeśli coś jest nie "
+            "tak, powiedz co konkretnie."
+        )
+
+    if rola == "ENGINEER":
+        if blad:
+            return (
+                "\n\nBartku — naprawisz to? Jeśli da się prościej "
+                "niż dotąd, powiedz jak."
+            )
+        return (
+            "\n\nBartku — da się to zrobić? Jeśli tak, pokaż jak; "
+            "jeśli prościej inaczej, powiedz."
+        )
+
+    if rola == "RESEARCHER":
+        if blad:
+            return (
+                "\n\nKamilu — wiesz, dlaczego to nie zadziałało?"
+            )
+        return "\n\nKamilu — czego nam tu brakuje?"
+
+    if rola == "WOJTEK":
+        return "\n\nWojtku — masz na to jakiś prostszy pomysł?"
+
+    return ""
 
 
 def _current_topic(last_result, critic_streak):
@@ -13124,7 +13210,19 @@ def _approaches_summary_block():
     return "\n".join(lines)
 
 
-def _checklist_summary_block():
+def _same_task(a, b):
+    """Czy to ten sam punkt zadania (po normalizacji bialych znakow)."""
+
+    a = re.sub(r"\s+", " ", str(a or "")).strip().lower()
+    b = re.sub(r"\s+", " ", str(b or "")).strip().lower()
+
+    if not a or not b:
+        return False
+
+    return a[:120] == b[:120]
+
+
+def _checklist_summary_block(skip_task=None):
     """
     Zwięzłe podsumowanie checklisty do wstrzyknięcia w kontekst
     zespołu — zero wywołań LLM, ten sam wzorzec co
@@ -13169,6 +13267,14 @@ def _checklist_summary_block():
             "porzucaj ich na rzecz nowych punktów):"
         )
         for item in failed_items[-5:]:
+
+            # v212: nie przypominamy o awarii, ktora WLASNIE sie
+            # wydarzyla i jest opisana dwie linijki nizej (OSTATNI
+            # RAPORT + surowy wynik). Checklista jest od tego, zeby
+            # nie zginely punkty STARE — nie zeby powtarzac biezacy.
+            if skip_task and _same_task(item.get("task", ""), skip_task):
+                continue
+
             lines.append("- " + short(item.get("task", ""), 100))
 
     recent_other = [
@@ -16574,7 +16680,16 @@ def consult_team(
 
     progress_snapshot = _goal_progress_snapshot(goal)
 
-    checklist_summary = _checklist_summary_block()
+    # v212: zadanie, ktore WLASNIE sie wywalilo, jest juz opisane
+    # w OSTATNIM RAPORCIE i w surowym wyniku — checklista ma go nie
+    # powtarzac po raz trzeci. Ona jest od tego, zeby nie zginely
+    # punkty STARE.
+    _biezace_zadanie = (
+        last_result.get("task")
+        if isinstance(last_result, dict) else None
+    )
+
+    checklist_summary = _checklist_summary_block(_biezace_zadanie)
     checklist_block = ("\n" + checklist_summary + "\n") if checklist_summary else ""
 
     # Pamięć zespołu o już wypróbowanych podejściach — patrz
@@ -16732,7 +16847,7 @@ def consult_team(
             success_values_block = (
                 "\n\nDOKŁADNIE TO, CO WYPISAŁO NARZĘDZIE (surowe, "
                 "nieprzetworzone — jeśli szukacie jakiejś wartości, "
-                "ona jest tutaj, nie w streszczeniu powyżej):\n"
+                "ona jest tutaj):\n"
                 + _wypisane
             )
 
@@ -16748,8 +16863,7 @@ def consult_team(
     ):
         error_details_block = (
             "\n\nDOKŁADNIE TO, CO ZWRÓCIŁO NARZĘDZIE (surowe, "
-            "nieprzetworzone — na tym opieraj poprawkę, nie na samym "
-            "streszczeniu powyżej):\n"
+            "nieprzetworzone — na tym opieraj poprawkę):\n"
             + _condense_last_result_for_team(
                 last_result_for_team,
                 limit=1400
@@ -16775,6 +16889,34 @@ def consult_team(
     # wysypywac wszystko naraz.
     topic_line = _current_topic(last_result, _critic_block_streak)
 
+    # ============================================================
+    # JEDEN FAKT, JEDNA FORMA (v212)
+    # ============================================================
+    #
+    # Uzytkownik pokazal JEDEN realny blok wyslany do roli
+    # (2026-09-05). Ta sama rzecz — "poprzedni krok padl na limicie
+    # narzedzi" — byla w nim powiedziana PIEC RAZY:
+    #
+    #   1. w zdaniu na gorze (temat kroku)
+    #   2. w checkliscie ("1 bledow" + uciety punkt)
+    #   3. w decyzji MAIN-a
+    #   4. w streszczeniu Oli
+    #   5. w surowym wyniku (status=TOOL_LIMIT, chrome_execute_js x23)
+    #
+    # UWAGA na to, czego tu NIE robimy. Pierwsza wersja tej poprawki
+    # wycinala streszczenie Oli, gdy jest surowy wynik. To bylo
+    # bledne i zlapaly to dwa testy (v133, v160), ktore pilnuja
+    # wczesniejszego, wyraznego wymogu uzytkownika:
+    #
+    #   "surowe dane maja byc DOKLEJONE do zdania Oli, nie zastapic
+    #    go -- inaczej wracamy do samych logow, ktorych uzytkownik
+    #    nie chce"
+    #
+    # Para "zdanie po ludzku + surowe fakty pod spodem" jest
+    # zamierzona i zostaje. Prawdziwym duplikatem jest punkt 2:
+    # checklista przypomina o NIEDOKONCZONYCH punktach, a wypisywala
+    # tez ten, ktory wlasnie padl i jest opisany dwie linijki nizej.
+    # To ja tniemy — patrz _checklist_summary_block(skip_task).
     report_body = readable_report or raw_report_material
 
     # v193: kazda rola dostaje TYLKO to, czego jeszcze nie widziala.
@@ -16848,6 +16990,19 @@ def consult_team(
             )
         if extra:
             pieces.append(extra)
+
+        # v212: na samym koncu — o co prosimy TE osobe teraz.
+        # Patrz _pytanie_do(). Bez tego wiadomosc konczy sie cudzym
+        # planem i nikt nie wie, czego od niego chcemy.
+        pieces.append(
+            _pytanie_do(
+                role_name,
+                last_result,
+                _critic_block_streak > 0
+                if role_name == "PLANNER" else False
+            )
+        )
+
         return "\n".join(p for p in pieces if p)
 
     # Role odpytywane PO KOLEI — jedno realne połączenie do
