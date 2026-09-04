@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v204
+AEL-MINI AUTONOMOUS AGENT v205
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v204")
+    print("             AEL-MINI AUTONOMOUS AGENT v205")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2064,6 +2064,7 @@ def _set_current_goal(goal):
     # "nie widzial" (patrz _only_if_new).
     _reset_step_by_step_memory()
     _set_current_project_file(None)
+    _reset_code_review_budget()
 
 
 def _goal_briefing_for(name):
@@ -13780,6 +13781,197 @@ def _verify_patched_syntax(path, content):
     return ""
 
 
+# v205 -- na wyrazna prosbe uzytkownika (2026-09-04): "podepnij Anie".
+#
+# Z jego symulacji, interakcja 4:
+#   MAIN -> CODE_REVIEWER: "Przejrzyj auth_service.py oraz wyniki
+#                           testow. Nie zmieniaj kodu."
+#   CODE_REVIEWER -> MAIN: "Dwa problemy: duplikat sprawdzany za
+#                           pozno, bledne haslo zle obsluzone."
+#   MAIN -> CODE_FIXER:    "Napraw te dwa. Zmieniaj tylko potrzebne."
+#   CODE_FIXER -> EXECUTOR: poprawki zapisane.
+#
+# Dotad Piotr i Ania pracowali WYLACZNIE na agent.py i budzili sie
+# tylko wtedy, gdy to samo narzedzie zawiodlo kilka razy pod rzad. Gdy
+# skrypt Bartka nie dzialal, poprawial go sam Bartek — autor wlasnego
+# kodu, bez niezaleznego spojrzenia. A to wlasnie autor najtrudniej
+# widzi wlasny blad.
+#
+# Ich prompty sa CELOWO ogolne ("analizujesz kod"), wiec nie trzeba
+# zmieniac im rol: Piotr dostaje prawdziwy plik (v204) i to, co
+# naprawde sie stalo, a Ania — jego analize i ten sam plik. Jej
+# kontrakt SZUKAJ/ZAMIEN naklada Python (v203), z backupem i
+# weryfikacja skladni.
+#
+# KOSZT: dwa dodatkowe zapytania do DeepSeeka i TYLKO wtedy, gdy kod
+# faktycznie sie wysypal. Limit na cel pilnuje, zeby przy uporczywym
+# bledzie nie kreciło sie to w kolko.
+CODE_REVIEW_MAX_PER_GOAL = 3
+
+_code_review_used = 0
+
+
+def _reset_code_review_budget():
+    global _code_review_used
+    _code_review_used = 0
+
+
+def review_and_fix_project_file(path, run_result):
+    """
+    Piotr oglada plik i to, co sie stalo. Ania pisze minimalna
+    poprawke. Python ja naklada.
+
+    Zwraca slownik z opisem tego, co sie wydarzylo — albo None, gdy
+    w ogole nie warto bylo probowac.
+    """
+
+    global _code_review_used
+
+    if _code_review_used >= CODE_REVIEW_MAX_PER_GOAL:
+        log(
+            "MAIN",
+            "Piotr/Ania: wyczerpany limit przeglądów kodu na ten cel ("
+            + str(CODE_REVIEW_MAX_PER_GOAL) + ") — nie palę kolejnych "
+            "zapytań, zespół musi zmienić podejście."
+        )
+        return None
+
+    try:
+        target = _resolve_home_relative_path(path)
+        tresc = target.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+
+    if not tresc.strip():
+        return None
+
+    _code_review_used += 1
+
+    co_sie_stalo = _opis_awarii(run_result)
+
+    log(
+        "MAIN",
+        "Kod się wysypał — proszę Piotra o niezależne spojrzenie na "
+        + target.name + " (przegląd " + str(_code_review_used)
+        + "/" + str(CODE_REVIEW_MAX_PER_GOAL) + ")."
+    )
+
+    analiza = deepseek(
+        "CODE_REVIEWER",
+        "Ten plik nie zadziałał. Oto on w całości, odczytany z dysku "
+        "przed chwilą — " + str(target) + ":\n\n"
+        + tresc
+        + "\n\nA tak to się skończyło przy uruchomieniu:\n"
+        + co_sie_stalo
+        + "\n\nZnajdź przyczynę i wskaż najmniejszą możliwą "
+        "poprawkę. Nie zmieniaj kodu — to robi Ania."
+    )
+
+    if not str(analiza or "").strip():
+        return {"applied": False, "reason": "Piotr nie odpowiedział."}
+
+    log("MAIN", "Piotr skończył — proszę Anię o poprawkę.")
+
+    poprawka = deepseek(
+        "CODE_FIXER",
+        "Piotr przeanalizował " + str(target) + " i mówi tak:\n\n"
+        + short(analiza, 3000)
+        + "\n\nA tak wygląda ten plik TERAZ, odczytany z dysku "
+        "(kopiuj fragment SZUKAJ dokładnie stąd):\n\n"
+        + tresc
+        + "\n\nNapisz minimalną poprawkę."
+    )
+
+    if "BRAK BEZPIECZNEGO PATCHA" in str(poprawka or "").upper():
+        log("MAIN", "Ania: brak bezpiecznej poprawki — nic nie zmieniam.")
+        return {
+            "applied": False,
+            "review": short(analiza, 2000),
+            "reason": "Ania uznała, że nie ma bezpiecznej poprawki.",
+        }
+
+    wynik = apply_engineer_patch_to_project_file(str(target), poprawka)
+    wynik["review"] = short(analiza, 2000)
+
+    return wynik
+
+
+def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
+    """
+    v205: kod Bartka wlasnie sie wykonal. Wynik wraca do niego (v202),
+    a gdy sie WYSYPAL — Piotr oglada plik i Ania pisze poprawke.
+    Autor najtrudniej widzi wlasny blad, wiec patrzy ktos inny.
+    """
+
+    _remember_engineer_code_result(sciezka, wynik)
+
+    if not isinstance(wynik, dict) or wynik.get("ok"):
+        return
+
+    przeglad = review_and_fix_project_file(sciezka, wynik)
+
+    if not przeglad:
+        return
+
+    if przeglad.get("applied"):
+
+        _record_python_written_file(przeglad["path"])
+        _set_current_project_file(przeglad["path"])
+
+        _pending_team_warnings.append(
+            "python [poprawka_ani]: kod się wysypał, więc Piotr "
+            "obejrzał " + Path(przeglad["path"]).name + " niezależnie, "
+            "a Ania naniosła poprawkę (" + str(przeglad["blocks"])
+            + " x SZUKAJ/ZAMIEŃ, " + str(przeglad["size_before"])
+            + " B -> " + str(przeglad["size_after"]) + " B, backup: "
+            + Path(przeglad["backup"]).name + "). Plik jest JUŻ "
+            "poprawiony — następny krok to uruchomienie go, nie "
+            "pisanie od nowa. Co znalazł Piotr: "
+            + short(str(przeglad.get("review", "")), 700)
+        )
+
+    else:
+
+        _pending_team_warnings.append(
+            "python [poprawka_ani_nieudana]: Piotr obejrzał plik po "
+            "awarii, ale poprawki NIE udało się nanieść — "
+            + str(przeglad.get("reason"))
+            + " Plik jest NIEZMIENIONY. Co zauważył Piotr: "
+            + short(str(przeglad.get("review", "")), 700)
+        )
+
+
+
+def _opis_awarii(run_result):
+    """Krotko i konkretnie: co sie stalo przy uruchomieniu."""
+
+    if not isinstance(run_result, dict):
+        return "(brak szczegółów)"
+
+    szczegoly = run_result.get("tool_result")
+
+    if not isinstance(szczegoly, dict):
+        szczegoly = run_result.get("shell_result")
+
+    if not isinstance(szczegoly, dict):
+        szczegoly = {}
+
+    czesci = []
+
+    if szczegoly.get("returncode") is not None:
+        czesci.append("kod wyjścia: " + str(szczegoly["returncode"]))
+
+    for klucz, etykieta in (("stdout", "WYJŚCIE"), ("stderr", "BŁĘDY")):
+        wartosc = str(szczegoly.get(klucz) or "").strip()
+        if wartosc:
+            czesci.append(etykieta + ":\n" + short(wartosc, 2000))
+
+    if not czesci:
+        czesci.append(short(str(run_result.get("report") or ""), 1500))
+
+    return "\n".join(czesci)
+
+
 def apply_engineer_patch_to_project_file(path, engineer_text):
     """
     Naklada poprawke SZUKAJ/ZAMIEN Bartka na PLIK PROJEKTU.
@@ -19875,9 +20067,9 @@ Zwróć tylko JSON.
                     task_text
                 )
 
-                # v202: wynik JEGO kodu wraca do Bartka, nie tylko do
-                # MAIN-a (patrz _engineer_code_feedback).
-                _remember_engineer_code_result(
+                # v202 + v205: wynik JEGO kodu wraca do Bartka, a gdy
+                # kod sie wysypal — Piotr oglada, Ania poprawia.
+                _po_uruchomieniu_kodu_bartka(
                     _self_run_path, last_result
                 )
 
@@ -19996,7 +20188,7 @@ Zwróć tylko JSON.
                 # v202: jesli to zadanie dotyczylo kodu, ktory Python
                 # wlasnie zapisal od Bartka — oddaj mu wynik wprost.
                 if _code_ready_path:
-                    _remember_engineer_code_result(
+                    _po_uruchomieniu_kodu_bartka(
                         _code_ready_path, result
                     )
 
