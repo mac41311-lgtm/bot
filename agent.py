@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v210
+AEL-MINI AUTONOMOUS AGENT v211
 
 ARCHITEKTURA:
 
@@ -422,6 +422,10 @@ MAX_STEPS = int(
         "40"
     )
 )
+
+# Ile razy Gemini moze dostac DOKLADNIE ten sam wynik z tego samego
+# wywolania, zanim uznamy to za czekanie, a nie prace (v211).
+GEMINI_IDENTICAL_CALL_STOP = 4
 
 GEMINI_MAX_TOOL_CALLS = int(
     os.environ.get(
@@ -1262,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v210")
+    print("             AEL-MINI AUTONOMOUS AGENT v211")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11866,6 +11870,21 @@ CO POWINIEN ZROBIĆ MAIN:
             )
 
         tool_calls = 0
+
+        # v211 -- log 2026-09-05, krok 1. Gemini wywolal
+        # chrome_execute_js 21 RAZY POD RZAD, za kazdym razem
+        # dostajac doslownie to samo: {"value": "STILL_WAITING"}.
+        # To byla petla czekania na odpowiedz ChatGPT, w ktorej
+        # KAZDY obieg to pelne zapytanie do Gemini (41 schematow
+        # narzedzi) i ~3-4 s. Skonczylo sie TOOL_LIMIT-em na 25
+        # wywolaniach — caly budzet kroku spalony na czekanie.
+        #
+        # Czekanie nie jest praca do wykonania przez model. Gdy ten
+        # sam wynik wraca N razy z rzedu, dalsze pytanie Gemini o to
+        # samo nic nie wniesie — przerywamy i mowimy zespolowi, co
+        # sie naprawde stalo.
+        _identical_streak = 0
+        _last_call_signature = None
         ask_deepseek_calls = 0
 
         # ====================================================
@@ -12162,6 +12181,52 @@ CO POWINIEN ZROBIĆ MAIN:
                         1000
                     )
                 )
+
+                # v211: to samo narzedzie + te same argumenty + ten
+                # sam wynik = petla czekania, patrz _identical_streak.
+                try:
+                    _signature = (
+                        str(name)
+                        + "|" + json.dumps(args, sort_keys=True,
+                                           default=str)
+                        + "|" + json.dumps(result, sort_keys=True,
+                                           default=str)
+                    )
+                except Exception:
+                    _signature = None
+
+                if _signature and _signature == _last_call_signature:
+                    _identical_streak += 1
+                else:
+                    _identical_streak = 1
+
+                _last_call_signature = _signature
+
+                if _identical_streak >= GEMINI_IDENTICAL_CALL_STOP:
+
+                    log(
+                        "GEMINI",
+                        "przerywam: " + str(name) + " zwrocilo "
+                        + str(_identical_streak) + " razy pod rzad "
+                        "DOKLADNIE ten sam wynik. To czekanie, nie "
+                        "praca — nie pale na to reszty limitu."
+                    )
+
+                    collected_warnings.append(
+                        "gemini [petla_czekania]: " + str(name)
+                        + " wywolane " + str(_identical_streak)
+                        + " razy z rzedu z tymi samymi argumentami i "
+                        "za kazdym razem z tym samym wynikiem. To "
+                        "znaczy, ze COS SIE JESZCZE NIE WYDARZYLO "
+                        "(strona nie odpowiedziala, element nie "
+                        "pojawil sie) — a nie, ze Gemini zle "
+                        "wykonuje polecenie. Nie kazcie mu probowac "
+                        "jeszcze raz tego samego. Ostatni wynik: "
+                        + short(json.dumps(result, ensure_ascii=False,
+                                           default=str), 300)
+                    )
+
+                    break
 
                 if isinstance(result, dict):
 
@@ -16767,10 +16832,20 @@ def consult_team(
     # przypomnienie tożsamości.
     def _team_context(role_name, include_chrome=False, include_android=False, extra=""):
         pieces = [_core_context_for(role_name)]
+
+        # v211: stan ekranu idzie przez _only_if_new — dokladnie tak
+        # jak stan faktyczny w v208. Dzieki temu MOZEMY dac go tez
+        # Markowi (bez tego dwa razy blokowal plan, bo nie mial jak
+        # sprawdzic jego przeslanek), a mimo to nikt nie dostaje
+        # dwa razy pod rzad tej samej sciany hierarchii widokow.
         if include_chrome:
-            pieces.append(chrome_block)
+            pieces.append(
+                _only_if_new(role_name, "chrome", chrome_block)
+            )
         if include_android:
-            pieces.append(android_block)
+            pieces.append(
+                _only_if_new(role_name, "android", android_block)
+            )
         if extra:
             pieces.append(extra)
         return "\n".join(p for p in pieces if p)
@@ -17139,10 +17214,30 @@ def consult_team(
         )
         _answer_for_critic = None
 
+    # v211 -- log 2026-09-05, kroki 1 i 2. Marek DWA RAZY zglosil
+    # zastrzezenie o tej samej tresci:
+    #
+    #   "opiera sie na danych NIEWYSTEPUJACYCH w dostarczonym STANIE
+    #    FAKTYCZNYM - powolujesz sie na 'stan ekranu (widze
+    #    klawiature i pasek powiadomien)'"
+    #
+    # I mial racje ZE SWOJEGO MIEJSCA. Tomek dostaje AKTUALNY ANDROID
+    # i AKTUALNY CHROME (include_android/include_chrome wyzej) i
+    # planuje na tym, co widzi. Marek nie dostawal ich NIGDY — wiec
+    # kazdy plan oparty na ekranie wygladal dla niego na zmyslony.
+    # Cztery spalone rundy w dwoch krokach, a Tomek tlumaczyl sie
+    # zdaniem "spojrz na pierwsza wiadomosc w tym watku", ktorego
+    # Marek nie mial jak zweryfikowac.
+    #
+    # Recenzent musi widziec DOKLADNIE te fakty, na ktorych zbudowano
+    # to, co ocenia. Inaczej nie recenzuje planu, tylko wlasna
+    # niewiedze.
     results["CRITIC"] = deepseek(
         "CRITIC",
         _team_context(
             "CRITIC",
+            include_chrome=goal_needs_chrome,
+            include_android=goal_needs_android,
             extra=(
                 "\nPLAN TOMKA:\n" + planner_out
                 + _only_if_new(
@@ -18723,21 +18818,78 @@ def _tool_stdout_values(last_result):
 # Koszt: ZERO dodatkowych zadan do DeepSeeka i ZERO do Gemini.
 
 # Polecenia, ktore tylko czytaja. Nic tu nie zmienia stanu telefonu.
-_READONLY_COMMANDS = frozenset((
+# v211 -- pierwszy realny log z v210 (2026-09-05, krok 1) pokazal, ze
+# zbior byl za szeroki. Wszystkie CZTERY sloty na krok poszly na to:
+#
+#   `echo "=== KROK 1: Przygotowanie sciagawki AI ==="`
+#   `echo "Otwieram ChatGPT w Chrome..."`
+#   `echo "Kopiuje prompt do schowka:"`
+#   `echo "$PROMPT"`
+#
+# To nie sa pytania. To NARRACJA ze srodka skryptu, ktory Bartek
+# dopiero opisywal — a ostatnie `echo "$PROMPT"` wypisalo pustke, bo
+# $PROMPT istnial tylko w jego skrypcie, nie w naszej powloce. Gdyby
+# ktos w tym samym kroku napisal prawdziwe `cat`, budzet bylby juz
+# zjedzony przez cztery echa.
+#
+# Zasada: pytanie to polecenie, ktore COS ODCZYTUJE. `echo`, `pwd`,
+# `date`, `whoami` nie odczytuja niczego o zadaniu — wypadaja.
+
+# Polecenia, ktore realnie CZYTAJA cos z urzadzenia. Tylko one moga
+# ZACZYNAC potok — czyli tylko one sa "pytaniem".
+_READONLY_SOURCES = frozenset((
     "cat", "head", "tail", "ls", "wc", "stat", "file", "du", "df",
-    "grep", "egrep", "fgrep", "find", "which", "type", "basename",
-    "dirname", "realpath", "readlink", "pwd", "date", "echo",
-    "sort", "uniq", "cut", "tr", "awk", "sed", "diff", "md5sum",
-    "sha256sum", "printf", "env", "id", "whoami", "uname",
+    "grep", "egrep", "fgrep", "find", "which", "readlink", "realpath",
+    "diff", "md5sum", "sha256sum",
     "termux-contact-list", "termux-clipboard-get", "termux-info",
     "termux-telephony-deviceinfo", "termux-battery-status",
     "termux-wifi-connectioninfo", "termux-notification-list",
 ))
 
+# Filtry dozwolone DALEJ w potoku ("... | grep -i beata | head -3").
+# Same z siebie nie sa pytaniem — czytalyby stdin, ktory i tak jest
+# pusty (stdin=DEVNULL).
+_READONLY_FILTERS = frozenset((
+    "grep", "egrep", "fgrep", "sort", "uniq", "cut", "tr", "awk",
+    "sed", "head", "tail", "wc", "basename", "dirname",
+))
+
+_READONLY_COMMANDS = _READONLY_SOURCES | _READONLY_FILTERS
+
+# Zrodla, ktore maja sens BEZ argumentu (czytaja "domyslne miejsce").
+# Kazde inne musi wskazac, CO ma odczytac -- inaczej czyta stdin,
+# ktory u nas jest pusty (stdin=DEVNULL), i zwraca pustke. Zespol
+# dostalby wtedy "polecenie nic nie wypisalo", co jest falszywa
+# odpowiedzia na jego pytanie.
+_SOURCES_WITHOUT_ARGS = frozenset((
+    "ls", "df", "termux-contact-list", "termux-clipboard-get",
+    "termux-info", "termux-telephony-deviceinfo",
+    "termux-battery-status", "termux-wifi-connectioninfo",
+    "termux-notification-list",
+))
+
+
+def _names_a_path(slowa):
+    """Czy w argumentach jest cokolwiek, co wskazuje plik/katalog."""
+
+    for arg in slowa[1:]:
+
+        if arg.startswith("-"):
+            continue
+
+        if "/" in arg or arg.startswith("~") or "." in arg:
+            return True
+
+    return False
+
 # Znaki i slowa, ktore wykluczaja komende bez dalszej analizy --
 # przekierowanie, zapis, siec, uruchomienie czegokolwiek innego.
 _UNSAFE_SHELL_MARKERS = (
     ">", "<", "$(", "`", ";", "&", "\n",
+    # v211: "$" w ogole. Zmienna z cudzego skryptu w NASZEJ powloce
+    # jest pusta, wiec `echo "$PROMPT"` wypisalo pustke i zespol
+    # dostalby falszywa odpowiedz "polecenie nic nie wypisalo".
+    "$",
 )
 
 _UNSAFE_WORDS = frozenset((
@@ -18775,7 +18927,7 @@ def _is_readonly_command(command):
     # Potok jest dozwolony, ale KAZDY jego czlon musi byc czytajacy
     # ("termux-contact-list | grep -i beata" -- dokladnie to, co
     # pisal Tomek).
-    for czlon in command.split("|"):
+    for i, czlon in enumerate(command.split("|")):
 
         slowa = czlon.split()
 
@@ -18784,7 +18936,23 @@ def _is_readonly_command(command):
 
         program = slowa[0]
 
-        if program not in _READONLY_COMMANDS:
+        # v211: PIERWSZY czlon musi cos realnie odczytywac — inaczej
+        # to nie jest pytanie, tylko narracja albo filtr bez wejscia.
+        dozwolone = (
+            _READONLY_SOURCES if i == 0 else _READONLY_COMMANDS
+        )
+
+        if program not in dozwolone:
+            return False
+
+        # v211: zrodlo musi powiedziec, CO odczytuje. "grep beata"
+        # bez pliku czytaloby pusty stdin i oddaloby zespolowi
+        # pustke jako odpowiedz na jego pytanie.
+        if (
+            i == 0
+            and program not in _SOURCES_WITHOUT_ARGS
+            and not _names_a_path(slowa)
+        ):
             return False
 
         if any(s in _UNSAFE_WORDS for s in slowa):
