@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v198
+AEL-MINI AUTONOMOUS AGENT v199
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v198")
+    print("             AEL-MINI AUTONOMOUS AGENT v199")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13050,6 +13050,135 @@ _CODE_SAVE_INTENT_RE = re.compile(
 )
 
 
+# v199 -- na wyrazna prosbe uzytkownika (2026-09-04): "Termux tez moze
+# przejac troche zadan... nie mozemy spamowac Gemini, minimum
+# potrzebne".
+#
+# Gdy Python wlasnie zapisal skrypt, a zadanie sprowadza sie do
+# "uruchom go", angazowanie Gemini nie wnosi NIC poza czekaniem: w
+# logu 2026-09-04 kazdy obieg do Gemini kosztowal 60-183 s i robil
+# dokladnie to, co Python potrafi jednym wywolaniem powloki.
+#
+# Warunki sa CELOWO ostre — w razie watpliwosci oddajemy zadanie
+# Gemini. Wolimy zaplacic jednym obiegiem niz wykonac po swojemu cos,
+# co wymagalo ekranu, przegladarki albo wiekszej roboty.
+_RUN_VERB_RE = re.compile(
+    r"(uruchom|wykonaj|odpal|urucham|wywolaj|wywołaj|\bbash\b|"
+    r"\bsh\b|\brun\b|\./)",
+    re.IGNORECASE
+)
+
+# Cokolwiek z tego w tresci = to NIE jest samo uruchomienie pliku.
+_NOT_SIMPLE_RUN_RE = re.compile(
+    r"(klikni|kliknij|dotknij|przewi|ekran|screenshot|zrzut|"
+    r"chrome|przegladar|przeglądar|strona|stronie|zakladk|zakładk|"
+    r"url|http|android_|chrome_|wpisz w|formular|zaloguj|"
+    r"aplikacj|zainstaluj|apk|schowek|wklej)",
+    re.IGNORECASE
+)
+
+
+def _task_is_simple_run(task_text, success_condition, written_path):
+    """
+    Czy cale zadanie to "uruchom plik, ktory Python wlasnie zapisal"?
+
+    Zwraca sciezke do uruchomienia albo None. None znaczy: oddaj to
+    Gemini normalna droga.
+    """
+
+    if not written_path:
+        return None
+
+    text = str(task_text or "") + " " + str(success_condition or "")
+
+    if not _RUN_VERB_RE.search(text):
+        return None
+
+    if _NOT_SIMPLE_RUN_RE.search(text):
+        return None
+
+    try:
+        if not written_path.exists():
+            return None
+    except Exception:
+        return None
+
+    # Skrypt pytajacy czlowieka i tak nie zadziala bez klawiatury
+    # (patrz _detect_interactive_script) -- niech przejdzie normalna
+    # droga, zeby zespol dostal pelna diagnoze.
+    try:
+        if _detect_interactive_script(
+            written_path.read_text(encoding="utf-8", errors="replace")
+        ):
+            return None
+    except Exception:
+        return None
+
+    return written_path
+
+
+def _run_script_directly(path, task_text):
+    """
+    Uruchamia zapisany skrypt przez to samo execute_shell, ktorego
+    uzywa Gemini — te same zabezpieczenia (potwierdzenia usuwania,
+    timeout, stdin=DEVNULL), zero zapytan do Gemini.
+
+    Zwraca wynik w TYM SAMYM ksztalcie co gemini_execute_task, zeby
+    reszta programu nie musiala wiedziec, kto to wykonal.
+    """
+
+    suffix = path.suffix.lower()
+
+    if suffix == ".py":
+        command = "python " + shlex.quote(str(path))
+    else:
+        command = "bash " + shlex.quote(str(path))
+
+    log("MAIN", "Uruchamiam bezpośrednio: " + command)
+
+    shell_result = execute_shell(command)
+
+    ok = bool(shell_result.get("ok"))
+
+    stdout = str(shell_result.get("stdout") or "").strip()
+    stderr = str(shell_result.get("stderr") or "").strip()
+
+    raport = (
+        "Python uruchomił " + path.name + " bezpośrednio przez "
+        "Termux (bez Gemini).\n"
+        + "Kod wyjścia: " + str(shell_result.get("returncode")) + "\n"
+        + ("WYJŚCIE:\n" + short(stdout, 3000) + "\n" if stdout else "")
+        + ("BŁĘDY:\n" + short(stderr, 2000) if stderr else "")
+    ).strip()
+
+    warnings = []
+
+    interactive = _detect_interactive_script(
+        read_text(path)
+    )
+
+    if interactive:
+        warnings.append("python [skrypt_pyta_czlowieka]: " + interactive)
+
+    return {
+        "ok": ok,
+        "status": "COMPLETED" if ok else "GEMINI_TOOL_ERROR",
+        "key": "python",
+        "executed_by": "python",
+        "tool": None if ok else "termux_run",
+        "tool_result": None if ok else shell_result,
+        "report": raport,
+        "tool_calls": 1,
+        "tool_trace": [{
+            "tool": "termux_run (Python, bez Gemini)",
+            "ok": ok,
+            "evidence": short(stdout or stderr, 400),
+        }],
+        "tool_warnings": warnings,
+        "confirmed_texts": [],
+    }
+
+
 def _task_wants_code_saved(task_text, success_condition=""):
     """
     Czy zadanie faktycznie prosi o ZAPISANIE kodu do pliku?
@@ -19076,6 +19205,64 @@ Zwróć tylko JSON.
                     }
 
                     continue
+
+            # --------------------------------------------------
+            # v199: PROSTE URUCHOMIENIE ROBI PYTHON, NIE GEMINI
+            #
+            # Na wyrazna prosbe uzytkownika (2026-09-04): "Termux tez
+            # moze przejac troche zadan, bo Python skrypty od razu do
+            # pliku bezposrednio z DeepSeeka, a reszte wykonuje
+            # Gemini... nie mozemy spamowac Gemini, minimum potrzebne".
+            #
+            # Gdy Python WLASNIE zapisal skrypt, a cale zadanie sprowadza
+            # sie do "uruchom go", to angazowanie Gemini nie wnosi nic
+            # poza czekaniem: w logu 2026-09-04 kazdy obieg do Gemini
+            # kosztowal 60-183 sekundy, a robil dokladnie to, co Python
+            # potrafi zrobic sam jednym wywolaniem powloki. Uruchamiamy
+            # wiec bezposrednio — z tymi samymi zabezpieczeniami, bo
+            # idzie to przez to samo execute_shell (potwierdzenia
+            # usuwania, timeouty, wykrywanie bledow).
+            #
+            # Robimy to TYLKO gdy mamy pewnosc: plik zapisany w tym
+            # kroku, zadanie mowi wprost o uruchomieniu i NIE dotyka
+            # ekranu ani przegladarki. W kazdym innym przypadku
+            # zadanie idzie normalnie do Gemini.
+            # --------------------------------------------------
+
+            _self_run_path = _task_is_simple_run(
+                task_text,
+                decision.get("success_condition", ""),
+                target_path if write_target else None
+            )
+
+            if _self_run_path and not gemini_disabled:
+
+                log(
+                    "MAIN",
+                    "To zwykłe uruchomienie zapisanego pliku — robię "
+                    "to sam przez Termux, bez angażowania Gemini "
+                    "(oszczędzam jeden pełny obieg)."
+                )
+
+                last_result = _run_script_directly(
+                    _self_run_path,
+                    task_text
+                )
+
+                sep = "─" * 60
+                print()
+                print(sep)
+                print("  WYKONAŁ: Python (Termux) — bez Gemini")
+                print("  PLIK: " + str(_self_run_path))
+                print("  STATUS: " + str(last_result.get("status")))
+                if last_result.get("report"):
+                    print("  WYNIK: " + short(
+                        str(last_result["report"]), 600
+                    ))
+                print(sep)
+                print()
+
+                continue
 
             # --------------------------------------------------
             # GEMINI ZABLOKOWANY
