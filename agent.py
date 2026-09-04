@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v206
+AEL-MINI AUTONOMOUS AGENT v207
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v206")
+    print("             AEL-MINI AUTONOMOUS AGENT v207")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2839,6 +2839,42 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     return full_text, status_seen
 
 
+# ============================================================
+# CZY ODPOWIEDZ ZOSTALA URWANA (v207)
+# ============================================================
+#
+# Log 2026-09-04, 19:09-19:11 (uruchomienie v206). v206 przestal
+# ciac wypowiedzi po stronie Pythona i to zadzialalo — ale Marek
+# NADAL blokowal plan trzy razy z rzedu, i znowu mial racje:
+#
+#   "urywa sie w polowie Kroku 3 (przy 'Opcja B (hybrydowa...)')"
+#   "urywa sie w polowie skryptu beata_auto.sh (po '# Proba 1:')"
+#   "urywa sie po 'sed -i'"
+#
+# Tym razem ucinal je DeepSeek — sesja przegladarkowa konczy
+# odpowiedz w okolicach 2200-4000 znakow. Zmierzone w tym logu
+# dlugosci wypowiedzi urwanych w polowie zdania:
+#
+#   2170, 2252, 2564, 2746, 3281, 3986
+#
+# A stary warunek wymagal len > 3000. Czyli CZTERY z szesciu
+# urwan byly dla Pythona niewidzialne — nie szla o nich zadna
+# adnotacja (v201), nie szla prosba o dokonczenie, nikt nikomu
+# nic nie powiedzial. Tomek cztery razy z rzedu przepraszal, ze
+# "ponownie nie dokonczyl Kroku 3", jakby to bylo jego
+# niedbalstwo.
+#
+# Prog 3000 byl zgadniety; te szesc liczb jest zmierzonych.
+_TRUNCATION_MIN_LEN = 1500
+
+# Znaki, na ktorych wypowiedz moze sie normalnie skonczyc.
+_SENTENCE_END = ".!?\"')]}`”…»"
+
+# Poczatki linii listy/tabeli — taka linia bez kropki na koncu to
+# normalne zakonczenie wyliczenia, nie urwanie.
+_LIST_LINE_RE = re.compile(r"^\s*(?:[-*•+>|]|\d+[.)])\s")
+
+
 def _deepseek_looks_truncated(text, status):
 
     if status:
@@ -2851,13 +2887,35 @@ def _deepseek_looks_truncated(text, status):
 
     stripped = (text or "").rstrip()
 
-    if (
-        len(stripped) > 3000
-        and stripped
-        and stripped[-1] not in ".!?\"')]}`”"
-    ):
+    # Niedomkniety blok ``` to dowod, nie poszlaka — i dziala przy
+    # KAZDEJ dlugosci. Tak wlasnie wygladaly dwa urwania z tego
+    # logu ("# Proba 1:", "sed -i" — oba w srodku skryptu).
+    if stripped.count("```") % 2 == 1:
+        return True, "niedomkniety blok ``` (kod urwany w polowie)"
+
+    if len(stripped) < _TRUNCATION_MIN_LEN:
+        # Krotka wypowiedz bez kropki to zwykle po prostu krotka
+        # wypowiedz. Nie zgadujemy.
+        return False, None
+
+    ostatnia_linia = stripped.split("\n")[-1]
+
+    if _LIST_LINE_RE.match(ostatnia_linia):
+        # Wyliczenie zakonczone pozycja bez kropki — normalne.
+        return False, None
+
+    if stripped[-1] in ":,;":
+        # Dwukropek/przecinek na koncu to zapowiedz, ktora nie
+        # nadeszla ("# Proba 1:", "powiedz Hej,").
         return True, (
-            "dlugosc/koncowka tekstu (status=" + repr(status) + ")"
+            "konczy sie na " + repr(stripped[-1])
+            + " — zapowiedz bez ciagu dalszego"
+        )
+
+    if stripped[-1] not in _SENTENCE_END:
+        return True, (
+            "brak znaku konca zdania (" + str(len(stripped))
+            + " znakow, koncowka " + repr(ostatnia_linia[-40:]) + ")"
         )
 
     return False, None
@@ -2901,6 +2959,207 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
         if text is None:
             text = str(response)
         return text, None
+
+
+# ============================================================
+# URWALO SIE — PYTHON PYTA O DALSZY CIAG (v207)
+# ============================================================
+#
+# Log 2026-09-04, 19:09-19:11. Cztery razy z rzedu Tomek pisal:
+#
+#   "Ponadto ponownie nie dokonczylem Kroku 3."
+#   "przyjmuje blokade - masz racje: urwalem sie w Opcji B"
+#   "przyjmuje blokade - masz 100% racji. Moj skrypt urwal sie w
+#    polowie"
+#
+# Tomek przepraszal za wlasne niedbalstwo, ktorego nie bylo. Jego
+# odpowiedzi ucinala sesja DeepSeeka na ~2200-4000 znakach. Python
+# to widzial (albo mogl widziec — patrz _deepseek_looks_truncated),
+# ale nie powiedzial ani JEMU, ani nikomu innemu, wiec caly zespol
+# przez trzy rundy klocil sie o brakujacy tekst zamiast go po
+# prostu dostac.
+#
+# Wersja 'action=continue' jest martwa — serwer odrzuca ja kodem
+# 422 (patrz _continue_action_supported, v190). Ale nie potrzeba
+# do tego zadnego API: sesja roli jest zwyklym czatem, wiec Python
+# robi to, co zrobilby czlowiek — pisze "ucielo ci sie tutaj,
+# dopisz dalszy ciag". To JEDNO zadanie zamiast dwoch spalonych
+# rund wymiany zdan i jednego BLOKUJ.
+#
+# To dokladnie ta rola, ktora uzytkownik opisal: Python gra
+# czlowieka przy przegladarce.
+
+# Ile razy w CALYM uruchomieniu prosimy o dokonczenie. Zabezpiecza
+# przed spirala, gdyby detektor zaczal falszywie alarmowac.
+CONTINUATION_MAX_PER_RUN = 12
+_continuation_used = 0
+
+# Ile ostatnich znakow pokazujemy roli, zeby wiedziala GDZIE
+# przerwac szukanie i skad pisac dalej.
+_CONTINUATION_TAIL_HINT = 300
+
+# Ile znakow zachodzenia szukamy przy sklejaniu.
+_CONTINUATION_OVERLAP = 400
+
+# Ile razy Z RZEDU odpowiedzi tej roli byly ucinane.
+_role_cut_streak = {}
+
+# Dlugosc ostatniej ucietej odpowiedzi tej roli — liczba, ktora
+# podajemy autorowi zamiast ogolnika "pisz krocej".
+_role_last_cut_len = {}
+
+
+def _stitch_continuation(text, tail):
+    """
+    Skleja odpowiedz z jej dokonczeniem, usuwajac zachodzenie.
+
+    Rola poproszona o dalszy ciag czesto powtarza ostatnie zdanie
+    dla plynnosci. Bez usuniecia zachodzenia zespol dostaje ten sam
+    fragment dwa razy i ma prawo uznac to za blad.
+    """
+
+    text = str(text or "")
+    tail = str(tail or "").strip()
+
+    if not tail:
+        return text
+
+    # Rola poproszona o "dalszy ciag" czasem ZACZYNA OD NOWA i
+    # przysyla cala wypowiedz jeszcze raz. Wtedy doklejenie dalo by
+    # zespolowi ten sam tekst podwojnie — czyli dokladnie ten rodzaj
+    # smiecia, ktory potem ktos w dobrej wierze analizuje. Jesli
+    # poczatek dokonczenia pokrywa sie z poczatkiem oryginalu, to
+    # nie jest dokonczenie.
+    poczatek = text.lstrip()[:200]
+
+    if poczatek and tail[:200] == poczatek:
+        return text
+
+    okno = text[-_CONTINUATION_OVERLAP:]
+
+    # Najdluzszy sufiks `okno`, ktory jest prefiksem `tail`.
+    for dlugosc in range(len(okno), 20, -1):
+        if tail.startswith(okno[-dlugosc:]):
+            tail = tail[dlugosc:].lstrip()
+            break
+
+    if not tail:
+        return text
+
+    return text.rstrip() + "\n" + tail
+
+
+def _ask_for_missing_tail(name, session, text, reason):
+    """
+    Prosi role o sam brakujacy koniec jej wlasnej wypowiedzi.
+
+    Zwraca (nowy_tekst, czy_nadal_ucieta).
+    """
+
+    global _continuation_used
+
+    if _continuation_used >= CONTINUATION_MAX_PER_RUN:
+        log(
+            "DEEPSEEK",
+            name + ": odpowiedz urwana (" + str(reason) + "), ale "
+            "wyczerpalem budzet prosb o dokonczenie ("
+            + str(CONTINUATION_MAX_PER_RUN) + ") w tym uruchomieniu."
+        )
+        return text, True
+
+    _continuation_used += 1
+
+    koncowka = str(text or "")[-_CONTINUATION_TAIL_HINT:].strip()
+
+    # Zwykla, ludzka wiadomosc w tej samej rozmowie — bez formulek
+    # i bez powtarzania czegokolwiek z kontekstu (v193/v200).
+    prosba = (
+        "Ucięło Cię w połowie — do mnie doszło tylko tyle:\n\n"
+        "...\u201e" + koncowka + "\u201d\n\n"
+        "To limit długości odpowiedzi, nie Twój błąd. Dopisz sam "
+        "dalszy ciąg od tego miejsca — nie powtarzaj tego, co już "
+        "napisałeś, i nie zaczynaj od nowa."
+    )
+
+    try:
+        tail, tail_status = _deepseek_send_experimental(
+            name, session, prosba
+        )
+    except Exception as e:
+        log(
+            "DEEPSEEK",
+            name + ": prosba o dokonczenie nie doszla (" + str(e)
+            + ") — zostaje ucieta odpowiedz."
+        )
+        return text, True
+
+    if not str(tail or "").strip():
+        log(
+            "DEEPSEEK",
+            name + ": na prosbe o dokonczenie przyszedl pusty tekst "
+            "— zostaje ucieta odpowiedz."
+        )
+        return text, True
+
+    sklejone = _stitch_continuation(text, tail)
+
+    nadal, nadal_reason = _deepseek_looks_truncated(
+        sklejone, tail_status
+    )
+
+    log(
+        "DEEPSEEK",
+        name + ": odpowiedz byla urwana (" + str(reason)
+        + "). Poprosilem o dalszy ciag i dostalem "
+        + str(len(str(tail))) + " znakow — razem "
+        + str(len(sklejone)) + "."
+        + ("" if not nadal else " NADAL wyglada na urwana ("
+           + str(nadal_reason) + ").")
+    )
+
+    return sklejone, nadal
+
+
+def _note_role_length_problem(name, truncated, length):
+    """Czy TA rola ma powtarzajacy sie problem z dlugoscia."""
+
+    if truncated:
+        _role_cut_streak[name] = _role_cut_streak.get(name, 0) + 1
+        _role_last_cut_len[name] = int(length)
+    else:
+        _role_cut_streak.pop(name, None)
+        _role_last_cut_len.pop(name, None)
+
+
+def _length_notice_for(name):
+    """
+    Zdanie doklejane do NASTEPNEJ wiadomosci do roli, ktorej
+    poprzednia odpowiedz zostala ucieta.
+
+    v201 powiedzialo o urwaniu CZYTAJACYM. Autorowi nie powiedzial
+    nikt — i to on jako jedyny mogl z tym cos zrobic. W logu
+    2026-09-04 Tomek cztery razy z rzedu przepraszal za "brak
+    Kroku 3", po czym pisal kolejna odpowiedz tej samej dlugosci,
+    ucinana w tym samym miejscu.
+    """
+
+    seria = _role_cut_streak.get(name, 0)
+
+    if not seria:
+        return ""
+
+    ile = _role_last_cut_len.get(name, 0)
+
+    return (
+        "[FAKT OD PYTHONA: Twoja poprzednia odpowiedź została "
+        "ucięta po " + str(ile) + " znakach — to limit długości "
+        "odpowiedzi w tej sesji, nie Twój błąd i nie niedbalstwo. "
+        "Nie przepraszaj za to i nie zaczynaj od nowa. Po prostu "
+        "zmieść się krócej: jeden krok albo jedna sprawa na "
+        "wiadomość, bez powtarzania tego, co już ustalone. Jeśli "
+        "masz do przekazania więcej, powiedz na końcu, że ciąg "
+        "dalszy podasz w następnej wiadomości.]\n\n"
+    )
 
 
 def deepseek(name, message):
@@ -2992,10 +3251,16 @@ def deepseek(name, message):
                 # v191: cel doklejamy TYLKO przy pierwszej
                 # wiadomości do tej roli w tym celu — patrz
                 # _goal_briefing_for(). Potem rozmawiamy normalnie.
+                # v207: rola, ktorej poprzednia odpowiedz ucielo,
+                # dowiaduje sie o tym jako PIERWSZA — patrz
+                # _length_notice_for(). Do tej pory mowilismy o
+                # urwaniu wszystkim OPROCZ autora.
                 text, status = _deepseek_send_experimental(
                     name,
                     session,
-                    _goal_briefing_for(name) + message
+                    _goal_briefing_for(name)
+                    + _length_notice_for(name)
+                    + message
                 )
 
                 # Eksperyment z v75 (przechwycenie statusu, który
@@ -3019,45 +3284,25 @@ def deepseek(name, message):
                     text, status
                 )
 
-                # v201: zapamietujemy to DLA ODBIORCOW tej wypowiedzi
-                # (patrz _role_truncated) — inaczej beda ja czytac jak
-                # niedbalosc autora.
-                _mark_role_truncated(name, truncated)
+                if truncated and _continue_action_supported:
 
-                if truncated and not _continue_action_supported:
-
-                    # v190: już wiemy z TEJ sesji, że serwer tego nie
-                    # przyjmuje (patrz _continue_action_supported).
-                    # Nie palimy kolejnego żądania na obaloną
-                    # hipotezę — mówimy tylko, co się dzieje.
+                    # Eksperyment z v75: natywne action='continue'.
+                    # Zostaje, bo gdyby serwer je kiedys przyjal,
+                    # jest tansze niz osobna wiadomosc. W praktyce
+                    # od v190 wylacza sie po pierwszym 422.
                     log(
                         "DEEPSEEK",
                         name + ": odpowiedz wyglada na ucieta ("
-                        + str(reason) + "). Nie probuje juz "
-                        "action='continue' — serwer odrzucil to "
-                        "wczesniej w tym uruchomieniu, a kazda proba "
-                        "to dodatkowe zadanie do DeepSeeka."
-                    )
-
-                elif truncated:
-
-                    log(
-                        "DEEPSEEK",
-                        name + ": EKSPERYMENT — odpowiedz wyglada "
-                        "na ucieta (" + str(reason) + "), probuje "
-                        "action='continue'..."
+                        + str(reason) + "), probuje action='continue'"
                     )
 
                     try:
                         # Realny dowod z produkcji (v75, 2026-08-23):
                         # pusty prompt z action="continue" serwer
                         # odrzuca kodem 422/biz_code 6 "missing
-                        # prompt or ref file" — wiec pusty string tu
-                        # nigdy nie mial szansy zadzialac niezaleznie
-                        # od tego, czy "continue" jest wlasciwa
-                        # wartoscia. Jeden odstep spelnia wymog
-                        # "niepusty prompt" bez dopisywania nowej
-                        # instrukcji do rozmowy.
+                        # prompt or ref file". Jeden odstep spelnia
+                        # wymog "niepusty prompt" bez dopisywania
+                        # nowej instrukcji do rozmowy.
                         continue_text, continue_status = (
                             _deepseek_send_experimental(
                                 name, session, " ", action="continue"
@@ -3065,22 +3310,19 @@ def deepseek(name, message):
                         )
 
                         if continue_text:
-                            text = text + continue_text
-                            log(
-                                "DEEPSEEK",
-                                name + ": EKSPERYMENT — 'continue' "
-                                "zwrocil dodatkowe "
-                                + str(len(continue_text))
-                                + " znakow, doklejone do "
-                                "odpowiedzi."
+                            text = _stitch_continuation(
+                                text, continue_text
                             )
-                        else:
+                            truncated, reason = (
+                                _deepseek_looks_truncated(
+                                    text, continue_status
+                                )
+                            )
                             log(
                                 "DEEPSEEK",
-                                name + ": EKSPERYMENT — 'continue' "
-                                "nie zwrocil dodatkowego tekstu "
-                                "(status=" + str(continue_status)
-                                + ")."
+                                name + ": 'continue' zwrocil "
+                                + str(len(continue_text))
+                                + " znakow, doklejone."
                             )
 
                     except Exception as continue_error:
@@ -3092,15 +3334,35 @@ def deepseek(name, message):
 
                         log(
                             "DEEPSEEK",
-                            name + ": EKSPERYMENT — probe "
-                            "'continue' zakonczyl blad ("
-                            + str(continue_error) + "), zostaje "
-                            "oryginalna (mozliwe ze ucieta) "
-                            "odpowiedz. Wylaczam te probe do konca "
-                            "tego uruchomienia, zeby nie palic "
-                            "kolejnych zadan do DeepSeeka na cos, "
-                            "czego serwer nie przyjmuje."
+                            name + ": action='continue' odrzucone ("
+                            + str(continue_error) + ") — wylaczam je "
+                            "do konca uruchomienia i pytam o dalszy "
+                            "ciag zwykla wiadomoscia."
                         )
+
+                if truncated:
+
+                    # v207: nie potrzeba do tego zadnego API. Sesja
+                    # roli to zwykly czat — Python pisze w niej to,
+                    # co napisalby czlowiek: "ucielo cie, dopisz
+                    # dalszy ciag". Jedno zadanie zamiast dwoch
+                    # spalonych rund wymiany zdan i jednego BLOKUJ
+                    # (patrz _ask_for_missing_tail).
+                    text, truncated = _ask_for_missing_tail(
+                        name, session, text, reason
+                    )
+
+                # v201: zapamietujemy to DLA ODBIORCOW tej wypowiedzi
+                # (patrz _role_truncated) — inaczej beda ja czytac jak
+                # niedbalosc autora. Po udanym sklejeniu tekst jest
+                # juz kompletny, wiec adnotacja NIE idzie.
+                _mark_role_truncated(name, truncated)
+
+                # v207: a autor dowiaduje sie o tym przy swojej
+                # nastepnej wiadomosci — patrz _length_notice_for().
+                _note_role_length_problem(
+                    name, truncated, len(str(text or ""))
+                )
 
                 if not text:
                     text = ""
@@ -13438,6 +13700,146 @@ def _task_wants_code_saved(task_text, success_condition=""):
     return bool(_CODE_SAVE_INTENT_RE.search(str(task_text or "")))
 
 
+# ============================================================
+# KOD NIE WCHODZI DO PLIKU Z DANYMI (v207)
+# ============================================================
+#
+# Log 2026-09-04, kroki 16-24. Najdrozszy blad, jaki ten program
+# dotad popelnil. CZTERY RAZY z rzedu:
+#
+#   [MAIN] MAIN wkleil kod do tresci zadania zamiast podac sciezke.
+#          Zapisuje go sam do ~/beata_number.txt
+#   [MAIN] Zapisano kod ENGINEER bezposrednio do beata_number.txt
+#          (27 znakow) ... (302) ... (341) ... (341)
+#
+# beata_number.txt to PLIK Z NUMEREM TELEFONU BEATY — dana, od
+# ktorej zalezal caly cel. _infer_code_target_path() zobaczylo te
+# nazwe w tresci zadania ("zapisz numer do ~/beata_number.txt"),
+# uznalo ja za "miejsce na kod Bartka" i Python cztery razy
+# zamazal numer skryptem, a potem trescia promptu.
+#
+# Skutki widac w logu wprost — i to slowami samego zespolu:
+#
+#   Marek:  "Plik ~/beata_number.txt NIE ZAWIERA NUMERU BEATY -
+#            zawiera polecenie cat"
+#   Bartek: "beata_number.txt zawiera 'cat ~/agent/call_result.txt'
+#            - to POLECENIE, nie numer telefonu"
+#   Kamil:  "~/beata_number.txt ZAWIERA SKRYPT, A NIE NUMER"
+#   Tomek:  "plik ~/beata_number.txt zostal nadpisany"
+#   API:    INVALID_JSON, bo NUM="Dziendobry,tuasystentKamila..."
+#
+# Dziewiec krokow zespol diagnozowal plik, ktory psul mu Python —
+# za kazdym razem meldujac to w logu jako pomocna czynnosc. To
+# jest dokladnie to, o czym mowi uzytkownik: "nie wiem czy nie
+# dostaja danych dobrych". Nie dostawali.
+#
+# v196 zalatalo ten sam mechanizm dla FINAL_OK.txt lista nazw
+# zakazanych. Lista nazw nie moze wystarczyc — nazw plikow z
+# danymi jest nieskonczenie wiele. Potrzebna jest ZASADA:
+#
+#   1. Kod idzie do pliku KODU. .txt/.json/.csv/.log to dane.
+#   2. Nigdy nie zamazujemy w ciemno pliku, ktory JUZ ISTNIEJE i
+#      nie zawiera kodu — najpierw czytamy, co w nim jest.
+#   3. Gdy odmawiamy, MOWIMY ZESPOLOWI, co w tym pliku naprawde
+#      jest. Jedno takie zdanie w kroku 16 oszczedziloby dziewiec
+#      krokow.
+
+# Rozszerzenia, ktore z definicji trzymaja DANE, nie kod.
+_DATA_FILE_EXTENSIONS = (
+    ".txt", ".json", ".csv", ".tsv", ".log", ".md",
+    ".png", ".jpg", ".jpeg", ".xml", ".pdf", ".ini",
+)
+
+# Slady kodu wykonywalnego. Wystarczy jeden, zeby uznac tresc za kod.
+_CODE_SMELL_RE = re.compile(
+    r"(^#!|^\s*(?:def|class|import|from)\s|\bfunction\s+\w+\s*\(|"
+    r"^\s*(?:if|for|while)\s+.*(?:then|do|:)\s*$|\bfi\b|\bdone\b|"
+    r"\becho\s|\bcurl\s|\bmkdir\s|=\$\(|\$\{)",
+    re.MULTILINE
+)
+
+
+def _looks_like_code(text):
+    """Czy tresc wyglada na kod/skrypt, a nie na dane."""
+
+    return bool(_CODE_SMELL_RE.search(str(text or "")))
+
+
+def _code_target_rejection(path, code_text):
+    """
+    Dlaczego NIE wolno zapisac tu kodu. None = wolno.
+
+    Zwraca (powod_do_logu, fakt_dla_zespolu) albo None.
+
+    KOLEJNOSC MA ZNACZENIE: najpierw czytamy, co w pliku JEST, bo to
+    najmocniejszy dowod i zarazem jedyna informacja, ktora zespolowi
+    naprawde pomaga. Odmowa sama w sobie ratuje plik; dopiero
+    dolaczona do niej TRESC tego pliku ratuje kroki.
+    """
+
+    nazwa = str(path or "")
+
+    if not nazwa:
+        return None
+
+    baza = nazwa.rsplit("/", 1)[-1].lower()
+    kod = _looks_like_code(code_text)
+
+    # --- co w tym pliku naprawde jest (jesli istnieje) ---
+    obecne = ""
+
+    try:
+        sciezka = _resolve_home_relative_path(nazwa)
+        if sciezka.exists():
+            obecne = sciezka.read_text(
+                encoding="utf-8", errors="ignore"
+            )
+    except Exception:
+        obecne = ""
+
+    istnieje_z_danymi = bool(
+        obecne.strip() and not _looks_like_code(obecne)
+    )
+
+    plik_danych = baza.endswith(_DATA_FILE_EXTENSIONS)
+
+    if not kod:
+        # Zapisujemy dane, nie kod — to nie nasza sprawa.
+        return None
+
+    if not (plik_danych or istnieje_z_danymi):
+        # Plik kodu albo nieznane rozszerzenie bez danych w srodku.
+        return None
+
+    powod = (
+        baza + " zawiera DANE, nie kod"
+        if istnieje_z_danymi else
+        baza + " to plik z danymi (rozszerzenie), a zapisywana tresc "
+        "wyglada na kod"
+    )
+
+    fakt = (
+        "python [nie_zamazuje_danych]: NIE zapisalem kodu do "
+        + nazwa + ", bo to plik z DANYMI, a nie plik kodu. Kod "
+        "zapisujemy do .sh/.py — dane zostaja danymi."
+    )
+
+    if istnieje_z_danymi:
+        fakt += (
+            " Ten plik JUZ ISTNIEJE, a jego prawdziwa, aktualna "
+            "tresc — odczytana z dysku TERAZ — to:\n---\n"
+            + short(obecne.strip(), 400)
+            + "\n---\nUzyjcie tej wartosci zamiast jej szukac."
+        )
+    else:
+        fakt += (
+            " Podajcie nazwe pliku skryptu, jesli ten kod ma gdzies "
+            "trafic."
+        )
+
+    return powod, fakt
+
+
 def _infer_code_target_path(task_text, success_condition, engineer_text):
     """
     Szuka nazwy pliku, do którego ewidentnie ma trafić kod — po
@@ -13972,6 +14374,52 @@ def review_and_fix_project_file(path, run_result):
     return wynik
 
 
+# Bash melduje awarie z PELNA sciezka i numerem linii:
+#   /data/.../home/call_beata.sh: line 24: content: command not found
+# Ta sama forma dziala dla python3 ("File \"x.py\", line 24").
+_FAILING_SCRIPT_RE = re.compile(
+    # Python3 melduje 'File "/x/call.py", line 12' — cudzyslow stoi
+    # MIEDZY sciezka a przecinkiem, wiec musi byc opcjonalny.
+    r"(?:^|[\s\"'])((?:/|~/)[^\s:\"']+\.(?:sh|py|bash|js))[\"']?\s*[:,]\s*"
+    r"(?:line|linia)\s*(\d+)",
+    re.IGNORECASE
+)
+
+
+def _failing_script_from_result(wynik):
+    """
+    Ktory plik NAPRAWDE sie wysypal — wedlug komunikatu bledu, a nie
+    wedlug tego, co Python ostatnio zapisal.
+
+    Log 2026-09-04, kroki 19-21. Python zapisal (blednie, patrz
+    _code_target_rejection) kod do beata_number.txt, wiec to ta
+    nazwa byla "biezacym plikiem projektu". Tymczasem wysypal sie
+    call_beata.sh, i bash powiedzial to wprost:
+    "call_beata.sh: line 24: content: command not found".
+    Piotr dostal wiec do przegladu plik z trescia promptu, a Ania
+    dwa razy odpowiedziala jedyne, co mogla:
+    "BRAK BEZPIECZNEGO PATCHA - otrzymany fragment to tresc promptu,
+     a nie kod zrodlowy skryptu call_beata.sh".
+    Oba sloty przegladu (2/3 i 3/3) poszly na zly plik, a prawdziwy
+    blad — linia 24 — nikt nigdy nie zobaczyl.
+    """
+
+    if not isinstance(wynik, dict):
+        return None
+
+    haystack = " ".join(
+        str(wynik.get(klucz, "") or "")
+        for klucz in ("stderr", "stdout", "error", "output", "report")
+    )
+
+    match = _FAILING_SCRIPT_RE.search(haystack)
+
+    if not match:
+        return None
+
+    return match.group(1), match.group(2)
+
+
 def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
     """
     v205: kod Bartka wlasnie sie wykonal. Wynik wraca do niego (v202),
@@ -13983,6 +14431,29 @@ def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
 
     if not isinstance(wynik, dict) or wynik.get("ok"):
         return
+
+    # v207: do przegladu idzie plik, ktory NAPRAWDE sie wysypal —
+    # bash podaje jego sciezke i numer linii w samym komunikacie
+    # bledu. Patrz _failing_script_from_result().
+    _winny = _failing_script_from_result(wynik)
+
+    if _winny and Path(str(sciezka)).name != Path(_winny[0]).name:
+
+        log(
+            "MAIN",
+            "Wysypal sie " + _winny[0] + " (linia " + _winny[1]
+            + "), a nie " + Path(str(sciezka)).name
+            + " — do przegladu daje ten plik, ktory bash wskazal."
+        )
+
+        _pending_team_warnings.append(
+            "python [winny_plik]: blad pochodzi z " + _winny[0]
+            + ", linia " + _winny[1] + " — tak mowi sam komunikat "
+            "bledu. Nie z " + Path(str(sciezka)).name
+            + ", mimo ze to jego ostatnio zapisywaliśmy."
+        )
+
+        sciezka = _winny[0]
 
     przeglad = review_and_fix_project_file(sciezka, wynik)
 
@@ -19858,6 +20329,33 @@ Zwróć tylko JSON.
                     team.get("engineer_full", "")
                 )
 
+                # v207: zanim cokolwiek zapiszemy — sprawdzamy, CO
+                # tam jest. Bez tego Python cztery razy zamazal
+                # numer telefonu Beaty kodem (log 2026-09-04,
+                # kroki 16-24), patrz _code_target_rejection().
+                _odmowa = (
+                    _code_target_rejection(
+                        inferred_target,
+                        extract_code_block(
+                            team.get("engineer_full", "")
+                        ) or task_text
+                    )
+                    if inferred_target else None
+                )
+
+                if _odmowa:
+
+                    log(
+                        "MAIN",
+                        "NIE zapisuję kodu do " + str(inferred_target)
+                        + " — " + _odmowa[0] + ". Mówię o tym "
+                        "zespołowi zamiast niszczyć plik."
+                    )
+
+                    _pending_team_warnings.append(_odmowa[1])
+
+                    inferred_target = None
+
                 if inferred_target:
 
                     write_target = inferred_target
@@ -19869,6 +20367,10 @@ Zwróć tylko JSON.
                         + inferred_target + " — Gemini nie będzie "
                         "go przepisywać."
                     )
+
+                elif _odmowa:
+
+                    pass
 
                 else:
 
