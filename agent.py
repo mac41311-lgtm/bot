@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v194
+AEL-MINI AUTONOMOUS AGENT v195
 
 ARCHITEKTURA:
 
@@ -1262,7 +1262,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v194")
+    print("             AEL-MINI AUTONOMOUS AGENT v195")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14334,6 +14334,41 @@ _answer_for_critic = None
 # Po ilu krokach bez odpowiedzi pytanie przepada. Sytuacja zmienia się
 # z kroku na krok — odpowiedź na nieaktualne pytanie jest gorsza niż
 # jej brak.
+# ============================================================
+# TURA PO TURZE (v195)
+# ============================================================
+#
+# Na wyrazna zgode uzytkownika (2026-09-04): "tak, rob ture po turze,
+# zgadzam sie na wiecej zapytan".
+#
+# Dotad kazda rola wypowiadala sie RAZ na krok, rownolegle, i nikt
+# nikomu nie odpowiadal w tym samym kroku. Gdy Marek blokowal plan,
+# Tomek dowiadywal sie o tym dopiero w NASTEPNYM kroku -- a wtedy
+# sytuacja byla juz inna. W realnym logu Marek zablokowal 10 z 13
+# krokow i praktycznie nigdy nie dostal odpowiedzi na konkretny
+# zarzut; zespol zamiast tego rzucal kolejna nowa koncepcje.
+#
+# Teraz, gdy Marek zglosi zastrzezenie, od razu -- w TYM SAMYM kroku
+# -- pytamy osobe, ktorej ono dotyczy, a potem wracamy z jej
+# odpowiedzia do Marka, zeby podtrzymal je albo przyjal. Czyli
+# normalna wymiana zdan: zarzut -> odpowiedz -> rozstrzygniecie.
+#
+# KOSZT: kazda runda to DWA dodatkowe zapytania do DeepSeeka i
+# odpala sie WYLACZNIE przy realnym zastrzezeniu -- gdy Marek pisze
+# "OCENA: OK", nie kosztuje nic. Przerywamy natychmiast, gdy Marek
+# przyjmie wyjasnienie, wiec czesto wystarcza jedna runda.
+TEAM_EXCHANGE_MAX_ROUNDS = 2
+
+
+def _critic_objects(text):
+    """Czy Marek faktycznie zglasza zastrzezenie (a nie 'OCENA: OK')?"""
+
+    return any(
+        marker in str(text or "").upper()
+        for marker in ("BLOKUJ", "OSTRZEŻENIE")
+    )
+
+
 CRITIC_QUESTION_MAX_AGE = 2
 
 
@@ -15117,6 +15152,98 @@ def consult_team(
     # szumem w jego kontekście.
     _critic_out_full = results.get("CRITIC", "") or ""
 
+    # ------------------------------------------------------------
+    # v195: TURA PO TURZE -- Marek zglosil zarzut, wiec od razu
+    # pytamy osobe, ktorej on dotyczy, i wracamy z jej odpowiedzia
+    # do Marka. Patrz TEAM_EXCHANGE_MAX_ROUNDS.
+    # ------------------------------------------------------------
+    team_exchange = []
+    _exchange_round = 0
+
+    while (
+        _critic_objects(_critic_out_full)
+        and _exchange_round < TEAM_EXCHANGE_MAX_ROUNDS
+    ):
+
+        _exchange_round += 1
+
+        # Do kogo Marek sie zwraca? Gdy pyta wprost Bartka -- do
+        # Bartka; inaczej do Tomka, bo to jego plan jest oceniany.
+        _addressee, _ = _extract_critic_question(_critic_out_full)
+
+        if _addressee not in ("PLANNER", "ENGINEER"):
+            _addressee = "PLANNER"
+
+        _who = "Tomku" if _addressee == "PLANNER" else "Bartku"
+
+        log(
+            "DEEPSEEK",
+            "Marek ma zastrzeżenie (runda " + str(_exchange_round)
+            + ") — pytam " + _addressee + " o odpowiedź, zamiast "
+            "odkładać to na następny krok."
+        )
+
+        # Krotka, konkretna wiadomosc -- to jest ciag dalszy rozmowy,
+        # ktora ta rola juz prowadzi, wiec nie powtarzamy jej calego
+        # tla (patrz v193).
+        _reply = deepseek(
+            _addressee,
+            _who + ", Marek ma zastrzeżenie do tego, co "
+            "zaproponowaliście:\n\n"
+            + short(_critic_out_full, 1500)
+            + "\n\nOdpowiedz mu wprost: albo wyjaśnij, dlaczego "
+            "jego obawa nie dotyczy tego przypadku, albo przyznaj mu "
+            "rację i podaj poprawioną wersję. Krótko i na temat — "
+            "to jedno konkretne pytanie, nie nowa narada."
+        )
+
+        team_exchange.append(("Marek", short(_critic_out_full, 900)))
+        team_exchange.append((
+            "Tomek" if _addressee == "PLANNER" else "Bartek",
+            short(_reply, 900)
+        ))
+
+        if not str(_reply or "").strip():
+            # Rola nie odpowiedziala (awaria sesji) -- nie palimy
+            # kolejnego zapytania na przekazanie Markowi pustki.
+            log(
+                "DEEPSEEK",
+                _addressee + " nie odpowiedział na zastrzeżenie "
+                "(pusta odpowiedź) — przerywam wymianę."
+            )
+            break
+
+        _verdict = deepseek(
+            "CRITIC",
+            ("Tomek" if _addressee == "PLANNER" else "Bartek")
+            + " odpowiedział na Twoje zastrzeżenie:\n\n"
+            + short(_reply, 1500)
+            + "\n\nI co teraz — przyjmujesz to wyjaśnienie, czy "
+            "podtrzymujesz zastrzeżenie? Odpowiedz jak zwykle, "
+            "zaczynając od OCENA: OK / OSTRZEŻENIE / BLOKUJ."
+        )
+
+        if not str(_verdict or "").strip():
+            log(
+                "DEEPSEEK",
+                "Marek nie odesłał werdyktu po wyjaśnieniu (pusta "
+                "odpowiedź) — zostaje jego poprzednia ocena."
+            )
+            break
+
+        team_exchange.append(("Marek", short(_verdict, 900)))
+
+        _critic_out_full = _verdict
+        results["CRITIC"] = _verdict
+
+        if not _critic_objects(_verdict):
+            log(
+                "DEEPSEEK",
+                "Marek przyjął wyjaśnienie — zastrzeżenie zdjęte w "
+                "tym samym kroku, bez odkładania na później."
+            )
+            break
+
     # Nowe pytanie Marka — tylko gdy żadne inne nie czeka (jedno na
     # raz: to ma być doprecyzowanie, nie przesłuchanie).
     if _critic_question is None:
@@ -15199,6 +15326,13 @@ def consult_team(
         ),
         "wojtek":    _role_output_for_team(
             "Wojtek", results.get("WOJTEK", ""), 1500
+        ),
+        # v195: zapis wymiany zdan Marek <-> Tomek/Bartek, ktora
+        # odbyla sie w TYM kroku. MAIN musi widziec nie tylko koncowy
+        # werdykt, ale i to, co go zmienilo -- inaczej "OCENA: OK" po
+        # burzliwej dyskusji wyglada jak brak zastrzezen od poczatku.
+        "exchange": "\n\n".join(
+            kto + ": " + tekst for kto, tekst in team_exchange
         ),
     }
 
@@ -15443,6 +15577,14 @@ konkretnego do podjęcia decyzji):
     # v193: MAIN tez zaczyna od JEDNEJ rzeczy, ktora teraz blokuje
     # postep -- to on podejmuje decyzje, wiec najbardziej potrzebuje
     # jasnosci, o czym w tym kroku w ogole rozmawiamy.
+    # v195: wymiana zdan Marka z Tomkiem/Bartkiem z TEGO kroku.
+    _exchange = str(team.get("exchange", "") or "").strip()
+    _exchange_block = (
+        "\nWYMIANA ZDAŃ W TYM KROKU (Marek zgłosił zastrzeżenie i "
+        "dostał odpowiedź — to działo się teraz, nie w poprzednim "
+        "kroku):\n" + _exchange + "\n"
+    ) if _exchange else ""
+
     _main_topic = _current_topic(last_result, _critic_block_streak)
     _main_topic_block = ("\n" + _main_topic + "\n") if _main_topic else ""
 
@@ -15481,6 +15623,7 @@ RESEARCHER:
 
 CRITIC:
 {team['critic']}
+{_exchange_block}
 
 BROWSER:
 {team['browser']}
