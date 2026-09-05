@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v217
+AEL-MINI AUTONOMOUS AGENT v218
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v217")
+    print("             AEL-MINI AUTONOMOUS AGENT v218")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2267,6 +2267,7 @@ def _set_current_goal(goal):
     _reset_code_review_budget()
     _reset_critic_objection_memory()
     _reset_progress_memory()
+    _reset_irreversible_memory()
 
     global _main_override_for_critic
     _main_override_for_critic = None
@@ -9400,6 +9401,103 @@ def _detect_grep_on_termux_api_json(command):
 #    trzeba to powiedzieć wprost (NEED_USER/‌FAILED z prawdziwym
 #    powodem) albo wyjść poza powłokę (sterować realną aplikacją
 #    przez UI/Chrome), a NIE odtwarzać TTS lokalnie i pisać FINAL_OK.
+# ============================================================
+# CZYNNOSCI NIEODWRACALNE ROBIMY RAZ (v218)
+# ============================================================
+#
+# Log 2026-09-05, cel "napisz Beacie SMS". Do Beaty poszly DWA
+# SMS-y:
+#
+#   11:03:45  "Hej Beata, odzywam sie po dluzszej przerwie..."
+#   11:06:07  "Hej Beata! Kamil juz na miejscu, wszystko gra..."
+#
+# Pierwszy wyszedl naprawde (returncode 0). Ale nie zostawil zadnego
+# sladu (patrz _short_tool_evidence wyzej), wiec zespol uznal, ze
+# "mamy 4 zadeklarowane punkty BEZ dowodu", Ela dala 0%, Marek
+# zablokowal — i wyslali jeszcze raz.
+#
+# Sam slad juz nie wystarczy. SMS i polaczenie sa NIEODWRACALNE:
+# drugiej proby nie da sie cofnac, bo dotarla do zywego czlowieka.
+# Python widzi wszystkie wykonane komendy, wiec jako jedyny moze
+# powiedziec "to juz poszlo" — ZANIM pojdzie drugi raz.
+#
+# Nie blokujemy (uzytkownik moze chciec dwoch SMS-ow), ale mowimy to
+# tak, zeby nie dalo sie tego przeoczyc.
+
+_IRREVERSIBLE_MARKERS = (
+    "termux-sms-send",
+    "termux-telephony-call",
+)
+
+# Co juz w tym celu wyslalismy/wybralismy: marker -> lista
+# (godzina, komenda).
+_irreversible_done = {}
+
+
+def _reset_irreversible_memory():
+    """Nowy cel = nowa historia czynnosci nieodwracalnych."""
+
+    _irreversible_done.clear()
+
+
+def _irreversible_kind(command):
+    """Ktora czynnosc nieodwracalna to jest (albo None)."""
+
+    text = str(command or "")
+
+    for marker in _IRREVERSIBLE_MARKERS:
+        if marker in text:
+            return marker
+
+    return None
+
+
+def _note_and_warn_irreversible(command):
+    """
+    Zapamietuje czynnosc nieodwracalna i ostrzega, jesli TAKA SAMA
+    juz sie w tym celu wydarzyla. Zwraca tekst ostrzezenia albo None.
+    """
+
+    kind = _irreversible_kind(command)
+
+    if not kind:
+        return None
+
+    wczesniej = _irreversible_done.get(kind, [])
+
+    ostrzezenie = None
+
+    if wczesniej:
+
+        ostrzezenie = (
+            "UWAGA: " + kind + " zostalo w tym celu wykonane JUZ "
+            + str(len(wczesniej))
+            + (" raz" if len(wczesniej) == 1 else " razy")
+            + ", a to jest czynnosc NIEODWRACALNA — dotarla do "
+            "zywego czlowieka i nie da sie jej cofnac. Poprzednio:\n"
+            + "\n".join(
+                "- " + godz + ": " + short(kom, 160)
+                for godz, kom in wczesniej[-3:]
+            )
+            + "\nJesli to nie jest CELOWE powtorzenie, nie rob tego "
+            "drugi raz. Brak wyniku na ekranie NIE znaczy, ze "
+            "poprzednia proba sie nie udala — te komendy przy "
+            "powodzeniu nic nie wypisuja."
+        )
+
+        log(
+            "MAIN",
+            "POWTORZONA CZYNNOSC NIEODWRACALNA: " + kind
+            + " (juz " + str(len(wczesniej)) + "x w tym celu)."
+        )
+
+    _irreversible_done.setdefault(kind, []).append(
+        (datetime.now().strftime("%H:%M:%S"), str(command or ""))
+    )
+
+    return ostrzezenie
+
+
 def _detect_call_audio_fallacy(command):
 
     command_str = str(command or "")
@@ -9639,6 +9737,18 @@ def termux_run(command):
             if call_audio_warning:
                 result["call_audio_warning"] = call_audio_warning
 
+            # v218: SMS/polaczenie sa nieodwracalne — mowimy, jesli
+            # to samo juz w tym celu poszlo. Patrz
+            # _note_and_warn_irreversible().
+            repeated_irreversible = _note_and_warn_irreversible(
+                command_str
+            )
+
+            if repeated_irreversible:
+                result["repeated_irreversible_warning"] = (
+                    repeated_irreversible
+                )
+
             contact_schema_warning = _detect_contact_list_wrong_schema(
                 command_str
             )
@@ -9832,6 +9942,13 @@ def termux_run_background(
 
         if call_audio_warning:
             bg_result["call_audio_warning"] = call_audio_warning
+
+        repeated_irreversible = _note_and_warn_irreversible(command)
+
+        if repeated_irreversible:
+            bg_result["repeated_irreversible_warning"] = (
+                repeated_irreversible
+            )
 
         contact_schema_warning = _detect_contact_list_wrong_schema(command)
 
@@ -11800,6 +11917,30 @@ def _short_tool_evidence(result):
         if value:
             return short(value, 160)
 
+    # v218 -- log 2026-09-05. SMS do Beaty poszedl DWA RAZY, i to
+    # jest dokladnie ten powod.
+    #
+    # Udana wysylka wyglada tak:
+    #   {"ok": true, "returncode": 0, "stdout": "", "stderr": "",
+    #    "command": "termux-sms-send -n +48514590110 \"Hej Beata...\""}
+    #
+    # Pusto wszedzie. Wiec evidence bylo puste, wiec dla zespolu ta
+    # czynnosc nie zostawila SLADU — a byla to najwazniejsza rzecz w
+    # calym przebiegu. Marek orzekl "4 zadeklarowane punkty BEZ
+    # dowodu", Ela dala 0%, i zespol wyslal SMS jeszcze raz.
+    #
+    # A przeciez cisza przy returncode 0 to WLASNIE sukces: sms-send,
+    # mkdir, echo>plik i pol Termuxa nic nie wypisuje, gdy sie uda.
+    # Faktem jest wtedy sama WYKONANA KOMENDA.
+    if (
+        result.get("ok")
+        and result.get("returncode") == 0
+        and result.get("command")
+    ):
+        return "wykonano bez błędu: " + short(
+            str(result.get("command")), 140
+        )
+
     if result.get("ok") and "path" in result and "bytes" in result:
         return (
             "zapisano " + str(result.get("bytes")) + " B do "
@@ -12507,6 +12648,7 @@ CO POWINIEN ZROBIĆ MAIN:
                         "shortcircuit_warning",
                         "json_parse_warning",
                         "call_audio_warning",
+                        "repeated_irreversible_warning",
                         "contact_schema_warning",
                         "placeholder_phone_warning",
                         "dom_fields_warning",
