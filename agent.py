@@ -2306,68 +2306,11 @@ def _goal_briefing_for(name):
 
     _goal_briefed.add(name)
 
-    # v224: razem z celem mówimy, czym Python zmierzy jego wykonanie.
-    # Wojtek zostaje przy samym celu — dostaje go jako zwykły człowiek,
-    # bez technicznego tła (patrz consult_wojtek).
-    meta = "" if name == "WOJTEK" else _meta_celu_block(_current_goal_text)
-
     return (
         "CEL, nad którym pracujemy:\n"
         + _current_goal_text
         + "\n\n(Mówię to raz, na początku — dalej rozmawiamy "
         "normalnie i nie będę tego powtarzać.)\n\n"
-        + meta
-    )
-
-
-def _meta_celu_block(goal):
-    """
-    Czym KONKRETNIE Python zmierzy, że cel jest zrobiony.
-
-    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "gra 3D na
-    Androida", KROK 16): zespół zbudował APK, podpisał go, `adb
-    install` zwrócił "Success" — i DONE zostało odrzucone, bo
-    verify_final() wymaga FINAL_OK.txt oraz pliku .apk. Ani
-    "FINAL_OK.txt", ani "apk_output" nie występowały w ŻADNYM
-    prompcie (sprawdzone), więc zespół nie miał jak się o tych
-    warunkach dowiedzieć inaczej niż przez odrzucone DONE. Meta
-    istniała, ale nikt nie powiedział, gdzie jest.
-    """
-
-    linie = []
-
-    if not _goal_waives_final_ok(goal):
-
-        tresc = _expected_final_ok_content(goal)
-
-        linie.append(
-            "plik FINAL_OK.txt (w " + str(HOME) + ", w "
-            + str(AGENT_DIR) + " albo w " + str(APK_OUTPUT_DIR)
-            + ") z treścią "
-            + (
-                "\"" + tresc + "\""
-                if tresc
-                else "mówiącą wprost, że cel jest zrobiony"
-            )
-            + ", zapisany już w trakcie tego celu"
-        )
-
-    if _goal_needs_apk(goal):
-        linie.append(
-            "gotowy plik .apk zawierający AndroidManifest.xml i "
-            "classes.dex — może leżeć w katalogu projektu, byle "
-            "powstał w trakcie tego celu"
-        )
-
-    if not linie:
-        return ""
-
-    return (
-        "Na koniec Python sprawdza fizycznie, czy cel jest zrobiony, "
-        "i szuka wtedy tego:\n- "
-        + "\n- ".join(linie)
-        + "\nBez tego DONE zostanie odrzucone, choćby reszta się "
-        "udała.\n\n"
     )
 
 
