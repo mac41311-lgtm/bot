@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v226
+AEL-MINI AUTONOMOUS AGENT v227
 
 ARCHITEKTURA:
 
@@ -1258,7 +1258,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v226")
+    print("             AEL-MINI AUTONOMOUS AGENT v227")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9897,9 +9897,54 @@ def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
     return wynik
 
 
+def _co_lezy_w_home():
+    """Nazwy najwyzszego poziomu pod $HOME. Nigdy nie rzuca."""
+
+    try:
+        return set(os.listdir(str(HOME)))
+    except Exception:
+        return set()
+
+
+def _zglos_to_co_przybylo(przed):
+    """
+    Zglasza do sprzatniecia katalogi/pliki, ktore wlasnie POJAWILY SIE
+    pod $HOME — patrz _track_project_path().
+
+    ZAOBSERWOWANY REALNY PROBLEM (log 2026-09-05, cel "gra 3D").
+    Sprzatanie wygenerowanych plikow bierze kandydatow WYLACZNIE z
+    PROJECT_DIRS_FILE, a ta lista rosnie tylko przy termux_mkdir /
+    termux_write_file / termux_patch_file / write_engineer_code_to.
+    Cala ta gra powstala natomiast przez termux_run: `mkdir -p
+    ~/webview_game`, `cat > AndroidManifest.xml << EOF`, `javac -d .`,
+    `dx`, `zip`, `apksigner`. Ani jedna z tych sciezek nie zostala
+    nigdzie zapisana, wiec project_dirs.json zostal pusty ("[]", 2
+    bajty na dysku uzytkownika) — a sprzatanie po skonczonym celu nie
+    mialo czego zaproponowac do usuniecia i po cichu nic nie zrobilo.
+    Uzytkownik zgodzil sie na usuniecie i nic sie nie usunelo.
+
+    Zamiast zgadywac z tresci komendy, ktora moze utworzyc plik na sto
+    sposobow, po prostu patrzymy, co przybylo. _track_project_path()
+    odsiewa dalej wlasne rzeczy agenta, kropkowe pliki konfiguracyjne
+    i tokeny — wiec zgloszenie tutaj nigdy nie znaczy "usun", tylko
+    "pokaz to uzytkownikowi do decyzji na koniec celu".
+    """
+
+    for nazwa in (_co_lezy_w_home() - przed):
+
+        try:
+            _track_project_path(HOME / nazwa)
+        except Exception:
+            pass
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
+
+        # v227: co przybylo pod $HOME po tej komendzie — patrz
+        # _zglos_to_co_przybylo().
+        _przed = _co_lezy_w_home()
 
         if _looks_long_running(command_str):
 
@@ -9910,6 +9955,7 @@ def termux_run(command):
                 skonczone = _poczekaj_na_komende_w_tle(bg)
 
                 if skonczone is not None:
+                    _zglos_to_co_przybylo(_przed)
                     return skonczone
 
                 bg["status"] = "AUTO_BACKGROUNDED"
@@ -9933,9 +9979,13 @@ def termux_run(command):
                     "cokolwiek zgłosisz jako wynik."
                 )
 
+            _zglos_to_co_przybylo(_przed)
+
             return bg
 
         result = execute_shell(command_str)
+
+        _zglos_to_co_przybylo(_przed)
 
         if isinstance(result, dict):
 
@@ -23716,6 +23766,18 @@ def maybe_clear_generated_project_files():
         candidates.append(p)
 
     if not candidates:
+
+        # v227: dotad wychodzilismy stad w ciszy. Uzytkownik zgadzal
+        # sie na sprzatanie i nie dowiadywal sie, ze nie bylo czego
+        # sprzatac — a to dwie zupelnie rozne rzeczy niz "posprzatane".
+        log(
+            "MAIN",
+            "Nie mam wygenerowanych plikow do zaproponowania — nic "
+            "nie zostalo zapisane pod tym, co sledze. Jesli cos "
+            "powstalo w trakcie celu, usun to sam albo powiedz mi, "
+            "gdzie leży."
+        )
+
         write_json(PROJECT_DIRS_FILE, [])
         return
 
