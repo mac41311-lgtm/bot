@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v219
+AEL-MINI AUTONOMOUS AGENT v220
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v219")
+    print("             AEL-MINI AUTONOMOUS AGENT v220")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1494,18 +1494,15 @@ krok.
 
 
 CRITIC_PROMPT = """
-Nazywasz się Marek. Oceniasz plan Tomka krytycznie — błędy, ryzyka,
-brakujące dowody — na podstawie STANU FAKTYCZNEGO/checklisty, nie
-własnych domysłów. Odpowiedz zaczynając od:
-OCENA: OK
-albo
-OCENA: OSTRZEŻENIE
-albo
-OCENA: BLOKUJ
-z krótkim uzasadnieniem. Gdy zastrzeżenie to w istocie pytanie do
-Tomka albo Bartka, zamiast blokować możesz dopisać osobną linię
-"PYTANIE DO TOMKA: ..." (albo BARTKA) — odpowiedź wróci w następnym
-kroku.
+Nazywasz się Marek. Oceniasz plan Tomka — błędy, ryzyka, brakujące
+dowody — opierając się na tym, co faktycznie widać w stanie i w
+checkliście. Gdy plan jest w porządku, powiedz to krótko i puść go
+dalej. Gdy coś jest naprawdę nie tak, powiedz wprost co i dlaczego —
+to zatrzymuje zespół, więc waż to spokojnie.
+
+Gdy Twoje zastrzeżenie jest w istocie pytaniem do Tomka albo Bartka,
+dopisz osobną linię "PYTANIE DO TOMKA: ..." (albo BARTKA) —
+odpowiedź wróci do Ciebie.
 """
 
 
@@ -16519,9 +16516,20 @@ def _condense_last_result_for_team(last_result, limit=2500):
             limit
         )
 
+    # v220: zdanie zamiast zrzutu zmiennych ("status=... ok=..."). Sama
+    # nazwa statusu zostaje — to realne slowo, ktorym poslugujemy sie
+    # dalej (patrz wyjasnienia statusow w main_decide) — ale otoczka
+    # jest ludzka, bo to czytaja ludzie-role, nie parser.
+    _ok = last_result.get("ok")
+
     parts = [
-        "status=" + str(last_result.get("status", "?"))
-        + " ok=" + str(last_result.get("ok"))
+        "Ostatni krok skończył się tak: "
+        + str(last_result.get("status", "?"))
+        + (
+            " (udany)" if _ok is True
+            else " (nieudany)" if _ok is False
+            else ""
+        )
     ]
 
     tool = last_result.get("tool")
@@ -16883,8 +16891,8 @@ _answer_for_critic = None
 # normalna wymiana zdan: zarzut -> odpowiedz -> rozstrzygniecie.
 #
 # KOSZT: kazda runda to DWA dodatkowe zapytania do DeepSeeka i
-# odpala sie WYLACZNIE przy realnym zastrzezeniu -- gdy Marek pisze
-# "OCENA: OK", nie kosztuje nic. Przerywamy natychmiast, gdy Marek
+# odpala sie WYLACZNIE przy realnym zastrzezeniu -- gdy Marek puszcza
+# plan dalej, nie kosztuje nic. Przerywamy natychmiast, gdy Marek
 # przyjmie wyjasnienie, wiec czesto wystarcza jedna runda.
 TEAM_EXCHANGE_MAX_ROUNDS = 2
 
@@ -16904,58 +16912,120 @@ TEAM_EXCHANGE_MAX_ROUNDS = 2
 # gorzej: ta sama luzna zasada napedzala _critic_block_streak, wiec
 # ZGODA Marka podbijala licznik blokad w strone twardego stopu.
 #
-# Marek ma kontrakt: "Odpowiedz zaczynajac od OCENA: OK/OSTRZEZENIE/
-# BLOKUJ". Czytamy wiec WERDYKT, a nie przypadkowe wystapienie slowa.
+# Stempel "OCENA: ..." wciąż rozpoznajemy — trwające sesje Marka mają
+# stary kontrakt w historii i mogą go używać do końca swojego życia.
 _CRITIC_VERDICT_RE = re.compile(
     r"OCENA\s*:?\s*\**\s*(OK|OSTRZE[ŻZ]ENIE|BLOKUJ)",
+    re.IGNORECASE
+)
+
+# v220: Marek mówi normalnie, bez stemplowania werdyktu.
+#
+# Wcześniej miał w prompcie kontrakt "Odpowiedz zaczynając od OCENA:
+# OK / OSTRZEŻENIE / BLOKUJ" — MUSIAŁ więc wydać werdykt przy każdej
+# wypowiedzi, także wtedy, gdy nie miał nic do powiedzenia. Realny log
+# 2026-09-05 (cel "rozmowa głosowa z Beatą", KROK 1): trzy rundy
+# OSTRZEŻENIA pod rząd, każda o coraz bardziej kosmetyczny punkt
+# ("brak dowodu, że Sklep Play działa", potem "brak dowodu, że
+# użytkownik ma konto OpenAI"), a cały krok skończył się ZEREM wywołań
+# narzędzi. Rytuał sam produkował zastrzeżenia.
+#
+# Domyślność jest teraz ODWROTNA: brak wyraźnego sprzeciwu znaczy "nie
+# ma sprzeciwu". To istotne, bo obie pomyłki kosztują zupełnie inaczej.
+# Fałszywie wykryty sprzeciw to dwa dodatkowe zapytania do DeepSeeka na
+# każdą rundę wymiany zdań plus podbity licznik blokad — dokładnie ta
+# pętla, którą naprawiamy. Przeoczony sprzeciw nie kosztuje nic: pełna
+# wypowiedź Marka i tak idzie do MAIN-a (patrz team_block w
+# main_decide), więc on ją przeczyta i sam zdecyduje.
+#
+# Sprzeciwu szukamy w POCZĄTKU wypowiedzi — tam, gdzie człowiek stawia
+# sprawę jasno. To zarazem lekarstwo na bug z v200: Marek opisujący
+# gdzieś w prozie CUDZE ostrzeżenie nie jest sprzeciwem.
+_CRITIC_OPENING_CHARS = 400
+
+_CRITIC_BLOCK_RE = re.compile(
+    r"\b(?:blokuj\w*|wstrzymuj\w*|sprzeciwiam)\b",
+    re.IGNORECASE
+)
+
+_CRITIC_OBJECTION_RE = re.compile(
+    r"\bnie\s+zgadzam\b"
+    r"|(?<!nie )\bmam\s+(?:zastrzeżeni|wątpliwoś)\w*"
+    r"|\bzgłaszam\s+zastrzeżeni\w*"
+    r"|\bto\s+się\s+nie\s+uda\b"
+    r"|\bnie\s+zadziała\b"
+    r"|\bbrak(?:uje)?\s+dowod\w*"
+    r"|\bbłędne\s+założeni\w*",
+    re.IGNORECASE
+)
+
+_CRITIC_ACCEPT_RE = re.compile(
+    r"\bzgadzam\s+się\b"
+    r"|\bprzyjmuję\b"
+    r"|\bakceptuję\b"
+    r"|\bbez\s+zastrzeżeń\b"
+    r"|\bnie\s+mam\s+zastrzeżeń\b"
+    r"|\bwygląda\s+(?:dobrze|sensownie|w\s+porządku)\b"
+    r"|\bmoże\s+iść\b",
     re.IGNORECASE
 )
 
 
 def _critic_verdict(text):
     """
-    Werdykt Marka: "OK", "OSTRZEŻENIE", "BLOKUJ" albo None gdy nie
-    da sie go odczytac.
+    Werdykt Marka: "OK", "OSTRZEŻENIE", "BLOKUJ" albo None, gdy z
+    wypowiedzi nie da się go odczytać.
 
-    Bierzemy PIERWSZE "OCENA:" — to jest jego werdykt. Wszystko
-    ponizej to uzasadnienie, w ktorym te same slowa moga pasc w
-    zupelnie innym znaczeniu.
+    Gdy padł stempel "OCENA: ...", bierzemy PIERWSZE wystąpienie — to
+    jest werdykt, a wszystko poniżej to uzasadnienie, w którym te same
+    słowa mogą paść w zupełnie innym znaczeniu.
+
+    Bez stempla czytamy początek wypowiedzi (patrz komentarz wyżej):
+    wyraźny sprzeciw daje "BLOKUJ"/"OSTRZEŻENIE", wyraźna zgoda "OK",
+    a wszystko inne zostaje jako None.
     """
 
-    match = _CRITIC_VERDICT_RE.search(str(text or ""))
+    tekst = str(text or "")
 
-    if not match:
-        return None
+    match = _CRITIC_VERDICT_RE.search(tekst)
 
-    slowo = match.group(1).upper().replace("Z", "Ż")
+    if match:
 
-    if slowo.startswith("OK"):
-        return "OK"
+        slowo = match.group(1).upper().replace("Z", "Ż")
 
-    if slowo.startswith("BLOKUJ"):
+        if slowo.startswith("OK"):
+            return "OK"
+
+        if slowo.startswith("BLOKUJ"):
+            return "BLOKUJ"
+
+        return "OSTRZEŻENIE"
+
+    poczatek = tekst[:_CRITIC_OPENING_CHARS]
+
+    if _CRITIC_BLOCK_RE.search(poczatek):
         return "BLOKUJ"
 
-    return "OSTRZEŻENIE"
+    if _CRITIC_OBJECTION_RE.search(poczatek):
+        return "OSTRZEŻENIE"
+
+    if _CRITIC_ACCEPT_RE.search(poczatek):
+        return "OK"
+
+    return None
 
 
 def _critic_objects(text):
     """
-    Czy Marek faktycznie zglasza zastrzezenie?
+    Czy Marek faktycznie zgłasza sprzeciw?
 
-    Gdy werdyktu NIE da sie odczytac, wracamy do starego, luznego
-    dopasowania — lepiej raz zapytac o wyjasnienie niz przeoczyc
-    prawdziwa blokade zapisana nietypowo.
+    Brak czytelnego werdyktu znaczy "nie ma sprzeciwu" — odwrotnie niż
+    wcześniej, gdy uruchamiało to luźne szukanie słów "BLOKUJ"/
+    "OSTRZEŻENIE" gdziekolwiek w tekście i regularnie brało cudze
+    ostrzeżenie, opisane przez Marka w prozie, za jego własne.
     """
 
-    verdict = _critic_verdict(text)
-
-    if verdict is not None:
-        return verdict != "OK"
-
-    return any(
-        marker in str(text or "").upper()
-        for marker in ("BLOKUJ", "OSTRZEŻENIE")
-    )
+    return _critic_verdict(text) not in (None, "OK")
 
 
 CRITIC_QUESTION_MAX_AGE = 2
@@ -18020,24 +18090,14 @@ def consult_team(
 
         team_exchange.append(("Marek", short(_verdict, 900)))
 
-        # v200: kontrakt "OCENA: ..." zostal w prompcie systemowym
-        # Marka i nie powtarzamy go w kazdym pytaniu (v191). Gdyby
-        # jednak w tej jednej odpowiedzi go pominal, NIE zgadujemy z
-        # prozy — konczymy wymiane i zostawiamy poprzedni werdykt.
-        # Zgadywanie po slowach kosztowalo nas juz dwa spalone
-        # zapytania na krok (patrz _critic_verdict).
-        if _critic_verdict(_verdict) is None:
-            log(
-                "DEEPSEEK",
-                "Marek odpowiedział bez wyraźnego 'OCENA: ...' — "
-                "nie zgaduję z treści, kończę wymianę i zostawiam "
-                "jego poprzednią ocenę."
-            )
-            break
-
         _critic_out_full = _verdict
         results["CRITIC"] = _verdict
 
+        # v220: po wyjaśnieniu wystarczy, że Marek nie podtrzymuje
+        # sprzeciwu. Wcześniej wymagaliśmy tutaj stempla "OCENA: ..."
+        # i bez niego kończyliśmy wymianę jako NIEROZSTRZYGNIĘTĄ —
+        # czyli zwykłe "no dobra, to ma sens" zostawiało jego
+        # zastrzeżenie w mocy i niosło je do kolejnego kroku.
         if not _critic_objects(_verdict):
             log(
                 "DEEPSEEK",
@@ -18214,43 +18274,42 @@ def main_decide(
     # WYŁĄCZNIE dla statusu, który faktycznie jest w last_result
     # (plus zawsze krótkie COMPLETED jako punkt odniesienia, chyba
     # że to właśnie ono wystąpiło — wtedy nie ma sensu dublować).
+    # v220: to samo, co dotąd, ale powiedziane jak człowiek relacjonujący
+    # sytuację, a nie jak legenda do formularza. Wcześniej każde
+    # wyjaśnienie odsyłało MAIN-a do pól surowego JSON-a ("pole 'tool'
+    # mówi co, 'tool_result' dlaczego") i składało się głównie z zakazów
+    # ("NIE zwracaj", "Nie powtarzaj") — a fakty i tak idą teraz wyżej
+    # prozą (patrz _facts w tej funkcji).
     _status_explanations = {
         "GEMINI_TOOL_ERROR": (
-            'GEMINI_TOOL_ERROR — Gemini próbował użyć narzędzia i się nie\n'
-            '  powiodło. Pole "tool" mówi co, "arguments" jak, "tool_result"\n'
-            '  dlaczego. Jeżeli "attempt_count" >= 2, agent już skonsultował\n'
-            '  CODE_REVIEWERA — sprawdź "code_review". Nie powtarzaj tej samej\n'
-            '  komendy. Zmień podejście lub narzędzie.'
+            'Gemini sięgnął po narzędzie i nie wyszło — wyżej masz które,\n'
+            '  z czym i co zwróciło. Skoro to samo podejście już raz\n'
+            '  zawiodło, warto pójść inną drogą.'
         ),
         "TOOL_LIMIT": (
-            'TOOL_LIMIT — Gemini wyczerpał limit wywołań narzędzi (zbyt\n'
-            '  skomplikowane zadanie). Podziel TASK na mniejsze kroki.'
+            'Gemini wyczerpał limit wywołań narzędzi — zadanie było na\n'
+            '  jeden raz za duże. Podziel je na mniejsze kroki.'
         ),
         "DONE_REJECTED_VERIFICATION_FAILED": (
-            'DONE_REJECTED_VERIFICATION_FAILED — TWOJE poprzednie DONE zostało\n'
-            '  odrzucone fizyczną weryfikacją. Pole "checks" mówi CO dokładnie\n'
-            '  brakuje. Utwórz TASK który uzupełni KONKRETNIE brakujące dowody.\n'
-            '  NIE zwracaj ponownie DONE — poczekaj na kolejny raport.'
+            'Twoje poprzednie DONE odrzuciła fizyczna weryfikacja — wyżej\n'
+            '  jest, czego zabrakło. Zleć TASK, który dokładnie to uzupełni,\n'
+            '  i wróć do DONE po kolejnym raporcie.'
         ),
         "TASK_BLOCKED_BY_POLICY": (
-            'TASK_BLOCKED_BY_POLICY — zadanie naruszało zakaz pobierania\n'
-            '  gotowej gry/APK. Zaproponuj INNE podejście (build od zera).'
+            'Zadanie naruszało zakaz pobierania gotowej gry/APK.\n'
+            '  Zaproponuj zbudowanie tego od zera.'
         ),
         "TASK_DUPLICATE_OF_VERIFIED_POINT": (
-            'TASK_DUPLICATE_OF_VERIFIED_POINT — proponowany TASK jest identyczny\n'
-            '  z punktem, który checklist (patrz "PUNKTY ZADAŃ" w kontekście)\n'
-            '  już ma jako ZWERYFIKOWANY dowodem z dysku. Pole "message" mówi\n'
-            '  którym. NIE ponawiaj go — zaproponuj KOLEJNY, inny krok celu.'
+            'Ten TASK to ten sam punkt, który checklist ma już potwierdzony\n'
+            '  dowodem z dysku (wyżej który). Weź kolejny krok celu.'
         ),
         "TASK_ALREADY_SATISFIED_ON_DISK": (
-            'TASK_ALREADY_SATISFIED_ON_DISK — proponowany TASK sprawdzał coś,\n'
-            '  co Python już potwierdził bezpośrednio na dysku (patrz\n'
-            '  "message"). Nie twórz go ponownie — zaproponuj NASTĘPNY,\n'
-            '  faktycznie jeszcze niezrobiony krok.'
+            'To Python już potwierdził bezpośrednio na dysku (wyżej co).\n'
+            '  Wybierz następny, jeszcze niezrobiony krok.'
         ),
         "COMPLETED": (
-            'COMPLETED — Gemini wykonał blok, pole "report" to jego raport.\n'
-            '  NIE oznacza automatycznie DONE całego projektu. Sprawdź raport.'
+            'Gemini wykonał blok i napisał raport. Cały cel bywa gotowy\n'
+            '  później niż pojedynczy blok — przeczytaj raport i oceń sam.'
         ),
     }
 
@@ -18284,41 +18343,24 @@ def main_decide(
     # przeoczenia notatka zamiast twardej blokady (twarda blokada
     # groziłaby drugim zakleszczeniem, po tym z v156).
     critic_streak_block = (
-        """============================================================
-MAREK ZGŁASZA ZASTRZEŻENIE JUŻ """
+        "Marek zgłasza zastrzeżenie już "
         + str(_critic_block_streak)
-        + """ RAZ Z RZĘDU
-============================================================
-
-Tyle razy pod rząd padło BLOKUJ/OSTRZEŻENIE, a praca szła dalej.
-Zanim zlecisz kolejny TASK, zrób JEDNO z dwóch — wprost, w polu
-"reason":
-
-1. Usuń przyczynę zastrzeżenia (napisz, co konkretnie zmieniasz), albo
-2. Napisz, dlaczego uważasz zarzut Marka za nietrafiony i idziesz
-   dalej mimo niego.
-
-Milczące pominięcie tego po raz kolejny oznacza, że zespół pracuje w
-kółko nad czymś, co Marek uznaje za zablokowane — a Ty i tak płacisz
-za jego ocenę w każdym kroku.
-"""
+        + " raz z rzędu, a praca za każdym razem szła dalej. Zanim "
+        "zlecisz kolejny TASK, napisz w \"reason\" jedno z dwóch: co "
+        "konkretnie zmieniasz, żeby usunąć przyczynę, albo dlaczego "
+        "uważasz jego zarzut za nietrafiony i idziesz dalej mimo "
+        "niego.\n\n"
         if _critic_block_streak >= CRITIC_STREAK_ESCALATION else ""
     )
 
     repair_rule_block = (
-        """============================================================
-ZASADA NAPRAWY PO BŁĘDZIE
-============================================================
-
-Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
-
-1. NIE zwracaj DONE.
-2. Przeczytaj dokładnie: tool, arguments, tool_result, error.
-3. Zmień strategię — nie powtarzaj identycznej komendy.
-4. Jeżeli błąd to Timeout — zleć tę samą operację przez
-   termux_run_background z monitorowaniem procesu.
-5. Utwórz konkretny TASK z MIERZALNYM warunkiem sukcesu.
-"""
+        "Ostatni krok skończył się błędem, więc teraz liczy się "
+        "naprawa. Przeczytaj dokładnie, co i dlaczego zawiodło, i "
+        "zleć TASK idący inną drogą, z warunkiem sukcesu, który da "
+        "się zmierzyć. Przy Timeoucie ta sama operacja zwykle "
+        "przechodzi przez termux_run_background z monitorowaniem "
+        "procesu. DONE zostaw na moment, w którym coś faktycznie "
+        "zadziała.\n\n"
         if _last_result_is_error else ""
     )
 
@@ -18334,7 +18376,7 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
     )
 
     chrome_block = (
-        "\nAKTUALNE KARTY CHROME:\n"
+        "\nW Chrome jest teraz:\n"
         + _resolved_chrome_text
         + "\n"
         if _chrome_relevant_now(goal, last_result) else ""
@@ -18363,19 +18405,12 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
     if asked_followup:
 
         ask_block = f"""
-============================================================
-ODPOWIEDŹ NA TWOJE DODATKOWE PYTANIE
-============================================================
+Zapytałeś {asked_followup['role']}: {asked_followup['question']}
 
-Zapytałeś {asked_followup['role']}:
-{asked_followup['question']}
+Odpowiedź: {short(str(asked_followup['answer']), 2000)}
 
-Odpowiedź:
-{short(str(asked_followup['answer']), 2000)}
-
-Wykorzystałeś już swoje jedno pytanie w tym kroku — TERAZ MUSISZ
-zwrócić TASK, DONE albo FAILED. ASK jest w tym wywołaniu
-ZABRONIONE.
+To było Twoje jedno pytanie w tym kroku — teraz zdecyduj: TASK, DONE
+albo FAILED.
 """
         ask_contract_block = ""
 
@@ -18383,14 +18418,12 @@ ZABRONIONE.
 
         ask_block = ""
         ask_contract_block = f"""
-ASK (opcjonalne, NAJWYŻEJ RAZ na krok — nie zamiast konsultacji
-zespołu powyżej, tylko dodatkowe, KONKRETNE pytanie do JEDNEJ
-roli, gdy z odpowiedzi zespołu powyżej brakuje Ci czegoś
-konkretnego do podjęcia decyzji):
+Gdyby do decyzji brakowało Ci jednej konkretnej rzeczy, możesz raz w
+tym kroku dopytać jedną osobę:
 {{
   "type": "ASK",
   "ask_role": "jedna z: {", ".join(_MAIN_ASK_ALLOWED_ROLES)}",
-  "ask_question": "krótkie, konkretne pytanie — nie ogólne 'co dalej'"
+  "ask_question": "konkretne pytanie"
 }}
 """
 
@@ -18399,61 +18432,94 @@ konkretnego do podjęcia decyzji):
     # jasnosci, o czym w tym kroku w ogole rozmawiamy.
     # v195: wymiana zdan Marka z Tomkiem/Bartkiem z TEGO kroku.
     _exchange = str(team.get("exchange", "") or "").strip()
-    _exchange_block = (
-        "\nW tym kroku Marek zgłosił zastrzeżenie i dostał "
-        "odpowiedź:\n" + _exchange + "\n"
-    ) if _exchange else ""
 
     _main_topic = _current_topic(last_result, _critic_block_streak)
     _main_topic_block = _only_if_new(
         "MAIN", "topic", "\n" + _main_topic + "\n"
     ) if _main_topic else ""
 
+    # v220: fakty o ostatnim kroku idą tą samą, deterministyczną prozą,
+    # którą dostaje zespół (_condense_last_result_for_team), zamiast
+    # zrzutu json.dumps(last_result) na 5000 znaków.
+    #
+    # ZAOBSERWOWANY REALNY PROBLEM (log 2026-09-05, cel "rozmowa
+    # głosowa z Beatą"): MAIN dostawał co krok formularz — "KROK: 2",
+    # "OSTATNI WYNIK: {...}", linie "====", a pod nimi sześć etykiet
+    # PLANNER:/ENGINEER:/RESEARCHER:/CRITIC:/BROWSER:/WOJTEK:. Widać
+    # to nawet w samym logu: Gemini odczytało stronę DeepSeeka i w
+    # treści czatu stało dosłownie "KROK:\n2\n\nOSTATNI WYNIK:\n{"ok":
+    # true...}". W tym samym kroku Marek trzy razy z rzędu wymusił
+    # wycofanie Sklepu Play, po czym MAIN zlecił TASK "otwórz Sklep
+    # Play, zainstaluj ChatGPT" — nie dlatego, że zignorował naradę,
+    # tylko dlatego, że dostał ją jako sześć rubryk, a nie jako
+    # rozmowę, w której ktoś komuś odpowiada.
+    #
+    # code_review/checks/attempt_count dokładamy osobno — kondensator
+    # ich nie zna, a to na nie wskazują wyjaśnienia statusów wyżej.
+    _facts = _condense_last_result_for_team(last_result, 3000)
+
+    if isinstance(last_result, dict):
+
+        _attempts = last_result.get("attempt_count")
+
+        if _attempts:
+            _facts += (
+                "\nTo samo podejście zawiodło już "
+                + str(_attempts) + " raz z rzędu."
+            )
+
+        _review = last_result.get("code_review")
+
+        if _review:
+            _facts += (
+                "\nPrzegląd tego błędu: "
+                + short(str(_review), 1200)
+            )
+
+        _checks = last_result.get("checks")
+
+        if _checks:
+            _facts += (
+                "\nWeryfikacja wykazała: "
+                + short(
+                    _checks if isinstance(_checks, str)
+                    else json.dumps(_checks, ensure_ascii=False),
+                    1200
+                )
+            )
+
+    # Głosy zespołu jako relacja z narady — kto co powiedział, po
+    # imieniu. Osoby, które w tym kroku nic nie wniosły, po prostu się
+    # nie pojawiają, zamiast wchodzić pustą rubryką.
+    _glosy = []
+
+    for _wstep, _tekst in (
+        ("Tomek zaplanował tak:", team.get("planner", "")),
+        ("Bartek na to:", team.get("engineer", "")),
+        ("Kamil sprawdził:", team.get("researcher", "")),
+        ("Marek ocenia:", team.get("critic", "")),
+        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:", _exchange),
+        ("Ola streszcza:", team.get("browser", "")),
+        ("Wojtek podrzucił:", team.get("wojtek", "")),
+    ):
+
+        if str(_tekst or "").strip():
+            _glosy.append(_wstep + "\n" + str(_tekst).strip())
+
+    team_block = "\n\n".join(_glosy)
+
     # v191: bez "CEL AGENTA" — MAIN dostał cel raz (patrz
     # _goal_briefing_for) i ma go w historii swojej rozmowy.
     prompt = f"""{_main_topic_block}
-KROK:
-{step}
-
-OSTATNI WYNIK:
-{short(
-    json.dumps(
-        last_result,
-        ensure_ascii=False
-    ),
-    5000
-)}
-
-============================================================
-INTERPRETACJA STATUSU
-============================================================
+Co się właśnie stało:
+{_facts}
 
 {status_interpretation_block}
 
-{critic_streak_block}{repair_rule_block}
-============================================================
-
-PLANNER:
-{team['planner']}
-
-ENGINEER:
-{team['engineer']}
-
-RESEARCHER:
-{team['researcher']}
-
-CRITIC:
-{team['critic']}
-{_exchange_block}
-
-BROWSER:
-{team['browser']}
-
-WOJTEK:
-{team.get('wojtek', '')}
+{critic_streak_block}{repair_rule_block}{team_block}
 {chrome_block}{android_block}
 {ask_block}
-Zwróć WYŁĄCZNIE JSON — formaty (TASK/DONE/FAILED/NEED_USER_LOGIN/ASK) masz w swoim prompcie systemowym.
+Zdecyduj i odpowiedz samym JSON-em — formaty (TASK/DONE/FAILED/NEED_USER_LOGIN/ASK) masz w swoim prompcie systemowym.
 {ask_contract_block}"""
 
     return deepseek(
