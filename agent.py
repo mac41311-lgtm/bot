@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v224
+AEL-MINI AUTONOMOUS AGENT v225
 
 ARCHITEKTURA:
 
@@ -692,7 +692,10 @@ APPROACHES_FILE = AGENT_DIR / "approaches.json"
 # Gdzie run_agent() spodziewa się finalnego APK i FINAL_OK.txt —
 # używane wyłącznie do FIZYCZNEJ weryfikacji przed przyjęciem DONE.
 APK_OUTPUT_DIR = AGENT_DIR / "apk_output"
-FINAL_OK_TOKEN = "ANDROID_GAME_BUILD_OK"
+
+# v225: FINAL_OK_TOKEN ("ANDROID_GAME_BUILD_OK") usuniety. Byl relikt
+# czasow, gdy agent budowal WYLACZNIE gry Android, a dzis kazdy cel
+# jest inny — o tresci tego pliku decyduje CEL, nie stala w kodzie.
 
 APK_OUTPUT_DIR.mkdir(
     parents=True,
@@ -1266,7 +1269,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v224")
+    print("             AEL-MINI AUTONOMOUS AGENT v225")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19355,28 +19358,10 @@ _GOAL_FILE_NONEXISTENCE_MARKERS = (
 )
 
 
-_FINAL_OK_WAIVER_RE = re.compile(
-    # Wzorzec CELOWO tolerancyjny na literowki -- uzytkownik pisze
-    # szybko i tak, jak mu wygodnie ("filal_oki.txt nienbierz pod
-    # uwage"). Wymaganie poprawnej pisowni znaczyloby, ze jego
-    # wyrazna prosba po cichu nie zadziala.
-    r"(final[_ ]?ok\w*|fina\w*ok\w*|filal[_ ]?ok\w*)[^\n]{0,60}?"
-    r"(nie\s*n?\s*bierz|nie\s*brac|nie\s*uwzgl|pomi[nń]|ignor|"
-    r"nie\s*polegaj|nie\s*sugeruj|bez niego|nie\s*licz)",
-    re.IGNORECASE
-)
-
-
-def _goal_waives_final_ok(goal):
-    """
-    Czy CEL wprost prosi, zeby NIE opierac sie na FINAL_OK.txt?
-
-    Patrz komentarz w verify_final(). Uzytkownik ma prawo powiedziec
-    "nie sprawdzaj tego tym plikiem" — i wtedy ten check nie moze
-    blokowac zakonczenia celu.
-    """
-
-    return bool(_FINAL_OK_WAIVER_RE.search(str(goal or "")))
+# v225: _FINAL_OK_WAIVER_RE/_goal_waives_final_ok usuniete. Sluzyly
+# do tego, zeby cel mowiacy wprost "nie bierz pod uwage final_ok.txt"
+# nie byl blokowany przez brak tego pliku. Od v225 FINAL_OK.txt nie
+# blokuje ZADNEGO celu, wiec nie ma juz z czego zwalniac.
 
 
 def _extract_goal_mentioned_files(goal):
@@ -20508,24 +20493,28 @@ def verify_final(goal=""):
     """
     Twarda, fizyczna weryfikacja przed zaakceptowaniem DONE.
 
-    Wymagane dowody (required=True — muszą przejść, inaczej DONE
-    jest odrzucane) — UNIWERSALNE dla każdego celu:
-      1. FINAL_OK.txt z treścią DOKŁADNIE równą FINAL_OK_TOKEN —
-         wymuszony, jawny dowód, że wykonawca sam uznał zadanie za
-         zakończone, niezależnie od rodzaju projektu.
+    Wymagane (required=True — bez tego DONE jest odrzucane),
+    UNIWERSALNIE dla kazdego celu:
+      1. W tym celu cokolwiek realnie zadzialalo — patrz check
+         "Czy w tym celu cokolwiek realnie zadzialalo". Liczy sie
+         punkt potwierdzony wlasnym dowodem Pythona ALBO punkt, w
+         ktorym narzedzia faktycznie cos zrobily. To zastapilo
+         ceremonie z plikiem FINAL_OK.txt (v225).
+      2. Pliki, ktore CEL wymienia z nazwy, istnieja i sa niepuste —
+         sprawdzane bezposrednio na dysku, niezaleznie od raportow.
 
-    Dodatkowe dowody TYLKO gdy cel faktycznie dotyczy zbudowania
-    apki/gry Android (patrz _goal_needs_apk) — required=True w
-    tym wypadku, required=False (czysto informacyjne) gdy cel jest
-    innego rodzaju (skrypt, narzędzie CLI, strona, automatyzacja
-    itp.), bo wtedy brak .apk jest oczekiwany, a nie błędem:
-      2. plik .apk w APK_OUTPUT_DIR, który wygląda jak prawdziwy
-         APK (ZIP zawierający AndroidManifest.xml i classes.dex),
-         nie pusty/uszkodzony plik.
-      3. obecność pakietu wśród zainstalowanych (adb pm list
-         packages), jeśli udało się odczytać nazwę pakietu z APK —
-         zawsze tylko informacyjne, bo nazwy pakietu nie zawsze da
-         się ustalić bez aapt.
+    Wymagane TYLKO wtedy, gdy cel faktycznie dotyczy zbudowania apki
+    (patrz _goal_needs_apk); dla kazdego innego celu brak .apk jest
+    oczekiwany, wiec check jest czysto informacyjny:
+      3. plik .apk wygladajacy jak prawdziwy APK (ZIP z
+         AndroidManifest.xml i classes.dex), zbudowany w trakcie tego
+         celu — gdziekolwiek pod $HOME, bo katalog projektu jest tak
+         samo dobry jak APK_OUTPUT_DIR (v224).
+
+    Informacyjnie (nigdy nie blokuje):
+      - FINAL_OK.txt, jesli ktos go napisal,
+      - obecnosc pakietu wsrod zainstalowanych (adb pm list packages),
+        gdy udalo sie odczytac nazwe pakietu z APK.
     """
 
     needs_apk = _goal_needs_apk(goal)
@@ -20560,25 +20549,11 @@ def verify_final(goal=""):
     # stary plik z zupełnie innego, wcześniejszego celu nie mógł już
     # nigdy po cichu "pożyczyć" swojej ważności nowemu zadaniu.
 
-    # v192 -- zaobserwowany realny przypadek (log 2026-09-04).
-    # Uzytkownik napisal w CELU wprost: "final_ok.txt nie bierz pod
-    # uwage, bo sie gubicie, znajdz lepszy sposob na sprawdzenie, czy
-    # wszystko dobrze". Mimo to ten check byl na sztywno required=True,
-    # wiec DONE nie moglo przejsc bez pliku, ktorego uzytkownik
-    # jawnie sobie NIE zyczyl -- a zespol i tak kreci sie wokol niego
-    # (Kamil w kroku 2 oglosil "przelom" na podstawie starego,
-    # niepowiazanego FINAL_OK.txt). Gdy CEL sam odwoluje ten
-    # mechanizm, zostawiamy check jako INFORMACYJNY (required=False):
-    # nie blokuje DONE, ale dalej pokazuje stan faktyczny.
-    final_ok_waived = _goal_waives_final_ok(goal)
-
-    if final_ok_waived:
-        log(
-            "MAIN",
-            "CEL wprost mowi, zeby nie opierac sie na FINAL_OK.txt — "
-            "ten check zostaje informacyjny, nie blokuje DONE."
-        )
-
+    # v192 zwalnialo z tego pliku tylko te cele, ktore SAME prosily,
+    # zeby na nim nie polegac (uzytkownik: "final_ok.txt nie bierz pod
+    # uwage, bo sie gubicie"). Od v225 nie blokuje on juz zadnego celu,
+    # wiec ten wyjatek nie ma czego zwalniac — zostaje samo czytanie
+    # pliku, zeby dalej bylo widac stan faktyczny.
     expected_final_ok_content = _expected_final_ok_content(goal)
 
     final_ok_candidates = [
@@ -20636,23 +20611,112 @@ def verify_final(goal=""):
         final_ok_path = candidate
         break
 
+    # v225: FINAL_OK.txt przestaje byc bramka.
+    #
+    # Ten plik to ceremonia z czasow, gdy agent budowal WYLACZNIE gry
+    # Android — do dzis token nazywa sie "ANDROID_GAME_BUILD_OK".
+    # Agent jest uniwersalny, a mimo to KAZDY cel (napisanie skryptu,
+    # telefon, przeszukanie kontaktow) musial na koniec zostawic ten
+    # sam magiczny plik, o ktorym zespol nigdzie sie nie dowiadywal.
+    # Realny log 2026-09-05: APK zbudowany, podpisany, zainstalowany,
+    # "Success" — DONE odrzucone, bo pliku nie bylo.
+    #
+    # Zostaje jako INFORMACJA: gdy ktos go napisze, widac to i widac
+    # tresc. Prawdziwa bramka jest nizej i pyta o to, co naprawde ma
+    # znaczenie — czy w tym celu cokolwiek sie wydarzylo.
     checks.append({
-        "check": "FINAL_OK.txt",
-        "required": not final_ok_waived,
+        "check": "FINAL_OK.txt (informacyjnie)",
+        "required": False,
         "ok": final_ok_found,
         "detail": (
             str(final_ok_path)
             if final_ok_found
-            else (
-                final_ok_reject_reason
-                + (
-                    " (CEL wprost prosi, zeby na tym pliku nie "
-                    "polegac — ten punkt NIE blokuje DONE, sluzy "
-                    "tylko za informacje.)"
-                    if final_ok_waived else ""
-                )
+            else final_ok_reject_reason
+        )
+    })
+
+    # --- 1b. Czy w tym celu cokolwiek realnie zadzialalo -----------
+    #
+    # To zastepuje FINAL_OK.txt w roli twardego warunku i pyta wprost
+    # o to, przed czym tamten plik mial chronic: czy Gemini oglosilo
+    # sukces, nie zrobiwszy niczego. Ten przypadek jest realny i
+    # widoczny w logach wprost ("zadanie zakonczone bez ANI JEDNEGO
+    # wywolania narzedzia — nic fizycznie sie nie wydarzylo").
+    #
+    # Liczy sie jedno z dwojga, bo cele sa rozne:
+    #   - punkt ZWERYFIKOWANY, czyli Python sam potwierdzil warunek
+    #     sukcesu (plik na dysku albo tekst potwierdzony na ekranie),
+    #   - albo punkt zakonczony, w ktorym narzedzia FAKTYCZNIE cos
+    #     zrobily (tool_trace z udanym wywolaniem).
+    #
+    # Ta druga sciezka jest tu kluczowa i celowa: cel w rodzaju
+    # "zadzwon do kogos" nie zostawia zadnego pliku ani napisu na
+    # ekranie, wiec sam wymog ZWERYFIKOWANY bylby dokladnie taka sama
+    # niemozliwa brama, jak FINAL_OK.txt — tylko inaczej nazwana.
+    _punkty = _load_progress_checklist()
+
+    _zweryfikowane = [
+        i for i in _punkty
+        if i.get("status") == "ZWERYFIKOWANY"
+    ]
+
+    _z_narzedziami = []
+
+    for _punkt in _punkty:
+
+        if _punkt.get("status") not in (
+            "ZWERYFIKOWANY", "ZADEKLAROWANY_BEZ_DOWODU"
+        ):
+            continue
+
+        _udane = [
+            w for w in (_punkt.get("tool_trace") or [])
+            if isinstance(w, dict) and w.get("ok")
+        ]
+
+        if _udane:
+            _z_narzedziami.append((_punkt, len(_udane)))
+
+    if _zweryfikowane:
+        _co_sie_wydarzylo = (
+            str(len(_zweryfikowane))
+            + " z " + str(len(_punkty))
+            + " punktow tego celu Python potwierdzil wlasnym dowodem, "
+            "np.: "
+            + short(
+                str(_zweryfikowane[-1].get("evidence") or "").strip()
+                or str(_zweryfikowane[-1].get("task") or ""),
+                200
             )
         )
+
+    elif _z_narzedziami:
+        _punkt, _ile = _z_narzedziami[-1]
+        _co_sie_wydarzylo = (
+            "Zadnego punktu nie da sie potwierdzic dowodem z dysku "
+            "ani z ekranu, ale narzedzia realnie dzialaly — ostatnio "
+            + str(_ile) + " udanych wywolan przy: "
+            + short(str(_punkt.get("task") or ""), 200)
+        )
+
+    elif not _punkty:
+        _co_sie_wydarzylo = (
+            "W tym celu nie ma ani jednego wykonanego zadania — nie "
+            "wydarzylo sie nic, co dałoby sie uznac za zrobione."
+        )
+
+    else:
+        _co_sie_wydarzylo = (
+            "Zadne z " + str(len(_punkty)) + " zadan tego celu nie "
+            "zostalo potwierdzone dowodem ani nie wykonalo ani jednego "
+            "udanego wywolania narzedzia — same deklaracje i bledy."
+        )
+
+    checks.append({
+        "check": "Czy w tym celu cokolwiek realnie zadziałało",
+        "required": True,
+        "ok": bool(_zweryfikowane or _z_narzedziami),
+        "detail": _co_sie_wydarzylo
     })
 
     # --- 2. Plik APK ------------------------------------------
