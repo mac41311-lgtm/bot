@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v216
+AEL-MINI AUTONOMOUS AGENT v217
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v216")
+    print("             AEL-MINI AUTONOMOUS AGENT v217")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11754,20 +11754,64 @@ def _shell_failure_is_just_missing_file(tool_name, result):
 # wyniku narzędzia — dokładnie ten wzorzec, o którym napisał
 # użytkownik ("ciągle szukają dowodów... a coś już zadziałało").
 def _short_tool_evidence(result):
+    """
+    Co to wywolanie NAPRAWDE powiedzialo.
+
+    v217 -- log 2026-09-05. Uzytkownik: "Gemini wypelnia, ale DeepSeek
+    nie widzi za bardzo". Dokladnie tak, i to z dwoch powodow naraz.
+    Ten jest pierwszy: patrzylismy TYLKO w "stdout" i "content".
+    A narzedzie, ktorego Gemini uzylo w tym logu 23 RAZY --
+    chrome_execute_js -- zwraca wynik pod kluczem "value":
+
+      {"ok": true, "value": "Filled textarea successfully"}
+      {"ok": true, "value": "Generate button not found"}
+      {"ok": true, "value": "10,000 credits remaining ..."}
+
+    Zaden z tych wynikow nie byl nigdzie zapisany. Dla zespolu te 23
+    wywolania byly puste.
+
+    Tak samo bledy: {"ok": false, "stdout": "", "stderr":
+    "ModuleNotFoundError: No module named 'gtts'"} — stdout pusty,
+    wiec evidence pusty, wiec zespol nie wiedzial, CO sie zepsulo.
+    """
 
     if not isinstance(result, dict):
         return ""
 
-    for key in ("stdout", "content"):
+    # Sprawdzenie obecnosci tekstu rozstrzygamy PRZED reszta: samo
+    # "19" nie mowi, czy tekst na ekranie BYL, czy go NIE BYLO — a to
+    # jest cala tresc tego wywolania.
+    if "found" in result:
+        return (
+            ("znalazłem: " if result.get("found") else "NIE znalazłem: ")
+            + short(str(result.get("text", "")), 80)
+        )
+
+    # Kolejnosc ma znaczenie: blad jest wazniejszy niz wyjscie.
+    for key in ("error", "stderr", "stdout", "value", "content", "text"):
+
         value = result.get(key)
-        if value and str(value).strip():
-            return short(str(value).strip(), 160)
+
+        if isinstance(value, (dict, list)):
+            continue
+
+        value = str(value or "").strip()
+
+        if value:
+            return short(value, 160)
 
     if result.get("ok") and "path" in result and "bytes" in result:
         return (
             "zapisano " + str(result.get("bytes")) + " B do "
             + str(result.get("path"))
         )
+
+    # "action" celowo NIE jest tu wymienione — prawie zawsze powtarza
+    # nazwe narzedzia ("action": "assert_text_visible"), wiec byloby
+    # czystym szumem.
+    for key in ("clicked", "key", "package", "url"):
+        if result.get(key):
+            return str(key) + "=" + short(str(result.get(key)), 80)
 
     return ""
 
@@ -16460,33 +16504,77 @@ def _condense_last_result_for_team(last_result, limit=2500):
 
         failed = sum(1 for e in tool_trace if _ok_of(e) is False)
 
-        if len(tool_trace) <= 12:
-            pieces = []
-            for e in tool_trace:
-                label = _name_of(e) + ("" if _ok_of(e) is not False else " [BŁĄD]")
-                evidence = _evidence_of(e)
-                if evidence:
-                    label += " -> " + evidence
-                pieces.append(label)
-            rendered = "; ".join(pieces)
-        else:
-            counts = {}
-            for e in tool_trace:
-                counts[_name_of(e)] = counts.get(_name_of(e), 0) + 1
-            rendered = ", ".join(
-                name + " x" + str(n)
-                for name, n in sorted(
-                    counts.items(),
-                    key=lambda kv: -kv[1]
+        # v217 -- druga polowa tego samego bledu (log 2026-09-05).
+        # Przy WIECEJ niz 12 wywolaniach wyrzucalismy wszystkie
+        # dowody i zostawialismy sam histogram nazw:
+        #
+        #   "chrome_execute_js x23, chrome_tabs x1, chrome_open x1"
+        #
+        # A wsrod tych 23 wywolan bylo "Filled textarea successfully",
+        # "Generate button not found", "10,000 credits remaining" i
+        # "No module named gtts". Zespol dostawal liczydlo zamiast
+        # wynikow — stad "Gemini wypelnia, ale DeepSeek nie widzi".
+        #
+        # Liczba wywolan nie jest powodem, zeby ukrywac wyniki.
+        # Powodem jest brak wyniku. Wiec: pokazujemy KAZDY blad i
+        # kazdy niepusty wynik (bez powtorzen), a puste wywolania
+        # zliczamy — bo one faktycznie nic nie wnosza.
+        pieces = []
+        widziane = {}
+        puste = {}
+
+        for e in tool_trace:
+
+            nazwa = _name_of(e)
+            evidence = _evidence_of(e)
+            blad = _ok_of(e) is False
+
+            if not evidence and not blad:
+                puste[nazwa] = puste.get(nazwa, 0) + 1
+                continue
+
+            label = nazwa + ("" if not blad else " [BŁĄD]")
+
+            if evidence:
+                label += " -> " + evidence
+
+            # Dwadziescia razy ten sam wynik to jedna informacja —
+            # ale LICZBA powtorzen juz nia nie jest, bo znaczy
+            # "petla". Zwijamy tresc, zachowujemy licznik.
+            if label in widziane:
+                widziane[label] += 1
+                continue
+
+            widziane[label] = 1
+            pieces.append(label)
+
+        pieces = [
+            (p if widziane.get(p, 1) < 2
+             else p.split(" -> ")[0] + " (x" + str(widziane[p]) + ")"
+                  + (" -> " + p.split(" -> ", 1)[1] if " -> " in p else ""))
+            for p in pieces
+        ]
+
+        if puste:
+            pieces.append(
+                "(bez wyniku: "
+                + ", ".join(
+                    nazwa + " x" + str(ile)
+                    for nazwa, ile in sorted(
+                        puste.items(), key=lambda kv: -kv[1]
+                    )
                 )
+                + ")"
             )
+
+        rendered = "; ".join(pieces)
 
         parts.append(
             "co Gemini FAKTYCZNIE wywołało (zapis Pythona, nie jego "
             "własna proza) — wywołań: "
             + str(len(tool_trace))
             + ", nieudanych: " + str(failed) + " -> "
-            + short(rendered, 600)
+            + short(rendered, 1800)
         )
 
     return short("\n".join(parts), limit)
