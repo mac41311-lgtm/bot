@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v229
+AEL-MINI AUTONOMOUS AGENT v230
 
 ARCHITEKTURA:
 
@@ -638,6 +638,26 @@ CONTACTS_LOOKUP_ATTEMPTED_FILE = STATE_DIR / "contacts_lookup_attempted.flag"
 # wartością z poprzedniego uruchomienia.
 USER_PROVIDED_VALUE_FILE = STATE_DIR / "user_provided_value.txt"
 
+# v230: co uzytkownik POWIEDZIAL w trakcie biegu — nie wartosc, tylko
+# zdanie, ktore zmienia kierunek.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "zadzwon do
+# Beaty z asystentem glosowym"). O 22:12 uzytkownik wpisal w okienku
+# "szukaj innych darmowych metod lub wersji prubnych darmowych".
+# Bartek to odczytal i zrozumial. Ale tekst wyladowal w
+# USER_PROVIDED_VALUE_FILE, ktory sluzy do WARTOSCI (klucz, kod,
+# numer) i jest NADPISYWANY przy kazdej kolejnej odpowiedzi — o 22:14
+# uzytkownik wpisal "blad strony blokada nie moge sie zalogowac" i
+# poprzednie polecenie znikneło. Zylo tez tylko w last_result, czyli
+# jeden krok. O 22:18 MAIN wrocil z "musisz doladowac konto minimalna
+# kwota $5" — dokladnie tym, czego uzytkownik odmowil szesc krokow
+# wczesniej.
+#
+# Wartosc i polecenie to dwie rozne rzeczy. Wartosc sie zuzywa,
+# polecenie obowiazuje do konca celu — wiec ma swoj wlasny, trwaly
+# plik, dopisywany a nie nadpisywany.
+USER_SAID_FILE = STATE_DIR / "co_powiedzial_uzytkownik.txt"
+
 # Zapamiętany, niedokończony cel — pozwala wznowić sesję po
 # Ctrl+C zamiast zaczynać rozmowę od zera.
 GOAL_FILE = AGENT_DIR / "current_goal.txt"
@@ -1258,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v229")
+    print("             AEL-MINI AUTONOMOUS AGENT v230")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -17899,6 +17919,15 @@ def consult_team(
             "\nCo się właśnie stało:\n" + report_body
             + success_values_block + error_details_block + "\n",
             _only_if_new(role_name, "tool_hint", tool_hint),
+            # v230: co użytkownik powiedział w trakcie tego celu.
+            # Przez _only_if_new, więc mówimy to raz — ale plik żyje
+            # do końca celu, więc nowe zdanie użytkownika dotrze
+            # wtedy, gdy padnie.
+            _only_if_new(
+                role_name,
+                "uzytkownik_powiedzial",
+                _co_powiedzial_uzytkownik_block()
+            ),
             # v221: co koledzy z zespołu powiedzieli WPROST do tej
             # osoby — patrz _collect_role_messages(). Idzie na końcu,
             # tuż przed pytaniem do niej, żeby było ostatnią rzeczą,
@@ -19615,6 +19644,83 @@ def _czego_nikt_nie_tknal(goal, punkty, ile=5):
         nietkniete.append(slowo)
 
     return nietkniete[:ile]
+
+
+# Cos, co wyglada na sekret, NIGDY nie trafia do pamieci zdan — ta
+# pamiec idzie do wszystkich rol, a wartosci sa przed nimi celowo
+# redagowane (patrz last_result_for_team w consult_team).
+_WYGLADA_NA_SEKRET_RE = re.compile(
+    r"\bsk-|\borg_|\bBearer\b|\bAIza|[A-Za-z0-9_\-]{24,}",
+    re.IGNORECASE
+)
+
+
+def _zapamietaj_co_powiedzial_uzytkownik(tekst):
+    """
+    Dopisuje zdanie uzytkownika do trwalej listy — ale tylko wtedy,
+    gdy to faktycznie ZDANIE, a nie wartosc. Patrz USER_SAID_FILE.
+
+    Klucz API, kod czy numer telefonu to jedno-dwa slowa bez spacji i
+    zostaja tam, gdzie byly. Proza ("szukaj darmowych metod", "nie
+    moge sie zalogowac, daj inna strone") to polecenie, ktore
+    obowiazuje do konca celu.
+
+    Przy watpliwosci NIE zapamietujemy: przeoczone polecenie to stan
+    sprzed tej zmiany, a zapamietany klucz trafilby do dziewieciu
+    sesji DeepSeeka.
+    """
+
+    tekst = " ".join(str(tekst or "").split())
+
+    if (
+        len(tekst.split()) < 3
+        or len(tekst) > 300
+        or _WYGLADA_NA_SEKRET_RE.search(tekst)
+    ):
+        return False
+
+    try:
+        USER_SAID_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        dotad = (
+            USER_SAID_FILE.read_text(encoding="utf-8")
+            if USER_SAID_FILE.exists() else ""
+        )
+
+        if tekst in dotad:
+            return False
+
+        with open(USER_SAID_FILE, "a", encoding="utf-8") as f:
+            f.write(tekst + "\n")
+
+    except Exception:
+        return False
+
+    return True
+
+
+def _co_powiedzial_uzytkownik_block():
+    """Zdania uzytkownika z tego celu, albo pusty string."""
+
+    try:
+        linie = [
+            l.strip()
+            for l in USER_SAID_FILE.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if l.strip()
+        ] if USER_SAID_FILE.exists() else []
+    except Exception:
+        linie = []
+
+    if not linie:
+        return ""
+
+    return (
+        "\nUżytkownik powiedział nam w trakcie tego celu:\n"
+        + "\n".join("- „" + l + "”" for l in linie[-4:])
+        + "\nTo dalej obowiązuje.\n"
+    )
 
 
 def _extract_goal_mentioned_files(goal):
@@ -22013,6 +22119,17 @@ def _handle_need_user_login(decision):
     # bez tego Gemini pisało skrypty bez klucza i dostawało 401.
     value_file_note = ""
 
+    # v230: to samo zdanie moze byc WARTOSCIA (klucz, numer) albo
+    # POLECENIEM ("szukaj darmowych metod"). Wartosc idzie tam, gdzie
+    # szla dotad — a polecenie dodatkowo do trwalej pamieci, bo
+    # obowiazuje do konca celu, a nie jeden krok.
+    if user_typed and _zapamietaj_co_powiedzial_uzytkownik(user_typed):
+        log(
+            "MAIN",
+            "Zapamiętuję to, co powiedziałeś — będzie widoczne dla "
+            "zespołu do końca tego celu, nie tylko w tym kroku."
+        )
+
     if user_typed:
         try:
             USER_PROVIDED_VALUE_FILE.parent.mkdir(
@@ -23817,7 +23934,8 @@ def maybe_clear_previous_session_data():
         PROGRESS_CHECKLIST_FILE,
         APPROACHES_FILE,
         CONTACTS_LOOKUP_ATTEMPTED_FILE,
-        USER_PROVIDED_VALUE_FILE
+        USER_PROVIDED_VALUE_FILE,
+        USER_SAID_FILE
     ):
         try:
             extra.unlink(missing_ok=True)
