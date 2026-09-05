@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v227
+AEL-MINI AUTONOMOUS AGENT v228
 
 ARCHITEKTURA:
 
@@ -1258,7 +1258,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v227")
+    print("             AEL-MINI AUTONOMOUS AGENT v228")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -20824,12 +20824,23 @@ def verify_final(goal=""):
 
     _z_narzedziami = []
 
+    # v228: liczymy udane wywolania z KAZDEGO punktu, takze tego ze
+    # statusem BLAD.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "zadzwon do
+    # Beaty", KROK 2). W jednym zadaniu Gemini wywolalo dwie rzeczy:
+    # `termux-telephony-call +48514590110` — UDANE, telefon faktycznie
+    # zadzwonil, widac to potem na ekranie dialera i w termux-call-log —
+    # oraz `termux-call-log -n 1`, ktore padlo na nieistniejacej opcji.
+    # Cale zadanie dostalo przez to GEMINI_TOOL_ERROR, czyli punkt
+    # BLAD, a v225 pomijalo takie punkty i oglaszalo, ze "nic realnie
+    # nie zadzialalo". Polaczenie bylo faktem.
+    #
+    # Pytanie tej bramki brzmi "czy cokolwiek sie wydarzylo", a nie
+    # "czy wszystko sie udalo". Udane wywolanie narzedzia zostaje
+    # udanym wywolaniem takze wtedy, gdy pozniejsza komenda w tym samym
+    # zadaniu sie wywalila.
     for _punkt in _punkty:
-
-        if _punkt.get("status") not in (
-            "ZWERYFIKOWANY", "ZADEKLAROWANY_BEZ_DOWODU"
-        ):
-            continue
 
         _udane = [
             w for w in (_punkt.get("tool_trace") or [])
