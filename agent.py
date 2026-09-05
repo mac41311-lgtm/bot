@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v230
+AEL-MINI AUTONOMOUS AGENT v231
 
 ARCHITEKTURA:
 
@@ -1278,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v230")
+    print("             AEL-MINI AUTONOMOUS AGENT v231")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -17928,6 +17928,13 @@ def consult_team(
                 "uzytkownik_powiedzial",
                 _co_powiedzial_uzytkownik_block()
             ),
+            # v231: czym ten telefon dysponuje sam z siebie — raz, jak
+            # pokazanie warsztatu. Patrz _narzedzia_telefonu().
+            _only_if_new(
+                role_name,
+                "narzedzia_telefonu",
+                _narzedzia_telefonu_block()
+            ),
             # v221: co koledzy z zespołu powiedzieli WPROST do tej
             # osoby — patrz _collect_role_messages(). Idzie na końcu,
             # tuż przed pytaniem do niej, żeby było ostatnią rzeczą,
@@ -19697,6 +19704,81 @@ def _zapamietaj_co_powiedzial_uzytkownik(tekst):
         return False
 
     return True
+
+
+# Co ten telefon ma pod reka — liczone raz na uruchomienie.
+_narzedzia_telefonu_cache = None
+
+
+def _narzedzia_telefonu():
+    """
+    Nazwy narzedzi termux-*, ktore FAKTYCZNIE sa na tym telefonie.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "zadzwon do
+    Beaty z asystentem glosowym"). Zespol przez 15 krokow i ~55 minut
+    probowal Bland AI, potem Retell, potem Vapi — same platne konta
+    zagraniczne, zadne nie wypalilo. A telefon mial wszystko na
+    miejscu: termux-telephony-call, termux-tts-speak i
+    termux-speech-to-text, przy czym termux-api bylo juz
+    ZAINSTALOWANE (widac to w tym samym logu). Wojtek zaproponowal
+    Asystenta Google w PIERWSZYM kroku obu przebiegow i nikt tego nie
+    podjal.
+
+    Przyczyna jest prosta: Kamil szuka w internecie, a internet na
+    "voice agent, ktory zadzwoni" odpowiada amerykanskim SaaS-em.
+    Nikt nie pytal, co potrafi TO urzadzenie — bo nikt im tego nigdy
+    nie powiedzial. Zespol dostawal stan ekranu i karty Chrome, nigdy
+    spis wlasnych mozliwosci.
+
+    Nie jest to instrukcja ani zachęta w prompcie, tylko fakt o
+    srodowisku — ta sama klasa co "Na dysku wyglada to teraz tak".
+    Mowimy go RAZ (przez _only_if_new), tak jak pokazuje sie komus
+    warsztat, w ktorym ma pracowac.
+    """
+
+    global _narzedzia_telefonu_cache
+
+    if _narzedzia_telefonu_cache is not None:
+        return _narzedzia_telefonu_cache
+
+    znalezione = []
+
+    try:
+        katalog = (
+            Path(_SHELL_EXECUTABLE).parent
+            if _SHELL_EXECUTABLE else Path("/usr/bin")
+        )
+
+        znalezione = sorted(
+            p.name for p in katalog.glob("termux-*")
+            if p.is_file()
+        )
+
+    except Exception:
+        znalezione = []
+
+    _narzedzia_telefonu_cache = znalezione
+
+    return znalezione
+
+
+def _narzedzia_telefonu_block():
+    """
+    Jedno zdanie o tym, co ten telefon potrafi sam z siebie.
+    Pusty string, gdy niczego nie znalezlismy (np. nie-Termux).
+    """
+
+    narzedzia = _narzedzia_telefonu()
+
+    if not narzedzia:
+        return ""
+
+    return (
+        "\nTen telefon ma pod ręką własne narzędzia, działające "
+        "lokalnie, bez zakładania kont i bez opłat:\n"
+        + ", ".join(narzedzia)
+        + "\n"
+    )
 
 
 def _co_powiedzial_uzytkownik_block():
