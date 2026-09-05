@@ -1578,9 +1578,9 @@ zrobione — nie ile Gemini zadeklarowało. Cel może być czymkolwiek
 
 Dostajesz trzy rzeczy:
 - Ostatnie kroki — to WŁASNE relacje Gemini, mogą mijać się z prawdą.
-- PUNKTY ZADAŃ — checklist Pythona: "zweryfikowany dowodem" znaczy,
-  że Python sam to potwierdził (plik na dysku, realny wynik na
-  ekranie); "bez dowodu" znaczy, że tylko Gemini tak napisało —
+- Punkty tego celu policzone przez Pythona: "potwierdzone dowodem"
+  znaczy, że Python sam to sprawdził (plik na dysku, realny wynik na
+  ekranie); "z deklaracji Gemini" znaczy, że tylko ono tak napisało —
   traktuj to jako niepewne, gdzieś pomiędzy faktem a porażką.
 - Co widać teraz na ekranie. Telefon żyje własnym życiem między
   krokami (aplikacje się zamykają, ekran gaśnie), więc gdy wcześniejszy
@@ -2074,7 +2074,10 @@ def _progress_for_role(role_name, snapshot):
     _role_seen_progress[role_name] = teraz
 
     if poprzednio is None:
-        return "\n" + snapshot + "\n"
+        # v220: krótkie wprowadzenie zamiast gołej listy wrzuconej w
+        # środek wiadomości — to są fakty z dysku, więc mówimy, skąd
+        # są, tak jak powiedziałby to człowiek.
+        return "\nNa dysku wygląda to teraz tak:\n" + snapshot + "\n"
 
     zmiany = []
 
@@ -13476,17 +13479,22 @@ def _approaches_summary_block():
     )[:6]
 
     lines = [
-        "Próbowaliśmy już tego ("
-        "zaproponujesz usługę z tej listy, sprawdź, czym skończyła "
-        "się poprzednia próba):"
+        "Tego już próbowaliśmy — gdy któraś z tych usług wróci w "
+        "propozycji, warto najpierw sprawdzić, czym skończył się "
+        "poprzedni raz:"
     ]
 
     for name, entry in ordered:
+
+        _kroki = int(entry.get("kroki", 0))
+        _bledy = int(entry.get("bledy", 0))
+
         lines.append(
-            "- " + name
-            + ": kroków " + str(entry.get("kroki", 0))
-            + ", błędów " + str(entry.get("bledy", 0))
-            + ", ostatnio: " + str(entry.get("ostatnio", "?"))
+            "- " + name + " — "
+            + str(_kroki) + (" krok" if _kroki == 1 else " kroków")
+            + ", " + str(_bledy)
+            + (" błąd" if _bledy == 1 else " błędów")
+            + ", ostatnio " + str(entry.get("ostatnio", "?"))
         )
 
     return "\n".join(lines)
@@ -13536,17 +13544,37 @@ def _checklist_summary_block(skip_task=None):
     failed_items = [i for i in items if i.get("status") == "BLAD"]
     running = sum(1 for i in items if i.get("status") == "W_TOKU")
 
+    # v220: zdanie zamiast tabelki. Wcześniej każda rola dostawała co
+    # krok nagłówek "PUNKTY ZADAŃ (12 łącznie): ..." i baner
+    # "⚠️ NIEDOKOŃCZONE (błąd, WYMAGAJĄ PONOWIENIA...)" — te same
+    # liczby, ale podane jak raport z systemu, a nie jak zdanie od
+    # kolegi, który mówi Ci, gdzie jesteśmy.
+    _stan = []
+
+    if verified:
+        _stan.append(str(verified) + " mamy potwierdzone dowodem")
+
+    if unverified:
+        _stan.append(
+            str(unverified) + " tylko z deklaracji Gemini"
+        )
+
+    if failed_items:
+        _stan.append(str(len(failed_items)) + " się wywaliło")
+
+    if running:
+        _stan.append(str(running) + " jest w toku")
+
     lines = [
-        "PUNKTY ZADAŃ (" + str(len(items)) + " łącznie): "
-        + str(verified) + " zweryfikowanych dowodem, "
-        + str(unverified) + " zadeklarowanych BEZ dowodu, "
-        + str(len(failed_items)) + " błędów, " + str(running) + " w toku."
+        "Z " + str(len(items)) + " punktów tego celu: "
+        + ", ".join(_stan) + "."
+        if _stan else
+        "Punktów tego celu jest " + str(len(items)) + "."
     ]
 
     if failed_items:
         lines.append(
-            "⚠️ NIEDOKOŃCZONE (błąd, WYMAGAJĄ PONOWIENIA — nie "
-            "porzucaj ich na rzecz nowych punktów):"
+            "Do tych warto wrócić, zanim dołożymy nowe:"
         )
         for item in failed_items[-5:]:
 
@@ -13564,12 +13592,15 @@ def _checklist_summary_block(skip_task=None):
     ]
 
     if recent_other:
-        lines.append("Ostatnie inne punkty:")
+        lines.append("Z ostatnich rzeczy:")
         for item in recent_other:
             label = _CHECKLIST_STATUS_LABELS.get(
                 item.get("status"), str(item.get("status", "?"))
             )
-            lines.append("- [" + label + "] " + short(item.get("task", ""), 100))
+            lines.append(
+                "- " + short(item.get("task", ""), 100)
+                + " (" + label + ")"
+            )
 
     return "\n".join(lines)
 
