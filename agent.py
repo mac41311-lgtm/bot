@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v215
+AEL-MINI AUTONOMOUS AGENT v216
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v215")
+    print("             AEL-MINI AUTONOMOUS AGENT v216")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4230,8 +4230,11 @@ def android_summary():
     for attempt in range(2):
 
         try:
-            xml = android_device.dump_hierarchy(
-                compressed=False
+            xml = _android_with_deadline(
+                "android_state",
+                lambda: android_device.dump_hierarchy(
+                    compressed=False
+                )
             )
 
             lines = _parse_hierarchy(xml)
@@ -4576,8 +4579,11 @@ def _android_click_single_text(text):
     try:
         import xml.etree.ElementTree as ET
 
-        xml_data = android_device.dump_hierarchy(
-            compressed=False
+        xml_data = _android_with_deadline(
+            "dump_hierarchy",
+            lambda: android_device.dump_hierarchy(
+                compressed=False
+            )
         )
 
         root = ET.fromstring(xml_data)
@@ -4821,8 +4827,11 @@ def android_long_click_text(text):
     try:
         import xml.etree.ElementTree as ET
 
-        xml_data = android_device.dump_hierarchy(
-            compressed=False
+        xml_data = _android_with_deadline(
+            "dump_hierarchy",
+            lambda: android_device.dump_hierarchy(
+                compressed=False
+            )
         )
 
         root = ET.fromstring(xml_data)
@@ -5168,6 +5177,81 @@ def android_click_resource(resource):
         }
 
 
+# ============================================================
+# ZADEN GEST NIE MOZE ZAWIESIC AGENTA NA 10 MINUT (v216)
+# ============================================================
+#
+# Log 2026-09-05, krok 9-10. W trakcie TRWAJACEGO polaczenia z Beata:
+#
+#   [09:19:48] narzedzie #1: android_swipe
+#   [09:29:48] wynik: {"ok": false, "error": "timed out",
+#                      "duration_s": 600.39}
+#
+# DZIESIEC MINUT. Jedno wywolanie gestu zjadlo dziesiec minut, w
+# srodku zywej rozmowy telefonicznej. Zespol przez ten czas nie
+# istnial, uzytkownik patrzyl na zawieszony terminal.
+#
+# Przyczyna: uiautomator2 rozmawia z urzadzeniem po HTTP i ma
+# wlasny, bardzo dlugi timeout. Gdy Android wchodzi w tryb
+# polaczenia, UI systemowe dostaje priorytet i serwis u2 potrafi
+# po prostu przestac odpowiadac (Kamil w tym samym logu opisal to
+# poprawnie). Wtedy blokujacy call wisi az do swojego limitu.
+#
+# Gest na ekranie trwa ulamek sekundy. Wszystko powyzej kilkunastu
+# sekund to juz nie "wolno", tylko "nie odpowiada" — i lepiej to
+# powiedziec od razu, niz czekac.
+ANDROID_ACTION_TIMEOUT = int(
+    os.environ.get("ANDROID_ACTION_TIMEOUT", "20")
+)
+
+
+def _android_with_deadline(label, fn, timeout=None):
+    """
+    Wykonuje blokujace wywolanie uiautomator2 z twardym limitem
+    czasu. Po przekroczeniu zwraca blad zamiast wisiec.
+
+    Watek zostaje porzucony (nie da sie bezpiecznie zabic watku w
+    Pythonie), ale agent idzie dalej — to jedyna roznica miedzy
+    "krok sie nie udal" a "program stoi dziesiec minut".
+    """
+
+    limit = int(timeout or ANDROID_ACTION_TIMEOUT)
+    wynik = {}
+
+    def _praca():
+        try:
+            wynik["value"] = fn()
+        except Exception as e:
+            wynik["error"] = e
+
+    watek = _threading.Thread(target=_praca, daemon=True)
+    watek.start()
+    watek.join(limit)
+
+    if watek.is_alive():
+
+        log(
+            "ANDROID",
+            label + ": brak odpowiedzi po " + str(limit) + " s — "
+            "przerywam. Ekran systemowy (np. trwajace polaczenie) "
+            "potrafi zablokowac uiautomator2."
+        )
+
+        raise TimeoutError(
+            label + ": urzadzenie nie odpowiedzialo w " + str(limit)
+            + " s. To NIE znaczy, ze gest jest zly — znaczy, ze "
+            "uiautomator2 nie ma teraz dostepu do ekranu (tak "
+            "dziala Android przy aktywnym polaczeniu albo ekranie "
+            "systemowym). Sprobuj czegos, co nie wymaga rysowania "
+            "po ekranie."
+        )
+
+    if "error" in wynik:
+        raise wynik["error"]
+
+    return wynik.get("value")
+
+
 def android_swipe(
     x1,
     y1,
@@ -5190,12 +5274,15 @@ def android_swipe(
             }
 
     try:
-        android_device.swipe(
-            int(x1),
-            int(y1),
-            int(x2),
-            int(y2),
-            duration=float(duration)
+        _android_with_deadline(
+            "android_swipe",
+            lambda: android_device.swipe(
+                int(x1),
+                int(y1),
+                int(x2),
+                int(y2),
+                duration=float(duration)
+            )
         )
 
         return {
@@ -15743,19 +15830,98 @@ def _human_task_summary_lines(summaries):
 # tylko listy tego, co faktycznie tam jest. Ta sama skarga co wyżej:
 # surowy zrzut accessibility-tree wyglądał jak dane maszynowe, nie
 # jak coś, co można ludzko przeczytać.
+# Etykiety, ktore nic nie mowia o tym, CO jest na ekranie: kontenery
+# layoutu, chrome klawiatury, ikony paska stanu. Zawsze sa na
+# poczatku zrzutu i zawsze wypelniaja caly limit.
+_PUSTE_ETYKIETY = (
+    "_container", "_layout", "_view", "_holder", "_root", "_pager",
+    "_widget", "_fragment", "_compose", "_grid", "_row", "_section",
+    "0_resource_name_obfuscated",
+)
+
+_PUSTE_DOKLADNIE = frozenset((
+    "Alarm", "VoLTE", "VoWiFi", "workspace", "launcher", "drag_layer",
+    "ESC", "/", "―", "HOME", "END", "↑", "↓", "←", "→",
+    "Zamknij tryb jednej ręki",
+    "Przełącz klawiaturę na tryb lewej ręki",
+    "Zmień rozmiar lub położenie klawiatury",
+    "Otwórz menu funkcji",
+    "Ta aplikacja nie obsługuje tutaj obrazów",
+))
+
+
 def _labels_only(state_text, limit=400):
+    """
+    Etykiety ekranu dla Eli — ale te, ktore COS ZNACZA.
+
+    v216 -- log 2026-09-05. Ela dwa razy orzekla 0% i "brak dowodu
+    na nawiazanie polaczenia... ekran pokazuje klawiature", podczas
+    gdy w tym samym zrzucie stalo "incall_ui_container" i
+    "Dzwonie...". Telefon w tej chwili DZWONIL.
+    Nie klamala — dostala pierwsze 400 znakow etykiet, a te na
+    Androidzie to zawsze to samo: pasek powiadomien, kontenery
+    layoutu i chrome klawiatury. Prawdziwa tresc ("Dzwonie...",
+    "Beata", "incall") lezy nizej i zawsze wypadala poza limit.
+    Ocena postepu liczona z najmniej informacyjnego kawalka ekranu
+    nie jest ocena, tylko losowaniem.
+    """
 
     if not state_text:
         return ""
 
     labels = []
+    pominiete = 0
+    ekran_nazwany = False
 
     for line in str(state_text).split("\n"):
-        label = line.split(" | ")[0].strip()
-        if label:
-            labels.append(label)
 
-    return short(", ".join(labels), limit)
+        label = line.split(" | ")[0].strip()
+
+        if not label:
+            continue
+
+        if label in _PUSTE_DOKLADNIE:
+            pominiete += 1
+            continue
+
+        if any(m in label for m in _PUSTE_ETYKIETY):
+
+            # PIERWSZY kontener zostawiamy: on jedyny mowi, JAKI to
+            # ekran ("incall_fragment_container", "launcher",
+            # "quick_contact_fragment"). Cala reszta to juz tylko
+            # zagniezdzenia tego samego.
+            if not ekran_nazwany:
+                ekran_nazwany = True
+                labels.append(label)
+                continue
+
+            pominiete += 1
+            continue
+
+        if label.startswith("Powiadomienie z aplikacji"):
+            pominiete += 1
+            continue
+
+        labels.append(label)
+
+    if not labels:
+        # Ekran zlozony wylacznie z kontenerow — wtedy lepsze cokolwiek
+        # niz nic, wiec wracamy do surowej listy.
+        labels = [
+            l.split(" | ")[0].strip()
+            for l in str(state_text).split("\n")
+            if l.split(" | ")[0].strip()
+        ]
+
+    out = short(", ".join(labels), limit)
+
+    if pominiete:
+        out += (
+            " (pominąłem " + str(pominiete) + " etykiet kontenerów "
+            "i paska stanu — nic o nich nie mówią)"
+        )
+
+    return out
 
 
 def estimate_progress(goal, chrome_text=None, android_text=None):
