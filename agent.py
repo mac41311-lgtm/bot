@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v223
+AEL-MINI AUTONOMOUS AGENT v224
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v223")
+    print("             AEL-MINI AUTONOMOUS AGENT v224")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2306,11 +2306,68 @@ def _goal_briefing_for(name):
 
     _goal_briefed.add(name)
 
+    # v224: razem z celem mówimy, czym Python zmierzy jego wykonanie.
+    # Wojtek zostaje przy samym celu — dostaje go jako zwykły człowiek,
+    # bez technicznego tła (patrz consult_wojtek).
+    meta = "" if name == "WOJTEK" else _meta_celu_block(_current_goal_text)
+
     return (
         "CEL, nad którym pracujemy:\n"
         + _current_goal_text
         + "\n\n(Mówię to raz, na początku — dalej rozmawiamy "
         "normalnie i nie będę tego powtarzać.)\n\n"
+        + meta
+    )
+
+
+def _meta_celu_block(goal):
+    """
+    Czym KONKRETNIE Python zmierzy, że cel jest zrobiony.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "gra 3D na
+    Androida", KROK 16): zespół zbudował APK, podpisał go, `adb
+    install` zwrócił "Success" — i DONE zostało odrzucone, bo
+    verify_final() wymaga FINAL_OK.txt oraz pliku .apk. Ani
+    "FINAL_OK.txt", ani "apk_output" nie występowały w ŻADNYM
+    prompcie (sprawdzone), więc zespół nie miał jak się o tych
+    warunkach dowiedzieć inaczej niż przez odrzucone DONE. Meta
+    istniała, ale nikt nie powiedział, gdzie jest.
+    """
+
+    linie = []
+
+    if not _goal_waives_final_ok(goal):
+
+        tresc = _expected_final_ok_content(goal)
+
+        linie.append(
+            "plik FINAL_OK.txt (w " + str(HOME) + ", w "
+            + str(AGENT_DIR) + " albo w " + str(APK_OUTPUT_DIR)
+            + ") z treścią "
+            + (
+                "\"" + tresc + "\""
+                if tresc
+                else "mówiącą wprost, że cel jest zrobiony"
+            )
+            + ", zapisany już w trakcie tego celu"
+        )
+
+    if _goal_needs_apk(goal):
+        linie.append(
+            "gotowy plik .apk zawierający AndroidManifest.xml i "
+            "classes.dex — może leżeć w katalogu projektu, byle "
+            "powstał w trakcie tego celu"
+        )
+
+    if not linie:
+        return ""
+
+    return (
+        "Na koniec Python sprawdza fizycznie, czy cel jest zrobiony, "
+        "i szuka wtedy tego:\n- "
+        + "\n- ".join(linie)
+        + "\nBez tego DONE zostanie odrzucone, choćby reszta się "
+        "udała.\n\n"
     )
 
 
@@ -20454,6 +20511,56 @@ def _expected_final_ok_content(goal):
     return match.group(1).strip()
 
 
+def _swieze_apk_pod_home(po_czasie, pomijane=()):
+    """
+    Pliki .apk pod $HOME zbudowane PO starcie bieżącego celu, od
+    najnowszego. Patrz komentarz przy checku APK w verify_final():
+    bez tego jedyną akceptowaną lokalizacją jest APK_OUTPUT_DIR, o
+    której zespół nigdy się nie dowiaduje.
+
+    Wymóg świeżości jest tu tym samym zabezpieczeniem, co przy
+    FINAL_OK.txt — APK z wcześniejszego, niepowiązanego zadania nie
+    może po cichu zaliczyć nowego celu.
+    """
+
+    pomijane = {str(p) for p in pomijane}
+    znalezione = []
+
+    try:
+        wynik = execute_shell(
+            "find " + shlex.quote(str(HOME))
+            + " -maxdepth 5 -name '*.apk' -not -path '*/.*' "
+            "2>/dev/null",
+            timeout=25
+        )
+    except Exception:
+        return []
+
+    for linia in str(wynik.get("stdout", "") or "").splitlines():
+
+        linia = linia.strip()
+
+        if not linia or linia in pomijane:
+            continue
+
+        kandydat = Path(linia)
+
+        try:
+            if kandydat.stat().st_mtime < po_czasie:
+                continue
+        except Exception:
+            continue
+
+        znalezione.append(kandydat)
+
+    znalezione.sort(
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    )
+
+    return znalezione
+
+
 def verify_final(goal=""):
     """
     Twarda, fizyczna weryfikacja przed zaakceptowaniem DONE.
@@ -20609,45 +20716,84 @@ def verify_final(goal=""):
 
     apk_ok = False
     apk_path = None
-    apk_detail = (
-        "Katalog " + str(APK_OUTPUT_DIR) + " nie istnieje."
-    )
+    apk_detail = "Nie znalazłem żadnego pliku .apk."
+
+    # v224 — ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "gra
+    # 3D na Androida", KROK 16). Zespół zbudował APK, podpisał go i
+    # `adb install` zwrócił "Success" — a DONE zostało odrzucone, bo
+    # ten check patrzył WYŁĄCZNIE do APK_OUTPUT_DIR, a plik leżał w
+    # ~/webview_game/game.apk. Nikt zespołowi nigdy nie powiedział, że
+    # APK ma trafić do ~/agent/apk_output — ta ścieżka nie występuje w
+    # ŻADNYM prompcie (sprawdzone). Cel był osiągnięty i strukturalnie
+    # nie dało się tego rozpoznać.
+    #
+    # Podpisany APK w katalogu projektu jest dokładnie tak samo
+    # prawdziwy jak ten w apk_output. Szukamy go więc wszędzie pod
+    # $HOME, z tym samym wymogiem świeżości, co FINAL_OK.txt (musi
+    # powstać PO starcie tego celu) — żeby APK z zupełnie innego,
+    # wcześniejszego zadania nie mógł po cichu zaliczyć nowego.
+    kandydaci = []
 
     if APK_OUTPUT_DIR.exists():
+        kandydaci.extend(
+            sorted(
+                APK_OUTPUT_DIR.glob("*.apk"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True
+            )
+        )
 
-        apks = sorted(APK_OUTPUT_DIR.glob("*.apk"))
+    kandydaci.extend(_swieze_apk_pod_home(goal_started_at, kandydaci))
 
-        if not apks:
-            apk_detail = "Brak plików .apk w " + str(APK_OUTPUT_DIR)
-        else:
-            apk_path = apks[-1]
+    if not kandydaci:
+        apk_detail = (
+            "Nie znalazłem pliku .apk ani w " + str(APK_OUTPUT_DIR)
+            + ", ani nigdzie indziej pod " + str(HOME)
+            + " (szukałem plików zbudowanych w trakcie tego celu)."
+        )
 
-            listing = execute_shell(
-                "unzip -l " + shlex.quote(str(apk_path)),
-                timeout=20
+    for kandydat in kandydaci[:5]:
+
+        listing = execute_shell(
+            "unzip -l " + shlex.quote(str(kandydat)),
+            timeout=20
+        )
+
+        looks_valid = (
+            listing.get("ok")
+            and "AndroidManifest.xml" in listing.get("stdout", "")
+            and "classes.dex" in listing.get("stdout", "")
+        )
+
+        if not looks_valid:
+            apk_path = apk_path or kandydat
+            apk_detail = (
+                str(kandydat)
+                + " istnieje, ale nie wygląda jak poprawny APK "
+                "(brak AndroidManifest.xml/classes.dex w archiwum "
+                "ZIP)."
+            )
+            continue
+
+        apk_ok = True
+        apk_path = kandydat
+
+        apk_detail = (
+            str(kandydat)
+            + " ("
+            + str(kandydat.stat().st_size)
+            + " B) — zawiera AndroidManifest.xml i classes.dex."
+        )
+
+        if kandydat.parent != APK_OUTPUT_DIR:
+            apk_detail += (
+                " Leży w katalogu projektu, nie w "
+                + str(APK_OUTPUT_DIR)
+                + " — to nie ma znaczenia dla tego, czy APK istnieje "
+                "i jest poprawny."
             )
 
-            looks_valid = (
-                listing.get("ok")
-                and "AndroidManifest.xml" in listing.get("stdout", "")
-                and "classes.dex" in listing.get("stdout", "")
-            )
-
-            if looks_valid:
-                apk_ok = True
-                apk_detail = (
-                    str(apk_path)
-                    + " ("
-                    + str(apk_path.stat().st_size)
-                    + " B) — zawiera AndroidManifest.xml i classes.dex."
-                )
-            else:
-                apk_detail = (
-                    str(apk_path)
-                    + " istnieje, ale nie wygląda jak poprawny APK "
-                    "(brak AndroidManifest.xml/classes.dex w archiwum "
-                    "ZIP)."
-                )
+        break
 
     if not needs_apk and not apk_ok:
         apk_detail = (
