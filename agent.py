@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v231
+AEL-MINI AUTONOMOUS AGENT v232
 
 ARCHITEKTURA:
 
@@ -1278,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v231")
+    print("             AEL-MINI AUTONOMOUS AGENT v232")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10919,8 +10919,15 @@ def load_custom_tools():
     """
 
     try:
+        # v232: __init__.py tworzy tu SAM AGENT (patrz miejsce, gdzie
+        # zakladamy pakiety przy starcie), a potem przy KAZDYM
+        # uruchomieniu narzekal na wlasny plik: "[CUSTOM_TOOL]
+        # ODRZUCONO __init__.py: Brak poprawnego TOOL_NAME". To nie
+        # jest narzedzie i nigdy nim nie bedzie — pomijamy po cichu
+        # zamiast zglaszac jako blad.
         current_files = sorted(
-            CUSTOM_TOOLS_DIR.glob("*.py")
+            p for p in CUSTOM_TOOLS_DIR.glob("*.py")
+            if not p.name.startswith("__")
         )
     except Exception:
         return
@@ -14126,12 +14133,20 @@ def run_next_task():
                     "rzędu w tym celu — za każdym razem z INNYMI "
                     "argumentami (dlatego to NIE jest jeszcze "
                     "automatyczna eskalacja do CODE_REVIEWERA powyżej). "
-                    "Jeśli to zadanie wymaga faktycznej logiki "
+                    "Jeśli ta robota wymaga prawdziwej logiki "
                     "(parsowanie, dopasowywanie danych, obsługa "
-                    "wariantów), rozważ napisanie NARZĘDZIA w "
-                    "custom_tools/ zamiast kolejnej pojedynczej "
-                    "komendy powłoki — patrz kontrakt custom_tools w "
-                    "promptcie ENGINEER."
+                    "wariantów), zamiast kolejnej komendy powłoki "
+                    "opłaca się napisać własne narzędzie: zwykły plik "
+                    ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME "
+                    "(nazwa), TOOL_DESCRIPTION (co robi), "
+                    "TOOL_PARAMETERS (JSON Schema, jak przy "
+                    "pozostałych narzędziach) i funkcją run(...) "
+                    "zwracającą słownik. Python wczytuje taki plik "
+                    "sam, raz na krok, bez restartu — od tej chwili "
+                    "Gemini ma go na liście narzędzi jak każde inne. "
+                    "Kod pisze Bartek, ścieżkę do zapisu podaje MAIN "
+                    "w \"write_engineer_code_to\", a Gemini je potem "
+                    "po prostu uruchamia."
                 )
 
     elif result.get("ok"):
