@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v222
+AEL-MINI AUTONOMOUS AGENT v223
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v222")
+    print("             AEL-MINI AUTONOMOUS AGENT v223")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19995,6 +19995,92 @@ def _extract_commands_from_text(text):
     return znalezione
 
 
+_NIE_MA_PLIKU_MARKERY = (
+    "no such file or directory",
+    "nie ma takiego pliku",
+    "cannot access",
+)
+
+
+def _sciezki_z_komendy(command):
+    """Argumenty komendy, ktore wygladaja na sciezke pliku."""
+
+    znalezione = []
+
+    for arg in str(command or "").split()[1:]:
+
+        if arg.startswith("-") or arg == "|":
+            continue
+
+        if "/" in arg or "." in arg:
+            znalezione.append(arg.strip("'\""))
+
+    return znalezione
+
+
+def _gdzie_naprawde_lezy(command):
+    """
+    Gdy czytajace polecenie zespolu nie znalazlo pliku, szukamy go
+    pod $HOME i mowimy, GDZIE faktycznie jest.
+
+    ZAOBSERWOWANY REALNY PROBLEM (log 2026-09-05, cel "gra 3D na
+    Androida", KROKI 11-17). Gemini zbudowalo classes.dex o 20:06
+    (1240 B, potwierdzone przez termux_file_exists), a mimo to Marek
+    przez SZESC kolejnych krokow powtarzal "classes.dex NIE ISTNIEJE
+    (potwierdzone `ls`)". Bo zespol pisal `ls -la classes.dex` majac
+    w glowie katalog projektu (`cd ~/webview_game && ...` -- tak
+    brzmialy wszystkie ich wlasne polecenia), a my uruchamiamy te
+    sondy przez execute_shell, ktory ma cwd przypiete na $HOME.
+    Plik lezal w ~/webview_game/classes.dex, wiec z $HOME faktycznie
+    "nie istnial" -- i ta NASZA odpowiedz szla do nich jako twardy
+    fakt, ktory przebijal prawdziwy dowod od Gemini. Zespol scigal
+    ducha przez ~15 minut, wielokrotnie powtarzajac dx i rozwazajac
+    d8, podczas gdy APK powstal (game.apk, 12694 B o 20:10) i
+    zainstalowal sie poprawnie.
+
+    Fałszywe "nie ma" jest tu grozniejsze niz brak odpowiedzi: brak
+    odpowiedzi kaze sprawdzic, a falszywe "nie ma" kaze zawrocic.
+    """
+
+    for sciezka in _sciezki_z_komendy(command)[:2]:
+
+        nazwa = Path(sciezka).name
+
+        if not nazwa or nazwa.startswith("*"):
+            continue
+
+        try:
+            # Sciezka WPROST, nie "~": tylda rozwija sie po stronie
+            # powloki, a my juz wiemy, gdzie jest dom — poleganie na
+            # tym, ze powloka zgodzi sie z nami, to dokladnie ta klasa
+            # zalozenia, ktora tu naprawiamy.
+            znaleziska = execute_shell(
+                "find " + shlex.quote(str(HOME))
+                + " -maxdepth 5 -name " + shlex.quote(nazwa)
+                + " -not -path '*/.*' 2>/dev/null | head -3",
+                timeout=15
+            )
+        except Exception:
+            continue
+
+        trafienia = [
+            l.strip()
+            for l in str(znaleziska.get("stdout", "") or "").splitlines()
+            if l.strip()
+        ]
+
+        if trafienia:
+            return (
+                "Szukalem go pod $HOME i JEST — tylko gdzie indziej: "
+                + ", ".join(trafienia)
+                + ". (Moja sonda uruchamia sie w " + str(HOME)
+                + ", wiec sciezka wzgledna liczy sie OD TEGO katalogu, "
+                "a nie od katalogu projektu, w ktorym pracujecie.)"
+            )
+
+    return ""
+
+
 def _answer_readonly_requests(role_texts):
     """
     Wykonuje czytajace polecenia, ktore zespol sam napisal, i zwraca
@@ -20053,10 +20139,24 @@ def _answer_readonly_requests(role_texts):
                     "- `" + command + "` wypisało:\n" + pokazane
                 )
             elif err:
-                odpowiedzi.append(
+
+                tresc = (
                     "- `" + command + "` nie zadziałało:\n"
                     + short(err, 300)
                 )
+
+                # v223: "nie ma pliku" z NASZEJ sondy bywa nieprawdą o
+                # świecie, a prawdą tylko o katalogu, w którym ją
+                # uruchomiliśmy — patrz _gdzie_naprawde_lezy().
+                if any(
+                    m in err.lower() for m in _NIE_MA_PLIKU_MARKERY
+                ):
+                    gdzie = _gdzie_naprawde_lezy(command)
+
+                    if gdzie:
+                        tresc += "\n  " + gdzie
+
+                odpowiedzi.append(tresc)
             else:
                 odpowiedzi.append(
                     "- `" + command + "` wykonało się, ale nic nie "
