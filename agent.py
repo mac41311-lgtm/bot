@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v221
+AEL-MINI AUTONOMOUS AGENT v222
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v221")
+    print("             AEL-MINI AUTONOMOUS AGENT v222")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4084,7 +4084,66 @@ def warn_if_aggressive_oem_battery_management():
         pass
 
 
-def android_summary():
+# v222: jak nazywa się aplikacja, która jest TERAZ na wierzchu.
+#
+# ZAOBSERWOWANY REALNY PROBLEM (log 2026-09-05, cel "zadzwoń do
+# Beaty", KROKI 5-6). W KROKU 5 dialer był otwarty i numer
+# +48514590110 był już wklikany cyfra po cyfrze. Zadanie padło na
+# ostatnim kliknięciu (android_click_resource nie znalazł
+# dialpad_fab_container), a zanim przyszedł KROK 6, telefon wrócił do
+# Termuksa. MAIN kazał wtedy kliknąć w konkretne współrzędne, Gemini
+# wywołało android_state, DOSTAŁO w odpowiedzi hierarchię Termuksa —
+# i mimo to trzy razy kliknęło. W logu widać litery "g", "l", "v",
+# które te kliknięcia wpisały do terminala agenta. Zadanie
+# zaraportowało COMPLETED, a Ola zorientowała się dopiero krok później.
+#
+# Nikt nie kłamał i nikt nie był nieuważny: stan ekranu szedł do nich
+# jako ściana surowej hierarchii zaczynająca się od
+# "activity_termux_root_view | click=false | ...". Żeby wiedzieć, że
+# to Termux, trzeba to najpierw rozszyfrować. Python wie to wprost i
+# od teraz po prostu to mówi — jednym zdaniem, na samej górze.
+_ZNANE_PAKIETY = {
+    "com.termux": "Termux (nasz własny terminal)",
+    "com.google.android.dialer": "Telefon",
+    "com.android.dialer": "Telefon",
+    "com.android.chrome": "Chrome",
+    "com.google.android.googlequicksearchbox": "Google / Asystent",
+    "com.android.settings": "Ustawienia",
+    "com.android.launcher3": "ekran główny",
+}
+
+
+def _foreground_app():
+    """
+    (pakiet, czytelna nazwa) aplikacji na wierzchu albo (None, None),
+    gdy nie da się tego ustalić. Nigdy nie rzuca wyjątkiem — to
+    informacja pomocnicza, jej brak nie może wywrócić właściwej akcji.
+    """
+
+    if android_device is None:
+        return None, None
+
+    try:
+        biezaca = _android_with_deadline(
+            "android_app_current",
+            lambda: android_device.app_current(),
+            timeout=10
+        )
+
+        pakiet = str((biezaca or {}).get("package") or "").strip()
+
+    except Exception:
+        return None, None
+
+    if not pakiet:
+        return None, None
+
+    nazwa = _ZNANE_PAKIETY.get(pakiet)
+
+    return pakiet, (nazwa + " — " + pakiet) if nazwa else pakiet
+
+
+def android_summary(with_header=True):
     """
     Zwraca aktualny stan Androida.
 
@@ -4256,13 +4315,25 @@ def android_summary():
 
             lines = _parse_hierarchy(xml)
 
+            # v222: jedno zdanie o tym, co jest na wierzchu — patrz
+            # _foreground_app(). Idzie PRZED hierarchią, bo to jest
+            # rzecz, którą czytelnik i tak musi z niej wywnioskować.
+            _, _app_label = _foreground_app()
+
+            naglowek = (
+                "Na wierzchu jest teraz: " + _app_label
+                if (_app_label and with_header) else ""
+            )
+
             if not lines:
                 return (
-                    "Android OK — brak "
-                    "czytelnych elementów UI."
-                )
+                    (naglowek + "\n") if naglowek else ""
+                ) + "Android OK — brak czytelnych elementów UI."
 
-            return "\n".join(lines)
+            return (
+                ((naglowek + "\n\n") if naglowek else "")
+                + "\n".join(lines)
+            )
 
         except Exception as e:
 
@@ -4319,7 +4390,12 @@ def android_assert_text_visible(text):
             "error": "Pusty tekst do sprawdzenia."
         }
 
-    summary = android_summary()
+    # v222: bez zdania Pythona o tym, co jest na wierzchu — to
+    # jest funkcja od DOWODU, a jej stog siana ma zawierac
+    # wylacznie to, co realnie widac na ekranie. Wlasna adnotacja
+    # Pythona czytana potem jako dowod to dokladnie ta klasa bledu,
+    # ktora ten kod juz raz naprawial.
+    summary = android_summary(with_header=False)
 
     if summary == "Android niedostępny." or summary.startswith(
         "Android state error:"
@@ -5067,6 +5143,16 @@ def android_tap(x, y):
             "error": "Android niedostępny"
         }
 
+    # v222: kliknięcie w ślepe współrzędne leci w TO, CO JEST NA
+    # WIERZCHU — a agent celuje w aplikację, którą sobie wyobraża.
+    # Gdy na wierzchu jest Termux, klikamy we własny terminal i
+    # wpisujemy do niego znaki (realny log 2026-09-05: trzy takie
+    # kliknięcia zostawiły w terminalu litery "g", "l", "v", a zadanie
+    # zaraportowało sukces). Python zna prawdę przed kliknięciem, więc
+    # ją mówi — i zespół dowiaduje się o tym w tym samym kroku, a nie
+    # dwa kroki później.
+    pakiet, etykieta = _foreground_app()
+
     try:
 
         android_device.click(
@@ -5074,11 +5160,36 @@ def android_tap(x, y):
             int(y)
         )
 
-        return {
+        wynik = {
             "ok": True,
             "x": x,
             "y": y
         }
+
+        if pakiet == "com.termux":
+
+            ostrzezenie = (
+                "To kliknięcie poszło w Termux — czyli w terminal, w "
+                "którym działa sam agent, a nie w aplikację, którą "
+                "chcesz obsłużyć (klikanie tutaj wpisuje znaki do "
+                "terminala). Wyciągnij właściwą aplikację na wierzch "
+                "(android_launch_app), potwierdź to przez "
+                "android_state i dopiero wtedy klikaj we współrzędne."
+            )
+
+            wynik["foreground_warning"] = ostrzezenie
+
+            _pending_team_warnings.append(
+                "Kliknięcie we współrzędne ("
+                + str(x) + ", " + str(y)
+                + ") poszło w Termux, a nie w obsługiwaną aplikację — "
+                "na wierzchu był terminal agenta."
+            )
+
+        elif etykieta:
+            wynik["foreground"] = etykieta
+
+        return wynik
 
     except Exception as e:
 
