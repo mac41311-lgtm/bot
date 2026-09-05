@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v218
+AEL-MINI AUTONOMOUS AGENT v219
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v218")
+    print("             AEL-MINI AUTONOMOUS AGENT v219")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -17143,6 +17143,14 @@ def consult_team(
     # POPRZEDNIEJ naradzie — patrz _remember_team_file_questions().
     # To jest ta "druga wiadomosc" w rozmowie: w jednej padlo
     # pytanie/blad, w tej pada odpowiedz.
+    delegacja_block = (
+        "\nUżytkownik w celu powiedział wprost, żeby to wymyślić / "
+        "wybrać samemu. Nie układajcie wariantów do jego wyboru i "
+        "nie pytajcie go, którą wersję woli — on już odpowiedział: "
+        "dowolną. Wybierzcie jedną i wykonajcie.\n"
+        if _goal_delegates_decision(goal) else ""
+    )
+
     _file_answers = _team_file_answers_block()
     file_answers_block = ("\n" + _file_answers + "\n") if _file_answers else ""
 
@@ -17396,6 +17404,10 @@ def consult_team(
             # tym szablonem, ktorego mielismy sie pozbyc (v191/v193).
             _only_if_new(role_name, "topic", topic_line + "\n\n")
             if topic_line else "",
+            # v219: gdy cel wprost oddaje wybor agentowi ("wymysl
+            # cos"), mowimy to raz kazdej roli — zanim ktokolwiek
+            # zacznie ukladac warianty do wyboru dla uzytkownika.
+            _only_if_new(role_name, "delegacja", delegacja_block),
             _only_if_new(role_name, "files", file_answers_block),
             # v208: nie caly listing co krok, tylko roznica —
             # patrz _progress_for_role().
@@ -20406,6 +20418,113 @@ _TASK_IS_USER_QUESTION_RE = re.compile(
 )
 
 
+# ============================================================
+# CEL MOWI "WYMYSL" -- WIEC NIE PYTAJ, CO WYMYSLIC (v219)
+# ============================================================
+#
+# Log 2026-09-05, cel doslownie: "napisz beacie sms wymysl cos".
+#
+# Kroki 1, 2 i 3 -- piec minut i pietnascie zapytan do DeepSeeka --
+# poszly na to, zeby zapytac uzytkownika, KTORY SMS wybiera:
+#
+#   MAIN:   "Przedstaw je uzytkownikowi i popros o wybor 1, 2 lub 3"
+#   Tomek:  "Odpowiedz mi jednym slowem: A, B lub C"
+#   MAIN:   "Przypomnij uzytkownikowi... popros, zeby odpisal jedna
+#            literka"
+#   Tomek:  "Krazymy w kolko, bo nie padla Twoja decyzja"
+#
+# Oba te TASK-i skonczyly sie zerem wywolan narzedzi -- nic sie nie
+# wydarzylo, bo Gemini nie ma jak zapytac czlowieka i poczekac.
+# Dopiero w kroku 4 Bartek napisal "przecinam te petle" i wyslal.
+#
+# A uzytkownik w samym celu powiedzial "WYMYSL COS". Oddal te decyzje.
+# Pytanie go o nia nie jest ostroznoscia, tylko zwracaniem mu z
+# powrotem roboty, ktora zlecil.
+#
+# Python czyta cel i wie to od pierwszego kroku. Wiec mowi.
+
+_GOAL_DELEGATES_RE = re.compile(
+    r"\b("
+    r"wymy[sś]l\w*|"
+    r"sam\s+(?:zdecyduj|wybierz|dobierz|napisz)|"
+    r"sama\s+(?:zdecyduj|wybierz)|"
+    r"zdecyduj\s+sam\w*|"
+    r"wybierz\s+sam\w*|"
+    r"co[śs]\s+(?:ciekawego|fajnego|milego|[śs]miesznego)|"
+    r"cokolwiek|"
+    r"dowoln\w+|"
+    r"zaproponuj\w*|"
+    r"tw[oó]j\s+wyb[oó]r|"
+    r"nie\s+pytaj"
+    r")\b",
+    re.IGNORECASE
+)
+
+# Slownictwo TASK-a, ktory oddaje decyzje z powrotem czlowiekowi.
+_TASK_ASKS_TO_CHOOSE_RE = re.compile(
+    r"("
+    r"popro[śs]\w*\s+(?:go\s+)?o\s+wyb[oó]r|"
+    r"popro[śs]\w*,?\s+[zż]eby\s+(?:wybra|odpisa|poda)|"
+    r"niech\s+(?:wybierze|zdecyduje|napisze,?\s+kt[oó]r)|"
+    r"wybierz\s+jeden\s+z|"
+    r"kt[oó]r[ya]\s+z\s+(?:tych\s+)?(?:opcji|wariant[oó]w|propozycji)|"
+    r"odpowiedz\s+(?:mi\s+)?(?:jedn\w+\s+)?"
+    r"(?:liter|cyfr|s[lł]ow)|"
+    # Najpewniejszy sygnal: wyliczenie etykiet do wyboru
+    # ("1, 2 lub 3", "A, B albo C") -- tak wygladalo to w logu.
+    r"[A-Za-z0-9]\s*,\s*[A-Za-z0-9]\s+(?:lub|albo|czy)\s+"
+    r"[A-Za-z0-9]\b|"
+    r"przedstaw\s+\w*\s*(?:u[zż]ytkownikowi|mu)\s+\w*\s*"
+    r"(?:opcje|warianty|propozycje)|"
+    r"czekamy\s+(?:tylko\s+)?na\s+(?:tw[oó]j\s+)?wyb[oó]r|"
+    r"popro[śs]\w*\s+o\s+decyzj"
+    r")",
+    re.IGNORECASE
+)
+
+
+def _goal_delegates_decision(goal):
+    """
+    Czy uzytkownik w CELU oddal wybor agentowi ("wymysl cos",
+    "zdecyduj sam", "cokolwiek", "zaproponuj").
+    """
+
+    return bool(_GOAL_DELEGATES_RE.search(str(goal or "")))
+
+
+def _task_hands_decision_back(task_text):
+    """Czy TASK odsyla decyzje z powrotem do czlowieka."""
+
+    return bool(_TASK_ASKS_TO_CHOOSE_RE.search(str(task_text or "")))
+
+
+def _decision_returns_delegated_choice(decision, goal):
+    """
+    TASK, ktory prosi czlowieka o wybor, chociaz cel ten wybor JEMU
+    oddal. Zwraca tekst faktu albo None.
+    """
+
+    if str(decision.get("type", "")).upper() != "TASK":
+        return None
+
+    if not _goal_delegates_decision(goal):
+        return None
+
+    task_text = str(decision.get("task", ""))
+
+    if not _task_hands_decision_back(task_text):
+        return None
+
+    return (
+        "Ten TASK prosi użytkownika, żeby wybrał jedną z opcji — a "
+        "on w celu napisał wprost, żeby wymyślić to samemu. Oddaje "
+        "mu więc z powrotem robotę, którą zlecił. Gemini i tak nie "
+        "ma jak zapytać człowieka i poczekać na odpowiedź, więc taki "
+        "krok kończy się zerem wywołań narzędzi i cel nie rusza się "
+        "z miejsca. Wybierz jedną wersję sam i KAŻ JĄ WYKONAĆ."
+    )
+
+
 def _decision_task_is_user_question(decision):
 
     if str(decision.get("type", "")).upper() != "TASK":
@@ -21576,6 +21695,49 @@ Zwróć tylko JSON.
             # start, zamiast natychmiast wpadać w tę samą blokadę na
             # kolejnym kroku.
             _critic_block_streak = 0
+
+        # ------------------------------------------------------
+        # CEL MÓWI "WYMYŚL" — WIĘC NIE PYTAJ, CO WYMYŚLIĆ (v219)
+        # ------------------------------------------------------
+        # Patrz _decision_returns_delegated_choice(). Taki TASK i tak
+        # skończyłby się zerem wywołań narzędzi (Gemini nie ma jak
+        # zapytać człowieka i poczekać) — w logu 2026-09-05 zdarzyło
+        # się to DWA RAZY z rzędu i kosztowało pięć minut.
+        # Nie zamieniamy go na NEED_USER_LOGIN, bo tu nie brakuje
+        # ŻADNEJ informacji od człowieka — on ją już dał, mówiąc
+        # "wymyśl coś". Odrzucamy krok i mówimy zespołowi dlaczego.
+        _oddaje_wybor = _decision_returns_delegated_choice(
+            decision, goal
+        )
+
+        if _oddaje_wybor:
+
+            log(
+                "MAIN",
+                "TASK odsyła wybór do użytkownika, choć cel mówi "
+                "\"wymyśl sam\" — odrzucam ten krok, zanim spali "
+                "kolejny obieg na zero wywołań narzędzi."
+            )
+
+            _pending_team_warnings.append(
+                "python [cel_oddal_wam_wybor]: " + _oddaje_wybor
+            )
+
+            decision = {
+                "type": "ASK",
+                "ask_role": "PLANNER",
+                "ask_question": (
+                    "Cel mówi wprost, żeby wymyślić to samemu, a "
+                    "poprzedni krok odsyłał wybór z powrotem do "
+                    "użytkownika. Wybierz JEDNĄ wersję — tę, którą "
+                    "sam uważasz za najlepszą — i powiedz, jaką "
+                    "komendą ją wykonać. Nie przedstawiaj już "
+                    "wariantów do wyboru."
+                ),
+                "reason": _oddaje_wybor,
+            }
+
+            dtype = "ASK"
 
         # ------------------------------------------------------
         # TASK, KTÓRY W ISTOCIE JEST PYTANIEM DO CZŁOWIEKA (v188)
