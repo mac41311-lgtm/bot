@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v228
+AEL-MINI AUTONOMOUS AGENT v229
 
 ARCHITEKTURA:
 
@@ -1258,7 +1258,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v228")
+    print("             AEL-MINI AUTONOMOUS AGENT v229")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19526,6 +19526,97 @@ _GOAL_FILE_NONEXISTENCE_MARKERS = (
 # blokuje ZADNEGO celu, wiec nie ma juz z czego zwalniac.
 
 
+# Slowa z celu, ktore nie niosa wymagania.
+#
+# Dwie grupy, obie wyszly z testu na prawdziwych celach uzytkownika.
+# Pierwsza to sklejka zdania. Druga, wazniejsza, to CZASOWNIKI
+# ROZKAZUJACE — czyli sposob, w jaki czlowiek formuluje prosbe
+# ("napisz gre", "uruchom jako APK", "zadzwon do Beaty"). Zespol
+# realizuje je zawsze innymi slowami ("skompiluj", "zbuduj",
+# "termux-telephony-call"), wiec porownywanie ich doslownie dawalo
+# sam falszywy alarm. Wymaganie siedzi w tym, CZEGO dotyczy prosba,
+# nie w tym, jakim czasownikiem ja wypowiedziano.
+_NIE_NIOSA_WYMAGANIA = frozenset((
+    # sklejka zdania
+    "dokladnie", "dokładnie", "wszystko", "prosze", "proszę",
+    "powinien", "powinno", "jeszcze", "zeby", "żeby", "ktory",
+    "który", "ktora", "która", "ktore", "które", "takze", "także",
+    "potem", "teraz", "bardzo", "troche", "trochę", "chyba",
+    # czasowniki rozkazujace
+    "napisz", "napisać", "napisac", "uruchom", "uruchomić",
+    "uruchomic", "zadzwoń", "zadzwon", "znajdz", "znajdź",
+    "sprawdz", "sprawdź", "otworz", "otwórz", "pobierz",
+    "zainstaluj", "wyslij", "wyślij", "stworz", "stwórz",
+    "przygotuj", "wykonaj", "pokaz", "pokaż", "ustaw", "dodaj",
+    "usun", "usuń", "popraw", "zbuduj", "zrobic", "zrobić",
+))
+
+
+def _czego_nikt_nie_tknal(goal, punkty, ile=5):
+    """
+    Slowa z CELU, ktore nie pojawily sie w NICZYM, co zespol
+    faktycznie zrobil.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05). Cel brzmial
+    "zadzwon do Beata z itegracja glosowa czyli asystentem glosowym a
+    numer znajdz na telefonie" — trzy rzeczy. Zespol znalazl numer i
+    zadzwonil, a o asystencie glosowym zapomnial. I nie ze
+    niezrozumienia: w KROKU 1 Wojtek trafil w to idealnie ("asystent
+    glosowy ma wydzwonic do Beaty"), Kamil potwierdzil — ale pierwszy
+    plan Tomka zwinal cel do jednej komendy, ktora znajduje numer i
+    dzwoni, i od tego momentu slowo "glos" nie padlo juz ani razu.
+    Marek ocenial ten plan trzy razy: sprawdza, czy plan jest
+    WYKONALNY, nigdy czy REALIZUJE CEL. MAIN oglosil DONE cytujac
+    samo polaczenie.
+
+    Nic w calej petli nie porownuje celu z tym, co zrobiono:
+    checklista sledzi zadania, ktore zespol sam wymyslil, a
+    weryfikacja patrzy na dowody fizyczne.
+
+    Porownujemy wiec rdzenie slow (5 znakow radzi sobie z polska
+    odmiana: "glosowa"/"glosowym" to ten sam "gloso"). To jest z
+    zalozenia zgrubne i czasem wskaze cos, co zespol jednak zrobil,
+    tylko innymi slowami — dlatego wynik idzie do narady jako PYTANIE,
+    nigdy jako blokada.
+    """
+
+    stog = " ".join(
+        " ".join([
+            str(p.get("task") or ""),
+            str(p.get("success_condition") or ""),
+            str(p.get("evidence") or ""),
+            " ".join(
+                str(w.get("tool") or "")
+                for w in (p.get("tool_trace") or [])
+                if isinstance(w, dict)
+            ),
+        ])
+        for p in (punkty or [])
+        if isinstance(p, dict)
+    ).lower()
+
+    if not stog.strip():
+        # Nic jeszcze nie zrobiono — nie ma z czym porownywac.
+        return []
+
+    nietkniete = []
+
+    for slowo in re.findall(
+        r"[a-ząćęłńóśźż]{6,}",
+        str(goal or "").lower()
+    ):
+
+        if slowo in _NIE_NIOSA_WYMAGANIA or slowo in nietkniete:
+            continue
+
+        if slowo[:5] in stog:
+            continue
+
+        nietkniete.append(slowo)
+
+    return nietkniete[:ile]
+
+
 def _extract_goal_mentioned_files(goal):
     """
     Wyciąga z treści CELU/warunku sukcesu ścieżki plików wprost
@@ -23242,6 +23333,30 @@ Zwróć tylko JSON.
                 "reason",
                 ""
             )
+
+            # v229: zanim uznamy cel za zamkniety — czy przypadkiem
+            # nie zgubilismy po drodze kawalka tego, o co prosil
+            # uzytkownik? Patrz _czego_nikt_nie_tknal(). To GLOS W
+            # NARADZIE, nie blokada: mowimy zespolowi i uzytkownikowi,
+            # a decyzja zostaje po ich stronie.
+            _nietkniete = _czego_nikt_nie_tknal(
+                goal,
+                _load_progress_checklist()
+            )
+
+            if _nietkniete:
+
+                _glos = (
+                    "W celu pada jeszcze: "
+                    + ", ".join("„" + s + "”" for s in _nietkniete)
+                    + " — a nie widzę tego w żadnym z wykonanych "
+                    "zadań. Robimy to jeszcze, czy świadomie "
+                    "odpuszczamy?"
+                )
+
+                log("MAIN", _glos)
+
+                _pending_team_warnings.append(_glos)
 
             # ----------------------------------------------------
             # MAIN mówi DONE. Nie wierzymy mu na słowo — sprawdzamy
