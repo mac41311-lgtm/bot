@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v213
+AEL-MINI AUTONOMOUS AGENT v214
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v213")
+    print("             AEL-MINI AUTONOMOUS AGENT v214")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2268,6 +2268,9 @@ def _set_current_goal(goal):
     _reset_code_review_budget()
     _reset_critic_objection_memory()
     _reset_progress_memory()
+
+    global _main_override_for_critic
+    _main_override_for_critic = None
 
 
 def _goal_briefing_for(name):
@@ -15941,6 +15944,33 @@ _critic_verdict_for_engineer = None
 # niego oczekuje.
 _main_decision_for_team = None
 
+# ============================================================
+# MAIN PRZESTAJE BYC BOGIEM (v214)
+# ============================================================
+#
+# Uzytkownik: "mamy juz normalna komunikacje? rozmowe? bez bogow?
+# ktorymi ciagle sa MAIN i Ola — jeszcze popraw".
+#
+# Ma racje i jest to nawet opisane w komentarzu obok: "Marek
+# zablokowal 10 z 13 krokow, a MAIN za kazdym razem i tak tworzyl
+# TASK". W logu 2026-09-04 MAIN napisal wprost: "Odrzucam blokade
+# Marka jako nietrafiona" — i to byl koniec tematu. Marek nigdy nie
+# dostal tej odpowiedzi. Blokowal dalej w prozne, MAIN dalej
+# nadpisywal.
+#
+# Wczesniejsza proba (CRITIC_STREAK_ESCALATION) kazala MAIN-owi
+# NAPISAC uzasadnienie w polu "reason". Napisal. Tylko ze to
+# uzasadnienie szlo do wspolnego bloku "CO MAIN POSTANOWIL",
+# adresowanego do wszystkich i do nikogo. Recenzent nie dostawal
+# odpowiedzi na SWOJ zarzut.
+#
+# Dekret to nie rozmowa. Skoro MAIN idzie dalej mimo zastrzezenia,
+# to jego powod jest ODPOWIEDZIA DLA MARKA i tak ma do niego
+# trafic — imiennie, z pytaniem, co on na to. Mechanizm jest ten
+# sam, ktorym Tomek i Bartek odpowiadaja Markowi od v195. Kosztuje
+# ZERO dodatkowych zapytan: Marek i tak jest pytany w kazdym kroku.
+_main_override_for_critic = None
+
 # Ile razy Z RZĘDU Marek/CRITIC zgłosił zastrzeżenie (BLOKUJ/
 # OSTRZEŻENIE), a MAIN mimo to poszedł dalej.
 #
@@ -16663,6 +16693,7 @@ def consult_team(
     global _critic_verdict_for_planner
     global _critic_verdict_for_engineer
     global _main_decision_for_team
+    global _main_override_for_critic
     global _critic_block_streak
     global _critic_question
     global _answer_for_critic
@@ -17217,7 +17248,9 @@ def consult_team(
             extra=(
                 wojtek_extra
                 + (
-                    "\n\nOD OLI (tylko dla Ciebie): "
+                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
+                    "sprawdzony fakt — zweryfikuj, zanim na tym "
+                    "zbudujesz krok): "
                     + ola_role_callouts["RESEARCHER"]
                     if "RESEARCHER" in ola_role_callouts else ""
                 )
@@ -17303,7 +17336,9 @@ def consult_team(
                 + critic_feedback_block
                 + planner_question_block
                 + (
-                    "\n\nOD OLI (tylko dla Ciebie): "
+                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
+                    "sprawdzony fakt — zweryfikuj, zanim na tym "
+                    "zbudujesz krok): "
                     + ola_role_callouts["PLANNER"]
                     if "PLANNER" in ola_role_callouts else ""
                 )
@@ -17399,7 +17434,9 @@ def consult_team(
                 + engineer_question_block
                 + engineer_value_handoff
                 + (
-                    "\n\nOD OLI (tylko dla Ciebie): "
+                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
+                    "sprawdzony fakt — zweryfikuj, zanim na tym "
+                    "zbudujesz krok): "
                     + ola_role_callouts["ENGINEER"]
                     if "ENGINEER" in ola_role_callouts else ""
                 )
@@ -17444,6 +17481,24 @@ def consult_team(
     # Recenzent musi widziec DOKLADNIE te fakty, na ktorych zbudowano
     # to, co ocenia. Inaczej nie recenzuje planu, tylko wlasna
     # niewiedze.
+    # v214: MAIN poszedl dalej mimo zastrzezenia Marka — jego powod
+    # jest ODPOWIEDZIA DLA NIEGO, nie komunikatem dla wszystkich.
+    # Patrz _main_override_for_critic.
+    main_override_block = ""
+
+    if _main_override_for_critic:
+
+        main_override_block = (
+            "\n\nMAIN poszedł dalej mimo Twojego zastrzeżenia i "
+            "tak to uzasadnił:\n"
+            + _main_override_for_critic
+            + "\n\nJeśli to Cię przekonuje — powiedz wprost i zdejmij "
+            "zastrzeżenie. Jeśli nie — napisz, czego konkretnie w tym "
+            "uzasadnieniu brakuje. Nie powtarzaj samego zarzutu."
+        )
+
+        _main_override_for_critic = None
+
     results["CRITIC"] = deepseek(
         "CRITIC",
         _team_context(
@@ -17457,8 +17512,11 @@ def consult_team(
                     _current_project_file_block()
                 )
                 + critic_answer_block
+                + main_override_block
                 + (
-                    "\n\nOD OLI (tylko dla Ciebie): "
+                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
+                    "sprawdzony fakt — zweryfikuj, zanim na tym "
+                    "zbudujesz krok): "
                     + ola_role_callouts["CRITIC"]
                     if "CRITIC" in ola_role_callouts else ""
                 )
@@ -21011,6 +21069,18 @@ albo:
             ),
             700
         )
+
+        # v214: jesli Marek ma ZYWE zastrzezenie, a MAIN mimo to
+        # zleca prace — to jego "reason" jest odpowiedzia NA TO
+        # zastrzezenie. Idzie do Marka imiennie w nastepnym kroku,
+        # zamiast rozplynac sie we wspolnym bloku dla wszystkich.
+        if _critic_block_streak > 0 and dtype in ("TASK", "PATCH", "ASK"):
+
+            globals()["_main_override_for_critic"] = short(
+                str(decision.get("reason", "")).strip()
+                or "(MAIN nie podal powodu)",
+                900
+            )
 
         # ------------------------------------------------------
         # POWTARZANIE
