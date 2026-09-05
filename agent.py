@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v214
+AEL-MINI AUTONOMOUS AGENT v215
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v214")
+    print("             AEL-MINI AUTONOMOUS AGENT v215")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2097,8 +2097,7 @@ def _progress_for_role(role_name, snapshot):
         return ""
 
     return (
-        "\nOd ostatniego razu zmieniło się tylko tyle (reszta stanu "
-        "bez zmian — nie wracaj do niej):\n"
+        "\nOd ostatniego razu zmieniło się tyle (reszta bez zmian):\n"
         + "\n".join(zmiany)
         + "\n"
     )
@@ -3356,14 +3355,14 @@ def _length_notice_for(name):
     ile = _role_last_cut_len.get(name, 0)
 
     return (
-        "[FAKT OD PYTHONA: Twoja poprzednia odpowiedź została "
+        "Uwaga ode mnie: Twoja poprzednia odpowiedź została "
         "ucięta po " + str(ile) + " znakach — to limit długości "
         "odpowiedzi w tej sesji, nie Twój błąd i nie niedbalstwo. "
         "Nie przepraszaj za to i nie zaczynaj od nowa. Po prostu "
         "zmieść się krócej: jeden krok albo jedna sprawa na "
         "wiadomość, bez powtarzania tego, co już ustalone. Jeśli "
         "masz do przekazania więcej, powiedz na końcu, że ciąg "
-        "dalszy podasz w następnej wiadomości.]\n\n"
+        "dalszy podasz w następnej wiadomości.)\n\n"
     )
 
 
@@ -13244,7 +13243,7 @@ def _approaches_summary_block():
     )[:6]
 
     lines = [
-        "CZEGO JUŻ PRÓBOWALIŚMY (rejestr Pythona — zanim "
+        "Próbowaliśmy już tego ("
         "zaproponujesz usługę z tej listy, sprawdź, czym skończyła "
         "się poprzednia próba):"
     ]
@@ -14316,15 +14315,13 @@ def _role_output_for_team(role_label, text, limit, role_key=None):
 
         if _pelna_dlugosc > int(limit):
             out += (
-                "\n\n[FAKT OD PYTHONA: powyższe to PIERWSZE "
+                "\n\n(Skróciłem to — powyżej masz pierwsze "
                 + str(int(limit)) + " z " + str(_pelna_dlugosc)
-                + " znaków tej wypowiedzi. To PYTHON ją skrócił "
-                "przy przekazywaniu Ci jej — autor napisał ją do "
-                "końca i reszta istnieje. Urwanie w połowie zdania "
-                "czy kroku NIE jest jego błędem i NIE jest powodem "
-                "do blokady. Oceniaj to, co widzisz; jeśli "
-                "potrzebujesz akurat brakującego fragmentu, poproś "
-                "wprost o sam ten fragment.]"
+                + " znaków. Skróciłem to ja przy przekazywaniu — "
+                "autor napisał całość i reszta istnieje, więc "
+                "urwanie w pół zdania nie jest jego błędem ani "
+                "powodem do blokady. Jeśli brakuje Ci konkretnego "
+                "fragmentu, poproś o niego wprost.)"
             )
 
         # v201: jesli DeepSeek uciął tę wypowiedź w połowie, odbiorca
@@ -14333,23 +14330,22 @@ def _role_output_for_team(role_label, text, limit, role_key=None):
         # z rzedu (patrz _role_truncated).
         if role_key and str(role_key) in _role_truncated:
             out += (
-                "\n\n[FAKT OD PYTHONA: ta wypowiedź została URWANA "
-                "W POŁOWIE przez DeepSeeka (limit długości "
-                "odpowiedzi), a nie przez jej autora. Brakującego "
-                "końca NIE MA — nikt go nie ukrywa i nikt nie był "
-                "niedbały. Oceniaj to, co jest, albo poproś wprost o "
-                "sam brakujący fragment. NIE blokuj z powodu samego "
-                "urwania.]"
+                "\n\n(Tę wypowiedź urwało w połowie po stronie "
+                "DeepSeeka — to limit długości odpowiedzi, nie autor. "
+                "Brakującego końca po prostu nie ma, nikt go nie "
+                "ukrywa. Oceniaj to, co jest, albo poproś o sam "
+                "brakujący fragment; samo urwanie nie jest powodem "
+                "do blokady.)"
             )
 
         return out
 
     return (
-        "[FAKT OD PYTHONA: " + role_label + " ZOSTAŁ zapytany w tym "
-        "kroku, ale odpowiedział PUSTYM tekstem (ponowienie też nic "
-        "nie dało — najpewniej chwilowy problem po stronie sesji "
-        "DeepSeeka). To NIE jest jego opinia ani zgoda — tej opinii "
-        "po prostu NIE MA. Nie traktuj tego jako 'brak zastrzeżeń'.]"
+        "(" + role_label + " został zapytany w tym kroku, ale "
+        "odpowiedział pustym tekstem — ponowienie też nic nie dało, "
+        "najpewniej chwilowy problem po stronie sesji DeepSeeka. To "
+        "nie jest jego opinia ani zgoda: tej opinii po prostu nie ma. "
+        "Nie czytaj tego jako 'brak zastrzeżeń'.)"
     )
 
 
@@ -14389,11 +14385,11 @@ def _engineer_for_team(text, limit=4000):
     # a jego wypowiedz to zwykle KOD, wiec urwanie jest tu jeszcze
     # grozniejsze niz w prozie.
     _cut = (
-        "\n\n[FAKT OD PYTHONA: ta wypowiedź została URWANA W POŁOWIE "
+        "\n\n(Tę wypowiedź urwało w połowie "
         "przez DeepSeeka (limit długości odpowiedzi), nie przez "
         "Bartka. Jeśli kod poniżej wygląda na niedokończony — bo "
         "jest. Poproś wprost o brakujący fragment zamiast blokować "
-        "całość.]"
+        "całość.)"
         if "ENGINEER" in _role_truncated else ""
     )
 
@@ -14429,10 +14425,10 @@ def _engineer_for_team(text, limit=4000):
             rebuilt.append(short(part, prose_slice))
 
     return "".join(rebuilt) + _cut + (
-        "\n\n[FAKT OD PYTHONA: proza powyzej moze byc skrocona, ale "
-        "KAZDY blok kodu ```...``` jest tu KOMPLETNY — nic z kodu nie "
-        "zostalo uciete. Python ma go w calosci i potrafi zapisac go "
-        "do pliku sam, bez niczyjego przepisywania.]"
+        "\n\n(Prozę powyżej mogłem skrócić, ale każdy blok kodu "
+        "```...``` jest tu kompletny — z kodu nie uciąłem nic. Mam "
+        "go w całości i zapiszę do pliku sam, nikt nie musi go "
+        "przepisywać.)"
     )
 
 
@@ -16123,14 +16119,14 @@ def _critic_repeats_objection(text):
     )
 
     return (
-        "[FAKT OD PYTHONA: to jest ten SAM zarzut Marka po raz "
+        "(To ten sam zarzut Marka po raz "
         + str(_critic_same_objection_count) + " z rzędu — "
         "porównałem treść jego poprzednich i obecnej uwagi. "
         "Dotychczasowe tłumaczenia go nie zdjęły, więc powtórzenie "
         "ich jeszcze raz nic nie zmieni. Zrób jedno z dwóch: albo "
         "USUŃ przyczynę zarzutu, albo napisz WPROST, że uważasz go "
         "za nietrafiony i dlaczego — tak, żeby Marek miał się do "
-        "czego odnieść.]"
+        "czego odnieść.)"
     )
 
 
@@ -16726,11 +16722,9 @@ def consult_team(
 
         if tool_warnings:
             tool_hint += (
-                "\n\n⚠️ SYGNAŁY Z NARZĘDZI W OSTATNIM ZADANIU "
-                "(wykryte automatycznie w kodzie, NIEZALEŻNIE od "
-                "tego, co Gemini napisało w swoim raporcie — "
-                "traktuj jako fakty, nawet jeśli raport poniżej "
-                "brzmi na sukces):\n"
+                "\n\nPrzy okazji zauważyłem w narzędziach to "
+                "(sprawdzone w kodzie, niezależnie od raportu "
+                "Gemini):\n"
                 + "\n".join(
                     "- " + str(w) for w in tool_warnings[:8]
                 )
@@ -16742,7 +16736,7 @@ def consult_team(
     # kolejnych krokach jako "stare rzeczy".
     if _pending_team_warnings:
         tool_hint += (
-            "\n\n⚠️ ZAUWAŻONE PRZEZ PYTHONA (fakty, nie opinie):\n"
+            "\n\nZauważyłem jeszcze to:\n"
             + "\n".join(
                 "- " + str(w) for w in _pending_team_warnings[:8]
             )
@@ -16923,9 +16917,7 @@ def consult_team(
 
         if _wypisane:
             success_values_block = (
-                "\n\nDOKŁADNIE TO, CO WYPISAŁO NARZĘDZIE (surowe, "
-                "nieprzetworzone — jeśli szukacie jakiejś wartości, "
-                "ona jest tutaj):\n"
+                "\n\nNarzędzie wypisało dokładnie to:\n"
                 + _wypisane
             )
 
@@ -16940,8 +16932,7 @@ def consult_team(
         )
     ):
         error_details_block = (
-            "\n\nDOKŁADNIE TO, CO ZWRÓCIŁO NARZĘDZIE (surowe, "
-            "nieprzetworzone — na tym opieraj poprawkę):\n"
+            "\n\nNarzędzie zwróciło dokładnie to:\n"
             + _condense_last_result_for_team(
                 last_result_for_team,
                 limit=1400
@@ -16952,8 +16943,7 @@ def consult_team(
     # _main_decision_for_team. Bez tego zespół proponuje w próżnię:
     # nie wie, czy jego plan został użyty, zmieniony, czy odrzucony.
     main_decision_block = (
-        "\nCO MAIN POSTANOWIŁ PO POPRZEDNIEJ NARADZIE (jeśli poszedł "
-        "inną drogą niż proponowaliście, weź to pod uwagę teraz):\n"
+        "\nPo ostatniej naradzie MAIN zdecydował tak:\n"
         + _main_decision_for_team
         + "\n"
     ) if _main_decision_for_team else ""
@@ -17016,14 +17006,14 @@ def consult_team(
             _progress_for_role(role_name, progress_snapshot),
             _only_if_new(role_name, "checklist", checklist_block),
             _only_if_new(role_name, "main_decision", main_decision_block),
-            "\nOSTATNI RAPORT:\n" + report_body
+            "\nCo się właśnie stało:\n" + report_body
             + success_values_block + error_details_block + "\n",
             _only_if_new(role_name, "tool_hint", tool_hint),
         ]
         return "".join(p for p in pieces if p)
 
     chrome_block = (
-        "\nAKTUALNY CHROME:\n"
+        "\nW Chrome jest teraz:\n"
         + short(
             chrome_text if chrome_text is not None else chrome_summary(),
             2000
@@ -17032,7 +17022,7 @@ def consult_team(
     )
 
     android_block = (
-        "\nAKTUALNY ANDROID:\n"
+        "\nNa ekranie telefonu jest teraz:\n"
         + short(
             android_text if android_text is not None else android_summary(),
             2000
@@ -17248,9 +17238,8 @@ def consult_team(
             extra=(
                 wojtek_extra
                 + (
-                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
-                    "sprawdzony fakt — zweryfikuj, zanim na tym "
-                    "zbudujesz krok): "
+                    "\n\nOla tak to czyta (jej odczyt, nie "
+                    "sprawdzony fakt): "
                     + ola_role_callouts["RESEARCHER"]
                     if "RESEARCHER" in ola_role_callouts else ""
                 )
@@ -17299,11 +17288,9 @@ def consult_team(
     if _critic_verdict_for_planner:
 
         critic_feedback_block = (
-            "\n\nCO MAREK ZARZUCIŁ TWOJEMU POPRZEDNIEMU PLANOWI "
-            "(przeczytaj to ZANIM zaproponujesz kolejny krok — jeśli "
-            "zarzut jest słuszny, uwzględnij go; jeśli uważasz, że "
-            "Marek się myli, napisz wprost dlaczego, zamiast go po "
-            "cichu pomijać):\n"
+            "\n\nMarek zarzucił Twojemu poprzedniemu planowi to "
+            "(jeśli uważasz, że Marek się myli, napisz wprost "
+            "dlaczego):\n"
             + _critic_verdict_for_planner
         )
 
@@ -17318,7 +17305,7 @@ def consult_team(
 
     if _critic_question and _critic_question.get("role") == "PLANNER":
         planner_question_block = (
-            "\n\nMAREK PYTA CIĘ WPROST (odpowiedz mu w swojej "
+            "\n\nMarek pyta Cię wprost (odpowiedz mu w swojej "
             "wypowiedzi, zaczynając linię od \"ODPOWIEDŹ DLA MARKA:\" "
             "— dzięki temu odpowiedź do niego wróci):\n"
             + _critic_question.get("text", "")
@@ -17331,14 +17318,13 @@ def consult_team(
             include_chrome=goal_needs_chrome,
             include_android=goal_needs_android,
             extra=(
-                "\nINFO KAMILA:\n" + researcher_out
-                + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                "\nKamil ustalił:\n" + researcher_out
+                + "\nWojtek podrzucił:\n" + wojtek_out
                 + critic_feedback_block
                 + planner_question_block
                 + (
-                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
-                    "sprawdzony fakt — zweryfikuj, zanim na tym "
-                    "zbudujesz krok): "
+                    "\n\nOla tak to czyta (jej odczyt, nie "
+                    "sprawdzony fakt): "
                     + ola_role_callouts["PLANNER"]
                     if "PLANNER" in ola_role_callouts else ""
                 )
@@ -17394,10 +17380,9 @@ def consult_team(
     if _critic_verdict_for_engineer:
 
         engineer_critic_block = (
-            "\n\nCO MAREK ZARZUCIŁ POPRZEDNIEMU KROKOWI (jeśli zarzut "
-            "dotyczy Twojego kodu i jest słuszny — popraw to teraz; "
-            "jeśli uważasz, że Marek się myli, napisz wprost dlaczego, "
-            "zamiast go po cichu pomijać):\n"
+            "\n\nMarek zarzucił poprzedniemu krokowi to "
+            "(jeśli uważasz, że Marek się myli, napisz wprost "
+            "dlaczego):\n"
             + _critic_verdict_for_engineer
         )
 
@@ -17410,7 +17395,7 @@ def consult_team(
 
     if _critic_question and _critic_question.get("role") == "ENGINEER":
         engineer_question_block = (
-            "\n\nMAREK PYTA CIĘ WPROST (odpowiedz mu w swojej "
+            "\n\nMarek pyta Cię wprost (odpowiedz mu w swojej "
             "wypowiedzi, zaczynając linię od \"ODPOWIEDŹ DLA MARKA:\" "
             "— dzięki temu odpowiedź do niego wróci):\n"
             + _critic_question.get("text", "")
@@ -17422,9 +17407,9 @@ def consult_team(
             "ENGINEER",
             include_android=goal_needs_android,
             extra=(
-                "\nPLAN TOMKA:\n" + planner_out
-                + "\nINFO KAMILA:\n" + researcher_out
-                + "\nPOMYSŁ WOJTKA:\n" + wojtek_out
+                "\nTomek proponuje:\n" + planner_out
+                + "\nKamil ustalił:\n" + researcher_out
+                + "\nWojtek podrzucił:\n" + wojtek_out
                 + _only_if_new(
                     "ENGINEER", "project_file",
                     _current_project_file_block()
@@ -17434,9 +17419,8 @@ def consult_team(
                 + engineer_question_block
                 + engineer_value_handoff
                 + (
-                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
-                    "sprawdzony fakt — zweryfikuj, zanim na tym "
-                    "zbudujesz krok): "
+                    "\n\nOla tak to czyta (jej odczyt, nie "
+                    "sprawdzony fakt): "
                     + ola_role_callouts["ENGINEER"]
                     if "ENGINEER" in ola_role_callouts else ""
                 )
@@ -17506,7 +17490,7 @@ def consult_team(
             include_chrome=goal_needs_chrome,
             include_android=goal_needs_android,
             extra=(
-                "\nPLAN TOMKA:\n" + planner_out
+                "\nTomek proponuje:\n" + planner_out
                 + _only_if_new(
                     "CRITIC", "project_file",
                     _current_project_file_block()
@@ -17514,9 +17498,8 @@ def consult_team(
                 + critic_answer_block
                 + main_override_block
                 + (
-                    "\n\nOLA TAK TO CZYTA (jej odczyt, nie "
-                    "sprawdzony fakt — zweryfikuj, zanim na tym "
-                    "zbudujesz krok): "
+                    "\n\nOla tak to czyta (jej odczyt, nie "
+                    "sprawdzony fakt): "
                     + ola_role_callouts["CRITIC"]
                     if "CRITIC" in ola_role_callouts else ""
                 )
@@ -17950,7 +17933,7 @@ Jeżeli OSTATNI WYNIK zawiera ok=false lub GEMINI_TOOL_ERROR:
     )
 
     android_block = (
-        "\nAKTUALNY ANDROID:\n"
+        "\nNa ekranie telefonu jest teraz:\n"
         + short(
             android_text if android_text is not None else android_summary(),
             3500
@@ -18009,9 +17992,8 @@ konkretnego do podjęcia decyzji):
     # v195: wymiana zdan Marka z Tomkiem/Bartkiem z TEGO kroku.
     _exchange = str(team.get("exchange", "") or "").strip()
     _exchange_block = (
-        "\nWYMIANA ZDAŃ W TYM KROKU (Marek zgłosił zastrzeżenie i "
-        "dostał odpowiedź — to działo się teraz, nie w poprzednim "
-        "kroku):\n" + _exchange + "\n"
+        "\nW tym kroku Marek zgłosił zastrzeżenie i dostał "
+        "odpowiedź:\n" + _exchange + "\n"
     ) if _exchange else ""
 
     _main_topic = _current_topic(last_result, _critic_block_streak)
@@ -19322,12 +19304,12 @@ def _answer_readonly_requests(role_texts):
                 # wywnioskowal, ze numerow tam nie ma.
                 if len(out) > _READONLY_OUTPUT_MAX:
                     pokazane += (
-                        "\n[FAKT OD PYTHONA: to pierwsze "
+                        "\n(Pokazałem pierwsze "
                         + str(_READONLY_OUTPUT_MAX) + " z "
                         + str(len(out)) + " znaków wyniku. Reszta "
                         "ISTNIEJE — nie wyciągaj wniosku, że czegoś "
                         "tam nie ma. Jeśli szukasz konkretu, zawęź "
-                        "polecenie (np. grep po tym, czego szukasz).]"
+                        "polecenie (np. grep po tym, czego szukasz).)"
                     )
 
                 odpowiedzi.append(
@@ -19440,9 +19422,7 @@ def _team_file_answers_block():
         return ""
 
     return (
-        "SPRAWDZIŁEM TO, O CO PYTALIŚCIE (uruchomione przez Pythona "
-        "TERAZ, bezpośrednio w Termux — to fakty, nie domysły; nie "
-        "proście już o wykonanie tych poleceń, masz wynik niżej):\n"
+        "Uruchomiłem to, o co pytaliście — macie już wynik:\n"
         + "\n".join(_team_file_answers)
     )
 
@@ -19619,8 +19599,7 @@ def _goal_progress_snapshot(goal):
         return ""
 
     return (
-        "STAN FAKTYCZNY (sprawdzony TERAZ bezpośrednio na dysku, "
-        "nie z pamięci rozmowy — traktuj jako pewnik):\n"
+        "Sprawdziłem to teraz na dysku:\n"
         + "\n".join(lines)
     )
 
