@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v225
+AEL-MINI AUTONOMOUS AGENT v226
 
 ARCHITEKTURA:
 
@@ -1258,7 +1258,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v225")
+    print("             AEL-MINI AUTONOMOUS AGENT v226")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9787,6 +9787,116 @@ def _detect_placeholder_phone_target(command):
     )
 
 
+# Ile Python czeka SAM na komende, ktora poszla w tlo, zanim odda
+# Gemini uchwyt do monitorowania. Patrz _poczekaj_na_komende_w_tle().
+AUTO_BACKGROUND_WAIT = 90
+
+# pid -> Popen, zeby dalo sie poczekac i poznac kod wyjscia.
+_procesy_w_tle = {}
+
+
+def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
+    """
+    Czeka na komende, ktora wlasnie poszla w tlo. Zwraca gotowy wynik
+    (jak ze zwyklego termux_run) albo None, gdy proces nadal dziala.
+
+    ZAOBSERWOWANY REALNY PROBLEM (log 2026-09-05, cel "gra 3D",
+    KROK 11). `javac ... && dx ...` zostalo automatycznie wrzucone w
+    tlo, a Gemini musialo dowiedziec sie, co z niego wyszlo, samo:
+    check_process, read_file, check_process, read_file... DWANASCIE
+    wywolan narzedzi na JEDNA komende, ktora liczyla sie 35 sekund.
+    Kazde z nich to pelna runda do modelu. Ta sama historia w KROKU 8
+    przy `pkg install`.
+
+    Czekanie tutaj nie kosztuje ani sekundy wiecej niz to odpytywanie
+    — proces i tak musi sie policzyc — a oszczedza kilkanascie rund.
+    Gdy komenda naprawde jest dluga (gradle, wielki build), po budzecie
+    oddajemy uchwyt dokladnie jak dotad i Gemini monitoruje ja sama.
+    """
+
+    pid = bg.get("pid")
+
+    if not pid:
+        return None
+
+    start = time.time()
+    proc = _procesy_w_tle.get(pid)
+    returncode = None
+
+    if proc is not None:
+
+        try:
+            returncode = proc.wait(timeout=budzet_s)
+        except Exception:
+            # subprocess.TimeoutExpired albo cokolwiek innego —
+            # traktujemy tak samo: proces nadal dziala.
+            return None
+
+        _procesy_w_tle.pop(pid, None)
+
+    else:
+
+        # Nie mamy uchwytu (nie powinno sie zdarzyc) — zostaje
+        # sprawdzanie, czy pid jeszcze zyje. Kodu wyjscia wtedy nie
+        # poznamy i mowimy o tym wprost nizej.
+        while time.time() - start < budzet_s:
+
+            time.sleep(1.0)
+
+            if not termux_check_process(pid).get("running"):
+                break
+
+        else:
+            return None
+
+    # Chwila na domkniecie zapisu do logu przez system.
+    time.sleep(0.3)
+
+    tresc = ""
+
+    try:
+        sciezka = Path(str(bg.get("log_file") or ""))
+
+        if sciezka.exists():
+            tresc = sciezka.read_text(
+                encoding="utf-8",
+                errors="ignore"
+            )
+    except Exception:
+        tresc = ""
+
+    wynik = {
+        "ok": (returncode == 0) if returncode is not None else True,
+        "command": bg.get("command"),
+        "stdout": short(tresc, 6000),
+        "log_file": str(bg.get("log_file") or ""),
+        "pid": pid,
+        "status": "COMPLETED",
+        "duration_s": round(time.time() - start, 1),
+        "ran_in_background": (
+            "Komenda poszla w tlo (jest dluga), ale poczekalem na nia "
+            "za Ciebie — powyzej masz JEJ CALE wyjscie, tak samo jak "
+            "przy zwyklym uruchomieniu. Nie musisz jej monitorowac."
+        )
+    }
+
+    if returncode is not None:
+        wynik["returncode"] = returncode
+    else:
+        wynik["exit_code_unknown"] = (
+            "Proces sie zakonczyl, ale nie znam jego kodu wyjscia — "
+            "oceniaj po tresci wyjscia powyzej."
+        )
+
+    # Ostrzezenia wykryte przy starcie (cudzyslowy, brakujacy plik,
+    # audio rozmowy itp.) zostaja — dotycza tej samej komendy.
+    for klucz, wartosc in bg.items():
+        if klucz.endswith("_warning"):
+            wynik[klucz] = wartosc
+
+    return wynik
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -9796,6 +9906,12 @@ def termux_run(command):
             bg = termux_run_background(command_str)
 
             if bg.get("ok"):
+
+                skonczone = _poczekaj_na_komende_w_tle(bg)
+
+                if skonczone is not None:
+                    return skonczone
+
                 bg["status"] = "AUTO_BACKGROUNDED"
                 bg["reason"] = (
                     "Komenda rozpoznana jako długotrwała "
@@ -10026,6 +10142,19 @@ def termux_run_background(
             stderr=subprocess.STDOUT,
             start_new_session=True
         )
+
+        # v226: trzymamy uchwyt do procesu, zeby dalo sie na niego
+        # POCZEKAC i poznac jego kod wyjscia — patrz
+        # _poczekaj_na_komende_w_tle(). Sam pid tego nie da: os.kill(pid, 0)
+        # mowi tylko "zyje/nie zyje", nigdy "skonczyl sie bledem".
+        _procesy_w_tle[proc.pid] = proc
+
+        if len(_procesy_w_tle) > 64:
+            for _stary in [
+                p for p, o in _procesy_w_tle.items()
+                if o.poll() is not None
+            ][:32]:
+                _procesy_w_tle.pop(_stary, None)
 
         bg_result = {
             "ok": True,
