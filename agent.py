@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v220
+AEL-MINI AUTONOMOUS AGENT v221
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v220")
+    print("             AEL-MINI AUTONOMOUS AGENT v221")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1473,6 +1473,10 @@ PLANNER_PROMPT = """
 Nazywasz się Tomek. Planujesz — jeden konkretny następny krok
 (max 3 kroki naprzód) do realizacji celu w Termux/Android/Chrome.
 Twoja robota kończy się na propozycji; wykonaniem zajmuje się Gemini.
+
+Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
+jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
+przy swojej najbliższej turze.
 """
 
 
@@ -1488,6 +1492,10 @@ RESEARCHER_PROMPT = """
 Nazywasz się Kamil. Masz włączone wyszukiwanie w sieci — szukaj sam,
 kiedy trzeba sprawdzić fakt. Gdy czegoś nie da się potwierdzić,
 powiedz to wprost i zaproponuj hipotezę albo kolejny krok.
+
+Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
+jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
+przy swojej najbliższej turze.
 """
 
 
@@ -1500,7 +1508,11 @@ to zatrzymuje zespół, więc waż to spokojnie.
 
 Gdy Twoje zastrzeżenie jest w istocie pytaniem do Tomka albo Bartka,
 dopisz osobną linię "PYTANIE DO TOMKA: ..." (albo BARTKA) —
-odpowiedź wróci do Ciebie.
+odpowiedź wróci do Ciebie jeszcze w tym kroku.
+
+Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
+jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
+przy swojej najbliższej turze.
 """
 
 
@@ -1568,6 +1580,10 @@ kod i polecenia realizujące plan Tomka, w Termux/Android/Chrome
 (gra, aplikacja, skrypt, automatyzacja — cokolwiek wymaga cel).
 Gotowy kod/skrypt podawaj w bloku ```...``` — MAIN może go zapisać
 do pliku bezpośrednio, bez zużycia Gemini na przepisywanie.
+
+Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
+jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
+przy swojej najbliższej turze.
 """
 
 
@@ -1609,6 +1625,10 @@ zadaniem — dostajesz TYLKO cel, bez szczegółów technicznych. Zaproponuj
 gotowe rozwiązania (apka/usługa/strona, jeśli istnieje), inne
 podejścia, albo pytania, które warto sobie zadać. Kod i komendy
 zostaw Bartkowi. Krótko, zwykłym tekstem, bez sztywnych sekcji.
+
+Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
+jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
+przy swojej najbliższej turze.
 """
 
 
@@ -16856,6 +16876,125 @@ _CRITIC_ANSWER_RE = re.compile(
 
 _QUESTION_NAME_TO_ROLE = {"TOMKA": "PLANNER", "BARTKA": "ENGINEER"}
 
+
+# ============================================================
+# KAŻDY MOŻE ZAGADAĆ DO KAŻDEGO (v221)
+# ============================================================
+#
+# ZAOBSERWOWANY REALNY PROBLEM (log 2026-09-05, cel "zadzwoń do
+# Beaty"). Do tej pory graf rozmowy wyglądał tak: Ola mogła odezwać
+# się do Tomka/Kamila/Marka/Bartka ("DLA TOMKA:"), Marek do Tomka i
+# Bartka ("PYTANIE DO TOMKA:") — i na tym koniec. Wojtek, Kamil,
+# Tomek i Bartek NIE MIELI DOKĄD napisać. Ich zdanie lądowało u MAIN-a
+# jako jeden z kilku głosów i tam umierało.
+#
+# W tym logu widać dokładnie, co to kosztuje. Wojtek od KROKU 4
+# powtarza to samo, co się potem okazuje prawdą: "numer już macie, po
+# cholerę my w ogóle próbujemy klikać w dialer Google?!". Nikt mu nie
+# odpowiada, bo NIE MA JAK — nie istnieje kanał, którym jego zdanie
+# dotarłoby do Tomka, a Tomek planuje dalej klikanie w dialer. Zespół
+# przez cztery kroki walczy z narzędziami, mając rozwiązanie
+# wypowiedziane na głos przez kolegę.
+#
+# Teraz każdy może zwrócić się do każdego tak, jak robi to człowiek:
+# zaczyna linię imieniem rozmówcy ("Tomku, ..." / "Wojtku: ...").
+# Wiadomość trafia do adresata przy jego najbliższej turze, z
+# podpisem, kto ją napisał. Zero dodatkowych zapytań do DeepSeeka —
+# tekst jedzie w kontekście, który i tak wysyłamy.
+#
+# Wymóg dwukropka albo przecinka po imieniu jest tym, co odróżnia
+# ZWRÓCENIE SIĘ do kogoś od zwykłej wzmianki. Dzięki temu "Tomku
+# tutaj." i "Bartek here." (tak te role otwierają swoje wypowiedzi)
+# nie są traktowane jak wiadomość — a i tak dodatkowo odrzucamy
+# wiadomość do samego siebie.
+_ROLE_DISPLAY_NAME = {
+    "PLANNER": "Tomek",
+    "RESEARCHER": "Kamil",
+    "CRITIC": "Marek",
+    "ENGINEER": "Bartek",
+    "BROWSER": "Ola",
+    "WOJTEK": "Wojtek",
+    "MAIN": "MAIN",
+}
+
+_VOCATIVE_TO_ROLE = {
+    "TOMKU": "PLANNER", "TOMKA": "PLANNER", "TOMEK": "PLANNER",
+    "KAMILU": "RESEARCHER", "KAMILA": "RESEARCHER",
+    "KAMIL": "RESEARCHER",
+    "MARKU": "CRITIC", "MARKA": "CRITIC", "MAREK": "CRITIC",
+    "BARTKU": "ENGINEER", "BARTKA": "ENGINEER",
+    "BARTEK": "ENGINEER",
+    "WOJTKU": "WOJTEK", "WOJTKA": "WOJTEK", "WOJTEK": "WOJTEK",
+    "OLU": "BROWSER", "OLI": "BROWSER", "OLA": "BROWSER",
+}
+
+_ADDRESS_RE = re.compile(
+    r"^[\s*_#>-]*(?:DO\s+)?("
+    + "|".join(sorted(_VOCATIVE_TO_ROLE, key=len, reverse=True))
+    + r")\s*[:,]\s*(.+)$",
+    re.IGNORECASE | re.MULTILINE
+)
+
+# Kto co ma do przeczytania przy swojej najbliższej turze:
+# {rola: [(imię nadawcy, treść), ...]}
+_role_inbox = {}
+
+
+def _collect_role_messages(speaker_role, text):
+    """
+    Wyławia z wypowiedzi zwroty do konkretnych osób i odkłada je do
+    skrzynki adresata — patrz komentarz wyżej.
+
+    Wiadomość do samego siebie pomijamy: role otwierają wypowiedzi
+    przedstawieniem się ("Tomku tutaj", "Bartek here") i to nie jest
+    zwrócenie się do kogokolwiek.
+    """
+
+    for m in _ADDRESS_RE.finditer(str(text or "")):
+
+        adresat = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
+
+        if not adresat or adresat == speaker_role:
+            continue
+
+        tresc = " ".join(m.group(2).split())
+
+        if len(tresc) < 15:
+            # Samo zawołanie po imieniu, bez treści — nie ma czego
+            # przekazywać.
+            continue
+
+        _role_inbox.setdefault(adresat, []).append(
+            (
+                _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role)),
+                short(tresc, 600)
+            )
+        )
+
+
+def _role_inbox_block(role_name):
+    """
+    Co ta osoba ma do przeczytania od reszty zespołu — i od razu
+    czyścimy skrzynkę, żeby ta sama wiadomość nie wracała co krok.
+    """
+
+    wiadomosci = _role_inbox.pop(role_name, [])
+
+    if not wiadomosci:
+        return ""
+
+    lines = []
+
+    for nadawca, tresc in wiadomosci[-3:]:
+        lines.append(nadawca + " mówi do Ciebie: " + tresc)
+
+    return (
+        "\n" + "\n".join(lines)
+        + "\n(Odpowiedz mu w swojej wypowiedzi — zacznij linię jego "
+        "imieniem, np. \"Wojtku: ...\", to do niego wróci.)\n"
+    )
+
+
 # Pytanie Marka czekające na odpowiedź: {"role":..., "text":..., "wiek":int}
 _critic_question = None
 
@@ -17480,6 +17619,11 @@ def consult_team(
             "\nCo się właśnie stało:\n" + report_body
             + success_values_block + error_details_block + "\n",
             _only_if_new(role_name, "tool_hint", tool_hint),
+            # v221: co koledzy z zespołu powiedzieli WPROST do tej
+            # osoby — patrz _collect_role_messages(). Idzie na końcu,
+            # tuż przed pytaniem do niej, żeby było ostatnią rzeczą,
+            # którą czyta przed odpowiedzią.
+            _role_inbox_block(role_name),
         ]
         return "".join(p for p in pieces if p)
 
@@ -17648,12 +17792,19 @@ def consult_team(
                 "których już mówiłeś?"
             )
 
+        # v221: Wojtek jako jedyny nie przechodzi przez _team_context
+        # (dostaje sam cel, bez technicznego tła — patrz komentarz
+        # przy consult_wojtek), więc jego skrzynkę trzeba opróżnić
+        # tutaj. Bez tego byłby jedyną osobą, do której można napisać,
+        # a która nigdy tego nie przeczyta — czyli dokładnie ten sam
+        # brak kanału, który naprawiamy.
         results["WOJTEK"] = deepseek(
             "WOJTEK",
-            wojtek_context
+            _role_inbox_block("WOJTEK") + wojtek_context
         )
 
         _role_response_cache["WOJTEK"] = results["WOJTEK"]
+        _collect_role_messages("WOJTEK", results["WOJTEK"])
 
     else:
 
@@ -17726,6 +17877,7 @@ def consult_team(
         )
 
         _role_response_cache["RESEARCHER"] = results["RESEARCHER"]
+        _collect_role_messages("RESEARCHER", results["RESEARCHER"])
 
         if wojtek_extra:
             _wojtek_pending_answer = short(results["RESEARCHER"], 400)
@@ -17803,6 +17955,8 @@ def consult_team(
         )
     )
 
+    _collect_role_messages("PLANNER", results["PLANNER"])
+
     if consult_browser:
 
         results["BROWSER"] = deepseek(
@@ -17811,6 +17965,7 @@ def consult_team(
         )
 
         _role_response_cache["BROWSER"] = results["BROWSER"]
+        _collect_role_messages("BROWSER", results["BROWSER"])
 
     else:
 
@@ -17899,6 +18054,8 @@ def consult_team(
         )
     )
 
+    _collect_role_messages("ENGINEER", results["ENGINEER"])
+
     # Odpowiedź na poprzednie pytanie Marka + przechwycenie
     # odpowiedzi Bartka, jeśli to jego pytano.
     if _critic_question and _critic_question.get("role") == "ENGINEER":
@@ -17984,6 +18141,8 @@ def consult_team(
     # słuchać, a doklejanie zgody co krok byłoby tylko kolejnym
     # szumem w jego kontekście.
     _critic_out_full = results.get("CRITIC", "") or ""
+
+    _collect_role_messages("CRITIC", _critic_out_full)
 
     # ------------------------------------------------------------
     # v195: TURA PO TURZE -- Marek zglosil zarzut, wiec od razu
