@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v212
+AEL-MINI AUTONOMOUS AGENT v213
 
 ARCHITEKTURA:
 
@@ -1266,7 +1266,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v212")
+    print("             AEL-MINI AUTONOMOUS AGENT v213")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9404,7 +9404,44 @@ def _detect_contact_list_wrong_schema(command):
 # nigdy nie jest prawdziwym numerem telefonu. Wykrywamy to
 # statycznie, PRZED wybraniem numeru, zamiast dowiadywać się po
 # fakcie, że agent zadzwonił w próżnię.
-_PLACEHOLDER_PHONE_RE = re.compile(r'(?:\+?\d{1,3})?123456789\d?\b')
+# v213 -- ten sam blad wrocil w innym przebraniu (log 2026-09-05,
+# krok 3). Agent zadzwonil na "+48501234567". Stary wzorzec szukal
+# doslownie "123456789" i tego NIE zlapal, bo tu jest "501234567".
+# A to jest dokladnie ten sam placeholder: siedem kolejnych cyfr po
+# sobie (1234567). Numer poszedl do dialera naprawde.
+#
+# Zamiast listy konkretnych ciagow — wlasnosc: prawdziwy numer nie
+# ma szesciu kolejnych rosnacych cyfr ani szesciu tych samych pod
+# rzad. Sprawdzone na realnym numerze z tych samych logow
+# (+48514590110 — najdluzszy ciag rosnacy ma 3 cyfry, przechodzi).
+_PLACEHOLDER_MIN_RUN = 6
+
+
+def _has_placeholder_digit_run(cyfry):
+    """Szesc kolejnych cyfr rosnacych albo szesc identycznych."""
+
+    rosnace = 1
+    identyczne = 1
+
+    for i in range(1, len(cyfry)):
+
+        if int(cyfry[i]) == int(cyfry[i - 1]) + 1:
+            rosnace += 1
+        else:
+            rosnace = 1
+
+        if cyfry[i] == cyfry[i - 1]:
+            identyczne += 1
+        else:
+            identyczne = 1
+
+        if (
+            rosnace >= _PLACEHOLDER_MIN_RUN
+            or identyczne >= _PLACEHOLDER_MIN_RUN
+        ):
+            return True
+
+    return False
 
 
 def _detect_placeholder_phone_target(command):
@@ -9414,7 +9451,17 @@ def _detect_placeholder_phone_target(command):
     if "termux-telephony-call" not in command_str:
         return None
 
-    if not _PLACEHOLDER_PHONE_RE.search(command_str):
+    trafienie = False
+
+    for kandydat in re.findall(r"\+?\d[\d\s-]{7,}", command_str):
+
+        cyfry = re.sub(r"\D", "", kandydat)
+
+        if len(cyfry) >= 9 and _has_placeholder_digit_run(cyfry):
+            trafienie = True
+            break
+
+    if not trafienie:
         return None
 
     return (
@@ -17062,11 +17109,21 @@ def consult_team(
 
         if not wojtek_already_asked:
 
-            wojtek_context = (
-                "Oto zadanie, nad którym ktoś aktualnie pracuje:\n\n"
-                + goal
-                + "\n\nPodziel się swoimi pomysłami."
-            )
+            # v213 -- uzytkownik pokazal, jak to realnie wygladalo
+            # (2026-09-05). Wojtek dostawal w JEDNEJ wiadomosci:
+            #
+            #   "CEL, nad ktorym pracujemy: Zadzwon do Beata..."
+            #   "(Mowie to raz, na poczatku - dalej rozmawiamy
+            #    normalnie i nie bede tego powtarzac.)"
+            #   "Oto zadanie, nad ktorym ktos aktualnie pracuje:
+            #    Zadzwon do Beata..."
+            #
+            # Czyli ten sam cel dwa razy, rozdzielony obietnica, ze
+            # nie bedziemy go powtarzac. Zaleglosc po v191: cel
+            # dostarcza teraz _goal_briefing_for() przy pierwszej
+            # wiadomosci do roli, a stary tekst Wojtka nadal wklejal
+            # go po raz drugi. Zostaje samo pytanie.
+            wojtek_context = "Podziel się swoimi pomysłami."
 
         else:
 
@@ -18827,7 +18884,14 @@ _team_file_answers = []
 # odpowiada "jest tam +48514590110".
 
 # Ile tresci pliku pokazujemy w odpowiedzi na pytanie zespolu.
-_FILE_ANSWER_MAX = 500
+#
+# v213: bylo 500 i to bylo za malo. Log 2026-09-05: skrypt ma 1814 B,
+# wiec zespol dostal "poczatek i koniec, pominieto 1270 znakow w
+# srodku" — a potem Marek orzekl "w tresci skryptu odczytanej z dysku
+# NIE MA zadnego sprawdzenia typu if [ -n $BEAT_NUM ]", oceniajac
+# plik, ktorego srodka nigdy nie widzial. Typowy skrypt miesci sie
+# w calosci ponizej tego progu.
+_FILE_ANSWER_MAX = 3000
 
 
 def _file_answer_body(p):
@@ -18860,7 +18924,10 @@ def _file_answer_body(p):
         )
 
     return (
-        "JEST (" + str(size) + " B). Początek i koniec:\n"
+        "JEST (" + str(size) + " B). Pokazuję początek i koniec — "
+        "ŚRODEK ZOSTAŁ POMINIĘTY, więc nie twierdź, że czegoś w tym "
+        "pliku nie ma; jeśli szukasz konkretnej linii, poproś o "
+        "grep po niej:\n"
         + _head_tail_preview(
             tresc, _FILE_ANSWER_MAX // 2, _FILE_ANSWER_MAX // 2
         )
@@ -19058,8 +19125,24 @@ _UNSAFE_WORDS = frozenset((
 # pytanie, tylko robota -- ta idzie normalna droga.
 _READONLY_MAX_PER_STEP = 4
 
-# Ile wyniku oddajemy. Tyle, ile potrzeba na wartosc, nie na sciane.
-_READONLY_OUTPUT_MAX = 600
+# v213 -- log 2026-09-05, kroki 2-4. To jest ten sam blad co
+# "ucinanie planu Tomka" (v206), tylko po drugiej stronie: ucinalismy
+# ODPOWIEDZ na pytanie, ktore zespol sam zadal.
+#
+# 06:55:27 Python uruchomil `termux-contact-list` — pelny JSON, w
+# ktorym KAZDY kontakt ma pole "name" ORAZ "number". Numer Beaty tam
+# byl. Ale limit 600 znakow ucial wszystko po pierwszych kilku
+# nazwach, wiec do zespolu poszly same imiona. Wniosek zespolu:
+# "nie da sie wyciagnac numeru". Dwadziescia minut pozniej MAIN
+# zadzwonil na zmyslony numer.
+#
+# Uzytkownik: "jak oni maja cos wiedziec, jak nie ma konkretow,
+# tylko skracanie logow".
+#
+# To jest ODPOWIEDZ na ich pytanie — ucinanie jej w polowie niweczy
+# caly sens tego mechanizmu. A gdy juz musimy uciac, mowimy ile
+# zostalo, zeby nikt nie wyciagnal wniosku z polowy danych.
+_READONLY_OUTPUT_MAX = 4000
 
 
 def _is_readonly_command(command):
@@ -19172,9 +19255,25 @@ def _answer_readonly_requests(role_texts):
             err = str(wynik.get("stderr", "") or "").strip()
 
             if out:
+
+                pokazane = short(out, _READONLY_OUTPUT_MAX)
+
+                # v213: gdy tniemy, mowimy ILE zostalo. Bez tego
+                # zespol wyciaga wnioski z polowy danych — dokladnie
+                # jak w logu, gdzie z ucietej listy kontaktow
+                # wywnioskowal, ze numerow tam nie ma.
+                if len(out) > _READONLY_OUTPUT_MAX:
+                    pokazane += (
+                        "\n[FAKT OD PYTHONA: to pierwsze "
+                        + str(_READONLY_OUTPUT_MAX) + " z "
+                        + str(len(out)) + " znaków wyniku. Reszta "
+                        "ISTNIEJE — nie wyciągaj wniosku, że czegoś "
+                        "tam nie ma. Jeśli szukasz konkretu, zawęź "
+                        "polecenie (np. grep po tym, czego szukasz).]"
+                    )
+
                 odpowiedzi.append(
-                    "- `" + command + "` wypisało:\n"
-                    + short(out, _READONLY_OUTPUT_MAX)
+                    "- `" + command + "` wypisało:\n" + pokazane
                 )
             elif err:
                 odpowiedzi.append(
