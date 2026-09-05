@@ -741,25 +741,14 @@ try:
 except Exception:
     pass
 
-# Wzorce zadań, które użytkownik jawnie zabronił (np. pobieranie
-# gotowej gry zamiast tworzenia jej od zera przez Gemini).
-# Dopisz tu kolejne wzorce, jeśli MAIN znajdzie nowy sposób na
-# obejście wymagania "wszystko tworzy Gemini w Termux".
-FORBIDDEN_TASK_PATTERNS = (
-    "standoff",
-    "gotowy apk",
-    "gotowej gry",
-    "gotowa gra",
-    "pobierz apk",
-    "pobierz gotow",
-    "download apk",
-    "download a ready",
-    "ready-made apk",
-    "ready made apk",
-    "pobierz plik apk",
-    "ściągnij apk",
-    "ściągnij gotow",
-)
+# v225: FORBIDDEN_TASK_PATTERNS usuniete. Ta lista ("standoff",
+# "gotowa gra", "pobierz apk"...) pilnowala jednego, konkretnego celu
+# sprzed miesiecy -- zeby gra powstala od zera, a nie zostala sciagnieta
+# gotowa. Agent jest uniwersalny, wiec sprawdzalismy ja przy KAZDYM
+# zadaniu, takze przy telefonie do kogos czy szukaniu numeru w
+# kontaktach. Wymaganie danego celu nalezy do tresci celu, a nie do
+# stalej w kodzie: gdy uzytkownik chce cos zbudowac od zera, mowi to w
+# celu i zespol to widzi.
 
 # Komendy pasujące do tych fraz są z góry uznawane za
 # długotrwałe i automatycznie idą w tło (termux_run_background)
@@ -13094,34 +13083,6 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 # CREATE TASK
 # ============================================================
 
-def _check_forbidden_task(task_text):
-    """
-    Twarda (nie tylko promptowa) ochrona jawnego wymagania
-    użytkownika: żadnej gotowej gry, żadnego gotowego APK — cały
-    projekt ma powstać w Termuxie za pośrednictwem Gemini.
-
-    Bez tego wymaganie żyje tylko jako jednorazowa instrukcja na
-    początku rozmowy z DeepSeek/Gemini i może "wyparować" po
-    kilkudziesięciu krokach długiej autonomicznej sesji.
-    """
-
-    lowered = str(task_text or "").lower()
-
-    for pattern in FORBIDDEN_TASK_PATTERNS:
-
-        if pattern in lowered:
-
-            return (
-                "Zadanie pasuje do zabronionego wzorca '"
-                + pattern
-                + "'. Użytkownik jawnie zabronił pobierania "
-                "gotowej gry/APK — wszystkie pliki projektu mają "
-                "być utworzone przez Gemini w Termux."
-            )
-
-    return None
-
-
 # ============================================================
 # CHECKLIST PUNKTÓW CELU (progress_checklist.json)
 # ============================================================
@@ -13747,31 +13708,7 @@ def create_task(
 ):
     """
     Tworzy zadanie dla kolejki Gemini.
-
-    Zwraca None (zamiast task_id), jeżeli treść zadania łamie
-    jawne wymagania użytkownika (patrz _check_forbidden_task) —
-    wywołujący MUSI to sprawdzić przed dalszym działaniem.
     """
-
-    blocked_reason = _check_forbidden_task(task)
-
-    if blocked_reason:
-
-        log(
-            "MAIN",
-            "TASK ZABLOKOWANY (ochrona wymagań użytkownika): "
-            + blocked_reason
-        )
-
-        log_event(
-            "task_blocked",
-            {
-                "task": short(task, 500),
-                "reason": blocked_reason
-            }
-        )
-
-        return None
 
     task_id = (
         datetime.now().strftime(
@@ -14428,6 +14365,57 @@ def _task_wants_code_saved(task_text, success_condition=""):
     """
 
     return bool(_CODE_SAVE_INTENT_RE.search(str(task_text or "")))
+
+
+# v225: skrypt, ktory zadanie kaze URUCHOMIC, a ktorego jeszcze nie ma.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, cel "gra 3D",
+# KROK 12). Uklad jest taki: kod pisze Bartek, na dysk zapisuje go
+# Python, a Gemini tylko uruchamia. W tym kroku MAIN kazal Gemini
+# `bash build.sh || (pkg install zip -y && bash build.sh)`, przy czym
+# build.sh NIE ISTNIAL -- powstac mial dopiero z kodu Bartka. Gemini
+# dostalo wiec "uruchom plik, ktorego nie ma", sprobowalo zapisac go
+# samo i slusznie odbilo sie od GEMINI_NIE_PISZE_KODU ("bash: build.sh:
+# No such file or directory" widac w logu wprost). Caly krok spalony, a
+# kod Bartka lezal gotowy obok.
+#
+# Mechanizm ratunkowy juz istnial (_infer_code_target_path -- Python
+# zapisuje kod, gdy MAIN zapomni podac sciezki w write_engineer_code_to),
+# ale odpalal sie WYLACZNIE, gdy zadanie prosilo o ZAPISANIE. "Uruchom
+# build.sh" nie prosi o zapisanie, tylko o uruchomienie -- i wlasnie
+# dlatego przelatywalo obok. Brakujacy plik jest tu jednak rownie
+# jednoznaczna prosba: zeby go uruchomic, ktos musi go najpierw
+# zapisac, a od tego jest Python.
+_URUCHOM_SKRYPT_RE = re.compile(
+    r"(?:\b(?:bash|sh|source|python3?|node)\s+|(?<![\w/])\./)"
+    r"([~\w./-]*[\w-]+\.(?:sh|py|js))\b",
+    re.IGNORECASE
+)
+
+
+def _skrypt_do_uruchomienia_ktorego_nie_ma(task_text):
+    """
+    Sciezka skryptu, ktory zadanie kaze uruchomic, a ktorego na dysku
+    NIE MA — albo None. Patrz komentarz wyzej.
+
+    Istniejacy plik zwracamy jako None celowo: wtedy nie ma czego
+    ratowac i niczego nie nadpisujemy.
+    """
+
+    for match in _URUCHOM_SKRYPT_RE.finditer(str(task_text or "")):
+
+        kandydat = (match.group(1) or "").strip()
+
+        if not kandydat:
+            continue
+
+        try:
+            if not _resolve_home_relative_path(kandydat).exists():
+                return kandydat
+        except Exception:
+            continue
+
+    return None
 
 
 # ============================================================
@@ -16102,7 +16090,6 @@ _HUMAN_STATUS_LABELS = {
     "GEMINI_TOOL_ERROR": "błąd narzędzia",
     "TOOL_LIMIT": "przekroczony limit narzędzi",
     "DONE_REJECTED_VERIFICATION_FAILED": "zgłoszony DONE odrzucony (brak dowodu)",
-    "TASK_BLOCKED_BY_POLICY": "zablokowane zasadą",
     "TASK_DUPLICATE_OF_VERIFIED_POINT": "powtórka już zweryfikowanego punktu",
     "TASK_ALREADY_SATISFIED_ON_DISK": "już spełnione na dysku",
 }
@@ -18560,10 +18547,6 @@ def main_decide(
             'Twoje poprzednie DONE odrzuciła fizyczna weryfikacja — wyżej\n'
             '  jest, czego zabrakło. Zleć TASK, który dokładnie to uzupełni,\n'
             '  i wróć do DONE po kolejnym raporcie.'
-        ),
-        "TASK_BLOCKED_BY_POLICY": (
-            'Zadanie naruszało zakaz pobierania gotowej gry/APK.\n'
-            '  Zaproponuj zbudowanie tego od zera.'
         ),
         "TASK_DUPLICATE_OF_VERIFIED_POINT": (
             'Ten TASK to ten sam punkt, który checklist ma już potwierdzony\n'
@@ -22416,15 +22399,26 @@ Zwróć tylko JSON.
             # ```...``` to komenda do WYKONANIA, nie tresc pliku --
             # mylenie tego kosztowalo w logu trzy kroki i nadpisany
             # skrypt (patrz _task_wants_code_saved).
+            # v225: drugi powod, dla ktorego Python ma zapisac kod
+            # Bartka — zadanie kaze uruchomic skrypt, ktorego jeszcze
+            # nie ma. Patrz _skrypt_do_uruchomienia_ktorego_nie_ma().
+            _brakujacy_skrypt = (
+                _skrypt_do_uruchomienia_ktorego_nie_ma(task_text)
+                if not write_target else None
+            )
+
             if (
                 not write_target
-                and _task_wants_code_saved(task_text)
+                and (
+                    _task_wants_code_saved(task_text)
+                    or _brakujacy_skrypt
+                )
                 and _task_carries_engineer_code(
                     task_text, team.get("engineer_full", "")
                 )
             ):
 
-                inferred_target = _infer_code_target_path(
+                inferred_target = _brakujacy_skrypt or _infer_code_target_path(
                     task_text,
                     decision.get("success_condition", ""),
                     team.get("engineer_full", "")
@@ -23029,23 +23023,6 @@ Zwróć tylko JSON.
                     )
             )
 
-            if task_id is None:
-
-                last_result = {
-                    "status":
-                        "TASK_BLOCKED_BY_POLICY",
-                    "message": (
-                        "Proponowane zadanie narusza jawne "
-                        "wymagania użytkownika (np. pobranie "
-                        "gotowej gry/APK zamiast utworzenia jej od "
-                        "zera) i zostało odrzucone bez wykonania. "
-                        "Zaproponuj inne podejście: wszystkie pliki "
-                        "projektu ma utworzyć Gemini w Termux."
-                    )
-                }
-
-                continue
-
             # --------------------------------------------------
             # OD RAZU WYKONUJEMY
             # --------------------------------------------------
@@ -23321,30 +23298,12 @@ Tylko JSON.
 
                         continue
 
-                    alt_task_id = create_task(
+                    create_task(
                         task_text,
                         condition,
                         "Alternatywa po FAILED",
                         "high"
                     )
-
-                    if alt_task_id is None:
-
-                        last_result = {
-                            "status":
-                                "TASK_BLOCKED_BY_POLICY",
-                            "message": (
-                                "Proponowana alternatywa po FAILED "
-                                "narusza jawne wymagania użytkownika "
-                                "(np. pobranie gotowej gry/APK) i "
-                                "została odrzucona bez wykonania. "
-                                "Zaproponuj podejście zgodne z "
-                                "wymaganiem: wszystkie pliki "
-                                "projektu tworzy Gemini w Termux."
-                            )
-                        }
-
-                        continue
 
                     result = (
                         run_next_task()
