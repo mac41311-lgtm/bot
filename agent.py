@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v245
+AEL-MINI AUTONOMOUS AGENT v246
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v245")
+    print("             AEL-MINI AUTONOMOUS AGENT v246")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2189,8 +2189,8 @@ _KROTKIE_ZACZEPKI = {
                "\n\nMarku, co Ty na to?"],
     "ENGINEER": ["\n\nBartku?", "\n\nBartku — da się?",
                  "\n\nBartku, Twoja działka."],
-    "RESEARCHER": ["\n\nKamilu?", "\n\nKamilu — coś wiesz?",
-                   "\n\nKamilu, sprawdzisz?"],
+    "RESEARCHER": ["\n\nKamilu?", "\n\nKamilu — co znalazłeś?",
+                   "\n\nKamilu, sprawdzisz w sieci?"],
     "WOJTEK": ["\n\nWojtku?", "\n\nWojtku — masz pomysł?",
                "\n\nWojtku, a Ty jak byś to zrobił?"],
 }
@@ -2275,11 +2275,17 @@ def _pytanie_pelne(rola, last_result, critic_objection=False):
         )
 
     if rola == "RESEARCHER":
+        # Pytamy go tak, jak pyta sie kogos, kto ma pod reka
+        # wyszukiwarke — o swiat, nie o nasza maszynownie. Stare
+        # "czego nam tu brakuje?" bylo pytaniem o NAS i tak wlasnie
+        # odpowiadal: bilansem naszych brakow zamiast sprawdzonego
+        # faktu.
         if blad:
             return (
-                "\n\nKamilu — wiesz, dlaczego to nie zadziałało?"
+                "\n\nKamilu — sprawdź w sieci, jak się to robi "
+                "poprawnie."
             )
-        return "\n\nKamilu — czego nam tu brakuje?"
+        return "\n\nKamilu — sprawdź w sieci, co o tym wiadomo."
 
     if rola == "WOJTEK":
         return "\n\nWojtku — masz na to jakiś prostszy pomysł?"
@@ -18562,6 +18568,28 @@ def consult_team(
     # Sam raport nie przechodzi przez ten filtr celowo: to jest
     # "biezaca wiadomosc" w rozmowie, a nie tlo.
     def _core_context_for(role_name):
+
+        # Kamil pyta swiata, nie tego telefonu.
+        #
+        # UWAGA UZYTKOWNIKA (2026-09-06): "Kamil sprawdza fakty w
+        # sieci najlepiej, jak by byl pytany 'sprawdz w internecie',
+        # nie wiedzac, ze jest w Termuksie itp. — wtedy bedzie
+        # korzystal ze swojego narzedzia".
+        #
+        # Ma racje i widac to w logu z 19:31. Kamil dostawal spis
+        # komend termux-*, podpowiedzi o awariach narzedzi i
+        # checkliste punktow — i odpowiadal jak inzynier tego
+        # telefonu ("uzyje termux-tts-speak w petli, a do symulacji
+        # termux-speech-to-text w tle"), zamiast po prostu sprawdzic
+        # fakt w sieci, choc jako jedyny ma wlaczone natywne
+        # wyszukiwanie (search_enabled).
+        #
+        # Wiec nie sypiemy mu na biurko maszynowni. Cel, stan sprawy,
+        # to co koledzy powiedzieli wprost do niego — zostaje.
+        # Warsztat Termuksa i awarie narzedzi — nie; od tego sa ci,
+        # ktorzy przy nim siedza.
+        _bez_maszynowni = (role_name == "RESEARCHER")
+
         pieces = [
             # v200: temat tez nie moze byc sztywna formulka wracajaca
             # co krok. Gdy sytuacja sie NIE zmienila, rola ma to zdanie
@@ -18577,11 +18605,13 @@ def consult_team(
             # v208: nie caly listing co krok, tylko roznica —
             # patrz _progress_for_role().
             _progress_for_role(role_name, progress_snapshot),
-            _only_if_new(role_name, "checklist", checklist_block),
+            _only_if_new(role_name, "checklist", checklist_block)
+            if not _bez_maszynowni else "",
             _only_if_new(role_name, "main_decision", main_decision_block),
             "\nCo się właśnie stało:\n" + report_body
             + success_values_block + error_details_block + "\n",
-            _only_if_new(role_name, "tool_hint", tool_hint),
+            _only_if_new(role_name, "tool_hint", tool_hint)
+            if not _bez_maszynowni else "",
             # v230: co użytkownik powiedział w trakcie tego celu.
             # Przez _only_if_new, więc mówimy to raz — ale plik żyje
             # do końca celu, więc nowe zdanie użytkownika dotrze
@@ -18597,7 +18627,7 @@ def consult_team(
                 role_name,
                 "narzedzia_telefonu",
                 _narzedzia_telefonu_block()
-            ),
+            ) if not _bez_maszynowni else "",
             # v221: co koledzy z zespołu powiedzieli WPROST do tej
             # osoby — patrz _collect_role_messages(). Idzie na końcu,
             # tuż przed pytaniem do niej, żeby było ostatnią rzeczą,
