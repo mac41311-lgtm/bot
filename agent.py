@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v242
+AEL-MINI AUTONOMOUS AGENT v243
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v242")
+    print("             AEL-MINI AUTONOMOUS AGENT v243")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1614,9 +1614,8 @@ samym, więc bywają optymistyczne.
 To, co Python sprawdził albo zobaczył sam: punkty potwierdzone
 dowodem (plik leży na dysku, tekst faktycznie był na ekranie) oraz
 lista wywołań narzędzi, które naprawdę się wykonały i zwróciły
-wynik. To jest twardy grunt — udane wywołanie termux-telephony-call
-znaczy, że telefon zadzwonił, nawet jeśli nic po sobie nie zostawiło
-na dysku. Wiele celów tak właśnie wygląda: rozmowa, kliknięcie,
+wynik. To jest twardy grunt — udane wywołanie znaczy, że coś się
+naprawdę wydarzyło, nawet jeśli nic po sobie nie zostawiło na dysku. Wiele celów tak właśnie wygląda: rozmowa, kliknięcie,
 wysłana wiadomość nie zostawiają pliku, a jednak się wydarzyły.
 
 Stan ekranu teraz. Telefon żyje własnym życiem między krokami —
@@ -12755,8 +12754,19 @@ def gemini_execute_task(task_id, task, success_condition=''):
     # i tak zawsze dostępne w opisach poszczególnych narzędzi
     # (gemini_tools()), więc nic nie znika, tylko nie jest powtarzane
     # w każdej wiadomości bez potrzeby.
+    # Do decyzji, ktore rodziny narzedzi wyslac, bierzemy tez CEL i to,
+    # nie sam tekst pojedynczego zadania.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, 15:27-15:31).
+    # MAIN pisal zadania o Termuksie, wiec rodzina chrome znikala z
+    # listy Gemini ("36 z 41") i wykonawca nie mial nawet czym
+    # zajrzec do przegladarki, choc caly cel byl o szukaniu narzedzia
+    # do rozmowy. Sam tekst POJEDYNCZEGO zadania to za waska
+    # podstawa: opisuje jeden ruch, a nie to, dokad idziemy.
     _task_haystack = (
-        str(task or "") + " " + str(success_condition or "")
+        str(task or "") + " "
+        + str(success_condition or "") + " "
+        + str(_current_goal_text or "")
     ).lower()
 
     _android_task_relevant = any(
@@ -20434,8 +20444,16 @@ def _narzedzia_telefonu_block():
     # zakladania kont i bez oplat" (log 2026-09-06, KROK 1), czego
     # uzytkownik nigdy nie powiedzial. Fakt o srodowisku ma byc
     # faktem; co z niego wynika, zespol ustala sam.
+    # Nazwa tej listy tez ma znaczenie. v231 podawal ja jako "narzedzia
+    # tego telefonu" — i zespol czytal ja jako CALY swiat, jaki ma do
+    # dyspozycji. Log 2026-09-06, 15:27-15:30: przez cztery kroki
+    # meczyli sie z termux-dialog (--list, --values, --options,
+    # -v, -h, potem radio), zamiast po prostu otworzyc kontakty na
+    # ekranie. Wojtek mowil to od poczatku: "otworz dialer i wpisz
+    # Beata, to zajmuje 5 sekund". To spis komend, ktore SA JUZ
+    # zainstalowane — nie granica tego, co wolno.
     return (
-        "\nTen telefon ma pod ręką swoje własne narzędzia:\n"
+        "\nKomendy termux-* zainstalowane w tej chwili na telefonie:\n"
         + ", ".join(narzedzia)
         + "\n"
     )
