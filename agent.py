@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v256
+AEL-MINI AUTONOMOUS AGENT v257
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v256")
+    print("             AEL-MINI AUTONOMOUS AGENT v257")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15561,6 +15561,66 @@ def _code_target_rejection(path, code_text):
     return powod, fakt
 
 
+# Plik, do ktorego kod SAM pisze, jest jego WYNIKIEM — nie miejscem
+# na ten kod.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, cel "rozmowa glosowa z
+# Beata", KROK 2). MAIN kazal uruchomic polecenie, ktore mialo
+# wyluskac numer Beaty z kontaktow i zapisac go do
+# ~/beata_numery.txt. _infer_code_target_path bralo PIERWSZA nazwe
+# pliku z tresci zadania — czyli wlasnie ten plik wynikowy — i
+# Python zapisal do niego 303 znaki KOMENDY zamiast pozwolic ja
+# wykonac. Zadanie nigdy nie poszlo do Gemini. W nastepnym kroku
+# zespol zrobil `cat ~/beata_numery.txt`, zobaczyl tam kod i uznal,
+# ze numeru nie ma — choc Gemini wypisalo go krok wczesniej
+# ("11. Beata - +48514590110").
+#
+# Straznik na istniejace pliki (_code_target_rejection) tu nie
+# pomogl: pliku jeszcze nie bylo, bo mial dopiero powstac.
+#
+# Wyjatek: heredoc (`cat > plik << 'EOF'`) to jedyny przypadek, gdy
+# plik po ">" JEST celem zapisu — tam tresc pliku lezy w tym samym
+# bloku. Linie z "<<" wiec pomijamy.
+_KOD_ZAPISUJE_RE = re.compile(
+    r">>?\s*(?P<przekierowanie>[^\s;|&<>'\"()]+)"
+    r"|\btee\s+(?:-a\s+)?(?P<tee>[^\s;|&<>'\"()]+)"
+    r"|['\"](?P<otwarty>[^'\"\s]+\.[A-Za-z0-9]{1,6})['\"]\s*\)?\s*,"
+    r"\s*['\"][wa]",
+    re.IGNORECASE
+)
+
+
+def _pliki_ktore_kod_zapisuje(code):
+    """
+    Nazwy plikow, do ktorych ten kod sam pisze — czyli jego wynik.
+    Patrz komentarz wyzej.
+    """
+
+    nazwy = set()
+
+    for linia in str(code or "").splitlines():
+
+        # Heredoc: tam plik po ">" to wlasnie cel zapisu.
+        if "<<" in linia:
+            continue
+
+        for m in _KOD_ZAPISUJE_RE.finditer(linia):
+
+            for grupa in ("przekierowanie", "tee", "otwarty"):
+
+                sciezka = m.group(grupa)
+
+                if not sciezka:
+                    continue
+
+                nazwa = sciezka.rsplit("/", 1)[-1].strip(".,;:)('\"`")
+
+                if nazwa:
+                    nazwy.add(nazwa.lower())
+
+    return nazwy
+
+
 def _infer_code_target_path(task_text, success_condition, engineer_text):
     """
     Szuka nazwy pliku, do którego ewidentnie ma trafić kod — po
@@ -15571,6 +15631,15 @@ def _infer_code_target_path(task_text, success_condition, engineer_text):
     Zwraca nazwę pliku albo None, gdy nie da się jej ustalić
     JEDNOZNACZNIE — wtedy niczego nie zgadujemy.
     """
+
+    # v257: pliki, ktore ten kod sam tworzy, sa jego wynikiem —
+    # patrz _pliki_ktore_kod_zapisuje().
+    _wyniki = _pliki_ktore_kod_zapisuje(
+        extract_code_block(engineer_text or "") or engineer_text or ""
+    )
+    _wyniki |= _pliki_ktore_kod_zapisuje(
+        extract_code_block(task_text or "") or ""
+    )
 
     # v196: warunek sukcesu CELOWO wypadl z tej listy -- opisuje stan
     # koncowy ("plik X ma istniec"), nie cel zapisu. To on podsunal
@@ -15589,6 +15658,9 @@ def _infer_code_target_path(task_text, success_condition, engineer_text):
             base = candidate.rsplit("/", 1)[-1].lower()
 
             if base in _CODE_TARGET_FORBIDDEN:
+                continue
+
+            if base in _wyniki:
                 continue
 
             return candidate
