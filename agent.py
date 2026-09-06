@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v246
+AEL-MINI AUTONOMOUS AGENT v247
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v246")
+    print("             AEL-MINI AUTONOMOUS AGENT v247")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7293,7 +7293,12 @@ def chrome_open(
                 "fallback_attempted": "am_start"
             }
 
-        time.sleep(2.0)
+        # Sztywne 2 s wystarczaly na SAMO otwarcie karty, ale nie na
+        # to, zeby strona sie narysowala. Karta pojawia sie od razu, a
+        # dashboard w Reakcie potrzebuje jeszcze chwili; kto zajrzy w
+        # ta chwile, zobaczy "Loading...". Czekamy wiec na karte, a
+        # potem na sama strone — dokladnie tyle, ile trzeba.
+        time.sleep(1.0)
 
         domain = ""
 
@@ -7322,11 +7327,19 @@ def chrome_open(
                 "fallback_attempted": "am_start"
             }
 
+        _czekalismy = _poczekaj_az_strona_dojdzie(tab)
+
+        try:
+            tab = find_tab(tab["id"], None) or tab
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "tab_id": tab["id"],
             "url": tab["url"],
             "title": tab["title"],
+            "czekalem_na_zaladowanie_s": _czekalismy,
             "method": "am_start_fallback"
         }
 
@@ -7358,9 +7371,11 @@ def chrome_open(
         except Exception:
             pass
 
-    time.sleep(1.5)
+    # Zamiast sztywnych 1,5 s — czekamy dokladnie tyle, ile ta strona
+    # potrzebuje. Patrz _poczekaj_az_strona_dojdzie().
+    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
-    return {
+    wynik = {
         "ok":
             result.get(
                 "ok",
@@ -7371,6 +7386,11 @@ def chrome_open(
         "url":
             str(url)
     }
+
+    if _czekalismy:
+        wynik["czekalem_na_zaladowanie_s"] = _czekalismy
+
+    return wynik
 
 
 # ============================================================
@@ -7714,6 +7734,13 @@ def chrome_execute_js(
                 "Brak istniejącej karty"
         }
 
+    # Ten sam powod co przy chrome_click i chrome_inspect: kod
+    # puszczony na strone, ktora sie jeszcze rysuje, nie znajdzie
+    # elementow, ktore za pol sekundy tam beda. Patrz
+    # _poczekaj_az_strona_dojdzie() — dla gotowej strony to kosztuje
+    # zero.
+    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
+
     result = chrome_eval(
         tab,
         javascript,
@@ -7732,6 +7759,9 @@ def chrome_execute_js(
         "ok": True,
         "value": result
     }
+
+    if _czekalismy:
+        final["czekalem_na_zaladowanie_s"] = _czekalismy
 
     if dom_fields_warning:
         final["dom_fields_warning"] = dom_fields_warning
@@ -10378,6 +10408,34 @@ def termux_run(command):
 
             if placeholder_phone_warning:
                 result["placeholder_phone_warning"] = placeholder_phone_warning
+
+            # Komenda, ktora otwiera strone, konczy sie w ulamku
+            # sekundy — Android tylko przyjmuje intencje. Strona
+            # rysuje sie duzo dluzej, wiec kolejne wywolanie trafia w
+            # pusty ekran.
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, 21:19 i
+            # 21:23). Gemini otwieralo konsole Twilio przez
+            # `termux-open-url` i natychmiast szlo dalej. v238
+            # nauczylo czekac chrome_click/chrome_inspect, ale tedy
+            # nikt nie przechodzil — to jest komenda Termuksa, nie
+            # narzedzie Chrome.
+            if "termux-open-url" in command_str and result.get("ok"):
+
+                try:
+                    _karta = find_tab(None, None)
+
+                    if _karta is not None:
+
+                        _czekalismy = _poczekaj_az_strona_dojdzie(_karta)
+
+                        if _czekalismy:
+                            result["czekalem_na_zaladowanie_s"] = (
+                                _czekalismy
+                            )
+
+                except Exception:
+                    pass
 
         if (
             not result.get("ok")
