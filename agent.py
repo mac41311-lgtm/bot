@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v237
+AEL-MINI AUTONOMOUS AGENT v238
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v237")
+    print("             AEL-MINI AUTONOMOUS AGENT v238")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1523,8 +1523,7 @@ dalej. Gdy coś jest naprawdę nie tak, powiedz wprost co i dlaczego —
 to zatrzymuje zespół, więc waż to spokojnie.
 
 Gdy Twoje zastrzeżenie jest w istocie pytaniem do Tomka albo Bartka,
-dopisz osobną linię "PYTANIE DO TOMKA: ..." (albo BARTKA) —
-odpowiedź wróci do Ciebie jeszcze w tym kroku.
+zapytaj ich wprost — odpowiedź wróci do Ciebie jeszcze w tym kroku.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — "Tomku: ...", "Bartku: ...", "Kamilu: ...",
@@ -1582,11 +1581,11 @@ samych faktach: ocenianie należy do Marka, decyzje do MAIN-a, a
 wykonanie do Gemini. Gdy dostaniesz stan Chrome, oceń dodatkowo, czy
 karty mają sens względem celu.
 
-Jeśli coś w materiale ma znaczenie TYLKO dla jednej konkretnej osoby
-z zespołu, dopisz to na KOŃCU osobną linią zaczynającą się dosłownie
-od "DLA TOMKA:", "DLA KAMILA:", "DLA MARKA:" albo "DLA BARTKA:" —
-wtedy, gdy naprawdę jest taka rzecz. Wojtek zajmuje się samym celem,
-więc szczegóły techniczne zostaw poza tymi liniami.
+Jeśli coś w materiale ma znaczenie tylko dla jednej osoby z zespołu,
+dopisz to na końcu, zaczynając linię jej imieniem — "Tomku: ...",
+"Kamilu: ...", "Marku: ...", "Bartku: ..." — wtedy, gdy naprawdę
+jest taka rzecz. Wojtek zajmuje się samym celem, więc szczegóły
+techniczne zostaw poza tymi liniami.
 """
 
 
@@ -6990,6 +6989,65 @@ def chrome_eval(
 # CHROME INSPECT
 # ============================================================
 
+# Ile najdluzej czekamy, az strona sama sie dokona. Nie jest to
+# sztywna pauza — patrz _poczekaj_az_strona_dojdzie().
+CHROME_LOAD_BUDGET_S = 8.0
+
+
+def _poczekaj_az_strona_dojdzie(tab, budzet_s=CHROME_LOAD_BUDGET_S):
+    """
+    Czeka, az karta przestanie sie ladowac — i ANI CHWILI DLUZEJ.
+    Zwraca liczbe sekund, ktore faktycznie zeszly (0.0, gdy strona
+    byla gotowa od razu).
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, KROK 2). Gemini
+    otworzylo /dashboard/call-logs, natychmiast zrobilo
+    chrome_inspect i dostalo cala tresc strony w postaci jednego
+    slowa: "Loading...". Klikalo dalej w cos, czego jeszcze nie bylo,
+    a potem szukalo wpisu polaczenia na liscie, ktora sie nie
+    zdazyla wyrenderowac — i zameldowalo, ze polaczenia nie ma.
+    Wniosek byl falszywy, a wyciagnal go z pustego ekranu.
+
+    Sztywne "poczekaj 5 sekund" po kazdym kliknieciu byloby lekiem
+    gorszym od choroby: przy kilkudziesieciu wywolaniach na cel
+    zabiera minuty, w wiekszosci na strony, ktore byly gotowe od
+    razu. Wiec pytamy strony, czy skonczyla, kilka razy na sekunde,
+    i wracamy w tej samej chwili, w ktorej skonczyla. Typowo kosztuje
+    to zero, przy wolnym panelu ulamek sekundy.
+    """
+
+    sonda = (
+        "(() => ({"
+        " gotowa: document.readyState === 'complete',"
+        " tresc: (document.body ? document.body.innerText : '')"
+        ".replace(/\\s+/g, ' ').trim().length"
+        "}))()"
+    )
+
+    koniec = time.time() + max(0.0, float(budzet_s))
+    start = time.time()
+
+    while True:
+
+        stan = chrome_eval(tab, sonda)
+
+        if not isinstance(stan, dict):
+            break
+
+        # Gotowa i cos juz na niej jest. Sama flaga readyState nie
+        # wystarcza: panele w Reakcie melduja "complete", majac na
+        # ekranie samo "Loading..." (13 znakow).
+        if stan.get("gotowa") and int(stan.get("tresc") or 0) > 40:
+            break
+
+        if time.time() >= koniec:
+            break
+
+        time.sleep(0.35)
+
+    return round(time.time() - start, 2)
+
+
 def chrome_inspect(
     tab_id=None,
     contains=None
@@ -7007,6 +7065,8 @@ def chrome_inspect(
             "error":
                 "Nie znaleziono istniejącej karty"
         }
+
+    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
     javascript = r"""
 (() => {
@@ -7132,7 +7192,13 @@ def chrome_inspect(
             value.get(
                 "controls",
                 []
-            )
+            ),
+        # Mowimy o tym tylko wtedy, gdy naprawde trzeba bylo poczekac
+        # — inaczej byloby to pole-szum w kazdym wyniku.
+        **(
+            {"czekalem_na_zaladowanie_s": _czekalismy}
+            if _czekalismy else {}
+        )
     }
 
 
@@ -7318,6 +7384,10 @@ def chrome_click(
             "error":
                 "Brak istniejącej karty"
         }
+
+    # Klikniecie w strone, ktora sie jeszcze rysuje, trafia w pustke
+    # albo w nie ten element — patrz _poczekaj_az_strona_dojdzie().
+    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
     target = json.dumps(
         str(text),
@@ -9677,6 +9747,75 @@ _IRREVERSIBLE_MARKERS = (
 # Co juz w tym celu wyslalismy/wybralismy: marker -> lista
 # (godzina, komenda).
 _irreversible_done = {}
+
+
+# Numer telefonu w tresci zadania — z kierunkowym albo bez.
+_NUMER_W_ZADANIU_RE = re.compile(
+    r"(?<![\w.])(?:\+\d{1,3}[\s-]?)?(?:\d[\s-]?){8,14}\d(?![\w.])"
+)
+
+# Slowa, po ktorych poznajemy, ze zadanie ma DOSIEGNAC kogos z
+# zewnatrz: telefonem, SMS-em, przez panel dowolnej uslugi.
+_SIEGA_NA_ZEWNATRZ_RE = re.compile(
+    r"zadzwon|zadzwoń|dzwon|dzwoń|połącz|polacz|wybierz numer|"
+    r"telephony-call|sms-send|wyślij sms|wyslij sms|send call|"
+    r"place a call|outbound|zadzwonić|napisz do|wyślij wiadomość",
+    re.IGNORECASE
+)
+
+
+def _tylko_cyfry(tekst):
+    return re.sub(r"\D", "", str(tekst or ""))
+
+
+def _numer_ktorego_nikt_nie_podal(task_text, goal):
+    """
+    Numer, pod ktory zadanie chce zadzwonic albo napisac, a ktorego
+    uzytkownik nigdzie nie wskazal — albo None.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06). Cel brzmial
+    "znajdz na telefonie numer, przeprowadz rozmowe" i nie wymienial
+    NIKOGO. Zespol sciagnal cala ksiazke adresowa, sam wybral z niej
+    "BIURO OBSLUGI +48510100100" jako "scenariusz testowy" i przez
+    panel Bland AI faktycznie tam zadzwonil — pod numer, ktorego
+    uzytkownik nigdy nie wskazal, za jego kredyty. Uzytkownik
+    spodziewal sie zupelnie kogos innego.
+
+    Python jako jedyny widzi naraz i cel, i wszystko, co uzytkownik
+    powiedzial po drodze, i tresc zadania. Wiec moze to zauwazyc
+    zanim telefon zadzwoni. Nie blokujemy — mowimy.
+    """
+
+    tresc = str(task_text or "")
+
+    if not _SIEGA_NA_ZEWNATRZ_RE.search(tresc):
+        return None
+
+    znane = _tylko_cyfry(goal)
+
+    try:
+        if USER_SAID_FILE.exists():
+            znane += _tylko_cyfry(
+                USER_SAID_FILE.read_text(encoding="utf-8")
+            )
+    except Exception:
+        pass
+
+    for trafienie in _NUMER_W_ZADANIU_RE.finditer(tresc):
+
+        cyfry = _tylko_cyfry(trafienie.group(0))
+
+        if len(cyfry) < 9:
+            continue
+
+        # Porownujemy po koncowce: uzytkownik moze napisac numer bez
+        # kierunkowego, a zadanie z nim (albo odwrotnie).
+        if cyfry[-9:] in znane:
+            continue
+
+        return trafienie.group(0).strip()
+
+    return None
 
 
 def _reset_irreversible_memory():
@@ -17430,15 +17569,16 @@ def _chrome_relevant_now(goal, last_result=None):
 # technicznych (patrz WOJTEK_PROMPT/_ROLE_ACCOUNT), więc nie dostaje
 # adresowanych dopisków Oli.
 _OLA_ROLE_CALLOUT_RE = re.compile(
-    r'DLA (TOMKA|KAMILA|MARKA|BARTKA):\s*',
+    r'(?:DLA\s+)?\b(TOMKA|TOMKU|KAMILA|KAMILU|MARKA|MARKU|BARTKA'
+    r'|BARTKU)\s*[:,]\s*',
     re.IGNORECASE
 )
 
 _OLA_CALLOUT_NAME_TO_ROLE = {
-    "TOMKA": "PLANNER",
-    "KAMILA": "RESEARCHER",
-    "MARKA": "CRITIC",
-    "BARTKA": "ENGINEER",
+    "TOMKA": "PLANNER", "TOMKU": "PLANNER",
+    "KAMILA": "RESEARCHER", "KAMILU": "RESEARCHER",
+    "MARKA": "CRITIC", "MARKU": "CRITIC",
+    "BARTKA": "ENGINEER", "BARTKU": "ENGINEER",
 }
 
 
@@ -17778,30 +17918,67 @@ CRITIC_QUESTION_MAX_AGE = 2
 
 
 def _extract_critic_question(text):
-    """Zwraca (rola, treść) pierwszego pytania Marka albo (None, None)."""
+    """
+    Zwraca (rola, treść) pierwszego pytania Marka albo (None, None).
 
-    m = _CRITIC_QUESTION_RE.search(str(text or ""))
+    Marek moze zapytac tak, jak zapytalby czlowiek — "Tomku: czy ..."
+    — i to wystarczy. Stara formatka "PYTANIE DO TOMKA:" dalej
+    dziala, bo nic nie stoi na przeszkodzie, ale nikt jej juz nie
+    uczy i nikt jej nie wymaga.
+    """
 
-    if not m:
-        return None, None
+    text = str(text or "")
 
-    role = _QUESTION_NAME_TO_ROLE.get(m.group(1).upper())
-    pytanie = " ".join(m.group(2).split())
+    m = _CRITIC_QUESTION_RE.search(text)
 
-    if not role or not pytanie:
-        return None, None
+    if m:
+        role = _QUESTION_NAME_TO_ROLE.get(m.group(1).upper())
+        pytanie = " ".join(m.group(2).split())
 
-    return role, short(pytanie, 400)
+        if role and pytanie:
+            return role, short(pytanie, 400)
+
+    # Zwykle zwrocenie sie po imieniu — ten sam kanal, ktorym gada
+    # caly zespol (patrz _ADDRESS_RE). Bierzemy pierwsze zdanie do
+    # Tomka albo Bartka, ktore jest pytaniem.
+    for dopasowanie in _ADDRESS_RE.finditer(text):
+
+        rola = _VOCATIVE_TO_ROLE.get(dopasowanie.group(1).upper())
+
+        if rola not in ("PLANNER", "ENGINEER"):
+            continue
+
+        tresc = " ".join(dopasowanie.group(2).split())
+
+        if "?" not in tresc or len(tresc) < 15:
+            continue
+
+        return rola, short(tresc, 400)
+
+    return None, None
 
 
 def _extract_answer_for_critic(text, fallback_limit=400):
     """
-    Wyciąga odpowiedź oznaczoną "ODPOWIEDŹ DLA MARKA:". Gdy roli
-    umknie sam marker, oddajemy początek jej wypowiedzi — lepsze to
-    niż zgubienie odpowiedzi przez brak formatki.
+    Odpowiedz dla Marka. Najpierw patrzymy, czy ktos zwrocil sie do
+    niego po imieniu ("Marku: ..."), bo tak odpowiada czlowiek. Stara
+    formatka "ODPOWIEDŹ DLA MARKA:" dalej jest rozumiana. Gdy nie ma
+    ani jednego, ani drugiego — oddajemy poczatek wypowiedzi, bo
+    lepsze to niz zgubienie odpowiedzi przez brak naglowka.
     """
 
     text = str(text or "")
+
+    for dopasowanie in _ADDRESS_RE.finditer(text):
+
+        if _VOCATIVE_TO_ROLE.get(
+            dopasowanie.group(1).upper()
+        ) == "CRITIC":
+
+            tresc = " ".join(dopasowanie.group(2).split())
+
+            if len(tresc) >= 15:
+                return short(tresc, 500)
 
     m = _CRITIC_ANSWER_RE.search(text)
 
@@ -23155,6 +23332,33 @@ Zwróć tylko JSON.
                     ""
                 )
             ).strip()
+
+            # Zadanie chce zadzwonic/napisac pod numer, ktorego
+            # uzytkownik nigdzie nie wskazal — patrz
+            # _numer_ktorego_nikt_nie_podal(). Nie zatrzymujemy,
+            # mowimy o tym, zanim telefon zadzwoni.
+            _obcy_numer = _numer_ktorego_nikt_nie_podal(
+                task_text, goal
+            )
+
+            if _obcy_numer:
+
+                log(
+                    "MAIN",
+                    "To zadanie dzwoni/pisze pod " + _obcy_numer
+                    + ", a użytkownik nigdzie tego numeru nie podał."
+                )
+
+                _pending_team_warnings.append(
+                    "To zadanie sięga pod numer " + _obcy_numer
+                    + ", a użytkownik nigdzie go nie wskazał — ani w "
+                    "celu, ani później. Numer z książki adresowej "
+                    "jest tylko numerem kogoś; wybraliśmy go sami. "
+                    "Po drugiej stronie odbierze żywy człowiek i tego "
+                    "się nie cofnie, więc jeśli cel nie mówi wprost, "
+                    "do kogo dzwonimy, warto o to zapytać, zanim to "
+                    "pójdzie."
+                )
 
             success_condition = str(
                 decision.get(
