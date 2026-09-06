@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v255
+AEL-MINI AUTONOMOUS AGENT v256
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v255")
+    print("             AEL-MINI AUTONOMOUS AGENT v256")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2026,6 +2026,13 @@ def _only_if_new(role, key, block):
     """
     Zwraca blok tylko wtedy, gdy dla TEJ roli rozni sie od tego, co
     juz widziala. Inaczej pusty string -- nie powtarzamy sie.
+
+    v256: dotyczy takze WYPOWIEDZI KOLEGOW ("Kamil ustalil:",
+    "Tomek proponuje:"). Wczesniej szly do kazdego, w kazdym kroku,
+    nawet gdy autor w tym kroku nic nie powiedzial — a sesje rol sa
+    ciagle, wiec kazdy z nich mial te sama tresc juz w swojej
+    historii rozmowy. Powtarzanie jej to bylo wklejanie komus po raz
+    czwarty zdania, ktore sam przeczytal.
 
     Pusty blok nie kasuje pamieci: gdy cos chwilowo znika z kontekstu
     (np. checklista pusta w jednym kroku), a potem wraca w tej samej
@@ -19364,8 +19371,14 @@ def consult_team(
             include_chrome=goal_needs_chrome,
             include_android=goal_needs_android,
             extra=(
-                "\nKamil ustalił:\n" + researcher_out
-                + "\nWojtek podrzucił:\n" + wojtek_out
+                _only_if_new(
+                    "PLANNER", "od_kamila",
+                    "\nKamil ustalił:\n" + researcher_out
+                )
+                + _only_if_new(
+                    "PLANNER", "od_wojtka",
+                    "\nWojtek podrzucił:\n" + wojtek_out
+                )
                 + critic_feedback_block
                 + planner_question_block
                 + (
@@ -19474,9 +19487,18 @@ def consult_team(
             "ENGINEER",
             include_android=goal_needs_android,
             extra=(
-                "\nTomek proponuje:\n" + planner_out
-                + "\nKamil ustalił:\n" + researcher_out
-                + "\nWojtek podrzucił:\n" + wojtek_out
+                _only_if_new(
+                    "ENGINEER", "od_tomka",
+                    "\nTomek proponuje:\n" + planner_out
+                )
+                + _only_if_new(
+                    "ENGINEER", "od_kamila",
+                    "\nKamil ustalił:\n" + researcher_out
+                )
+                + _only_if_new(
+                    "ENGINEER", "od_wojtka",
+                    "\nWojtek podrzucił:\n" + wojtek_out
+                )
                 + _only_if_new(
                     "ENGINEER", "project_file",
                     _current_project_file_block()
@@ -19571,7 +19593,10 @@ def consult_team(
             include_chrome=goal_needs_chrome,
             include_android=goal_needs_android,
             extra=(
-                "\nTomek proponuje:\n" + planner_out
+                _only_if_new(
+                    "CRITIC", "od_tomka",
+                    "\nTomek proponuje:\n" + planner_out
+                )
                 + _only_if_new(
                     "CRITIC", "project_file",
                     _current_project_file_block()
