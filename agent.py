@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v234
+AEL-MINI AUTONOMOUS AGENT v235
 
 ARCHITEKTURA:
 
@@ -1278,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v234")
+    print("             AEL-MINI AUTONOMOUS AGENT v235")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1487,8 +1487,8 @@ Nazywasz się Tomek. Planujesz — jeden konkretny następny krok
 Twoja robota kończy się na propozycji; wykonaniem zajmuje się Gemini.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
-przy swojej najbliższej turze.
+jego imieniem — "Bartku: ...", "Marku: ...", "Kamilu: ...",
+"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
 """
 
 
@@ -1506,8 +1506,8 @@ kiedy trzeba sprawdzić fakt. Gdy czegoś nie da się potwierdzić,
 powiedz to wprost i zaproponuj hipotezę albo kolejny krok.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
-przy swojej najbliższej turze.
+jego imieniem — "Tomku: ...", "Bartku: ...", "Marku: ...",
+"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
 """
 
 
@@ -1523,8 +1523,8 @@ dopisz osobną linię "PYTANIE DO TOMKA: ..." (albo BARTKA) —
 odpowiedź wróci do Ciebie jeszcze w tym kroku.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
-przy swojej najbliższej turze.
+jego imieniem — "Tomku: ...", "Bartku: ...", "Kamilu: ...",
+"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
 """
 
 
@@ -1594,8 +1594,8 @@ Gotowy kod/skrypt podawaj w bloku ```...``` — MAIN może go zapisać
 do pliku bezpośrednio, bez zużycia Gemini na przepisywanie.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
-przy swojej najbliższej turze.
+jego imieniem — "Tomku: ...", "Marku: ...", "Kamilu: ...",
+"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
 """
 
 
@@ -1639,8 +1639,8 @@ podejścia, albo pytania, które warto sobie zadać. Kod i komendy
 zostaw Bartkowi. Krótko, zwykłym tekstem, bez sztywnych sekcji.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Wojtku: ..." — a on to dostanie
-przy swojej najbliższej turze.
+jego imieniem — "Tomku: ...", "Bartku: ...", "Marku: ...",
+"Kamilu: ..." — a on to dostanie przy swojej najbliższej turze.
 """
 
 
@@ -2168,6 +2168,26 @@ def _reset_progress_memory():
 # wiec zmienia sie z krokiem. Ta sama zasada, co przy _current_topic.
 
 
+# Ostatnie pytanie, jakie poszlo do danej roli — zeby nie zadawac
+# jej w kolko dokladnie tego samego zdania.
+_ostatnie_pytanie = {}
+
+# Krotkie zaczepki na sytuacje, ktora sie nie zmienila. Czlowiek nie
+# powtarza calego pytania po raz dwudziesty — mowi imie i patrzy.
+_KROTKIE_ZACZEPKI = {
+    "PLANNER": ["\n\nTomku?", "\n\nTomku — co dalej?",
+                "\n\nTomku, Twoja kolej."],
+    "CRITIC": ["\n\nMarku?", "\n\nMarku — jak to widzisz?",
+               "\n\nMarku, co Ty na to?"],
+    "ENGINEER": ["\n\nBartku?", "\n\nBartku — da się?",
+                 "\n\nBartku, Twoja działka."],
+    "RESEARCHER": ["\n\nKamilu?", "\n\nKamilu — coś wiesz?",
+                   "\n\nKamilu, sprawdzisz?"],
+    "WOJTEK": ["\n\nWojtku?", "\n\nWojtku — masz pomysł?",
+               "\n\nWojtku, a Ty jak byś to zrobił?"],
+}
+
+
 def _pytanie_do(rola, last_result, critic_objection=False):
     """
     Jedno zdanie na koncu wiadomosci: o co prosimy te role teraz.
@@ -2175,7 +2195,36 @@ def _pytanie_do(rola, last_result, critic_objection=False):
     Sytuacja decyduje o tresci — inaczej pytamy po swiezym bledzie,
     inaczej gdy Marek ma zastrzezenie, inaczej gdy po prostu idziemy
     dalej.
+
+    A gdy sytuacja sie NIE zmienila i wyszloby dokladnie to samo
+    zdanie co ostatnio — zamiast niego idzie krotka zaczepka. Pelne
+    pytanie wraca samo, gdy tylko zmieni sie sytuacja.
     """
+
+    pelne = _pytanie_pelne(rola, last_result, critic_objection)
+
+    if not pelne:
+        return ""
+
+    if _ostatnie_pytanie.get(rola) == pelne:
+
+        warianty = _KROTKIE_ZACZEPKI.get(rola)
+
+        if warianty:
+            _licznik = _ostatnie_pytanie.get(("ile", rola), 0) + 1
+            _ostatnie_pytanie[("ile", rola)] = _licznik
+            return warianty[(_licznik - 1) % len(warianty)]
+
+        return pelne
+
+    _ostatnie_pytanie[rola] = pelne
+    _ostatnie_pytanie[("ile", rola)] = 0
+
+    return pelne
+
+
+def _pytanie_pelne(rola, last_result, critic_objection=False):
+    """Pytanie wynikajace z samej sytuacji, bez pamieci o powtorkach."""
 
     blad = (
         isinstance(last_result, dict)
@@ -2298,6 +2347,7 @@ def _set_current_goal(goal):
     # v193: nowy cel = rozmowa od zera, wiec nikt niczego jeszcze
     # "nie widzial" (patrz _only_if_new).
     _reset_step_by_step_memory()
+    _ostatnie_pytanie.clear()
     _set_current_project_file(None)
     _reset_code_review_budget()
     _reset_critic_objection_memory()
@@ -5788,11 +5838,11 @@ def android_launch_app(package):
             already_launched_note = (
                 "Ta aplikacja (" + package + ") była już pomyślnie "
                 "otwarta i potwierdzona wcześniej W TYM SAMYM CELU "
-                "(pierwszy raz: " + prior + "). Jeśli to nie jest "
-                "faktycznie potrzebne (np. wcześniejsza sesja z tą "
-                "aplikacją padła), NIE otwieraj i nie potwierdzaj "
-                "jej ponownie — to marnuje cały cykl TASK-u na coś "
-                "już zrobionego. UWAGA: jeśli byłeś W TRAKCIE "
+                "(pierwszy raz: " + prior + ") — czyli ten krok jest "
+                "już za nami i otwarcie jej drugi raz zajmie cały "
+                "cykl TASK-u na coś zrobionego. Ma to sens tylko "
+                "wtedy, gdy tamta sesja faktycznie padła. UWAGA: "
+                "jeśli byłeś W TRAKCIE "
                 "interakcji z tą aplikacją (np. wpisane, ale jeszcze "
                 "niezatwierdzone dane), ponowne uruchomienie MOŻE "
                 "zresetować jej stan do początkowego — zaobserwowany "
@@ -8045,12 +8095,10 @@ def _gemini_tools_legacy():
                 "kontynuować (np. nie wiesz dokładnie jaki "
                 "fragment podać jako 'search' do "
                 "termux_patch_file, bo zgubiłeś kontekst pliku). "
-                "Odpowiedź wraca od razu jako wynik tego narzędzia "
-                "— możesz kontynuować zadanie, NIE musisz go "
-                "kończyć błędem. Limitowane do "
-                "kilku razy na zadanie — nie nadużywaj, najpierw "
-                "spróbuj sam (np. termux_read_file, żeby zobaczyć "
-                "aktualną zawartość pliku)."
+                "Odpowiedź wraca od razu jako wynik tego narzędzia, "
+                "więc zadanie idzie dalej bez kończenia go błędem. "
+                "Masz to kilka razy na zadanie; zwykle szybciej "
+                "odpowiada sam plik (termux_read_file)."
             ),
             "parameters": {
                 "type": "object",
@@ -8140,11 +8188,11 @@ def _gemini_tools_legacy():
                 "w przeglądarce, zadziała tak samo jak w konsoli "
                 "deweloperskiej. Użyj tego, gdy chrome_click/chrome_type "
                 "nie wystarczą (np. trzeba wywołać wewnętrzne API strony "
-                "bezpośrednio) — NIE pisz takiego kodu do pliku .js, bo "
-                "nic go tam nie uruchomi. NIGDY nie używaj "
-                "navigator.clipboard.readText()/writeText() — wymaga "
-                "zgody w oknie, którego nikt nie może kliknąć, i wisi aż "
-                "do timeoutu (10s). Gdy strona pokazuje nowo utworzoną "
+                "bezpośrednio). Ten kod żyje tylko w karcie — zapisany "
+                "do pliku .js nie ma się gdzie uruchomić. Osobny "
+                "przypadek: navigator.clipboard.readText()/writeText() "
+                "prosi o zgodę w okienku, którego nikt tu nie kliknie, "
+                "i wisi aż do timeoutu (10s). Gdy strona pokazuje nowo "
                 "wartość (np. klucz API) i mówi 'skopiowano do "
                 "schowka' — odczytaj ją WPROST z DOM (np. "
                 "document.querySelector(...).value/innerText tego pola/"
@@ -8229,12 +8277,11 @@ def _gemini_tools_legacy():
             "name": "android_set_clipboard",
             "description": (
                 "Ustaw systemowy schowek Androida na podany tekst. "
-                "Zwykle NIE wołaj tego osobno — użyj od razu "
-                "android_paste_text, które robi to razem z resztą "
-                "kroków w jednym, niezawodnym wywołaniu. Ten tzw. "
-                "surowy krok zostaw sobie tylko na sytuacje, gdy "
-                "faktycznie potrzebujesz kontroli nad każdym krokiem "
-                "z osobna."
+                "To surowy, pojedynczy krok — android_paste_text "
+                "robi to samo razem z resztą kroków w jednym, "
+                "niezawodnym wywołaniu i zwykle wystarcza. Ten "
+                "zostaje na sytuacje, gdy potrzebna jest kontrola "
+                "nad każdym krokiem z osobna."
             ),
             "parameters": {
                 "type": "object",
@@ -8286,9 +8333,10 @@ def _gemini_tools_legacy():
                 "zaznaczania/udostępniania Androida (przycisk "
                 "'Udostępnij', 'Wyślij do urządzenia', Bluetooth, "
                 "e-mail — zaobserwowany realny przypadek: użytkownik "
-                "zobaczył to na żywo na ekranie). Jeśli to się stanie, "
-                "NATYCHMIAST android_press('back') żeby to zamknąć — "
-                "NIE próbuj klikać niczego w tym menu. Dla ekranów bez "
+                "zobaczył to na żywo na ekranie). Wychodzi się z tego "
+                "przez android_press('back'); klikanie czegokolwiek w "
+                "tym menu prowadzi w bok — do udostępniania, nie do "
+                "zadania. Dla ekranów bez "
                 "prawdziwego pola tekstowego użyj zamiast android_type "
                 "narzędzia android_click po tekście KAŻDEGO przycisku "
                 "z osobna (np. \"1\", \"5\", \"+\", \"2\", \"7\", \"=\")."
@@ -10038,9 +10086,11 @@ def termux_run(command):
                     "curl/wget/unzip/tar/make itp.) — uruchomiona "
                     "w tle automatycznie, zamiast czekać na "
                     "COMMAND_TIMEOUT=" + str(COMMAND_TIMEOUT) + "s. "
-                    "Monitoruj przez termux_check_process(pid) i "
-                    "termux_read_file(log_file). NIE uruchamiaj "
-                    "tej samej komendy ponownie przez termux_run. "
+                    "Ona już chodzi — jej stan widać przez "
+                    "termux_check_process(pid) i termux_read_file"
+                    "(log_file), a puszczona drugi raz przez "
+                    "termux_run zaczęłaby wszystko od zera obok "
+                    "tamtej. "
                     "UWAGA: 'log_file' powyżej jest UNIKALNY dla "
                     "TEGO wywołania — nie myl go z log_file z "
                     "poprzednich komend w tym kroku/zadaniu. Jeśli "
@@ -10137,15 +10187,13 @@ def termux_run(command):
             result["suggested_next_step"] = (
                 "Komenda przekroczyła "
                 + str(result.get("timeout"))
-                + "s i została zatrzymana. NIE uruchamiaj jej "
-                "ponownie tym samym poleceniem przez termux_run. "
-                "Najpierw sprawdź faktyczny stan (termux_ls / "
-                "termux_read_file na spodziewany plik wynikowy). "
-                "Jeżeli operacja rzeczywiście musi trwać dłużej, "
-                "uruchom ją przez termux_run_background i "
-                "monitoruj przez termux_check_process / "
-                "termux_processes zamiast wołać ją ponownie "
-                "synchronicznie."
+                + "s i została zatrzymana — ale zdążyła coś zrobić, "
+                "więc faktyczny stan widać przez termux_ls albo "
+                "termux_read_file na spodziewany plik wynikowy. "
+                "Ta sama komenda przez termux_run skończy się tak "
+                "samo; jeśli to naprawdę musi trwać dłużej, jest od "
+                "tego termux_run_background i podglądanie przez "
+                "termux_check_process."
             )
 
         return result
@@ -14594,7 +14642,7 @@ def _run_script_directly(path, task_text):
     )
 
     if interactive:
-        warnings.append("python [skrypt_pyta_czlowieka]: " + interactive)
+        warnings.append("" + interactive)
 
     return {
         "ok": ok,
@@ -14803,9 +14851,9 @@ def _code_target_rejection(path, code_text):
     )
 
     fakt = (
-        "python [nie_zamazuje_danych]: NIE zapisalem kodu do "
-        + nazwa + ", bo to plik z DANYMI, a nie plik kodu. Kod "
-        "zapisujemy do .sh/.py — dane zostaja danymi."
+        "Kodu nie polozylem do "
+        + nazwa + " — ten plik trzyma dane. Kod idzie do .sh albo "
+        ".py, dane zostaja danymi."
     )
 
     if istnieje_z_danymi:
@@ -15470,7 +15518,7 @@ def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
         )
 
         _pending_team_warnings.append(
-            "python [winny_plik]: blad pochodzi z " + _winny[0]
+            "blad pochodzi z " + _winny[0]
             + ", linia " + _winny[1] + " — tak mowi sam komunikat "
             "bledu. Nie z " + Path(str(sciezka)).name
             + ", mimo ze to jego ostatnio zapisywaliśmy."
@@ -15489,7 +15537,7 @@ def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
         _set_current_project_file(przeglad["path"])
 
         _pending_team_warnings.append(
-            "python [poprawka_ani]: kod się wysypał, więc Piotr "
+            "kod się wysypał, więc Piotr "
             "obejrzał " + Path(przeglad["path"]).name + " niezależnie, "
             "a Ania naniosła poprawkę (" + str(przeglad["blocks"])
             + " x SZUKAJ/ZAMIEŃ, " + str(przeglad["size_before"])
@@ -15503,7 +15551,7 @@ def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
     else:
 
         _pending_team_warnings.append(
-            "python [poprawka_ani_nieudana]: Piotr obejrzał plik po "
+            "Piotr obejrzał plik po "
             "awarii, ale poprawki NIE udało się nanieść — "
             + str(przeglad.get("reason"))
             + " Plik jest NIEZMIENIONY. Co zauważył Piotr: "
@@ -17337,6 +17385,11 @@ _VOCATIVE_TO_ROLE = {
     "OLU": "BROWSER", "OLI": "BROWSER", "OLA": "BROWSER",
 }
 
+_WOLACZ = {
+    "Tomek": "Tomku", "Kamil": "Kamilu", "Marek": "Marku",
+    "Bartek": "Bartku", "Wojtek": "Wojtku", "Ola": "Olu",
+}
+
 _ADDRESS_RE = re.compile(
     r"^[\s*_#>-]*(?:DO\s+)?("
     + "|".join(sorted(_VOCATIVE_TO_ROLE, key=len, reverse=True))
@@ -17397,10 +17450,16 @@ def _role_inbox_block(role_name):
     for nadawca, tresc in wiadomosci[-3:]:
         lines.append(nadawca + " mówi do Ciebie: " + tresc)
 
+    # Przyklad bierzemy z imienia OSTATNIEGO nadawcy, nie ze
+    # sztywnego "Wojtku" — inaczej Wojtek dostawal podpowiedz, zeby
+    # odpisac samemu sobie.
+    _ostatni = wiadomosci[-1][0]
+    _przyklad = _WOLACZ.get(_ostatni, _ostatni)
+
     return (
         "\n" + "\n".join(lines)
-        + "\n(Odpowiedz mu w swojej wypowiedzi — zacznij linię jego "
-        "imieniem, np. \"Wojtku: ...\", to do niego wróci.)\n"
+        + "\n(Odpowiesz mu, zaczynając linię jego imieniem — "
+        "\"" + _przyklad + ": ...\" — to do niego wróci.)\n"
     )
 
 
@@ -17758,7 +17817,7 @@ def consult_team(
     delegacja_block = (
         "\nUżytkownik w celu powiedział wprost, żeby to wymyślić / "
         "wybrać samemu — na pytanie, którą wersję woli, już "
-        "odpowiedział: dowolną. Wybierzcie jedną i wykonajcie.\n"
+        "odpowiedział: dowolną. Wybór należy do was.\n"
         if _goal_delegates_decision(goal) else ""
     )
 
@@ -22886,7 +22945,7 @@ Zwróć tylko JSON.
             )
 
             _pending_team_warnings.append(
-                "python [cel_oddal_wam_wybor]: " + _oddaje_wybor
+                "" + _oddaje_wybor
             )
 
             decision = {
@@ -23079,15 +23138,12 @@ Zwróć tylko JSON.
                     )
 
                     _pending_team_warnings.append(
-                        "python [kod_przez_gemini]: MAIN umieścił "
-                        "gotowy kod w treści zadania zamiast podać "
-                        "ścieżkę pliku w \"write_engineer_code_to\", "
-                        "a z tekstu nie da się wyczytać nazwy pliku. "
-                        "Python NIE MÓGŁ zapisać kodu sam, więc "
-                        "Gemini musi go przepisywać ręcznie — to "
-                        "pali jego limit i grozi literówkami w "
-                        "kodzie. W następnej decyzji podaj ścieżkę "
-                        "pliku wprost."
+                        "W zadaniu jest gotowy kod, ale nigdzie "
+                        "nie pada nazwa pliku, do którego ma trafić "
+                        "— więc nie mam go gdzie położyć i Gemini "
+                        "musiałoby go przepisywać ręcznie. "
+                        "Wystarczy, że ktoś powie, jak ten plik ma "
+                        "się nazywać."
                     )
 
             if write_target:
@@ -23117,7 +23173,7 @@ Zwróć tylko JSON.
                     )
 
                     _pending_team_warnings.append(
-                        "python [poprawka_fragmentu]: Bartek podał "
+                        "Bartek podał "
                         "poprawkę przez SZUKAJ/ZAMIEŃ i Python naniósł "
                         "ją na " + _patch_wynik["path"] + " ("
                         + str(_patch_wynik["size_before"]) + " B -> "
@@ -23141,7 +23197,7 @@ Zwróć tylko JSON.
                     )
 
                     _pending_team_warnings.append(
-                        "python [poprawka_odrzucona]: Bartek podał "
+                        "Bartek podał "
                         "poprawkę SZUKAJ/ZAMIEŃ dla " + str(write_target)
                         + ", ale NIE dało się jej nanieść — "
                         + str(_patch_wynik.get("reason"))
@@ -23425,7 +23481,7 @@ Zwróć tylko JSON.
                         )
 
                         _pending_team_warnings.append(
-                            "python [skrypt_pyta_czlowieka]: "
+                            ""
                             + str(target_path) + " — " + _interactive
                         )
 
