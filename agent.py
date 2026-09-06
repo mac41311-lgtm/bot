@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v254
+AEL-MINI AUTONOMOUS AGENT v255
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v254")
+    print("             AEL-MINI AUTONOMOUS AGENT v255")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1745,6 +1745,11 @@ _pending_team_warnings = []
 # plik samo, kiedy Gemini po niego siega. Podzial rol bez zmian: kod
 # pisze Bartek, na dysk kładzie Python, Gemini uruchamia.
 _kod_bartka_teraz = ""
+
+# Czy MAIN w POPRZEDNIM kroku prosil o kod Bartka. To jedyny powod,
+# dla ktorego Bartek odzywa sie, choc nikt nie zawolal go po imieniu
+# — patrz consult_team().
+_main_chcial_kod = False
 
 
 # v201 -- zaobserwowany realny, kosztowny bug (log 2026-09-04, v200,
@@ -2443,6 +2448,11 @@ def _set_current_goal(goal):
     _reset_progress_memory()
     _reset_irreversible_memory()
     _reset_powody_zakonczenia()
+    _role_inbox.clear()
+    _role_response_cache.clear()
+
+    global _main_chcial_kod
+    _main_chcial_kod = False
 
     # v251: zdania uzytkownika naleza do celu, w ktorym padly.
     _przypnij_zdania_uzytkownika_do_celu(_current_goal_text)
@@ -19036,6 +19046,23 @@ def consult_team(
 
     results = {}
 
+    # KTO MOWI W TYM KROKU (v255)
+    #
+    # Uzytkownik pokazal, jak to wygladalo: w jednym kroku odzywalo
+    # sie szescioro ludzi na raz, kazde po kilka tysiecy znakow,
+    # kazde do kogos innego — bo kolejnosc byla petla, nie rozmowa.
+    # Tomek konczyl slowami "Bartku: twoja kolej", a w nastepnym
+    # kroku i tak mowili wszyscy.
+    #
+    # Teraz odzywa sie ten, kogo zawolano po imieniu (_role_inbox
+    # zbiera to od v-poprzednich) albo kogo pyta Marek. Tomek
+    # proponuje krok, wiec mowi takze wtedy, gdy nie zawolano nikogo
+    # — ktos musi powiedziec, co dalej. Marek mowi, gdy jest co
+    # oceniac.
+    _zawolani = set(_role_inbox.keys())
+
+    _pyta_marek = (_critic_question or {}).get("role")
+
     fresh_tool_error = (
         isinstance(last_result, dict)
         and last_result.get("status") == "GEMINI_TOOL_ERROR"
@@ -19047,11 +19074,13 @@ def consult_team(
     consult_researcher = (
         (step % 3 == 1)
         or fresh_tool_error
+        or "RESEARCHER" in _zawolani
+        or _pyta_marek == "RESEARCHER"
     )
 
     consult_browser = (
         goal_needs_chrome
-        and (step % 3 == 1)
+        and ((step % 3 == 1) or "BROWSER" in _zawolani)
     )
 
     # WOJTEK to jedyna rola, która NIE dostaje core_context (bez
@@ -19064,6 +19093,42 @@ def consult_team(
     consult_wojtek = (
         (step % 3 == 1)
         or fresh_tool_error
+        or "WOJTEK" in _zawolani
+    )
+
+    # Pytanie Marka to tez zawolanie — inaczej Tomek wchodzil w
+    # slowo za kazdym razem, gdy Marek pytal Bartka.
+    _ktos_zawolany = bool(_zawolani) or bool(_pyta_marek)
+
+    # Tomek proponuje krok — mowi, gdy ktos go zawolal, gdy pyta go
+    # Marek, albo gdy nie zawolano nikogo.
+    consult_planner = (
+        "PLANNER" in _zawolani
+        or _pyta_marek == "PLANNER"
+        or not _ktos_zawolany
+    )
+
+    # Bartek pisze kod. Odzywa sie, gdy ktos go zawolal, gdy pyta go
+    # Marek, gdy ostatni wynik dotyczy jego kodu, albo gdy MAIN
+    # prosil o kod w poprzednim kroku. Bez zadnego z tych powodow
+    # jego 7-11 tysiecy znakow i tak nikomu w tym kroku nie sluzy.
+    consult_engineer = (
+        "ENGINEER" in _zawolani
+        or _pyta_marek == "ENGINEER"
+        or _main_chcial_kod
+        or str(
+            last_result.get("status")
+            if isinstance(last_result, dict) else ""
+        ).startswith("ENGINEER_")
+    )
+
+    # Marek ocenia krok, zanim cokolwiek pojdzie do wykonania — wiec
+    # odzywa sie, gdy jest co oceniac albo gdy ktos zwrocil sie do
+    # niego.
+    consult_critic = (
+        consult_planner
+        or consult_engineer
+        or "CRITIC" in _zawolani
     )
 
     if consult_wojtek:
@@ -19275,7 +19340,24 @@ def consult_team(
             + _critic_question.get("text", "")
         )
 
-    results["PLANNER"] = deepseek(
+    if not consult_planner:
+
+        log(
+            "DEEPSEEK",
+            "Tomek nie odzywa sie w tym kroku — nikt go nie zawolal. "
+            "MAIN ma jego ostatni plan."
+        )
+
+        results["PLANNER"] = (
+            "[NIEAKTUALNE — Tomek nie był pytany w tym kroku, "
+            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            + _role_response_cache.get(
+                "PLANNER", "(Tomek nie zabierał jeszcze głosu.)"
+            )
+        )
+
+    else:
+        results["PLANNER"] = deepseek(
         "PLANNER",
         _team_context(
             "PLANNER",
@@ -19294,9 +19376,10 @@ def consult_team(
                 )
             )
         )
-    )
+        )
 
-    _collect_role_messages("PLANNER", results["PLANNER"])
+        _role_response_cache["PLANNER"] = results["PLANNER"]
+        _collect_role_messages("PLANNER", results["PLANNER"])
 
     if consult_browser:
 
@@ -19368,7 +19451,24 @@ def consult_team(
             + _critic_question.get("text", "")
         )
 
-    results["ENGINEER"] = deepseek(
+    if not consult_engineer:
+
+        log(
+            "DEEPSEEK",
+            "Bartek nie odzywa sie w tym kroku — nikt nie prosil go "
+            "o kod ani nie zawolal go po imieniu."
+        )
+
+        results["ENGINEER"] = (
+            "[NIEAKTUALNE — Bartek nie był pytany w tym kroku, "
+            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            + _role_response_cache.get(
+                "ENGINEER", "(Bartek nie zabierał jeszcze głosu.)"
+            )
+        )
+
+    else:
+        results["ENGINEER"] = deepseek(
         "ENGINEER",
         _team_context(
             "ENGINEER",
@@ -19393,9 +19493,10 @@ def consult_team(
                 )
             )
         )
-    )
+        )
 
-    _collect_role_messages("ENGINEER", results["ENGINEER"])
+        _role_response_cache["ENGINEER"] = results["ENGINEER"]
+        _collect_role_messages("ENGINEER", results["ENGINEER"])
 
     # Odpowiedź na poprzednie pytanie Marka + przechwycenie
     # odpowiedzi Bartka, jeśli to jego pytano.
@@ -19452,7 +19553,18 @@ def consult_team(
 
         _main_override_for_critic = None
 
-    results["CRITIC"] = deepseek(
+    if not consult_critic:
+
+        log(
+            "DEEPSEEK",
+            "Marek nie odzywa sie w tym kroku — nie padla nowa "
+            "propozycja do oceny."
+        )
+
+        results["CRITIC"] = ""
+
+    else:
+        results["CRITIC"] = deepseek(
         "CRITIC",
         _team_context(
             "CRITIC",
@@ -19474,7 +19586,9 @@ def consult_team(
                 )
             )
         )
-    )
+        )
+
+        _role_response_cache["CRITIC"] = results["CRITIC"]
 
     # Werdykt Marka czeka na Tomka do NASTĘPNEGO kroku. Przekazujemy
     # go tylko wtedy, gdy faktycznie jest zastrzeżeniem (OSTRZEŻENIE/
@@ -19644,7 +19758,7 @@ def consult_team(
         _critic_verdict_for_engineer = _critic_carry
         _critic_block_streak += 1
 
-    elif not _critic_out_full.strip():
+    elif not _critic_out_full.strip() and consult_critic:
         # v190: PUSTA odpowiedź Marka to awaria sesji, nie zgoda.
         # Dawniej wpadała w `else` niżej i ZEROWAŁA serię blokad —
         # czyli milczenie po awarii kasowało narastające ostrzeżenie
@@ -19680,7 +19794,9 @@ def consult_team(
     # zostaje — ale kiedy siega po zapis, Python ma czym ten plik
     # zapisac od reki, zamiast oddawac zespolowi odmowe.
     global _kod_bartka_teraz
-    _kod_bartka_teraz = results.get("ENGINEER", "")
+    _kod_bartka_teraz = (
+        results.get("ENGINEER", "") if consult_engineer else ""
+    )
 
     return {
         # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
@@ -19697,7 +19813,12 @@ def consult_team(
         # ale run_agent() jej potrzebuje w całości, żeby wyciąć z
         # niej blok kodu przy write_engineer_code_to (patrz
         # extract_code_block() / obsługa TASK w run_agent()).
-        "engineer_full": results.get("ENGINEER", ""),
+        # Gdy Bartek nie zabieral glosu w tym kroku, NIE ma tu jego
+        # starej odpowiedzi: extract_code_block() zapisalby wtedy do
+        # pliku kod sprzed kilku krokow jako "swiezy".
+        "engineer_full": (
+            results.get("ENGINEER", "") if consult_engineer else ""
+        ),
         "critic":    _role_output_for_team(
             "Marek (CRITIC)", results.get("CRITIC", ""), 4000, "CRITIC"
         ),
@@ -24164,6 +24285,11 @@ Zwróć tylko JSON.
 
             if write_target.lower() in ("none", "null", "-", "brak"):
                 write_target = ""
+
+            # Bartek odzywa sie w nastepnym kroku, gdy MAIN wlasnie
+            # poprosil o kod — patrz consult_team().
+            global _main_chcial_kod
+            _main_chcial_kod = bool(write_target)
 
             # v203: sciezka pliku, ktory JEST gotowy do uruchomienia —
             # niezaleznie od tego, czy powstal z calego zapisu, czy z
