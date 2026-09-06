@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v235
+AEL-MINI AUTONOMOUS AGENT v236
 
 ARCHITEKTURA:
 
@@ -1278,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v235")
+    print("             AEL-MINI AUTONOMOUS AGENT v236")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1600,33 +1600,34 @@ jego imieniem — "Tomku: ...", "Marku: ...", "Kamilu: ...",
 
 
 PROGRESS_ESTIMATOR_PROMPT = """
-Nazywasz się Ela. Oceniasz, ile procent celu jest FAKTYCZNIE
-zrobione — nie ile Gemini zadeklarowało. Cel może być czymkolwiek
-(gra, aplikacja, skrypt, strona...) — rozpoznaj go z treści.
+Nazywasz się Ela. Ktoś pyta Cię, ile z celu jest już naprawdę
+zrobione, a Ty patrzysz na to trzeźwo i mówisz liczbę.
 
-Dostajesz trzy rzeczy:
-- Ostatnie kroki — to WŁASNE relacje Gemini, mogą mijać się z prawdą.
-- Punkty tego celu policzone przez Pythona: "potwierdzone dowodem"
-  znaczy, że Python sam to sprawdził (plik na dysku, realny wynik na
-  ekranie); "z deklaracji Gemini" znaczy, że tylko ono tak napisało —
-  traktuj to jako niepewne, gdzieś pomiędzy faktem a porażką.
-- Co widać teraz na ekranie. Telefon żyje własnym życiem między
-  krokami (aplikacje się zamykają, ekran gaśnie), więc gdy wcześniejszy
-  krok dotyczył PRZEJŚCIOWEJ czynności (np. "otwórz kalkulator,
-  potwierdź wynik"), jej zniknięcie z ekranu jest normalne i ocena
-  zostaje bez zmian. Na ekranie szukaj tego, co MA zostać widoczne do
-  końca (finalna karta, docelowy ekran).
+Materiał, który dostajesz, jest trzech rodzajów i wart jest różnie:
 
-Bądź realistyczny. "Zapisano plik" to co innego niż "cel działa i jest
-potwierdzony" — zwykle potrzeba fizycznego dowodu (zbudowany i
-uruchomiony APK ze zrzutem ekranu; realny wynik skryptu; potwierdzony
-stan na ekranie). Przy powtarzających się błędach bez postępu obniż
-ocenę, nawet jeśli wcześniej było wyżej.
+Relacje Gemini o własnej pracy — pisane przez wykonawcę o sobie
+samym, więc bywają optymistyczne.
 
-Zwróć WYŁĄCZNIE JSON, bez żadnego dodatkowego tekstu:
+To, co Python sprawdził albo zobaczył sam: punkty potwierdzone
+dowodem (plik leży na dysku, tekst faktycznie był na ekranie) oraz
+lista wywołań narzędzi, które naprawdę się wykonały i zwróciły
+wynik. To jest twardy grunt — udane wywołanie termux-telephony-call
+znaczy, że telefon zadzwonił, nawet jeśli nic po sobie nie zostawiło
+na dysku. Wiele celów tak właśnie wygląda: rozmowa, kliknięcie,
+wysłana wiadomość nie zostawiają pliku, a jednak się wydarzyły.
+
+Stan ekranu teraz. Telefon żyje własnym życiem między krokami —
+aplikacje się zamykają, ekran gaśnie — więc zniknięcie czegoś
+przejściowego (otwarty kalkulator, okno dialera) nie cofa postępu.
+Na ekranie szukasz tego, co ma zostać widoczne do końca.
+
+Zapisany plik to jeszcze nie działający cel. Powtarzające się błędy
+bez ruchu do przodu też coś mówią.
+
+Odpowiadasz samym JSON-em, bez niczego wokół:
 {
   "percent": <liczba całkowita 0-100>,
-  "summary": "krótkie uzasadnienie po polsku, maksymalnie 2 zdania"
+  "summary": "dwa zdania po polsku, dlaczego tyle"
 }
 """
 
@@ -16578,6 +16579,65 @@ def _labels_only(state_text, limit=400):
     return out
 
 
+def _co_narzedzia_naprawde_zrobily(ile=6):
+    """
+    Zdanie o tym, co w tym celu FAKTYCZNIE sie wykonalo — liczone z
+    tool_trace, czyli z zapisu udanych wywolan narzedzi, nie z tego,
+    co Gemini o sobie napisalo. Pusty string, gdy nic sie nie udalo.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, cel "zadzwon do
+    Beaty"). Telefon zadzwonil — termux-telephony-call wykonalo sie i
+    zwrocilo ok. Ela dostawala jednak wylacznie relacje Gemini, opatrzone
+    zdaniem "traktuj z rezerwa", oraz checkliste, w ktorej ten punkt mial
+    status ZADEKLAROWANY_BEZ_DOWODU (warunek sukcesu nie wymienial
+    zadnego pliku, a dzwonienie nie zostawia napisu na ekranie). Nie
+    miala z czego wywnioskowac, ze cokolwiek sie stalo, i ogłosiła 0%
+    przy wykonanym polaczeniu.
+
+    Python ten dowod ma i mial przez caly czas — verify_final() korzysta
+    z niego od v228. Ela dostaje teraz dokladnie to samo.
+    """
+
+    zrobione = []
+
+    for punkt in _load_progress_checklist():
+
+        for wpis in (punkt.get("tool_trace") or []):
+
+            if not isinstance(wpis, dict) or not wpis.get("ok"):
+                continue
+
+            nazwa = str(wpis.get("tool") or "").strip()
+            dowod = str(wpis.get("evidence") or "").strip()
+
+            if not nazwa:
+                continue
+
+            zrobione.append(
+                nazwa + (" — " + short(dowod, 120) if dowod else "")
+            )
+
+    if not zrobione:
+        return ""
+
+    # Od najnowszych, bez powtorek — te same narzedzia wracaja co krok.
+    widziane = []
+
+    for wiersz in reversed(zrobione):
+        if wiersz not in widziane:
+            widziane.append(wiersz)
+        if len(widziane) >= ile:
+            break
+
+    return (
+        "\nA to wykonalo sie naprawde — Python widzial te wywolania i "
+        "ich wyniki, to nie sa niczyje deklaracje (lacznie udanych: "
+        + str(len(zrobione)) + "):\n"
+        + "\n".join("- " + w for w in reversed(widziane))
+        + "\n"
+    )
+
+
 def estimate_progress(goal, chrome_text=None, android_text=None):
     """
     Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
@@ -16653,14 +16713,17 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
 
     # v191: bez CEL-u — Ela dostała go raz (patrz
     # _goal_briefing_for) i ma go w historii swojej rozmowy.
+    # v236: dowód z tool_trace — patrz _co_narzedzia_naprawde_zrobily().
+    narzedzia_block = _co_narzedzia_naprawde_zrobily()
+
     prompt = f"""
-OSTATNIE KROKI (od najstarszego do najnowszego — własne relacje
-Gemini, traktuj z rezerwą):
+Tak to opisało Gemini, od najstarszego kroku do najnowszego — to jego
+własne relacje:
 {_human_task_summary_lines(summaries)}
-{checklist_block}
+{checklist_block}{narzedzia_block}
 {device_state_block}
-Zwróć WYŁĄCZNIE JSON zgodnie z formatem z Twojego prompta
-systemowego.
+Ile z tego celu jest naprawdę zrobione? Odpowiedz samym JSON-em,
+w formacie ze swojego prompta.
 """
 
     raw = deepseek(
