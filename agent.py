@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v233
+AEL-MINI AUTONOMOUS AGENT v234
 
 ARCHITEKTURA:
 
@@ -1278,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v233")
+    print("             AEL-MINI AUTONOMOUS AGENT v234")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1727,6 +1727,13 @@ _goal_briefed = set()
 # powiedzieć, a nie liczyć, że ktoś się domyśli. Opróżniane przy
 # każdym wywołaniu consult_team().
 _pending_team_warnings = []
+
+
+# Ostatnia, pelna wypowiedz Bartka (ENGINEER) z biezacej narady.
+# Ustawia ja consult_team(); czyta termux_write_file(), zeby zapisac
+# plik samo, kiedy Gemini po niego siega. Podzial rol bez zmian: kod
+# pisze Bartek, na dysk kładzie Python, Gemini uruchamia.
+_kod_bartka_teraz = ""
 
 
 # v201 -- zaobserwowany realny, kosztowny bug (log 2026-09-04, v200,
@@ -8939,43 +8946,89 @@ def termux_write_file(path, content, append=False):
 
         if (_code_suffix or _has_shebang) and not _is_custom_tool:
 
+            # Gemini siega po zapis kodu. Podzial rol zostaje: kod
+            # pisze Bartek, na dysk kladzie go Python, Gemini
+            # uruchamia. Wiec Python po prostu KLADZIE TEN PLIK —
+            # kodem Bartka z biezacej narady — i mowi o tym zwyklym
+            # zdaniem.
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (logi 2026-09-05 i
+            # 2026-09-06). Wczesniej wracala stad odmowa: liczba
+            # mnoga zakazow, odsylacz do pola, ktore widzi wylacznie
+            # MAIN, i status BLAD NARZEDZIA. Zespol czytal to jako
+            # sciane i przez kilkanascie krokow szukal, jak ja
+            # obejsc — Kamil nazwal ja "blokada polityczna", Bartek
+            # "polityczna, nie techniczna", a MAIN dwa razy z rzedu
+            # skonczyl na prosbie, zeby UZYTKOWNIK wklepal kod (raz z
+            # kluczami API) recznie do terminala. Zadna z tych rzeczy
+            # nie byla potrzebna: kod lezal gotowy w wypowiedzi
+            # Bartka, sciezke Gemini wlasnie podalo.
+            _kod = extract_code_block(_kod_bartka_teraz or "")
+
+            _blokada = (
+                _code_target_rejection(str(p), _kod) if _kod else None
+            )
+
+            if _kod and not _blokada:
+
+                try:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(_kod, encoding="utf-8")
+                    _track_project_path(p)
+
+                except Exception as _e:
+                    return {
+                        "ok": False,
+                        "error": str(_e),
+                        "path": str(p)
+                    }
+
+                log(
+                    "GEMINI",
+                    "Zapis " + p.name + " wzialem na siebie — "
+                    "leci kod Bartka, 1:1. Uruchom ten plik."
+                )
+
+                return {
+                    "ok": True,
+                    "path": str(p),
+                    "bytes": len(_kod.encode("utf-8")),
+                    "written_by": "python",
+                    "message": (
+                        "Ten plik zapisalem ja, kodem Bartka z tej "
+                        "narady — jest na dysku, w calosci. Twoja "
+                        "czesc to uruchomienie go i sprawdzenie, co "
+                        "z tego wyszlo."
+                    )
+                }
+
+            # Kodu Bartka nie ma albo nie wolno go tu polozyc
+            # (_code_target_rejection: plik z danymi). Mowimy o tym
+            # krotko i po ludzku, bez rozpisywania regul.
+            _powod = (
+                "ten plik trzyma dane, wiec kod do niego nie wchodzi"
+                if _blokada else
+                "nie mam jeszcze kodu Bartka do tego pliku"
+            )
+
             log(
                 "GEMINI",
-                "ODMOWA zapisu kodu do " + p.name + " — kod pisze "
-                "Bartek, a zapisuje Python. Gemini ma go URUCHOMIC."
+                "Nie zapisalem " + p.name + " — " + _powod + "."
             )
+
+            if _blokada:
+                _pending_team_warnings.append(_blokada[1])
 
             return {
                 "ok": False,
-                "error": "GEMINI_NIE_PISZE_KODU",
+                "error": "BRAK_KODU_DO_ZAPISU",
                 "path": str(p),
                 "message": (
-                    "Nie zapisuje kodu — to nie jest Twoje zadanie. "
-                    "Kod pisze Bartek (ENGINEER), a na dysk zapisuje "
-                    "go sam Python, w calosci i 1:1, bez Twojego "
-                    "udzialu. Ty jestes wykonawca: uruchamiasz, "
-                    "klikasz, sprawdzasz wynik.\n\n"
-                    "Co zrobic zamiast tego:\n"
-                    "- Jesli plik JUZ istnieje — po prostu go uruchom "
-                    "(termux_run, np. `bash " + p.name + "`).\n"
-                    "- Jesli pliku nie ma — zakoncz zadanie i zglos "
-                    "MAIN-owi, zeby w kolejnej decyzji podal sciezke "
-                    "w polu \"write_engineer_code_to\". Python "
-                    "zapisze go wtedy sam, zanim dostaniesz zadanie.\n"
-                    "- Jesli chodzilo o POPRAWKE fragmentu "
-                    "istniejacego pliku — uzyj termux_patch_file "
-                    "(search/replace), nie nadpisuj calosci.\n\n"
-                    "Zwykle pliki z danymi (konfiguracja, wartosc, "
-                    "tekst) mozesz zapisywac normalnie — odmowa "
-                    "dotyczy wylacznie KODU/SKRYPTOW."
-                ),
-                "gemini_wrote_code_warning": (
-                    "Gemini probowalo ZAPISAC KOD do " + p.name
-                    + " zamiast go uruchomic. Kod ma pisac Bartek, a "
-                    "zapisywac Python (write_engineer_code_to) — "
-                    "jesli ten plik jest potrzebny, MAIN musi podac "
-                    "jego sciezke w tym polu przy nastepnej decyzji."
-                ),
+                    "Nie zapisalem tego pliku — " + _powod + ". "
+                    "Kod do plikow pisze Bartek, a ja go klade na "
+                    "dysk; napisz w raporcie, czego tu brakuje, a "
+                    "zespol to uzupelni w nastepnym kroku."
+                )
             }
 
         p.parent.mkdir(
@@ -12946,7 +12999,6 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "dom_fields_warning",
                         "screen_unreadable_warning",
                         "fabricated_evidence_warning",
-                        "gemini_wrote_code_warning",
                         "missing_file_answer",
                         "stale_warning"
                     ):
@@ -14607,117 +14659,6 @@ _URUCHOM_SKRYPT_RE = re.compile(
 )
 
 
-def _domknij_odmowe_pisania_kodu(last_result, engineer_full):
-    """
-    Gemini chcialo zapisac kod i slusznie odbilo sie od
-    GEMINI_NIE_PISZE_KODU. Zamiast zostawiac zespol z sama odmowa —
-    zapisujemy ten plik sami, bo kod Bartka lezy gotowy obok.
-
-    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, 22:59-23:04, cel
-    "zadzwon do Beaty z asystentem glosowym"). Trzy razy z rzedu
-    Gemini probowalo zapisac skrypt (configure_call.sh, potem
-    voice_assistant.py) i trzy razy dostalo odmowe. Odmowa mowi
-    Gemini: "zglos MAIN-owi, zeby podal sciezke w
-    write_engineer_code_to". Tyle ze to pole widzi TYLKO MAIN, w
-    swoim prompcie — Tomek zajrzal na liste narzedzi, nie znalazl go
-    i oglosil: "narzedzie write_engineer_code_to NIE ISTNIEJE w tym
-    srodowisku". MAIN mu uwierzyl i zamknal cel jako FAILED, po czym
-    poprosil UZYTKOWNIKA, zeby recznie wklepal heredoc z kluczami API
-    do terminala.
-
-    Uklad rol byl caly czas poprawny i zostaje: kod pisze Bartek,
-    zapisuje Python, Gemini uruchamia. Brakowalo ostatniego ogniwa —
-    ktos musial faktycznie ten plik zapisac, a wszyscy czekali na
-    siebie nawzajem. Od tego jest Python, ktory ma i sciezke (z
-    odmowy), i kod (od Bartka).
-
-    Zabezpieczenie z v207 zostaje: _code_target_rejection() dalej
-    pilnuje, zeby kod nie wyladowal w pliku z danymi.
-    """
-
-    if not isinstance(last_result, dict):
-        return
-
-    wynik = last_result.get("tool_result") or {}
-
-    if not isinstance(wynik, dict):
-        return
-
-    if wynik.get("error") != "GEMINI_NIE_PISZE_KODU":
-        return
-
-    sciezka = str(wynik.get("path") or "").strip()
-
-    # W logu Gemini podalo "$HOME/configure_call.sh", co rozwinelo sie
-    # na ".../home/$HOME/configure_call.sh" — powloka tej zmiennej tu
-    # nie rozwija, wiec robimy to sami.
-    for prefiks in ("$HOME/", "${HOME}/", "~/"):
-        sciezka = sciezka.replace(prefiks, "")
-
-    kod = extract_code_block(engineer_full or "")
-
-    if not sciezka or not kod:
-        return
-
-    odmowa = _code_target_rejection(sciezka, kod)
-
-    if odmowa:
-        log(
-            "MAIN",
-            "Gemini odbiło się od zakazu pisania kodu, ale NIE "
-            "zapisuję tego za nie — " + odmowa[0] + "."
-        )
-        _pending_team_warnings.append(odmowa[1])
-        return
-
-    try:
-        cel = _resolve_home_relative_path(sciezka)
-
-        if cel.suffix.lower() == ".py":
-
-            blad = _python_syntax_error(kod)
-
-            if blad:
-                log(
-                    "MAIN",
-                    "Kod Bartka do " + cel.name + " ma błąd składni ("
-                    + short(blad, 200) + ") — nie zapisuję go."
-                )
-                _pending_team_warnings.append(
-                    "Chciałem zapisać kod Bartka do " + str(cel)
-                    + " za Gemini, ale to nie jest poprawny Python: "
-                    + short(blad, 300) + " — poprawcie i wracamy."
-                )
-                return
-
-        cel.parent.mkdir(parents=True, exist_ok=True)
-        cel.write_text(kod, encoding="utf-8")
-
-        _track_project_path(cel)
-
-    except Exception as e:
-        log(
-            "MAIN",
-            "Nie udało się zapisać kodu za Gemini do " + sciezka
-            + ": " + str(e)
-        )
-        return
-
-    log(
-        "MAIN",
-        "Gemini nie pisze kodu — więc zapisałem go sam: " + str(cel)
-        + " (" + str(len(kod)) + " znaków, kod Bartka). Gemini ma go "
-        "teraz tylko uruchomić."
-    )
-
-    _pending_team_warnings.append(
-        "Gemini chciało zapisać kod do " + str(cel) + " i odbiło się "
-        "od zakazu — to nie jego rola. Zapisałem ten plik sam, w "
-        "całości, kodem Bartka. Plik JEST na dysku: kolejny krok ma "
-        "go już tylko uruchomić, nie pisać od nowa."
-    )
-
-
 def _skrypt_do_uruchomienia_ktorego_nie_ma(task_text):
     """
     Sciezka skryptu, ktory zadanie kaze uruchomic, a ktorego na dysku
@@ -15172,6 +15113,48 @@ def _looks_like_shell_script(code, target_path):
         return False
 
     return bool(_SHELL_SCRIPT_MARKERS.search(code or ""))
+
+
+# `cat > plik << 'EOF' ... EOF` -- czyli tresc pliku owinieta w
+# komende, ktora ma ja zapisac.
+_HEREDOC_RE = re.compile(
+    r"(?:cat|tee)\s+(?:-a\s+)?>+\s*(?P<plik>[^\s<>|;&]+)\s*"
+    r"<<-?\s*(?P<cudz>['\"]?)(?P<znacznik>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?P=cudz)\s*\n(?P<tresc>.*?)\n(?P=znacznik)\s*$",
+    re.DOTALL | re.MULTILINE
+)
+
+
+def _tresc_z_heredoc(code, target_path):
+    """
+    Wyluskuje TRESC PLIKU z bloku, ktory jest komenda zapisujaca ten
+    plik (`cat > plik << 'EOF' ... EOF`) — albo None.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, KROK 3 i 4).
+    Bartek napisal czysty kod Pythona, ale owinal go w instrukcje
+    zapisu, bo zespol byl przekonany, ze zapis jest zablokowany.
+    _looks_like_shell_script() slusznie zauwazyl komendy powloki i
+    krok umarl na komunikacie "ODRZUCONE", co utwierdzilo wszystkich,
+    ze sciana jest prawdziwa — dwa kroki z rzedu, oba zakonczone
+    prosba, zeby uzytkownik wklepal ten plik recznie.
+
+    Tymczasem tresc pliku byla w tym bloku w calosci, dokladnie tam,
+    gdzie zawsze: miedzy znacznikami heredoc. Wystarczy ja wziac.
+    """
+
+    cel = Path(str(target_path)).name
+
+    for m in _HEREDOC_RE.finditer(str(code or "")):
+
+        if Path(m.group("plik").strip().strip("'\"")).name != cel:
+            continue
+
+        tresc = m.group("tresc")
+
+        if tresc.strip():
+            return tresc
+
+    return None
 
 
 _PYTHON_SCRIPT_MARKERS = re.compile(
@@ -18776,6 +18759,13 @@ def consult_team(
         readable_report,
     ])
 
+    # Kod, ktory Bartek napisal w TEJ naradzie, odlozony tam, gdzie
+    # siegnie po niego termux_write_file. Gemini nie pisze kodu i tak
+    # zostaje — ale kiedy siega po zapis, Python ma czym ten plik
+    # zapisac od reki, zamiast oddawac zespolowi odmowe.
+    global _kod_bartka_teraz
+    _kod_bartka_teraz = results.get("ENGINEER", "")
+
     return {
         # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
         # nie jako milcząca zgoda — patrz _role_output_for_team().
@@ -19899,9 +19889,14 @@ def _narzedzia_telefonu_block():
     if not narzedzia:
         return ""
 
+    # Sam spis, bez zadnej oceny. v231 dopisywal tu "dzialajace
+    # lokalnie, bez zakladania kont i bez oplat" -- i Marek zaczal
+    # cytowac to jako "mamy wyrazny, powtarzany warunek: dzialamy bez
+    # zakladania kont i bez oplat" (log 2026-09-06, KROK 1), czego
+    # uzytkownik nigdy nie powiedzial. Fakt o srodowisku ma byc
+    # faktem; co z niego wynika, zespol ustala sam.
     return (
-        "\nTen telefon ma pod ręką własne narzędzia, działające "
-        "lokalnie, bez zakładania kont i bez opłat:\n"
+        "\nTen telefon ma pod ręką swoje własne narzędzia:\n"
         + ", ".join(narzedzia)
         + "\n"
     )
@@ -22537,11 +22532,6 @@ def run_agent(goal):
                         {"tool_calls": result.get("tool_calls")}
                     )
 
-                _domknij_odmowe_pisania_kodu(
-                    last_result,
-                    team.get("engineer_full", "")
-                )
-
             continue
 
         # ------------------------------------------------------
@@ -23238,30 +23228,45 @@ Zwróć tylko JSON.
                     target_path
                 ):
 
-                    last_result = {
-                        "status":
-                            "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
-                        "message": (
-                            "write_engineer_code_to ODRZUCONE: "
-                            "blok kodu od ENGINEER "
-                            "wygląda jak SKRYPT POWŁOKI (zawiera "
-                            "np. 'cat > plik << EOF' albo "
-                            "podstawienie $(...)), nie treść "
-                            "pliku " + str(target_path) + ". "
-                            "Zapisanie tego dosłownie jako "
-                            "zawartość pliku by go uszkodziło. "
-                            "Jeżeli to naprawdę miał być skrypt do "
-                            "WYKONANIA — zrób zwykły TASK i każ "
-                            "Gemini uruchomić go przez termux_run, "
-                            "NIE używaj write_engineer_code_to. "
-                            "Jeżeli to miała być treść pliku — "
-                            "poproś ENGINEER o czysty "
-                            "kod pliku, bez komend powłoki wokół "
-                            "niego."
-                        )
-                    }
+                    # Najpierw sprawdzamy, czy tresc tego pliku nie
+                    # lezy po prostu w srodku tej komendy — bardzo
+                    # czesto lezy. Wtedy ja bierzemy i idziemy dalej,
+                    # zamiast zabijac krok.
+                    _z_heredoc = _tresc_z_heredoc(
+                        engineer_code,
+                        target_path
+                    )
 
-                    continue
+                    if _z_heredoc:
+
+                        engineer_code = _z_heredoc
+
+                        log(
+                            "MAIN",
+                            "Bartek owinął treść " + target_path.name
+                            + " w komendę zapisującą — wyjąłem ją ze "
+                            "środka i zapisuję sam."
+                        )
+
+                    else:
+
+                        last_result = {
+                            "status":
+                                "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
+                            "message": (
+                                "Blok od Bartka to komendy do "
+                                "wykonania, a nie treść pliku "
+                                + str(target_path) + " — zapisany "
+                                "dosłownie zepsułby ten plik, więc "
+                                "go nie zapisałem. Jeśli to miały "
+                                "być komendy, niech Gemini je "
+                                "uruchomi zwykłym TASKiem; jeśli "
+                                "treść pliku — Bartek poda ją bez "
+                                "komend wokół."
+                            )
+                        }
+
+                        continue
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: lustrzane odbicie powyższego —
@@ -23280,19 +23285,13 @@ Zwróć tylko JSON.
                         "status":
                             "ENGINEER_CODE_LOOKS_LIKE_PYTHON_SCRIPT",
                         "message": (
-                            "write_engineer_code_to ODRZUCONE: "
-                            "blok kodu od ENGINEER "
-                            "wygląda jak PYTHON (zawiera "
-                            "'import ...'/'from ... import'/"
-                            "'def ...(' itp.), a docelowa ścieżka "
-                            "to " + str(target_path) + " (.sh). "
-                            "Uruchomienie tego przez `bash` zwróci "
-                            "wyłącznie błędy składni ('import: "
-                            "command not found' i podobne), nie "
-                            "prawdziwy wynik. Jeżeli kod ma być "
-                            "Pythonem — zmień docelową ścieżkę na "
-                            ".py i każ Gemini uruchomić go przez "
-                            "`python3 plik.py`, nie `bash plik.py`. "
+                            "Kod od Bartka to Python, a plik "
+                            "docelowy ma końcówkę .sh ("
+                            + str(target_path) + ") — bash "
+                            "wypluje na tym same błędy składni, "
+                            "więc go tam nie położyłem. Wystarczy "
+                            "ta sama treść pod nazwą .py i "
+                            "uruchomienie przez python3. "
                             "Jeżeli to miał być czysty Bash — "
                             "poproś ENGINEER o kod bez składni "
                             "Pythona."
@@ -23323,20 +23322,14 @@ Zwróć tylko JSON.
                             "status":
                                 "ENGINEER_CODE_INVALID_PYTHON_SYNTAX",
                             "message": (
-                                "write_engineer_code_to ODRZUCONE: "
-                                "docelowa ścieżka to " + str(target_path)
-                                + " (.py), ale blok kodu od ENGINEER "
-                                "NIE JEST poprawnym Pythonem — próba "
-                                "kompilacji zwróciła: " + syntax_error
-                                + ". To zwykle oznacza, że ENGINEER "
-                                "podał POLECENIE URUCHOMIENIA (np. "
-                                "\"cd ... && python plik.py\") zamiast "
-                                "TREŚCI samego pliku. Poproś ENGINEER "
-                                "o czystą treść pliku .py, bez "
-                                "poleceń powłoki wokół niej — samo "
-                                "uruchomienie (jeśli potrzebne) należy "
-                                "do zwykłego TASKu, nie do tego bloku "
-                                "kodu."
+                                "Nie położyłem tego do "
+                                + str(target_path) + ", bo Python "
+                                "się na tym wykłada: " + syntax_error
+                                + ". Zwykle znaczy to, że w bloku "
+                                "jest komenda uruchamiająca, a nie "
+                                "treść samego pliku — Bartku, podaj "
+                                "samą treść, uruchomienie zrobimy "
+                                "osobnym krokiem."
                             )
                         }
 
@@ -23374,24 +23367,17 @@ Zwróć tylko JSON.
                             "status":
                                 "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
                             "message": (
-                                "write_engineer_code_to ODRZUCONE: "
-                                "plik " + str(target_path)
+                                "Plik " + str(target_path)
                                 + " ma już " + str(existing_size)
-                                + "B, a nowy blok kodu od "
-                                "ENGINEER ma tylko "
-                                + str(new_size) + "B (mniej niż "
-                                "40% obecnego rozmiaru). To wygląda "
-                                "na FRAGMENT/poprawkę, nie cały "
-                                "plik — nadpisanie zniszczyłoby "
-                                "resztę. Jeżeli to naprawdę cała "
-                                "nowa zawartość pliku, zmień "
-                                "podejście (np. poproś "
-                                "ENGINEER o "
-                                "potwierdzenie że plik ma być "
-                                "krótszy). Jeżeli to poprawka "
-                                "fragmentu — utwórz zwykły TASK z "
-                                "termux_patch_file (search/replace) "
-                                "zamiast write_engineer_code_to."
+                                + "B, a nowy blok ma "
+                                + str(new_size) + "B — to wygląda "
+                                "na fragment, nie na cały plik, "
+                                "więc nie nadpisałem, żeby nie "
+                                "zgubić reszty. Bartku: albo "
+                                "potwierdź, że plik ma być krótszy, "
+                                "albo daj samą poprawkę przez "
+                                "SZUKAJ/ZAMIEŃ — nałożę ją na "
+                                "istniejącą treść."
                             )
                         }
 
