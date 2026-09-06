@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v232
+AEL-MINI AUTONOMOUS AGENT v233
 
 ARCHITEKTURA:
 
@@ -1278,7 +1278,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v232")
+    print("             AEL-MINI AUTONOMOUS AGENT v233")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14607,6 +14607,117 @@ _URUCHOM_SKRYPT_RE = re.compile(
 )
 
 
+def _domknij_odmowe_pisania_kodu(last_result, engineer_full):
+    """
+    Gemini chcialo zapisac kod i slusznie odbilo sie od
+    GEMINI_NIE_PISZE_KODU. Zamiast zostawiac zespol z sama odmowa —
+    zapisujemy ten plik sami, bo kod Bartka lezy gotowy obok.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-05, 22:59-23:04, cel
+    "zadzwon do Beaty z asystentem glosowym"). Trzy razy z rzedu
+    Gemini probowalo zapisac skrypt (configure_call.sh, potem
+    voice_assistant.py) i trzy razy dostalo odmowe. Odmowa mowi
+    Gemini: "zglos MAIN-owi, zeby podal sciezke w
+    write_engineer_code_to". Tyle ze to pole widzi TYLKO MAIN, w
+    swoim prompcie — Tomek zajrzal na liste narzedzi, nie znalazl go
+    i oglosil: "narzedzie write_engineer_code_to NIE ISTNIEJE w tym
+    srodowisku". MAIN mu uwierzyl i zamknal cel jako FAILED, po czym
+    poprosil UZYTKOWNIKA, zeby recznie wklepal heredoc z kluczami API
+    do terminala.
+
+    Uklad rol byl caly czas poprawny i zostaje: kod pisze Bartek,
+    zapisuje Python, Gemini uruchamia. Brakowalo ostatniego ogniwa —
+    ktos musial faktycznie ten plik zapisac, a wszyscy czekali na
+    siebie nawzajem. Od tego jest Python, ktory ma i sciezke (z
+    odmowy), i kod (od Bartka).
+
+    Zabezpieczenie z v207 zostaje: _code_target_rejection() dalej
+    pilnuje, zeby kod nie wyladowal w pliku z danymi.
+    """
+
+    if not isinstance(last_result, dict):
+        return
+
+    wynik = last_result.get("tool_result") or {}
+
+    if not isinstance(wynik, dict):
+        return
+
+    if wynik.get("error") != "GEMINI_NIE_PISZE_KODU":
+        return
+
+    sciezka = str(wynik.get("path") or "").strip()
+
+    # W logu Gemini podalo "$HOME/configure_call.sh", co rozwinelo sie
+    # na ".../home/$HOME/configure_call.sh" — powloka tej zmiennej tu
+    # nie rozwija, wiec robimy to sami.
+    for prefiks in ("$HOME/", "${HOME}/", "~/"):
+        sciezka = sciezka.replace(prefiks, "")
+
+    kod = extract_code_block(engineer_full or "")
+
+    if not sciezka or not kod:
+        return
+
+    odmowa = _code_target_rejection(sciezka, kod)
+
+    if odmowa:
+        log(
+            "MAIN",
+            "Gemini odbiło się od zakazu pisania kodu, ale NIE "
+            "zapisuję tego za nie — " + odmowa[0] + "."
+        )
+        _pending_team_warnings.append(odmowa[1])
+        return
+
+    try:
+        cel = _resolve_home_relative_path(sciezka)
+
+        if cel.suffix.lower() == ".py":
+
+            blad = _python_syntax_error(kod)
+
+            if blad:
+                log(
+                    "MAIN",
+                    "Kod Bartka do " + cel.name + " ma błąd składni ("
+                    + short(blad, 200) + ") — nie zapisuję go."
+                )
+                _pending_team_warnings.append(
+                    "Chciałem zapisać kod Bartka do " + str(cel)
+                    + " za Gemini, ale to nie jest poprawny Python: "
+                    + short(blad, 300) + " — poprawcie i wracamy."
+                )
+                return
+
+        cel.parent.mkdir(parents=True, exist_ok=True)
+        cel.write_text(kod, encoding="utf-8")
+
+        _track_project_path(cel)
+
+    except Exception as e:
+        log(
+            "MAIN",
+            "Nie udało się zapisać kodu za Gemini do " + sciezka
+            + ": " + str(e)
+        )
+        return
+
+    log(
+        "MAIN",
+        "Gemini nie pisze kodu — więc zapisałem go sam: " + str(cel)
+        + " (" + str(len(kod)) + " znaków, kod Bartka). Gemini ma go "
+        "teraz tylko uruchomić."
+    )
+
+    _pending_team_warnings.append(
+        "Gemini chciało zapisać kod do " + str(cel) + " i odbiło się "
+        "od zakazu — to nie jego rola. Zapisałem ten plik sam, w "
+        "całości, kodem Bartka. Plik JEST na dysku: kolejny krok ma "
+        "go już tylko uruchomić, nie pisać od nowa."
+    )
+
+
 def _skrypt_do_uruchomienia_ktorego_nie_ma(task_text):
     """
     Sciezka skryptu, ktory zadanie kaze uruchomic, a ktorego na dysku
@@ -22425,6 +22536,11 @@ def run_agent(goal):
                         "tool_limit_hit",
                         {"tool_calls": result.get("tool_calls")}
                     )
+
+                _domknij_odmowe_pisania_kodu(
+                    last_result,
+                    team.get("engineer_full", "")
+                )
 
             continue
 
