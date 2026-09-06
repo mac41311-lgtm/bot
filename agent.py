@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v236
+AEL-MINI AUTONOMOUS AGENT v237
 
 ARCHITEKTURA:
 
@@ -684,7 +684,9 @@ PROJECT_DIRS_FILE = AGENT_DIR / "project_dirs.json"
 
 # Rejestr punktów (TASK-ów) bieżącego celu z ich statusem —
 # ZWERYFIKOWANY (Python sam potwierdził dowód, nie tylko deklarację
-# Gemini), ZADEKLAROWANY_BEZ_DOWODU, BLAD, W_TOKU. Patrz
+# Gemini), POTWIERDZONY_NARZEDZIAMI (narzędzia realnie zadziałały,
+# ale warunku nie da się sprawdzić z dysku — v237),
+# ZADEKLAROWANY_BEZ_DOWODU, BLAD, W_TOKU. Patrz
 # _checklist_add()/_checklist_record_result()/_checklist_summary_block()
 # przy create_task()/run_next_task() i w konsultacji zespołu.
 PROGRESS_CHECKLIST_FILE = AGENT_DIR / "progress_checklist.json"
@@ -1278,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v236")
+    print("             AEL-MINI AUTONOMOUS AGENT v237")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1484,7 +1486,9 @@ zapisze sam, w całości, więc Gemini nie musi go przepisywać.
 PLANNER_PROMPT = """
 Nazywasz się Tomek. Planujesz — jeden konkretny następny krok
 (max 3 kroki naprzód) do realizacji celu w Termux/Android/Chrome.
-Twoja robota kończy się na propozycji; wykonaniem zajmuje się Gemini.
+Twoja robota kończy się na propozycji, a wykonuje ją Gemini: samo
+klika po ekranie telefonu, wpisuje komendy w Termuksie, otwiera
+aplikacje i czyta wynik. Piszesz więc krok dla niego.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — "Bartku: ...", "Marku: ...", "Kamilu: ...",
@@ -13101,6 +13105,26 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                             confirmed_text
                         )
 
+                # Udane klikniecie PO TEKSCIE jest dokladnie tym samym
+                # dowodem co assert: zeby w cos trafic, trzeba to bylo
+                # najpierw na ekranie znalezc. Log 2026-09-06: Gemini
+                # kliknelo "Beata, Domowy, polaczenie wychodzace, 8
+                # minut temu" — czyli ten wpis TAM BYL — a punkt i tak
+                # szedl dalej jako "bez dowodu".
+                if (
+                    name in ("android_click", "android_click_desc")
+                    and isinstance(result, dict)
+                    and result.get("ok") is True
+                ):
+                    for _klucz in ("text", "node_desc", "node_text"):
+
+                        _widziane = str(
+                            result.get(_klucz, "") or ""
+                        ).strip()
+
+                        if len(_widziane) >= 3:
+                            collected_confirmed_texts.append(_widziane)
+
                 # --------------------------------------------
                 # KRYTYCZNA ZASADA:
                 #
@@ -13477,8 +13501,8 @@ def _verify_success_condition_evidence(success_condition, confirmed_texts=None):
         needle = str(confirmed_text).strip()
         if len(needle) >= 2 and needle.lower() in condition_lower:
             return True, (
-                "android_assert_text_visible potwierdził tekst '"
-                + needle + "' faktycznie widoczny na ekranie"
+                "tekst '" + needle + "' był naprawdę na ekranie — "
+                "narzędzie go tam znalazło w tym samym zadaniu"
             )
 
     return False, ""
@@ -13509,8 +13533,45 @@ def _checklist_record_result(task_id, result):
                 item["status"] = "ZWERYFIKOWANY"
                 item["evidence"] = evidence
             else:
-                item["status"] = "ZADEKLAROWANY_BEZ_DOWODU"
-                item["evidence"] = ""
+                # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06,
+                # KROKI 8-10). Gemini otworzylo dialer, kliknelo wpis
+                # "Beata, Domowy, polaczenie wychodzace, 8 minut temu"
+                # i odczytalo szczegoly z ekranu — siedem udanych
+                # wywolan narzedzi, zadnego bledu. Warunek sukcesu nie
+                # wymienial jednak pliku, a android_assert_text_visible
+                # nie padlo, wiec punkt dostawal etykiete
+                # "zadeklarowany przez Gemini, BEZ dowodu".
+                #
+                # Ta etykieta mowila nieprawde. Marek przeczytal ja
+                # doslownie i zablokowal krok ("opierasz sie wylacznie
+                # na deklaracji Gemini"), a Tomek dwa razy z rzedu
+                # kazal UZYTKOWNIKOWI otworzyc telefon recznie i
+                # przepisac historie polaczen, ktora Gemini wlasnie
+                # przeczytalo. Trzy kroki stracone na podwazanie
+                # wlasnej, poprawnej pracy.
+                #
+                # Miedzy "Python to sprawdzil" a "Gemini tak twierdzi"
+                # jest trzeci, prawdziwy stan: narzedzia realnie
+                # dzialaly. Nazywamy go po imieniu.
+                _udane = [
+                    w for w in (result.get("tool_trace") or [])
+                    if isinstance(w, dict) and w.get("ok")
+                ]
+
+                if _udane:
+                    item["status"] = "POTWIERDZONY_NARZEDZIAMI"
+                    item["evidence"] = (
+                        str(len(_udane)) + " udanych wywołań, m.in. "
+                        + short(
+                            str(_udane[-1].get("tool") or "")
+                            + ": "
+                            + str(_udane[-1].get("evidence") or ""),
+                            160
+                        )
+                    )
+                else:
+                    item["status"] = "ZADEKLAROWANY_BEZ_DOWODU"
+                    item["evidence"] = ""
         else:
             item["status"] = "BLAD"
 
@@ -13644,16 +13705,24 @@ def _checklist_duplicate_message(task_text):
 
     for item in _load_progress_checklist():
 
-        if item.get("status") != "ZWERYFIKOWANY":
+        # POTWIERDZONY_NARZEDZIAMI liczy sie tu tak samo jak
+        # ZWERYFIKOWANY. Log 2026-09-06: MAIN wyslal DWA RAZY to samo
+        # zadanie ("otworz Telefon, znajdz wpis Beaty, przepisz
+        # szczegoly"), bo pierwsze — mimo siedmiu udanych wywolan i
+        # odczytanego ekranu — nie miescilo sie w jedynym uznawanym
+        # wtedy stanie. Drugie podejscie spalilo kolejnych 12 wywolan
+        # i skonczylo sie bledem.
+        if item.get("status") not in (
+            "ZWERYFIKOWANY", "POTWIERDZONY_NARZEDZIAMI"
+        ):
             continue
 
         if _normalize_task_text(item.get("task", "")) == normalized:
             return (
-                "Ten TASK jest IDENTYCZNY z punktem już "
-                "ZWERYFIKOWANYM dowodem z dysku (task_id="
-                + str(item.get("task_id", "?")) + ", dowód: "
-                + str(item.get("evidence", "")) + "). Nie powtarzaj "
-                "go — zaproponuj KOLEJNY, inny krok."
+                "To samo zadanie już raz przeszło (task_id="
+                + str(item.get("task_id", "?")) + ") i skończyło się "
+                "tak: " + str(item.get("evidence", "")) + ". Wynik "
+                "mamy — kolejny krok może iść dalej."
             )
 
     return None
@@ -13661,6 +13730,10 @@ def _checklist_duplicate_message(task_text):
 
 _CHECKLIST_STATUS_LABELS = {
     "ZWERYFIKOWANY": "zweryfikowany dowodem",
+    "POTWIERDZONY_NARZEDZIAMI": (
+        "narzędzia realnie zadziałały, choć z dysku nie da się tego "
+        "sprawdzić"
+    ),
     "ZADEKLAROWANY_BEZ_DOWODU": "zadeklarowany przez Gemini, BEZ dowodu",
     "BLAD": "zakończony błędem",
     "W_TOKU": "w toku"
@@ -13942,6 +14015,9 @@ def _checklist_summary_block(skip_task=None):
         return ""
 
     verified = sum(1 for i in items if i.get("status") == "ZWERYFIKOWANY")
+    z_narzedziami = sum(
+        1 for i in items if i.get("status") == "POTWIERDZONY_NARZEDZIAMI"
+    )
     unverified = sum(1 for i in items if i.get("status") == "ZADEKLAROWANY_BEZ_DOWODU")
     failed_items = [i for i in items if i.get("status") == "BLAD"]
     running = sum(1 for i in items if i.get("status") == "W_TOKU")
@@ -13955,6 +14031,12 @@ def _checklist_summary_block(skip_task=None):
 
     if verified:
         _stan.append(str(verified) + " mamy potwierdzone dowodem")
+
+    if z_narzedziami:
+        _stan.append(
+            str(z_narzedziami) + " zrobiły się na narzędziach, choć "
+            "z dysku nie da się tego potwierdzić"
+        )
 
     if unverified:
         _stan.append(
