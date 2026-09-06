@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v239
+AEL-MINI AUTONOMOUS AGENT v240
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v239")
+    print("             AEL-MINI AUTONOMOUS AGENT v240")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2351,6 +2351,7 @@ def _set_current_goal(goal):
     # v193: nowy cel = rozmowa od zera, wiec nikt niczego jeszcze
     # "nie widzial" (patrz _only_if_new).
     _reset_step_by_step_memory()
+    _reset_ruchy_w_celu()
     _ostatnie_pytanie.clear()
     _set_current_project_file(None)
     _reset_code_review_budget()
@@ -12456,6 +12457,108 @@ def _shell_failure_is_just_missing_file(tool_name, result):
 # rzeczy, które faktycznie już zaszły i były zapisane w surowym
 # wyniku narzędzia — dokładnie ten wzorzec, o którym napisał
 # użytkownik ("ciągle szukają dowodów... a coś już zadziałało").
+# Narzedzia, ktore RUSZAJA interfejsem — klikaja, otwieraja, wpisuja.
+# Tylko one moga chodzic w kolko po tym samym przycisku.
+_NARZEDZIA_RUCHU = (
+    "chrome_click", "chrome_open", "android_click", "android_click_desc",
+    "android_launch_app", "android_type", "android_paste_text",
+)
+
+
+def _cel_akcji_narzedzia(name, args, result):
+    """
+    W co to wywolanie celowalo: tekst przycisku, adres, nazwa apki.
+    Pusty string dla narzedzi, ktore tylko czytaja.
+    """
+
+    if str(name) not in _NARZEDZIA_RUCHU:
+        return ""
+
+    for zrodlo in (result, args):
+
+        if not isinstance(zrodlo, dict):
+            continue
+
+        for klucz in ("clicked", "text", "url", "package", "node_desc"):
+
+            wartosc = str(zrodlo.get(klucz) or "").strip()
+
+            if wartosc:
+                return " ".join(wartosc.split())[:120]
+
+    return ""
+
+
+# Co juz probowalismy w TYM celu: "narzedzie -> cel" -> ile razy.
+_ruchy_w_celu = {}
+
+
+def _reset_ruchy_w_celu():
+    _ruchy_w_celu.clear()
+
+
+def _zauwaz_powtarzane_ruchy(last_result, ile_wystarczy=3):
+    """
+    Mowi zespolowi, gdy TEN SAM ruch w interfejsie powtarza sie raz za
+    razem — bo to znaczy, ze wracamy w to samo miejsce, a nie idziemy
+    dalej. Zwraca zdanie albo pusty string.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, KROKI 4-11).
+    Zespol klikal "Create Phone Number" w panelu Vapi trzy razy
+    (11:47:36, 11:47:56, 11:59:37) i "Free Vapi Number" dwa razy
+    (11:47:46, 12:01:03), za kazdym razem wracajac do tego samego
+    okna. Strona przez caly czas mowila wprost, czarno na bialym:
+    "For new accounts, Vapi numbers cannot make outbound calls".
+    Odczytali to zdanie i mimo to w nastepnym kroku klikali w to samo.
+    Osiem krokow, dwadziescia kilka minut, zero ruchu do przodu.
+
+    Python nie ocenia, czy pomysl jest dobry — na to sa Marek i reszta.
+    Liczy tylko, ile razy ta sama reka poszla w to samo miejsce, i mowi
+    to na glos. Sama liczba wystarczy, zeby zespol sam zauwazyl petle.
+    """
+
+    if not isinstance(last_result, dict):
+        return ""
+
+    slad = last_result.get("tool_trace")
+
+    if not isinstance(slad, list):
+        return ""
+
+    powtorzone = []
+
+    for wpis in slad:
+
+        if not isinstance(wpis, dict) or not wpis.get("ok"):
+            continue
+
+        cel = str(wpis.get("cel_akcji") or "").strip()
+
+        if not cel:
+            continue
+
+        klucz = str(wpis.get("tool") or "") + " -> " + cel
+        _ruchy_w_celu[klucz] = _ruchy_w_celu.get(klucz, 0) + 1
+
+        if _ruchy_w_celu[klucz] == ile_wystarczy:
+            powtorzone.append((cel, _ruchy_w_celu[klucz]))
+
+    if not powtorzone:
+        return ""
+
+    return (
+        "Zauwazylem, ze wracamy w to samo miejsce: "
+        + ", ".join(
+            "\"" + cel + "\" (" + str(ile) + " raz"
+            + ("y" if ile > 1 else "") + ")"
+            for cel, ile in powtorzone
+        )
+        + ". Za kazdym razem konczy sie tak samo, wiec samo powtorzenie "
+        "tego ruchu juz niczego nie zmieni — to, czego szukamy, jest "
+        "gdzie indziej albo tej drogi po prostu tu nie ma."
+    )
+
+
 def _short_tool_evidence(result):
     """
     Co to wywolanie NAPRAWDE powiedzialo.
@@ -13227,7 +13330,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         result.get("ok")
                         if isinstance(result, dict) else None
                     ),
-                    "evidence": _short_tool_evidence(result)
+                    "evidence": _short_tool_evidence(result),
+                    # W co konkretnie kliknelismy / co otworzylismy.
+                    # Sluzy _zauwaz_powtarzane_ruchy() do zobaczenia,
+                    # ze chodzimy w kolko po tym samym przycisku.
+                    "cel_akcji": _cel_akcji_narzedzia(name, args, result)
                 })
 
                 # Patrz komentarz przy _decision_asks_for_contact_info()
@@ -23007,6 +23114,12 @@ def run_agent(goal):
                         "tool_limit_hit",
                         {"tool_calls": result.get("tool_calls")}
                     )
+
+                _w_kolko = _zauwaz_powtarzane_ruchy(last_result)
+
+                if _w_kolko:
+                    log("MAIN", _w_kolko)
+                    _pending_team_warnings.append(_w_kolko)
 
             continue
 
