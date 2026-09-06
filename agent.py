@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v248
+AEL-MINI AUTONOMOUS AGENT v249
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v248")
+    print("             AEL-MINI AUTONOMOUS AGENT v249")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10539,6 +10539,10 @@ def termux_run(command):
 
             if placeholder_phone_warning:
                 result["placeholder_phone_warning"] = placeholder_phone_warning
+
+            # "cos: command not found" to fakt o telefonie, a nie o
+            # zadaniu — zapamietujemy go na dluzej niz ten cel.
+            _zapamietaj_brakujaca_komende(result.get("stderr"))
 
             # Komenda, ktora otwiera strone, konczy sie w ulamku
             # sekundy — Android tylko przyjmuje intencje. Strona
@@ -20651,6 +20655,87 @@ def _narzedzia_telefonu():
     return znalezione
 
 
+# Komendy, ktore juz raz probowalismy uruchomic i ktorych na tym
+# urzadzeniu po prostu nie ma. Zyje MIEDZY celami i miedzy
+# uruchomieniami, bo to fakt o telefonie, a nie o zadaniu.
+BRAK_KOMEND_FILE = STATE_DIR / "komendy_ktorych_tu_nie_ma.txt"
+
+_BRAK_KOMENDY_RE = re.compile(
+    r"([\w./-]+):\s*command not found", re.IGNORECASE
+)
+
+
+def _zapamietaj_brakujaca_komende(stderr):
+    """
+    Wylapuje "cos: command not found" i zapisuje nazwe na trwale.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK. `input keyevent` probowano DWA
+    RAZY, w dwoch osobnych sesjach (2026-09-06 13:40 i 21:53), za
+    kazdym razem z tym samym skutkiem: "input: command not found".
+    Termux bez roota tej komendy nie ma i miec nie bedzie. Za drugim
+    razem kosztowalo to prawdziwe polaczenie do Beaty, ktorego nie
+    dalo sie rozlaczyc — bo rozlaczyc mial wlasnie `input`.
+
+    Zespol nie mial jak tego wiedziec: sesje byly zresetowane, a
+    pamiec o proboach i tak konczy sie z celem. Python jest jedynym,
+    ktory moze to zapamietac na dluzej, wiec zapamietuje.
+    """
+
+    nazwy = set()
+
+    for m in _BRAK_KOMENDY_RE.finditer(str(stderr or "")):
+
+        nazwa = m.group(1).strip().rsplit("/", 1)[-1]
+
+        if nazwa and len(nazwa) < 40:
+            nazwy.add(nazwa)
+
+    if not nazwy:
+        return
+
+    try:
+        BRAK_KOMEND_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        znane = set()
+
+        if BRAK_KOMEND_FILE.exists():
+            znane = {
+                l.strip()
+                for l in BRAK_KOMEND_FILE.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if l.strip()
+            }
+
+        nowe = nazwy - znane
+
+        if nowe:
+            with open(BRAK_KOMEND_FILE, "a", encoding="utf-8") as f:
+                for nazwa in sorted(nowe):
+                    f.write(nazwa + "\n")
+
+    except Exception:
+        pass
+
+
+def _brakujace_komendy():
+    """Nazwy komend, ktorych tu nie ma — albo pusta lista."""
+
+    try:
+        if BRAK_KOMEND_FILE.exists():
+            return sorted({
+                l.strip()
+                for l in BRAK_KOMEND_FILE.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if l.strip()
+            })
+    except Exception:
+        pass
+
+    return []
+
+
 def _narzedzia_telefonu_block():
     """
     Jedno zdanie o tym, co ten telefon potrafi sam z siebie.
@@ -20676,11 +20761,23 @@ def _narzedzia_telefonu_block():
     # ekranie. Wojtek mowil to od poczatku: "otworz dialer i wpisz
     # Beata, to zajmuje 5 sekund". To spis komend, ktore SA JUZ
     # zainstalowane — nie granica tego, co wolno.
-    return (
+    blok = (
         "\nKomendy termux-* zainstalowane w tej chwili na telefonie:\n"
         + ", ".join(narzedzia)
         + "\n"
     )
+
+    # W tym samym miejscu — druga strona tej samej prawdy o
+    # srodowisku: czego tu NIE MA. Patrz _zapamietaj_brakujaca_komende().
+    _brak = _brakujace_komendy()
+
+    if _brak:
+        blok += (
+            "Próbowaliśmy już uruchomić i na tym telefonie ich nie "
+            "ma: " + ", ".join(_brak) + ".\n"
+        )
+
+    return blok
 
 
 def _co_powiedzial_uzytkownik_block():
