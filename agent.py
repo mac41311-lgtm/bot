@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v238
+AEL-MINI AUTONOMOUS AGENT v239
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v238")
+    print("             AEL-MINI AUTONOMOUS AGENT v239")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9764,6 +9764,14 @@ _SIEGA_NA_ZEWNATRZ_RE = re.compile(
 )
 
 
+# Cel mowi, do kogo dzwonimy: "zadzwon do Beaty", "napisz do mamy",
+# "polacz sie z biurem".
+_CEL_WYMIENIA_KOGO_RE = re.compile(
+    r"\b(?:do|z|pod)\s+[\w\u00c0-\u017f]{3,}",
+    re.IGNORECASE
+)
+
+
 def _tylko_cyfry(tekst):
     return re.sub(r"\D", "", str(tekst or ""))
 
@@ -9789,6 +9797,14 @@ def _numer_ktorego_nikt_nie_podal(task_text, goal):
     tresc = str(task_text or "")
 
     if not _SIEGA_NA_ZEWNATRZ_RE.search(tresc):
+        return None
+
+    # Gdy cel WYMIENIA, do kogo dzwonimy ("zadzwoń do Beaty, jest w
+    # kontaktach"), to numer z ksiazki adresowej jest wlasnie
+    # odpowiedzia na ten cel, a nie wyborem zza biurka. Bez tego
+    # wyjatku v238 odzywalo sie przy kazdym poprawnym kroku (log
+    # 2026-09-06, 11:17 i 11:18) i bylo czystym szumem.
+    if _CEL_WYMIENIA_KOGO_RE.search(str(goal or "")):
         return None
 
     znane = _tylko_cyfry(goal)
@@ -22433,6 +22449,70 @@ def _auto_extract_after_login(login_url):
     return _find_credentials_in_text(page_text), ""
 
 
+def _co_widac_w_chrome_teraz():
+    """
+    Zdanie o kartach otwartych w przegladarce W TEJ CHWILI, z
+    zaznaczeniem tych, ktore wygladaja na wnetrze zalogowanej
+    aplikacji (app./dashboard./console. albo /dashboard w sciezce).
+    Pusty string, gdy nic nie widac.
+
+    Uzywane po powrocie uzytkownika z NEED_USER_LOGIN — patrz tam.
+    """
+
+    try:
+        karty = chrome_tabs()
+    except Exception:
+        return ""
+
+    if not isinstance(karty, list) or not karty:
+        return ""
+
+    linie = []
+
+    for karta in karty[:6]:
+
+        if not isinstance(karta, dict):
+            continue
+
+        adres = str(karta.get("url") or "")
+        tytul = str(karta.get("title") or "").strip()
+
+        if not adres.startswith("http"):
+            continue
+
+        w_srodku = bool(
+            re.search(
+                r"https?://(?:app|dashboard|console|panel|my)\.",
+                adres,
+                re.IGNORECASE
+            )
+            or re.search(
+                r"/(?:dashboard|console|account|home|app)\b",
+                adres,
+                re.IGNORECASE
+            )
+        )
+
+        linie.append(
+            "- " + (tytul or adres) + " — " + short(adres, 120)
+            + (
+                " (to juz wnetrze aplikacji, nie ekran logowania)"
+                if w_srodku else ""
+            )
+        )
+
+    if not linie:
+        return ""
+
+    return (
+        "Zajrzalem do przegladarki po tym, jak uzytkownik wrocil. "
+        "Otwarte jest teraz to:\n"
+        + "\n".join(linie)
+        + "\nJesli ktoras z tych stron ma to, czego szukamy, jest "
+        "tam do wziecia — Gemini widzi dokladnie te same karty."
+    )
+
+
 def _handle_need_user_login(decision):
     """
     Obsługa decyzji NEED_USER_LOGIN — wspólna dla dwóch miejsc w
@@ -22550,6 +22630,21 @@ def _handle_need_user_login(decision):
     # note jest neutralna (nie przesądza ani sukcesu, ani porażki) i
     # każe zespołowi samodzielnie ocenić treść.
     looks_like_failure = bool(user_typed) and _looks_like_failure_report(user_typed)
+
+    # Uzytkownik wrocil — wiec w przegladarce cos sie zmienilo.
+    # Patrzymy TERAZ, zanim ktokolwiek zacznie zgadywac.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, KROK 4).
+    # Uzytkownik zalogowal sie sam do Vapi; stan pokazywal wprost
+    # kartę "Vapi - Dashboard | https://dashboard.vapi.ai/". Nikt
+    # tego nie odczytal: Ola napisala "bez zalogowania i srodkow nic
+    # z niej nie wyjdzie", a MAIN poszedl prosic o zalozenie JESZCZE
+    # jednego konta, tym razem w Bland. Uzytkownik na to: "patrze na
+    # strone, zalogowalem sie sam, wszystko by znalazl bez problemu".
+    _po_powrocie = _co_widac_w_chrome_teraz()
+
+    if _po_powrocie:
+        _pending_team_warnings.append(_po_powrocie)
 
     log(
         "MAIN",
