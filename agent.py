@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v250
+AEL-MINI AUTONOMOUS AGENT v251
 
 ARCHITEKTURA:
 
@@ -658,6 +658,9 @@ USER_PROVIDED_VALUE_FILE = STATE_DIR / "user_provided_value.txt"
 # plik, dopisywany a nie nadpisywany.
 USER_SAID_FILE = STATE_DIR / "co_powiedzial_uzytkownik.txt"
 
+# Pierwsza linia USER_SAID_FILE: cel, w ktorym te zdania padly.
+_CEL_ZDAN_PREFIX = "# cel: "
+
 # Zapamiętany, niedokończony cel — pozwala wznowić sesję po
 # Ctrl+C zamiast zaczynać rozmowę od zera.
 GOAL_FILE = AGENT_DIR / "current_goal.txt"
@@ -1280,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v250")
+    print("             AEL-MINI AUTONOMOUS AGENT v251")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2347,6 +2350,42 @@ def _current_topic(last_result, critic_streak):
     return ""
 
 
+def _przypnij_zdania_uzytkownika_do_celu(goal):
+    """
+    USER_SAID_FILE trzyma zdania uzytkownika z BIEZACEGO celu.
+    Pierwsza linia mowi, ktorego celu dotycza.
+
+    Gdy cel jest inny niz zapisany, stare zdania znikaja. Wznowienie
+    tego samego celu je zachowuje. Bez tego zdanie powiedziane przy
+    poprzednim celu ("szukaj darmowych rozwiazan") wracalo do zespolu
+    przy nastepnym jako aktualne polecenie uzytkownika.
+    """
+
+    goal = " ".join(str(goal or "").split())
+
+    try:
+        stary = ""
+
+        if USER_SAID_FILE.exists():
+            linie = USER_SAID_FILE.read_text(
+                encoding="utf-8"
+            ).splitlines()
+
+            if linie and linie[0].startswith(_CEL_ZDAN_PREFIX):
+                stary = linie[0][len(_CEL_ZDAN_PREFIX):].strip()
+
+        if goal and stary == goal:
+            return
+
+        USER_SAID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        USER_SAID_FILE.write_text(
+            _CEL_ZDAN_PREFIX + goal + "\n", encoding="utf-8"
+        )
+
+    except Exception:
+        pass
+
+
 def _set_current_goal(goal):
     """
     Nowy cel = wszyscy dostają go raz, przy swojej pierwszej
@@ -2368,6 +2407,9 @@ def _set_current_goal(goal):
     _reset_critic_objection_memory()
     _reset_progress_memory()
     _reset_irreversible_memory()
+
+    # v251: zdania uzytkownika naleza do celu, w ktorym padly.
+    _przypnij_zdania_uzytkownika_do_celu(_current_goal_text)
 
     global _main_override_for_critic
     _main_override_for_critic = None
@@ -20783,7 +20825,7 @@ def _co_powiedzial_uzytkownik_block():
             for l in USER_SAID_FILE.read_text(
                 encoding="utf-8"
             ).splitlines()
-            if l.strip()
+            if l.strip() and not l.startswith(_CEL_ZDAN_PREFIX)
         ] if USER_SAID_FILE.exists() else []
     except Exception:
         linie = []
