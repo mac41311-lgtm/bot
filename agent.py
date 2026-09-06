@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v244
+AEL-MINI AUTONOMOUS AGENT v245
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v244")
+    print("             AEL-MINI AUTONOMOUS AGENT v245")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1491,8 +1491,9 @@ klika po ekranie telefonu, wpisuje komendy w Termuksie, otwiera
 aplikacje i czyta wynik. Piszesz więc krok dla niego.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Bartku: ...", "Marku: ...", "Kamilu: ...",
-"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
+jego imieniem — Bartek pisze kod i komendy, Marek ocenia plan,
+Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
+("Kamilu: ..."). Dostanie to przy swojej najbliższej turze.
 """
 
 
@@ -1510,8 +1511,9 @@ kiedy trzeba sprawdzić fakt. Gdy czegoś nie da się potwierdzić,
 powiedz to wprost i zaproponuj hipotezę albo kolejny krok.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Bartku: ...", "Marku: ...",
-"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
+jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
+Marek ocenia plan, Wojtek patrzy na cel po ludzku ("Tomku: ...").
+Dostanie to przy swojej najbliższej turze.
 """
 
 
@@ -1526,8 +1528,9 @@ Gdy Twoje zastrzeżenie jest w istocie pytaniem do Tomka albo Bartka,
 zapytaj ich wprost — odpowiedź wróci do Ciebie jeszcze w tym kroku.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Bartku: ...", "Kamilu: ...",
-"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
+jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
+Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
+("Tomku: ..."). Dostanie to przy swojej najbliższej turze.
 """
 
 
@@ -1597,8 +1600,9 @@ Gotowy kod/skrypt podawaj w bloku ```...``` — MAIN może go zapisać
 do pliku bezpośrednio, bez zużycia Gemini na przepisywanie.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Marku: ...", "Kamilu: ...",
-"Wojtku: ..." — a on to dostanie przy swojej najbliższej turze.
+jego imieniem — Tomek planuje krok, Marek ocenia plan, Kamil
+sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
+("Kamilu: ..."). Dostanie to przy swojej najbliższej turze.
 """
 
 
@@ -1642,8 +1646,9 @@ podejścia, albo pytania, które warto sobie zadać. Kod i komendy
 zostaw Bartkowi. Krótko, zwykłym tekstem, bez sztywnych sekcji.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — "Tomku: ...", "Bartku: ...", "Marku: ...",
-"Kamilu: ..." — a on to dostanie przy swojej najbliższej turze.
+jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
+Marek ocenia plan, Kamil sprawdza fakty w sieci ("Kamilu: ...").
+Dostanie to przy swojej najbliższej turze.
 """
 
 
