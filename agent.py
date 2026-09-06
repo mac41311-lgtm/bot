@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v247
+AEL-MINI AUTONOMOUS AGENT v248
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v247")
+    print("             AEL-MINI AUTONOMOUS AGENT v248")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6823,6 +6823,63 @@ def chrome_summary():
     return "\n".join(lines)
 
 
+def _ta_sama_strona(a, b):
+    """
+    Czy dwa adresy prowadza do tego samego miejsca — z pominieciem
+    kotwicy (#...) i koncowego ukosnika. Query zostaje, bo czesto
+    niesie tresc (?frameUrl=..., ?id=...).
+    """
+
+    def _oczysc(u):
+        u = str(u or "").strip()
+        u = u.split("#", 1)[0]
+        return u.rstrip("/").lower()
+
+    a, b = _oczysc(a), _oczysc(b)
+
+    return bool(a) and a == b
+
+
+def _karta_z_tym_adresem(url):
+    """Otwarta karta pokazujaca juz ten adres, albo None."""
+
+    try:
+        for karta in chrome_tabs():
+            if _ta_sama_strona(karta.get("url"), url):
+                return karta
+    except Exception:
+        pass
+
+    return None
+
+
+def _przelacz_na_karte(tab_id):
+    """
+    Wyciaga karte na wierzch przez CDP. True, gdy sie udalo.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, KROKI 8-14).
+    Kazde `termux-open-url` otwieralo NOWA karte, choc ta sama strona
+    juz wisiala. Po siedmiu krokach Chrome miał cztery karty Twilio,
+    dwie z nich identyczne (AC18e2...), i zespol za kazdym razem
+    zgadywal, na ktorej pracuje. To samo widac w logu z 11:58, gdzie
+    byly TRZY karty dashboard.vapi.ai/phone-numbers naraz.
+    """
+
+    if not ensure_chrome_cdp_forward():
+        return False
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/activate/" + str(tab_id),
+            timeout=5
+        )
+        return r.status_code == 200
+
+    except Exception:
+        return False
+
+
 def find_tab(
     tab_id=None,
     contains=None
@@ -7224,6 +7281,37 @@ def chrome_open(
     tab_id=None,
     contains=None
 ):
+
+    # Ta strona moze juz gdzies wisiec. Wtedy jej nie otwieramy drugi
+    # raz — wyciagamy istniejaca karte na wierzch. Patrz
+    # _przelacz_na_karte().
+    if not tab_id and not contains:
+
+        _juz = _karta_z_tym_adresem(url)
+
+        if _juz is not None:
+
+            _przelacz_na_karte(_juz["id"])
+            _czekalismy = _poczekaj_az_strona_dojdzie(_juz)
+
+            log(
+                "CHROME",
+                "Ta strona juz byla otwarta — przelaczam na nia "
+                "zamiast otwierac kolejna karte."
+            )
+
+            return {
+                "ok": True,
+                "tab_id": _juz["id"],
+                "url": _juz["url"],
+                "title": _juz["title"],
+                "juz_otwarta": True,
+                "message": (
+                    "Ta strona juz byla otwarta w karcie "
+                    + str(_juz["id"]) + " — przelaczylem na nia, "
+                    "zamiast otwierac druga taka sama."
+                )
+            }
 
     global CDP_403
 
@@ -10297,9 +10385,52 @@ def _zglos_to_co_przybylo(przed):
             pass
 
 
+# Adres w komendzie otwierajacej strone.
+_ADRES_W_KOMENDZIE_RE = re.compile(r"https?://[^\s\"'`<>]+")
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
+
+        # Otwieranie strony, ktora juz wisi w Chrome, tylko mnozy
+        # karty — patrz _przelacz_na_karte(). Zamiast tego wyciagamy
+        # na wierzch te, ktora jest.
+        if "termux-open-url" in command_str:
+
+            _adres = _ADRES_W_KOMENDZIE_RE.search(command_str)
+
+            if _adres:
+
+                _juz = _karta_z_tym_adresem(_adres.group(0))
+
+                if _juz is not None:
+
+                    _przelacz_na_karte(_juz["id"])
+                    _czekalismy = _poczekaj_az_strona_dojdzie(_juz)
+
+                    log(
+                        "CHROME",
+                        "Ta strona juz byla otwarta — przelaczam na "
+                        "nia zamiast otwierac kolejna karte."
+                    )
+
+                    return {
+                        "ok": True,
+                        "returncode": 0,
+                        "stdout": "",
+                        "stderr": "",
+                        "command": command_str,
+                        "juz_otwarta": True,
+                        "tab_id": _juz["id"],
+                        "message": (
+                            "Ta strona juz byla otwarta w karcie "
+                            + str(_juz["id"]) + " (" + _juz["title"]
+                            + ") — przelaczylem na nia, zamiast "
+                            "otwierac druga taka sama."
+                        ),
+                        "czekalem_na_zaladowanie_s": _czekalismy
+                    }
 
         # v227: co przybylo pod $HOME po tej komendzie — patrz
         # _zglos_to_co_przybylo().
