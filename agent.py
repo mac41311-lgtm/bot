@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v253
+AEL-MINI AUTONOMOUS AGENT v254
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v253")
+    print("             AEL-MINI AUTONOMOUS AGENT v254")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15804,8 +15804,41 @@ def _engineer_for_team(text, limit=4000):
     )
 
 
+# Shebang mowi tylko, CZYM plik ma zostac uruchomiony. Powloka
+# znaczy "to sa komendy"; python/node/ruby to zwykly naglowek pliku
+# z kodem.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-06, cel "rozmowa glosowa z
+# Beata", kroki 2-4). Wzorzec brzmial `^#!/` — czyli KAZDY shebang.
+# Bartek przyslal nieskazitelnie czysty plik zaczynajacy sie od
+# "#!/usr/bin/env python3", a Python odrzucil go jako "komendy do
+# wykonania" i zabil krok. Zespol dostal przez Ole komunikat, ze kod
+# nie zostal zapisany, Tomek odczytal to jako "kod nie dotarl",
+# poprosil o niego jeszcze raz — i tak trzy kroki z rzedu, za kazdym
+# razem z tym samym shebangiem, wiec za kazdym razem z tym samym
+# odrzuceniem.
+#
+# Gorzej: extract_code_block() PREFERUJE blok z shebangiem (to jego
+# najmocniejszy sygnal "to tresc pliku"). Obie funkcje patrzyly na
+# ten sam znak i wyciagaly z niego przeciwne wnioski.
+_SHEBANG_POWLOKI_RE = re.compile(
+    r"^#!\S*/(?:env\s+)?(?:ba|z|k|da)?sh\b",
+    re.MULTILINE
+)
+
+# Czym kto uruchamia pliki o danym rozszerzeniu. Gdy shebang zgadza
+# sie z rozszerzeniem celu, to bez dwoch zdan tresc pliku.
+_INTERPRETER_ROZSZERZENIA = {
+    ".py": ("python",),
+    ".js": ("node",),
+    ".rb": ("ruby",),
+    ".pl": ("perl",),
+    ".lua": ("lua",),
+    ".php": ("php",),
+}
+
 _SHELL_SCRIPT_MARKERS = re.compile(
-    r"^#!/|<<\s*['\"]?EOF['\"]?\s*$|^\s*cat\s+>>?\s|\$\(",
+    r"<<\s*['\"]?EOF['\"]?\s*$|^\s*cat\s+>>?\s|\$\(",
     re.MULTILINE
 )
 
@@ -15832,7 +15865,22 @@ def _looks_like_shell_script(code, target_path):
     if suffix == ".sh":
         return False
 
-    return bool(_SHELL_SCRIPT_MARKERS.search(code or ""))
+    code = str(code or "")
+
+    # Shebang wskazujacy interpreter tego wlasnie rozszerzenia —
+    # plik jest soba, nie komenda.
+    pierwsza = code.lstrip().split("\n", 1)[0]
+
+    if pierwsza.startswith("#!"):
+
+        for nazwa in _INTERPRETER_ROZSZERZENIA.get(suffix, ()):
+            if nazwa in pierwsza.lower():
+                return False
+
+    if _SHEBANG_POWLOKI_RE.search(code):
+        return True
+
+    return bool(_SHELL_SCRIPT_MARKERS.search(code))
 
 
 # `cat > plik << 'EOF' ... EOF` -- czyli tresc pliku owinieta w
@@ -24380,6 +24428,27 @@ Zwróć tylko JSON.
 
                     else:
 
+                        # Bez pokazania, KTORY fragment o tym
+                        # zadecydowal, Bartek odsyla dokladnie ten
+                        # sam blok, a Tomek czyta to jako "kod nie
+                        # dotarl" (log 2026-09-06, trzy kroki z
+                        # rzedu). Cytujemy wiec konkretna linie.
+                        _trafienie = (
+                            _SHEBANG_POWLOKI_RE.search(engineer_code)
+                            or _SHELL_SCRIPT_MARKERS.search(
+                                engineer_code
+                            )
+                        )
+
+                        _cytat = (
+                            " Zadecydował o tym fragment: `"
+                            + short(
+                                _trafienie.group(0).strip(), 80
+                            )
+                            + "`."
+                            if _trafienie else ""
+                        )
+
                         last_result = {
                             "status":
                                 "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
@@ -24388,11 +24457,8 @@ Zwróć tylko JSON.
                                 "wykonania, a nie treść pliku "
                                 + str(target_path) + " — zapisany "
                                 "dosłownie zepsułby ten plik, więc "
-                                "go nie zapisałem. Jeśli to miały "
-                                "być komendy, niech Gemini je "
-                                "uruchomi zwykłym TASKiem; jeśli "
-                                "treść pliku — Bartek poda ją bez "
-                                "komend wokół."
+                                "go nie zapisałem."
+                                + _cytat
                             )
                         }
 
