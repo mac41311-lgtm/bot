@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v240
+AEL-MINI AUTONOMOUS AGENT v241
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v240")
+    print("             AEL-MINI AUTONOMOUS AGENT v241")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9800,14 +9800,6 @@ def _numer_ktorego_nikt_nie_podal(task_text, goal):
     if not _SIEGA_NA_ZEWNATRZ_RE.search(tresc):
         return None
 
-    # Gdy cel WYMIENIA, do kogo dzwonimy ("zadzwoń do Beaty, jest w
-    # kontaktach"), to numer z ksiazki adresowej jest wlasnie
-    # odpowiedzia na ten cel, a nie wyborem zza biurka. Bez tego
-    # wyjatku v238 odzywalo sie przy kazdym poprawnym kroku (log
-    # 2026-09-06, 11:17 i 11:18) i bylo czystym szumem.
-    if _CEL_WYMIENIA_KOGO_RE.search(str(goal or "")):
-        return None
-
     znane = _tylko_cyfry(goal)
 
     try:
@@ -9818,6 +9810,27 @@ def _numer_ktorego_nikt_nie_podal(task_text, goal):
     except Exception:
         pass
 
+    # Numery, pod ktore w tym celu JUZ dzwonilismy albo pisalismy.
+    # Patrz _irreversible_done — to ta sama pamiec, ktora pilnuje,
+    # zeby nie wyslac SMS-a dwa razy.
+    juz_dzwonione = set()
+
+    for wpisy in _irreversible_done.values():
+        for _, komenda in wpisy:
+            for m in _NUMER_W_ZADANIU_RE.finditer(str(komenda)):
+                _c = _tylko_cyfry(m.group(0))
+                if len(_c) >= 9:
+                    juz_dzwonione.add(_c[-9:])
+
+    # Cel mowi, do kogo dzwonimy ("zadzwoń do Beaty, jest w
+    # kontaktach") — wtedy PIERWSZY numer, po ktory zespol siega, to
+    # najpewniej wlasnie ona, wyszukana w ksiazce adresowej. Bez tego
+    # v238 odzywalo sie przy kazdym poprawnym kroku (log 11:17, 11:18)
+    # i bylo czystym szumem.
+    cel_kogos_wymienia = bool(
+        _CEL_WYMIENIA_KOGO_RE.search(str(goal or ""))
+    )
+
     for trafienie in _NUMER_W_ZADANIU_RE.finditer(tresc):
 
         cyfry = _tylko_cyfry(trafienie.group(0))
@@ -9825,9 +9838,33 @@ def _numer_ktorego_nikt_nie_podal(task_text, goal):
         if len(cyfry) < 9:
             continue
 
+        koncowka = cyfry[-9:]
+
         # Porownujemy po koncowce: uzytkownik moze napisac numer bez
         # kierunkowego, a zadanie z nim (albo odwrotnie).
-        if cyfry[-9:] in znane:
+        if koncowka in znane:
+            continue
+
+        # Ten sam numer, pod ktory juz dzwonilismy — to dalej ta sama
+        # osoba, nie nowy ktos.
+        if koncowka in juz_dzwonione:
+            continue
+
+        # Cel kogos wymienia, a to pierwszy adresat w tym celu.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06, 13:56).
+        # Cel brzmial "zadzwon do Beaty". Zespol zadzwonil do niej
+        # (13:33, 13:36) — poprawnie — a potem, zeby przetestowac
+        # dzwiek, zadzwonil do MARKA DEMBICKIEGO (+48601938949),
+        # wyszukanego w ksiazce adresowej. Uzytkownik: "zaczal mi
+        # dzwonic do innych ludzi". Marek nie mial pojecia, o co
+        # chodzi, i uslyszal syntezator mowiacy "raz dwa trzy test".
+        #
+        # v239 milczalo, bo cel wymienial Beate. To bylo za szerokie:
+        # zgoda na jedna osobe nie jest zgoda na kazda z ksiazki
+        # adresowej. Pierwszy adresat przechodzi, KAZDY KOLEJNY —
+        # inny numer w tym samym celu — juz nie.
+        if cel_kogos_wymienia and not juz_dzwonione:
             continue
 
         return trafienie.group(0).strip()
@@ -23562,10 +23599,13 @@ Zwróć tylko JSON.
                     + ", a użytkownik nigdzie go nie wskazał — ani w "
                     "celu, ani później. Numer z książki adresowej "
                     "jest tylko numerem kogoś; wybraliśmy go sami. "
-                    "Po drugiej stronie odbierze żywy człowiek i tego "
-                    "się nie cofnie, więc jeśli cel nie mówi wprost, "
-                    "do kogo dzwonimy, warto o to zapytać, zanim to "
-                    "pójdzie."
+                    "Po drugiej stronie odbierze żywy człowiek, który "
+                    "o niczym nie wie, i tego się nie cofnie — a "
+                    "zgoda na rozmowę z jedną osobą nie jest zgodą "
+                    "na resztę książki adresowej. Jeśli to ma być "
+                    "test, wygodniej zrobić go na własnym numerze "
+                    "albo zapytać użytkownika, do kogo wolno "
+                    "zadzwonić."
                 )
 
             success_condition = str(
