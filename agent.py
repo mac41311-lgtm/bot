@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v251
+AEL-MINI AUTONOMOUS AGENT v252
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v251")
+    print("             AEL-MINI AUTONOMOUS AGENT v252")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2155,6 +2155,41 @@ def _reset_progress_memory():
     _role_seen_progress.clear()
 
 
+# Powody, dla ktorych MAIN chcial juz zakonczyc cel. Zespol slyszy
+# kazdy z nich RAZ — patrz galaz FAILED w run_agent().
+_powody_zakonczenia = []
+
+
+def _reset_powody_zakonczenia():
+    """Nowy cel = wnioski o niewykonalnosci poprzedniego nie licza sie."""
+
+    del _powody_zakonczenia[:]
+
+
+def _zespol_slyszal_juz_ten_powod(reason, ile_prob=2):
+    """
+    False, gdy ten wniosek ma jeszcze trafic do zespolu. True, gdy
+    zespol juz go slyszal albo wyczerpal proby.
+
+    Czlowiek na spotkaniu, ktory mowi "moim zdaniem sie nie da",
+    slyszy odpowiedz reszty, zanim wszyscy wstana od stolu. Ale gdy
+    powtarza to samo zdanie drugi raz, to juz nie jest rozmowa —
+    wtedy konczymy.
+    """
+
+    klucz = " ".join(str(reason or "").lower().split())[:400]
+
+    if klucz and klucz in _powody_zakonczenia:
+        return True
+
+    if len(_powody_zakonczenia) >= ile_prob:
+        return True
+
+    _powody_zakonczenia.append(klucz)
+
+    return False
+
+
 # ============================================================
 # KAZDA WIADOMOSC KONCZY SIE PYTANIEM (v212)
 # ============================================================
@@ -2407,6 +2442,7 @@ def _set_current_goal(goal):
     _reset_critic_objection_memory()
     _reset_progress_memory()
     _reset_irreversible_memory()
+    _reset_powody_zakonczenia()
 
     # v251: zdania uzytkownika naleza do celu, w ktorym padly.
     _przypnij_zdania_uzytkownika_do_celu(_current_goal_text)
@@ -19706,6 +19742,11 @@ def main_decide(
             'To Python już potwierdził bezpośrednio na dysku (wyżej co).\n'
             '  Wybierz następny, jeszcze niezrobiony krok.'
         ),
+        "WNIOSEK_ZE_SIE_NIE_DA": (
+            'Padł wniosek, że celu się nie da — wyżej masz powód. Zespół\n'
+            '  właśnie się do niego odniósł, ich odpowiedzi masz w tym\n'
+            '  kroku. Decydujesz jeszcze raz, już z tym, co powiedzieli.'
+        ),
         "COMPLETED": (
             'Gemini wykonał blok i napisał raport. Cały cel bywa gotowy\n'
             '  później niż pojedynczy blok — przeczytaj raport i oceń sam.'
@@ -24888,118 +24929,34 @@ Zwróć tylko JSON.
                 # klucza dało się po prostu wcisnąć Enter.
                 return
 
-            alternative = deepseek(
-                "MAIN",
-                f"""
-MAIN zaproponował FAILED.
+            # Zaobserwowany realny problem (log 2026-09-06, cel
+            # "rozmowa glosowa z Beata"): MAIN recenzowal tu SAM
+            # SIEBIE. Dostawal wlasny FAILED w osobnym, stalym
+            # pytaniu "sprawdz jeszcze raz, czy jest alternatywa" —
+            # bez zespolu, bez stanu ekranu, bez checklisty — wiec
+            # potwierdzal wlasny wniosek i cel sie konczyl. Zespol,
+            # ktory ma Kamila od sprawdzania w sieci, Wojtka od
+            # innego pomyslu i Bartka od pisania kodu (ten sam
+            # zespol zbudowal wczesniej dzialajace APK z
+            # javac/dx/apksigner w samym Termuxie), nigdy sie nie
+            # dowiadywal, ze ktos wlasnie chce zamknac temat.
+            #
+            # Teraz "nie da sie" wraca do rozmowy jak zdanie
+            # czlowieka na spotkaniu: idzie do zespolu zwyklym
+            # last_result, kazdy odpowiada na swojej normalnej
+            # turze, a MAIN decyduje jeszcze raz — juz z tym, co
+            # powiedzieli. Powtorzony ten sam powod konczy cel,
+            # zeby to nie bylo krecenie w kolko.
+            if not _zespol_slyszal_juz_ten_powod(reason):
 
-POWÓD:
-{reason}
-
-Sprawdź jeszcze raz.
-
-Jeżeli istnieje sensowna alternatywa,
-zwróć TASK.
-
-Jeżeli naprawdę nie ma drogi,
-zwróć FAILED.
-
-Tylko JSON.
-"""
-            )
-
-            alt = parse_json(
-                alternative
-            )
-
-            if (
-                alt
-                and str(
-                    alt.get(
-                        "type",
-                        ""
+                last_result = {
+                    "status": "WNIOSEK_ZE_SIE_NIE_DA",
+                    "message": (
+                        "Na stole jest wniosek, że dalej się nie da. "
+                        "Powód: "
+                        + (str(reason).strip() or "(nie podano)")
                     )
-                ).upper()
-                == "TASK"
-            ):
-
-                task_text = alt.get(
-                    "task",
-                    ""
-                )
-
-                condition = alt.get(
-                    "success_condition",
-                    ""
-                )
-
-                if task_text:
-
-                    duplicate_msg = _checklist_duplicate_message(
-                        task_text
-                    )
-
-                    if duplicate_msg:
-
-                        last_result = {
-                            "status":
-                                "TASK_DUPLICATE_OF_VERIFIED_POINT",
-                            "message": duplicate_msg
-                        }
-
-                        continue
-
-                    already_satisfied_msg = (
-                        _success_condition_already_satisfied_message(
-                            task_text, condition
-                        )
-                    )
-
-                    if already_satisfied_msg:
-
-                        last_result = {
-                            "status":
-                                "TASK_ALREADY_SATISFIED_ON_DISK",
-                            "message": already_satisfied_msg
-                        }
-
-                        continue
-
-                    create_task(
-                        task_text,
-                        condition,
-                        "Alternatywa po FAILED",
-                        "high"
-                    )
-
-                    result = (
-                        run_next_task()
-                    )
-
-                    if result:
-                        last_result = result
-
-                    continue
-
-            # Zaobserwowany realny bug (log 2026-08-26): ta ścieżka
-            # sprawdzała WYŁĄCZNIE "type"=="TASK" — gdy MAIN, poproszony
-            # "sprawdź jeszcze raz, czy istnieje alternatywa", sam
-            # zwrócił NEED_USER_LOGIN (np. "wygeneruj klucz API
-            # ręcznie"), było to po cichu ignorowane i sesja kończyła
-            # się zwykłym FAILED, mimo że MAIN dosłownie właśnie podał
-            # wykonalną drogę do przodu. Patrz _handle_need_user_login().
-            if (
-                alt
-                and str(alt.get("type", "")).upper()
-                == "NEED_USER_LOGIN"
-            ):
-
-                last_result, contact_gate_redirects, credential_gate_redirects = (
-                    _need_user_login_with_contact_gate(
-                        alt, contact_gate_redirects,
-                        credential_gate_redirects
-                    )
-                )
+                }
 
                 continue
 
