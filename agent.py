@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v241
+AEL-MINI AUTONOMOUS AGENT v242
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v241")
+    print("             AEL-MINI AUTONOMOUS AGENT v242")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12590,9 +12590,7 @@ def _zauwaz_powtarzane_ruchy(last_result, ile_wystarczy=3):
             + ("y" if ile > 1 else "") + ")"
             for cel, ile in powtorzone
         )
-        + ". Za kazdym razem konczy sie tak samo, wiec samo powtorzenie "
-        "tego ruchu juz niczego nie zmieni — to, czego szukamy, jest "
-        "gdzie indziej albo tej drogi po prostu tu nie ma."
+        + ". Za kazdym razem konczylo sie tak samo."
     )
 
 
@@ -23595,17 +23593,11 @@ Zwróć tylko JSON.
                 )
 
                 _pending_team_warnings.append(
-                    "To zadanie sięga pod numer " + _obcy_numer
-                    + ", a użytkownik nigdzie go nie wskazał — ani w "
-                    "celu, ani później. Numer z książki adresowej "
-                    "jest tylko numerem kogoś; wybraliśmy go sami. "
-                    "Po drugiej stronie odbierze żywy człowiek, który "
-                    "o niczym nie wie, i tego się nie cofnie — a "
-                    "zgoda na rozmowę z jedną osobą nie jest zgodą "
-                    "na resztę książki adresowej. Jeśli to ma być "
-                    "test, wygodniej zrobić go na własnym numerze "
-                    "albo zapytać użytkownika, do kogo wolno "
-                    "zadzwonić."
+                    "To zadanie sięga pod " + _obcy_numer
+                    + ", a użytkownik nigdzie tego numeru nie "
+                    "wskazał — wybraliśmy go sami z książki "
+                    "adresowej. Po drugiej stronie odbierze ktoś, "
+                    "kto o tym nie wie."
                 )
 
             success_condition = str(
