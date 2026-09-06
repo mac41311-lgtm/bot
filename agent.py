@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v252
+AEL-MINI AUTONOMOUS AGENT v253
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v252")
+    print("             AEL-MINI AUTONOMOUS AGENT v253")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -18648,12 +18648,25 @@ def consult_team(
 
     last_result_for_team = last_result
 
+    # Zaobserwowany realny problem (log 2026-09-06): TA ukrywanka
+    # dotyczyla WSZYSTKIEGO, co uzytkownik wklei. Uzytkownik podal
+    # numer testowy, numer poszedl wylacznie do Bartka, a Tomek —
+    # ktory planuje kolejny krok — nadal nie wiedzial, ze go dostal
+    # i zaplanowal wziecie cudzego numeru z kontaktow. Uzytkownik
+    # podal ten numer dwa razy i dwa razy zniknal mu z oczu zespolu.
+    #
+    # Klucz API faktycznie nie ma po co isc do dziewieciu sesji.
+    # Numer telefonu, nazwa miasta czy godzina — wrecz przeciwnie:
+    # to dane, na ktorych zespol planuje. Rozroznia je ten sam test,
+    # ktorym juz odsiewamy sekrety gdzie indziej.
     if user_value and isinstance(last_result, dict):
-        last_result_for_team = dict(last_result)
-        last_result_for_team["user_provided_value"] = (
-            "(wartość ukryta tutaj — przekazana bezpośrednio "
-            "Bartkowi, reszta zespołu jej nie potrzebuje)"
-        )
+
+        if _WYGLADA_NA_SEKRET_RE.search(str(user_value)):
+            last_result_for_team = dict(last_result)
+            last_result_for_team["user_provided_value"] = (
+                "(wartość wygląda na klucz/token — poszła wprost do "
+                "Bartka, tutaj jej nie pokazuję)"
+            )
 
     raw_report_material = _condense_last_result_for_team(last_result_for_team)
 
@@ -21130,6 +21143,10 @@ _TEAM_MENTIONED_PATH_RE = re.compile(
 
 _team_file_answers = []
 
+# O co zespol pytal w poprzedniej naradzie. Odpowiedzi liczone
+# dopiero przy podawaniu — patrz _team_file_answers_block().
+_team_file_pytania = []
+
 
 # ============================================================
 # PYTAJA O PLIK -> DOSTAJA TRESC, NIE ROZMIAR (v209)
@@ -21676,18 +21693,42 @@ def _answer_readonly_requests(role_texts):
 
 def _remember_team_file_questions(role_texts):
     """
-    Zbiera sciezki, o ktorych mowil zespol, i przygotowuje na nie
-    ODPOWIEDZ na nastepna nature. Nigdy nie rzuca wyzej.
+    Zapamietuje, o co zespol pytal w TEJ naradzie. Sam niczego nie
+    uruchamia — patrz _team_file_answers_block(), ktory robi to
+    dopiero w chwili podawania odpowiedzi.
+
+    Zaobserwowany realny problem (log 2026-09-06, cel "rozmowa
+    glosowa z Beata"): ta funkcja odpalala `cat ~/config.txt` na
+    KONCU narady, a wynik szedl do zespolu na POCZATKU nastepnej.
+    Miedzy tymi dwoma chwilami Gemini wykonuje caly TASK — czyli
+    dokladnie to, co zmienia dysk. Sonda z 23:18:28 pokazala jedna
+    linie, o 23:18:52 Gemini dopisal druga, a w kroku 6 zespol
+    dostal te pierwsza odpowiedz jako stan "teraz". Tomek napisal
+    "widze, ze cat pokazuje tylko jedna linie" i poszedl brac cudzy
+    numer z kontaktow, choc numer testowy lezal juz w pliku.
+
+    Kazda taka odpowiedz byla wiec systematycznie starsza o jedno
+    wykonanie narzedzia — i to zawsze o to najwazniejsze.
     """
 
     del _team_file_answers[:]
+    del _team_file_pytania[:]
+
+    for t in role_texts:
+        _team_file_pytania.append(str(t or ""))
+
+
+def _policz_odpowiedzi_dla_zespolu(role_texts):
+    """Uruchamia sondy TERAZ i sklada z nich odpowiedzi."""
 
     # v210: zanim policzymy pliki — po prostu wykonujemy czytajace
     # polecenia, ktore zespol sam napisal. Patrz
     # _answer_readonly_requests(). To jest ta "wiedza dosylana, kiedy
     # jej chca", zamiast kazania im czekac caly obieg na `cat`.
+    odpowiedzi = []
+
     try:
-        _team_file_answers.extend(
+        odpowiedzi.extend(
             _answer_readonly_requests(role_texts)
         )
     except Exception as _e:
@@ -21718,7 +21759,7 @@ def _remember_team_file_questions(role_texts):
 
         try:
             if p.exists():
-                _team_file_answers.append(
+                odpowiedzi.append(
                     "- " + candidate + ": " + _file_answer_body(p)
                 )
                 continue
@@ -21750,12 +21791,36 @@ def _remember_team_file_questions(role_texts):
         except Exception:
             pass
 
-        _team_file_answers.append(
+        odpowiedzi.append(
             "- " + candidate + ": NIE MA takiego pliku." + hint
         )
 
+    return odpowiedzi
+
 
 def _team_file_answers_block():
+    """
+    Odpowiedzi na pytania z poprzedniej narady — liczone TERAZ, tuz
+    przed podaniem ich zespolowi, zeby mowily o dysku takim, jaki
+    jest w tej chwili. Patrz _remember_team_file_questions().
+    """
+
+    if _team_file_pytania:
+
+        pytania = list(_team_file_pytania)
+        del _team_file_pytania[:]
+        del _team_file_answers[:]
+
+        try:
+            _team_file_answers.extend(
+                _policz_odpowiedzi_dla_zespolu(pytania)
+            )
+        except Exception as _e:
+            log(
+                "TERMUX",
+                "Nie udalo sie odpowiedziec na pytania zespolu: "
+                + str(_e)
+            )
 
     if not _team_file_answers:
         return ""
