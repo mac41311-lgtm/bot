@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v243
+AEL-MINI AUTONOMOUS AGENT v244
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v243")
+    print("             AEL-MINI AUTONOMOUS AGENT v244")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -24090,6 +24090,37 @@ Zwróć tylko JSON.
                         _pending_team_warnings.append(
                             ""
                             + str(target_path) + " — " + _interactive
+                        )
+
+                    # Ten sam test, ktory od dawna dziala na komendach
+                    # puszczanych przez termux_run — teraz takze na
+                    # TRESCI skryptu, ktory wlasnie kladziemy na dysk.
+                    #
+                    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06,
+                    # 19:07:44). Skrypt wyciagal numer Beaty z
+                    # termux-contact-list grepem i wypisal:
+                    # "WYCIAGNIETY_NUMER: +48784445534". To nie jest
+                    # numer Beaty (+48514590110) — to numer kontaktu
+                    # "Bbb". SMS poszedlby do zupelnie obcej osoby;
+                    # uratowala nas dopiero literowka w opcji -t.
+                    # Ostrzezenie istnialo i bylo trafne, ale patrzylo
+                    # tylko na komendy Gemini, a kruche parsowanie
+                    # siedzialo w pliku .sh, ktory zapisal Python.
+                    _kruche = _detect_grep_on_termux_api_json(
+                        engineer_code
+                    )
+
+                    if _kruche:
+
+                        log(
+                            "MAIN",
+                            "Zapisany skrypt wyciąga dane z JSON-a "
+                            "grepem — mówię o tym zespołowi."
+                        )
+
+                        _pending_team_warnings.append(
+                            "W zapisanym przed chwilą "
+                            + str(target_path) + ": " + _kruche
                         )
 
                     log(
