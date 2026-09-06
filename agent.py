@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v249
+AEL-MINI AUTONOMOUS AGENT v250
 
 ARCHITEKTURA:
 
@@ -1280,7 +1280,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v249")
+    print("             AEL-MINI AUTONOMOUS AGENT v250")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19595,10 +19595,10 @@ def _main_human_line(decision, dtype):
     JSON między MAIN a Pythonem, tylko to, co widać w terminalu.
     """
 
-    reason = str(decision.get("reason", "")).strip()
+    reason = str(decision.get("reason") or "").strip()
 
     if dtype == "TASK":
-        task_text = str(decision.get("task", "")).strip()
+        task_text = str(decision.get("task") or "").strip()
         return task_text or reason or "(brak treści zadania)"
 
     if dtype == "DONE":
@@ -19610,7 +19610,7 @@ def _main_human_line(decision, dtype):
         )
 
     if dtype == "NEED_USER_LOGIN":
-        instructions = str(decision.get("instructions", "")).strip()
+        instructions = str(decision.get("instructions") or "").strip()
         return instructions or reason or "Potrzebna Twoja pomoc."
 
     return reason or (dtype or "(brak decyzji)")
@@ -19908,8 +19908,8 @@ def _handle_main_ask(
     tak samo jak niepoprawny JSON (istniejący mechanizm naprawy).
     """
 
-    ask_role = str(decision.get("ask_role", "")).strip().upper()
-    ask_question = str(decision.get("ask_question", "")).strip()
+    ask_role = str(decision.get("ask_role") or "").strip().upper()
+    ask_question = str(decision.get("ask_question") or "").strip()
 
     if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
 
@@ -20111,19 +20111,13 @@ def task_signature(decision):
 
     return (
         str(
-            decision.get(
-                "type",
-                ""
-            )
+            decision.get("type") or ""
         ).upper()
         + "|"
         + short(
             decision.get(
                 "task",
-                decision.get(
-                    "reason",
-                    ""
-                )
+                decision.get("reason") or ""
             ),
             500
         )
@@ -20263,14 +20257,14 @@ def protect_main_failed(decision, goal):
         return decision
 
     dtype = str(
-        decision.get("type", "")
+        decision.get("type") or ""
     ).upper()
 
     if dtype != "FAILED":
         return decision
 
     reason = str(
-        decision.get("reason", "")
+        decision.get("reason") or ""
     ).lower()
 
     phrases = (
@@ -22418,13 +22412,13 @@ def _decision_asks_for_contact_info(decision):
 
     # Prawdziwy adres http(s) oznacza prośbę o logowanie na stronie,
     # nie o dane kontaktowe — celowo poza zakresem tej bramki.
-    if str(decision.get("url", "")).strip():
+    if str(decision.get("url") or "").strip():
         return False
 
     text = (
-        str(decision.get("reason", ""))
+        str(decision.get("reason") or "")
         + " "
-        + str(decision.get("instructions", ""))
+        + str(decision.get("instructions") or "")
     )
 
     return bool(_CONTACT_INFO_REQUEST_RE.search(text))
@@ -22537,13 +22531,13 @@ def _decision_returns_delegated_choice(decision, goal):
     oddal. Zwraca tekst faktu albo None.
     """
 
-    if str(decision.get("type", "")).upper() != "TASK":
+    if str(decision.get("type") or "").upper() != "TASK":
         return None
 
     if not _goal_delegates_decision(goal):
         return None
 
-    task_text = str(decision.get("task", ""))
+    task_text = str(decision.get("task") or "")
 
     if not _task_hands_decision_back(task_text):
         return None
@@ -22560,10 +22554,10 @@ def _decision_returns_delegated_choice(decision, goal):
 
 def _decision_task_is_user_question(decision):
 
-    if str(decision.get("type", "")).upper() != "TASK":
+    if str(decision.get("type") or "").upper() != "TASK":
         return False
 
-    task_text = str(decision.get("task", ""))
+    task_text = str(decision.get("task") or "")
 
     return bool(_TASK_IS_USER_QUESTION_RE.search(task_text))
 
@@ -22618,13 +22612,13 @@ def _decision_asks_for_web_credential_without_url(decision):
 
     # Prawdziwy adres http(s) oznacza, że MAIN już wskazał, gdzie się
     # zalogować — nic tu do poprawienia.
-    if str(decision.get("url", "")).strip():
+    if str(decision.get("url") or "").strip():
         return False
 
     text = (
-        str(decision.get("reason", ""))
+        str(decision.get("reason") or "")
         + " "
-        + str(decision.get("instructions", ""))
+        + str(decision.get("instructions") or "")
     )
 
     return bool(_WEB_CREDENTIAL_REQUEST_RE.search(text))
@@ -23016,9 +23010,9 @@ def _handle_need_user_login(decision):
     (który MUSI potem zrobić `continue`, nie `return`).
     """
 
-    login_reason = str(decision.get("reason", ""))
-    login_url = str(decision.get("url", "")).strip()
-    login_instructions = str(decision.get("instructions", ""))
+    login_reason = str(decision.get("reason") or "")
+    login_url = str(decision.get("url") or "").strip()
+    login_instructions = str(decision.get("instructions") or "")
 
     print()
     print("=" * 72)
@@ -23673,10 +23667,7 @@ albo:
             continue
 
         dtype = str(
-            decision.get(
-                "type",
-                ""
-            )
+            decision.get("type") or ""
         ).upper()
 
         # Zespół dowie się przy NASTĘPNEJ naradzie, co MAIN z ich
@@ -23687,7 +23678,7 @@ albo:
         globals()["_main_decision_for_team"] = short(
             dtype
             + (
-                " — " + str(decision.get("reason", "")).strip()
+                " — " + str(decision.get("reason") or "").strip()
                 if decision.get("reason") else ""
             ),
             700
@@ -23700,7 +23691,7 @@ albo:
         if _critic_block_streak > 0 and dtype in ("TASK", "PATCH", "ASK"):
 
             globals()["_main_override_for_critic"] = short(
-                str(decision.get("reason", "")).strip()
+                str(decision.get("reason") or "").strip()
                 or "(MAIN nie podal powodu)",
                 900
             )
@@ -23768,10 +23759,7 @@ Zwróć tylko JSON.
                 )
 
                 dtype = str(
-                    decision.get(
-                        "type",
-                        ""
-                    )
+                    decision.get("type") or ""
                 ).upper()
 
                 signatures = []
@@ -23888,9 +23876,9 @@ Zwróć tylko JSON.
 
             decision = {
                 "type": "NEED_USER_LOGIN",
-                "reason": str(decision.get("reason", "")).strip(),
+                "reason": str(decision.get("reason") or "").strip(),
                 "url": "",
-                "instructions": str(decision.get("task", "")).strip()
+                "instructions": str(decision.get("task") or "").strip()
             }
 
             dtype = "NEED_USER_LOGIN"
@@ -23909,10 +23897,7 @@ Zwróć tylko JSON.
         if dtype == "TASK":
 
             task_text = str(
-                decision.get(
-                    "task",
-                    ""
-                )
+                decision.get("task") or ""
             ).strip()
 
             # Zadanie chce zadzwonic/napisac pod numer, ktorego
@@ -23940,10 +23925,7 @@ Zwróć tylko JSON.
                 )
 
             success_condition = str(
-                decision.get(
-                    "success_condition",
-                    ""
-                )
+                decision.get("success_condition") or ""
             ).strip()
 
             if not task_text:
@@ -23967,9 +23949,25 @@ Zwróć tylko JSON.
             # i eliminuje błędy przepisywania.
             # --------------------------------------------------
 
+            # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-06,
+            # 22:31:56). MAIN odeslal JSON z
+            # "write_engineer_code_to": null. decision.get(..., "")
+            # zwraca wtedy None — bo klucz JEST, tylko pusty — a
+            # str(None) to napis "None". Python zapisal wiec kod do
+            # pliku o nazwie DOSLOWNIE "None", uruchomil
+            # `bash ~/None`, a gdy to padlo, Piotr analizowal "None",
+            # Ania nanosila poprawke na "None" i powstal backup
+            # "None.bak_20260906_223213". Trzy kroki na plik, ktorego
+            # nikt nie chcial.
+            #
+            # Puste jest puste — niezaleznie od tego, czy przyszlo
+            # jako brak klucza, null, czy napis "none"/"null".
             write_target = str(
-                decision.get("write_engineer_code_to", "")
+                decision.get("write_engineer_code_to") or ""
             ).strip()
+
+            if write_target.lower() in ("none", "null", "-", "brak"):
+                write_target = ""
 
             # v203: sciezka pliku, ktory JEST gotowy do uruchomienia —
             # niezaleznie od tego, czy powstal z calego zapisu, czy z
@@ -24008,7 +24006,7 @@ Zwróć tylko JSON.
 
                 inferred_target = _brakujacy_skrypt or _infer_code_target_path(
                     task_text,
-                    decision.get("success_condition", ""),
+                    decision.get("success_condition") or "",
                     team.get("engineer_full", "")
                 )
 
@@ -24526,7 +24524,7 @@ Zwróć tylko JSON.
 
             _self_run_path = _task_is_simple_run(
                 task_text,
-                decision.get("success_condition", ""),
+                decision.get("success_condition") or "",
                 _code_ready_path
             )
 
@@ -24624,10 +24622,7 @@ Zwróć tylko JSON.
                 success_condition=
                     success_condition,
                 reason=
-                    decision.get(
-                        "reason",
-                        ""
-                    ),
+                    decision.get("reason") or "",
                 priority=
                     decision.get(
                         "priority",
@@ -24660,10 +24655,7 @@ Zwróć tylko JSON.
 
         if dtype == "DONE":
 
-            reason = decision.get(
-                "reason",
-                ""
-            )
+            reason = decision.get("reason") or ""
 
             # v229: zanim uznamy cel za zamkniety — czy przypadkiem
             # nie zgubilismy po drodze kawalka tego, o co prosil
@@ -24805,10 +24797,7 @@ Zwróć tylko JSON.
 
         if dtype == "FAILED":
 
-            reason = decision.get(
-                "reason",
-                ""
-            )
+            reason = decision.get("reason") or ""
 
             log(
                 "MAIN",
