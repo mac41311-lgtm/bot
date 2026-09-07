@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v266
+AEL-MINI AUTONOMOUS AGENT v267
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v266")
+    print("             AEL-MINI AUTONOMOUS AGENT v267")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3944,6 +3944,27 @@ def deepseek(name, message):
                     )
 
                 if attempt == 0:
+
+                    # v267: restart ma zaczac od zera, a start_session()
+                    # domyslnie WZNAWIA zapisany stan, jesli go znajdzie.
+                    # Restart po awarii wznawial wiec dokladnie te sesje,
+                    # ktora przed chwila padla.
+                    #
+                    # ZAOBSERWOWANY REALNY BUG (log 2026-09-07, 22:29:39).
+                    # Uzytkownik wlasnie zresetowal wszystkie sesje, po
+                    # czym pierwsza wiadomosc do WOJTKA padla na "invalid
+                    # message id". Restart zameldowal "Sesja WOJTEK: OK
+                    # (wznowiona z poprzedniego uruchomienia)" — czyli
+                    # wzial ten sam, martwy identyfikator — i proba nr 2
+                    # padla identycznie. Dopiero wtedy stan byl czyszczony,
+                    # ale prob juz nie zostalo, wiec rola oddawala pusty
+                    # tekst. To samo stalo sie z RESEARCHEREM.
+                    #
+                    # Zapisany stan czyscimy WCZESNIEJ: druga proba idzie
+                    # do naprawde nowej rozmowy.
+                    _resume_unverified.discard(name)
+                    _clear_session_state(name)
+
                     # Pierwsza awaria — próba restartu sesji.
                     log(
                         "DEEPSEEK",
