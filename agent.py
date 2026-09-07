@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v261
+AEL-MINI AUTONOMOUS AGENT v262
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v261")
+    print("             AEL-MINI AUTONOMOUS AGENT v262")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10229,6 +10229,25 @@ def _detect_call_audio_fallacy(command):
             "powietrza."
         )
 
+        # v262: gdy w tym samym programie gra TTS i slucha mikrofon,
+        # mikrofon lapie to, co gra glosnik. Log 2026-09-07: asystent
+        # rozpoznawal wlasna wypowiedz i odpowiadal na nia w kolko
+        # ("przepraszam, nie zrozumialem"), az uzytkownik przerwal.
+        if any(
+            n in command_str
+            for n in (
+                "termux-speech-to-text",
+                "termux-microphone-record",
+            )
+        ):
+            base += (
+                " W tym samym programie glosnik gra, a mikrofon "
+                "nagrywa — mikrofon lapie wiec takze to, co przed "
+                "chwila powiedzial glosnik, i rozpoznawanie mowy "
+                "dostaje wlasna wypowiedz jako kolejna wypowiedz "
+                "rozmowcy."
+            )
+
     return base
 
 
@@ -10549,6 +10568,63 @@ _PYTAJACE_KOMENDY_RE = re.compile(
 )
 
 
+# Skrypt, ktory ta komenda URUCHAMIA — zeby strazników nie omijalo
+# to, co siedzi w srodku pliku.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, 18:52:46). MAIN wkleil do
+# zadania skrypt asystent.py i napisal "zmien w nim numer Beaty na
+# wlasciwy" — czyli w pliku byl numer do PODMIANY PRZEZ CZLOWIEKA.
+# Python zapisal go (5580 znakow) i od razu uruchomil sam, bo
+# zadanie wygladalo na zwykle "uruchom plik".
+#
+# Wszystkie zabezpieczenia od dzwonienia — pamiec czynnosci
+# nieodwracalnych, numer-zaslepka, numer, ktorego nikt nie podal,
+# fakt o TTS grajacym na glosniku — patrza na TRESC KOMENDY. Tu
+# komenda brzmiala `python asystent.py`, wiec nie zobaczyly niczego.
+# Telefon zadzwonil, wlaczyl glosnik i zapetlil sie na wlasnym
+# glosie: TTS gral, mikrofon to nagrywal, STT rozpoznawal wlasna
+# wypowiedz i odpowiadal na nia ("przepraszam, nie zrozumialem").
+#
+# Skoro to, co robi program, siedzi w pliku, to strażnicy musza
+# czytac plik.
+_URUCHAMIANY_SKRYPT_RE = re.compile(
+    r"(?:^|[|;&]\s*|\bnohup\s+|\btimeout\s+\d+\s+)\s*"
+    r"(?:python3?|bash|sh|source)\s+"
+    r"(?:-\w+\s+)*['\"]?([~\w./-]+\.(?:py|sh))['\"]?"
+    r"|(?:^|[|;&]\s*)\s*\./([~\w./-]+\.(?:py|sh))\b",
+    re.IGNORECASE | re.MULTILINE
+)
+
+
+def _tresc_uruchamianego_skryptu(command):
+    """
+    Zawartosc skryptu, ktory ta komenda uruchamia — albo "".
+    Nigdy nie rzuca wyzej.
+    """
+
+    czesci = []
+
+    for m in _URUCHAMIANY_SKRYPT_RE.finditer(str(command or "")):
+
+        sciezka = m.group(1) or m.group(2)
+
+        if not sciezka:
+            continue
+
+        try:
+            p = _resolve_home_relative_path(sciezka)
+
+            if p.exists() and p.is_file():
+                czesci.append(
+                    p.read_text(encoding="utf-8", errors="replace")
+                )
+
+        except Exception:
+            continue
+
+    return "\n".join(czesci)
+
+
 def _kod_wyjscia_to_odpowiedz(command, result):
     """
     Zamienia "awarie narzedzia" na normalny wynik tam, gdzie kod
@@ -10698,6 +10774,17 @@ def termux_run(command):
             if _co_naprawde:
                 result["kod_wyjscia"] = _co_naprawde
 
+            # v262: to, co robi program, siedzi w pliku — patrz
+            # _tresc_uruchamianego_skryptu(). Strazniki dzwonienia
+            # dostaja komende RAZEM z trescia skryptu, ktory ona
+            # uruchamia.
+            _wnetrze = _tresc_uruchamianego_skryptu(command_str)
+
+            _do_sprawdzenia = (
+                command_str + "\n" + _wnetrze
+                if _wnetrze else command_str
+            )
+
             quoting_warning = _detect_single_quoted_shell_variable(
                 command_str
             )
@@ -10726,7 +10813,9 @@ def termux_run(command):
             if json_parse_warning:
                 result["json_parse_warning"] = json_parse_warning
 
-            call_audio_warning = _detect_call_audio_fallacy(command_str)
+            call_audio_warning = _detect_call_audio_fallacy(
+                _do_sprawdzenia
+            )
 
             if call_audio_warning:
                 result["call_audio_warning"] = call_audio_warning
@@ -10735,7 +10824,7 @@ def termux_run(command):
             # to samo juz w tym celu poszlo. Patrz
             # _note_and_warn_irreversible().
             repeated_irreversible = _note_and_warn_irreversible(
-                command_str
+                _do_sprawdzenia
             )
 
             if repeated_irreversible:
@@ -10751,7 +10840,7 @@ def termux_run(command):
                 result["contact_schema_warning"] = contact_schema_warning
 
             placeholder_phone_warning = _detect_placeholder_phone_target(
-                command_str
+                _do_sprawdzenia
             )
 
             if placeholder_phone_warning:
@@ -15431,7 +15520,11 @@ def _run_script_directly(path, task_text):
 
     log("MAIN", "Uruchamiam bezpośrednio: " + command)
 
-    shell_result = execute_shell(command)
+    # v262: przez termux_run, nie przez gole execute_shell — to tam
+    # mieszkaja strazniki dzwonienia, ktore od teraz czytaja takze
+    # TRESC uruchamianego pliku (patrz _tresc_uruchamianego_skryptu).
+    # Wczesniej ten skrot omijal je wszystkie.
+    shell_result = termux_run(command)
 
     ok = bool(shell_result.get("ok"))
 
@@ -15454,6 +15547,19 @@ def _run_script_directly(path, task_text):
 
     if interactive:
         warnings.append("" + interactive)
+
+    # To, co termux_run zauwazyl w tym uruchomieniu (dzwonienie,
+    # numer-zaslepka, TTS na glosniku), nie moze zginac tylko
+    # dlatego, ze uruchamial Python, a nie Gemini.
+    for _klucz in (
+        "call_audio_warning",
+        "repeated_irreversible_warning",
+        "placeholder_phone_warning",
+    ):
+        _uwaga = shell_result.get(_klucz)
+
+        if _uwaga:
+            warnings.append(str(_uwaga))
 
     return {
         "ok": ok,
