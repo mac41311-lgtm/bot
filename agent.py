@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v258
+AEL-MINI AUTONOMOUS AGENT v259
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v258")
+    print("             AEL-MINI AUTONOMOUS AGENT v259")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10489,6 +10489,81 @@ def _zglos_to_co_przybylo(przed):
 _ADRES_W_KOMENDZIE_RE = re.compile(r"https?://[^\s\"'`<>]+")
 
 
+# Komendy, ktorych kod wyjscia jest ODPOWIEDZIA, nie awaria.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, kroki 6-13). Gemini
+# uruchomilo `ps aux | grep vapi_wait | grep -v grep`. Procesu nie
+# bylo, wiec grep zwrocil 1 i pusty tekst — czyli dokladna odpowiedz
+# na zadane pytanie. My zglosilismy to jako GEMINI_TOOL_ERROR.
+#
+# Potem `pkill -f "vapi_wait.sh"` zwrocilo -15. Powod: wzorzec
+# pasowal do wiersza polecen NASZEJ WLASNEJ powloki, wiec pkill
+# zabil sam siebie razem z reszta komendy. To tez poszlo jako awaria
+# narzedzia.
+#
+# Zespol wyciagnal z tych dwoch rzeczy wniosek "termux_run
+# systematycznie zawodzi przy jakichkolwiek zlozonych wywolaniach",
+# porzucil automatyzacje, przeszedl na wypisywanie instrukcji dla
+# czlowieka i po czterech krokach zamknal cel jako FAILED z powodem
+# "brak wspolpracy uzytkownika". Zadne z narzedzi nie bylo zepsute.
+_PYTAJACE_KOMENDY_RE = re.compile(
+    r"(?:^|[|;&]\s*)\s*(?:sudo\s+)?"
+    r"(grep|egrep|fgrep|zgrep|test|\[|pgrep|pkill|killall|cmp|diff|"
+    r"which|command\s+-v|find)\b",
+    re.IGNORECASE
+)
+
+
+def _kod_wyjscia_to_odpowiedz(command, result):
+    """
+    Zamienia "awarie narzedzia" na normalny wynik tam, gdzie kod
+    wyjscia niesie ODPOWIEDZ, a nie blad. Zwraca zdanie do dolaczenia
+    albo "" — samego result nie rusza.
+    """
+
+    if not isinstance(result, dict) or result.get("ok"):
+        return ""
+
+    rc = result.get("returncode")
+    stderr = str(result.get("stderr") or "").strip()
+    command = str(command or "")
+
+    if stderr:
+        return ""
+
+    # pkill/pgrep ze wzorcem, ktory pasuje do naszej wlasnej powloki.
+    if rc == -15:
+
+        for m in re.finditer(
+            r"\b(?:pkill|pgrep|killall)\s+(?:-\w+\s+)*"
+            r"['\"]?([^\s'\"|;&]+)",
+            command
+        ):
+            wzorzec = m.group(1)
+
+            if wzorzec and command.count(wzorzec) > 1:
+                result["ok"] = True
+                return (
+                    "Wzorzec `" + wzorzec + "` pasuje takze do wiersza "
+                    "polecen tej powloki, wiec pkill zatrzymal sam "
+                    "siebie (kod -15). Wszystko, co bylo w tej "
+                    "komendzie PO nim, nie wykonalo sie."
+                )
+
+        return ""
+
+    # grep/test/pgrep: 1 znaczy "nie ma", nie "nie zadzialalo".
+    if rc == 1 and _PYTAJACE_KOMENDY_RE.search(command):
+        result["ok"] = True
+        return (
+            "Kod wyjscia 1 przy tej komendzie znaczy 'nie znaleziono' "
+            "— to jest odpowiedz na zadane pytanie, komenda wykonala "
+            "sie poprawnie."
+        )
+
+    return ""
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -10580,6 +10655,13 @@ def termux_run(command):
         _zglos_to_co_przybylo(_przed)
 
         if isinstance(result, dict):
+
+            _co_naprawde = _kod_wyjscia_to_odpowiedz(
+                command_str, result
+            )
+
+            if _co_naprawde:
+                result["kod_wyjscia"] = _co_naprawde
 
             quoting_warning = _detect_single_quoted_shell_variable(
                 command_str
@@ -22971,6 +23053,41 @@ def _decision_returns_delegated_choice(decision, goal):
     )
 
 
+# Zadanie, ktore w calosci jest INSTRUKCJA DLA CZLOWIEKA.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, kroki 8, 12, 13).
+# MAIN kazal Gemini "wyswietl uzytkownikowi ponizsza instrukcje"
+# (zaloz konto SIP, wygeneruj klucz w dashboardzie, wklej go do
+# pliku). Gemini zrobilo jedyne, co potrafi: echo do Termuksa.
+# Uzytkownik patrzy na konsole agenta, wiec NIE ZOBACZYL NIC — a
+# petla "czekala na jego wspolprace". Po trzech takich krokach
+# zespol zamknal cel jako FAILED z uzasadnieniem "brak wspolpracy
+# uzytkownika", choc czlowiek nigdy nie dostal ani jednej prosby.
+#
+# _TASK_IS_USER_QUESTION_RE lapalo "zapytaj o" i "popros o podanie",
+# ale nie "wyswietl uzytkownikowi instrukcje". A to jest ta sama
+# rzecz: tekst dla czlowieka, ktorego Gemini nie ma jak doreczyc ani
+# na ktorego nie ma jak poczekac. Jedyny kanal, ktory naprawde
+# zatrzymuje petle i pokazuje sie uzytkownikowi, to
+# NEED_USER_LOGIN.
+_TEKST_DLA_UZYTKOWNIKA_RE = re.compile(
+    r"(?:wy[śs]wietl|przeka[żz]|poka[żz]|poinformuj|popro[śs]|"
+    r"przypomnij)\s+(?:mu\s+|go\s+|ponownie\s+)?u[żz]ytkownik\w*|"
+    r"instrukcj\w+\s+dla\s+u[żz]ytkownik\w*|"
+    r"komunikat\s+dla\s+u[żz]ytkownik\w*",
+    re.IGNORECASE
+)
+
+# Czynnosc, ktorej Gemini nie zrobi za czlowieka.
+# Rdzenie, nie pelne formy — "wklej", "wkleil", "wkleil(a)by" to
+# ta sama prosba.
+_CZYNNOSC_CZLOWIEKA_RE = re.compile(
+    r"\b(?:wpis|wkle[ij]|zarejestr|zalog|za[łl][oó][żz]|za[łl]o[żz]|"
+    r"kup|uzupe[łl]ni|naci[śs]ni|roz[łl][ąa]cz|wygener|skopi)\w*",
+    re.IGNORECASE
+)
+
+
 def _decision_task_is_user_question(decision):
 
     if str(decision.get("type") or "").upper() != "TASK":
@@ -22978,7 +23095,14 @@ def _decision_task_is_user_question(decision):
 
     task_text = str(decision.get("task") or "")
 
-    return bool(_TASK_IS_USER_QUESTION_RE.search(task_text))
+    if _TASK_IS_USER_QUESTION_RE.search(task_text):
+        return True
+
+    # Tekst zaadresowany do czlowieka, ktory ma cos zrobic rekami.
+    return bool(
+        _TEKST_DLA_UZYTKOWNIKA_RE.search(task_text)
+        and _CZYNNOSC_CZLOWIEKA_RE.search(task_text)
+    )
 
 
 def _mark_contacts_lookup_attempted():
