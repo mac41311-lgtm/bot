@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v263
+AEL-MINI AUTONOMOUS AGENT v264
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v263")
+    print("             AEL-MINI AUTONOMOUS AGENT v264")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -9408,8 +9408,9 @@ def termux_write_file(path, content, append=False):
                 "message": (
                     "Nie zapisalem tego pliku — " + _powod + ". "
                     "Kod do plikow pisze Bartek, a ja go klade na "
-                    "dysk; napisz w raporcie, czego tu brakuje, a "
-                    "zespol to uzupelni w nastepnym kroku."
+                    "dysk. Bartek odzywa sie, gdy ktos go zawola po "
+                    "imieniu albo gdy padnie ten wlasnie brak — "
+                    "napisz w raporcie, czego tu brakuje."
                 )
             }
 
@@ -10652,7 +10653,13 @@ def _kod_wyjscia_to_odpowiedz(command, result):
         ):
             wzorzec = m.group(1)
 
-            if wzorzec and command.count(wzorzec) > 1:
+            # v264: warunek "wzorzec wystepuje w komendzie wiecej niz
+            # raz" byl bledny i dlatego ta naprawa nie zadzialala w
+            # logu 2026-09-07 20:31:14. `pkill -f X` uruchomione przez
+            # `bash -c "pkill -f X"` ZAWSZE pasuje do wlasnej powloki,
+            # bo jej wiersz polecen zawiera cala te komende — takze
+            # gdy X pada w niej tylko raz. Samo `-f` wystarczy.
+            if wzorzec:
                 result["ok"] = True
                 return (
                     "Wzorzec `" + wzorzec + "` pasuje takze do wiersza "
@@ -19572,10 +19579,24 @@ def consult_team(
     # Marek, gdy ostatni wynik dotyczy jego kodu, albo gdy MAIN
     # prosil o kod w poprzednim kroku. Bez zadnego z tych powodow
     # jego 7-11 tysiecy znakow i tak nikomu w tym kroku nie sluzy.
+    # v264: gdy termux_write_file odmowil zapisu, bo NIE MA kodu
+    # Bartka, to jest dokladnie prosba o Bartka.
+    #
+    # ZAOBSERWOWANY REALNY BUG (log 2026-09-07, 19:34 i 20:34). Od
+    # v255 Bartek milczy, dopoki ktos go nie zawola, a jego stara
+    # odpowiedz nie karmi juz zapisu do pliku. Zabraklo drugiej
+    # polowy tej zmiany: BRAK_KODU_DO_ZAPISU nie wolal go z powrotem.
+    # Zespol dostawal wiec "nie zapisalem, bo nie mam kodu", probowal
+    # jeszcze raz, dostawal to samo — i uznal, ze zepsute jest
+    # narzedzie ("termux_write_file wciaz nie dziala — odrzucam je"),
+    # zamiast poprosic Bartka o kod.
+    _brak_kodu_bartka = "BRAK_KODU_DO_ZAPISU" in str(last_result)
+
     consult_engineer = (
         "ENGINEER" in _zawolani
         or _pyta_marek == "ENGINEER"
         or _main_chcial_kod
+        or _brak_kodu_bartka
         or str(
             last_result.get("status")
             if isinstance(last_result, dict) else ""
