@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v264
+AEL-MINI AUTONOMOUS AGENT v265
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v264")
+    print("             AEL-MINI AUTONOMOUS AGENT v265")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1745,6 +1745,10 @@ _pending_team_warnings = []
 # plik samo, kiedy Gemini po niego siega. Podzial rol bez zmian: kod
 # pisze Bartek, na dysk kładzie Python, Gemini uruchamia.
 _kod_bartka_teraz = ""
+
+# Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
+# wkleja w nia kod Bartka — patrz termux_write_file().
+_tresc_zadania_teraz = ""
 
 # Czy MAIN w POPRZEDNIM kroku prosil o kod Bartka. To jedyny powod,
 # dla ktorego Bartek odzywa sie, choc nikt nie zawolal go po imieniu
@@ -9345,7 +9349,20 @@ def termux_write_file(path, content, append=False):
             # kluczami API) recznie do terminala. Zadna z tych rzeczy
             # nie byla potrzebna: kod lezal gotowy w wypowiedzi
             # Bartka, sciezke Gemini wlasnie podalo.
-            _kod = extract_code_block(_kod_bartka_teraz or "")
+            # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-07, 19:34
+            # i 20:34). Bartek milczal (nikt go nie zawolal), wiec
+            # _kod_bartka_teraz bylo puste — a kod, ktory mial trafic
+            # do pliku, lezal w TRESCI ZADANIA, bo MAIN wkleil go
+            # tam zamiast podac sciezke. Zespol dostawal wiec dwa
+            # razy "nie mam kodu Bartka" i uznal, ze zepsute jest
+            # narzedzie.
+            #
+            # Ten kod tez napisal DeepSeek, nie Gemini — podzial rol
+            # zostaje nietkniety, a plik po prostu powstaje.
+            _kod = (
+                extract_code_block(_kod_bartka_teraz or "")
+                or extract_code_block(_tresc_zadania_teraz or "")
+            )
 
             _blokada = (
                 _code_target_rejection(str(p), _kod) if _kod else None
@@ -9365,10 +9382,16 @@ def termux_write_file(path, content, append=False):
                         "path": str(p)
                     }
 
+                _skad = (
+                    "kod Bartka"
+                    if extract_code_block(_kod_bartka_teraz or "")
+                    else "kod z treści zadania"
+                )
+
                 log(
                     "GEMINI",
                     "Zapis " + p.name + " wzialem na siebie — "
-                    "leci kod Bartka, 1:1. Uruchom ten plik."
+                    "leci " + _skad + ", 1:1. Uruchom ten plik."
                 )
 
                 return {
@@ -13224,6 +13247,11 @@ def gemini_execute_task(task_id, task, success_condition=''):
     """
 
     global gemini_disabled
+
+    # v265: kod, ktory MAIN wklecil w tresc zadania, jest kodem
+    # zespolu — nie Gemini. Patrz termux_write_file().
+    global _tresc_zadania_teraz
+    _tresc_zadania_teraz = str(task or "")
 
     # ========================================================
     # GEMINI CLIENT
