@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v260
+AEL-MINI AUTONOMOUS AGENT v261
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v260")
+    print("             AEL-MINI AUTONOMOUS AGENT v261")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15683,6 +15683,108 @@ def _code_target_rejection(path, code_text):
     return powod, fakt
 
 
+# Do jakiego jezyka nalezy rozszerzenie pliku.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, kroki 3, 5 i 6). Bartek
+# rozwazal lokalny model i wymienil w rozmowie `llama.cpp` — nazwe
+# CUDZEGO PROJEKTU. _infer_code_target_path szuka nazwy pliku w
+# tresci zadania, a gdy jej nie znajdzie, siega do wypowiedzi
+# Bartka. Znalazlo tam "llama.cpp" (bo .cpp jest na liscie
+# rozszerzen kodu) i trzy razy zapisalo tam jego skrypt: 8545, 8088,
+# potem jeszcze raz.
+#
+# Dalej bylo gorzej: krok sie wysypal, wiec Piotr dostal ten plik do
+# analizy jako "kod, ktory zawiodl", a Ania nanosila na niego
+# poprawki (8545 -> 8537 -> 7478 B, z kopiami .bak). Przez dwa kroki
+# caly watek przegladu kodu pracowal nad plikiem, ktory nie mial nic
+# wspolnego z tym, co sie wykonywalo.
+#
+# Blok kodu MOWI, w jakim jest jezyku (```python, ```bash). Plik
+# .cpp nie jest miejscem na skrypt Pythona ani na komende powloki.
+_ROZSZERZENIA_JEZYKA = {
+    "python": (".py",), "python3": (".py",), "py": (".py",),
+    "bash": (".sh",), "sh": (".sh",), "shell": (".sh",),
+    "zsh": (".sh",), "console": (".sh",),
+    "javascript": (".js",), "js": (".js",), "node": (".js",),
+    "json": (".json",),
+    "html": (".html",), "css": (".css",), "xml": (".xml",),
+    "yaml": (".yaml", ".yml"), "yml": (".yaml", ".yml"),
+    "java": (".java",), "kotlin": (".kt",), "kt": (".kt",),
+    "c": (".c", ".h"), "cpp": (".cpp", ".h"), "c++": (".cpp", ".h"),
+    "ruby": (".rb",), "php": (".php",), "lua": (".lua",),
+    "sql": (".sql",), "toml": (".toml",), "ini": (".ini",),
+    "gradle": (".gradle",), "groovy": (".gradle",),
+    "markdown": (".md",), "md": (".md",),
+}
+
+# Rozszerzenia, ktore sa czyjegos jezyka — czyli takie, o ktore w
+# ogole warto sie spierac. Reszta (.txt, .conf, .csv) pasuje wszedzie.
+_ROZSZERZENIA_ZAJETE = {
+    r for rozszerzenia in _ROZSZERZENIA_JEZYKA.values()
+    for r in rozszerzenia
+}
+
+
+def _jezyk_zapisywanego_bloku(text):
+    """
+    Znacznik jezyka bloku, ktory wybralby extract_code_block — albo
+    "". Ta sama zasada wyboru: shebang, potem dlugosc.
+    """
+
+    bloki = re.findall(
+        r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
+        str(text or ""),
+        re.DOTALL
+    )
+
+    kandydaci = [
+        (znacznik, kod)
+        for znacznik, kod in bloki
+        if kod.strip()
+    ]
+
+    if not kandydaci:
+        return ""
+
+    znacznik, kod = max(
+        kandydaci,
+        key=lambda p: (
+            1 if p[1].lstrip().startswith("#!") else 0,
+            len(p[1])
+        )
+    )
+
+    # Heredoc (`cat > plik.py << 'EOF'`) to powloka, ktora TWORZY
+    # plik w innym jezyku. Znacznik opisuje wtedy opakowanie, nie
+    # tresc — wiec nic o docelowym rozszerzeniu nie mowi.
+    if "<<" in kod:
+        return ""
+
+    return znacznik.strip().lower()
+
+
+def _rozszerzenie_pasuje_do_bloku(kandydat, jezyk):
+    """
+    False, gdy plik nalezy do INNEGO jezyka niz zapisywany blok.
+    Brak znacznika jezyka albo neutralne rozszerzenie -> pasuje.
+    """
+
+    if not jezyk or jezyk not in _ROZSZERZENIA_JEZYKA:
+        return True
+
+    kropka = str(kandydat or "").lower().rfind(".")
+
+    if kropka < 0:
+        return True
+
+    rozszerzenie = str(kandydat or "").lower()[kropka:]
+
+    if rozszerzenie not in _ROZSZERZENIA_ZAJETE:
+        return True
+
+    return rozszerzenie in _ROZSZERZENIA_JEZYKA[jezyk]
+
+
 # Plik, do ktorego kod SAM pisze, jest jego WYNIKIEM — nie miejscem
 # na ten kod.
 #
@@ -15763,6 +15865,13 @@ def _infer_code_target_path(task_text, success_condition, engineer_text):
         extract_code_block(task_text or "") or ""
     )
 
+    # v261: blok mowi, w jakim jest jezyku — patrz
+    # _rozszerzenie_pasuje_do_bloku().
+    _jezyk = (
+        _jezyk_zapisywanego_bloku(engineer_text)
+        or _jezyk_zapisywanego_bloku(task_text)
+    )
+
     # v196: warunek sukcesu CELOWO wypadl z tej listy -- opisuje stan
     # koncowy ("plik X ma istniec"), nie cel zapisu. To on podsunal
     # FINAL_OK.txt jako "miejsce na kod".
@@ -15783,6 +15892,9 @@ def _infer_code_target_path(task_text, success_condition, engineer_text):
                 continue
 
             if base in _wyniki:
+                continue
+
+            if not _rozszerzenie_pasuje_do_bloku(base, _jezyk):
                 continue
 
             return candidate
