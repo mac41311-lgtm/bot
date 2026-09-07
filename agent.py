@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v262
+AEL-MINI AUTONOMOUS AGENT v263
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v262")
+    print("             AEL-MINI AUTONOMOUS AGENT v263")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16354,10 +16354,42 @@ def _tresc_z_heredoc(code, target_path):
     return None
 
 
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, 19:31:18). Bartek napisal
+# skrypt POWLOKI (`#!/.../bash`), ktory buduje APK: tworzy katalogi,
+# wypisuje pliki zrodlowe Javy przez heredoc i wola aapt/javac/d8.
+# W srodku tych heredocow stoja linie w rodzaju
+#
+#     import android.telecom.Call;
+#
+# czyli importy JAVY. Wzorzec "^\s*import\s+\S+\s*$" pasowal do nich
+# co do znaku (\S+ lyka takze srednik), wiec skrypt bash zostal uznany
+# za kod Pythona zapisywany do pliku .sh i odrzucony. MAIN napisal
+# "Zapisuje go sam", po czym nie zapisal nic, a Ola przekazala
+# zespolowi, ze "kod Bartka jest w Pythonie". Bartek odpowiedzial
+# "Moj skrypt to czysty Bash" — i mial racje.
+#
+# Import Pythona nie konczy sie srednikiem, wiec [^\s;] zamiast \S.
 _PYTHON_SCRIPT_MARKERS = re.compile(
-    r"^\s*import\s+\S+\s*$|^\s*from\s+\S+\s+import\b|^\s*def\s+\w+\s*\(",
+    r"^\s*import\s+[^\s;]+\s*$|^\s*from\s+\S+\s+import\b|"
+    r"^\s*def\s+\w+\s*\(",
     re.MULTILINE
 )
+
+# Tresc heredoca nalezy do PLIKU, ktory ten skrypt tworzy, a nie do
+# samego skryptu — ta sama zasada, co przy wyborze celu zapisu.
+_HEREDOC_BLOK_RE = re.compile(
+    r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\s*\n.*?^\1\s*$",
+    re.DOTALL | re.MULTILINE
+)
+
+
+def _bez_heredocow(code):
+    """Skrypt bez tresci plikow, ktore sam wypisuje."""
+
+    try:
+        return _HEREDOC_BLOK_RE.sub("\n", str(code or ""))
+    except Exception:
+        return str(code or "")
 
 
 def _looks_like_python_script(code, target_path):
@@ -16383,7 +16415,16 @@ def _looks_like_python_script(code, target_path):
     if suffix != ".sh":
         return False
 
-    return bool(_PYTHON_SCRIPT_MARKERS.search(code or ""))
+    code = str(code or "")
+
+    # Shebang powloki przesadza — to jest skrypt powloki, cokolwiek
+    # wypisuje w srodku (patrz _SHEBANG_POWLOKI_RE).
+    if _SHEBANG_POWLOKI_RE.search(code):
+        return False
+
+    return bool(
+        _PYTHON_SCRIPT_MARKERS.search(_bez_heredocow(code))
+    )
 
 
 def _python_syntax_error(code):
