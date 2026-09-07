@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v257
+AEL-MINI AUTONOMOUS AGENT v258
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v257")
+    print("             AEL-MINI AUTONOMOUS AGENT v258")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10140,10 +10140,9 @@ def _note_and_warn_irreversible(command):
                 "- " + godz + ": " + short(kom, 160)
                 for godz, kom in wczesniej[-3:]
             )
-            + "\nJesli to nie jest CELOWE powtorzenie, nie rob tego "
-            "drugi raz. Brak wyniku na ekranie NIE znaczy, ze "
-            "poprzednia proba sie nie udala — te komendy przy "
-            "powodzeniu nic nie wypisuja."
+            + "\nBrak wyniku na ekranie nie znaczy, ze poprzednia "
+            "proba sie nie udala — te komendy przy powodzeniu nic "
+            "nie wypisuja."
         )
 
         log(
@@ -10167,26 +10166,32 @@ def _detect_call_audio_fallacy(command):
         return None
 
     base = (
-        "UWAGA co do środowiska: termux-telephony-call zwykle nie "
-        "wypisuje NIC, gdy się powiedzie — więc PUSTY wynik NIE jest "
-        "dowodem, że połączenie się nawiązało, że był zasięg ani że "
-        "ktoś odebrał (to tylko 'numer poszedł do dialera'). Nie "
-        "pisz pliku-dowodu ani FINAL_OK na podstawie samego pustego "
-        "wyniku — potwierdź realnie przez termux-call-log albo stan "
-        "ekranu."
+        "termux-telephony-call zwykle nie wypisuje nic, gdy się "
+        "powiedzie — pusty wynik znaczy tyle, że numer poszedł do "
+        "dialera, i nie mówi nic o zasięgu ani o tym, czy ktoś "
+        "odebrał. To widać dopiero w termux-call-log albo na "
+        "ekranie."
     )
 
     if "termux-tts-speak" in command_str:
+        # v258: zostaje sam FAKT, znika wyrok i polecenie.
+        #
+        # Bylo tu: "jest tymi narzedziami NIEOSIAGALNE — jesli cel
+        # tego wymaga, zglos to wprost (NEED_USER/FAILED ...)".
+        # To nie byla obserwacja, tylko nasza teza o wykonalnosci
+        # calego zadania plus instrukcja, zeby sie poddac — podana
+        # zespolowi jako fakt ze srodowiska. Uzytkownik pyta o APK,
+        # AudioPlaybackCapture i Telecom API; to zdanie zamykalo mu
+        # te droge naszym glosem, zanim ktokolwiek ja sprawdzil.
+        #
+        # Co jest naprawde widoczne: TTS gra na glosniku. Reszte
+        # niech zespol wywnioskuje sam.
         base += (
-            " DODATKOWO to polecenie łączy połączenie z "
-            "termux-tts-speak — a TTS gra na GŁOŚNIKU tego telefonu, "
-            "NIE wchodzi w kanał audio rozmowy. Druga strona tego NIE "
-            "usłyszy. 'Powiedzenie czegoś rozmówcy' ani 'słuchanie "
-            "go' w trakcie połączenia jest tymi narzędziami "
-            "NIEOSIĄGALNE — jeśli cel tego wymaga, zgłoś to wprost "
-            "(NEED_USER/FAILED z prawdziwym powodem) albo wyjdź poza "
-            "powłokę (realna aplikacja przez UI/Chrome), zamiast grać "
-            "TTS lokalnie i uznawać cel za wykonany."
+            " To polecenie łączy połączenie z termux-tts-speak, a "
+            "termux-tts-speak gra na głośniku tego telefonu — jest "
+            "to osobne wyjście audio niż kanał rozmowy, więc druga "
+            "strona słyszy z niego tyle, ile mikrofon zdąży złapać z "
+            "powietrza."
         )
 
     return base
