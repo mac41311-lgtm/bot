@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v265
+AEL-MINI AUTONOMOUS AGENT v266
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v265")
+    print("             AEL-MINI AUTONOMOUS AGENT v266")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2918,6 +2918,21 @@ def _get_health(account):
 _DEEPSEEK_FAILURE_BURST_THRESHOLD = 3
 _DEEPSEEK_BASE_COOLDOWN_SECONDS = 90
 _DEEPSEEK_MAX_COOLDOWN_SECONDS = 600
+
+
+def _pozostaly_cooldown_konta(name):
+    """
+    Ile sekund zostalo do konca wstrzymania konta tej roli (0, gdy
+    konto jest zdrowe). Patrz _deepseek_circuit_wait().
+    """
+
+    try:
+        health = _get_health(_account_of(name))
+
+        return max(0.0, health["cooldown_until"] - time.time())
+
+    except Exception:
+        return 0.0
 
 
 def _deepseek_circuit_wait(name):
@@ -24320,6 +24335,26 @@ def run_agent(goal):
 
             continue
 
+        # v266: to samo dla awarii KONTA DeepSeek. Bezpiecznik juz
+        # istnial i dzialal poprawnie, ale odczekiwal DOPIERO przy
+        # pierwszym zapytaniu WEWNATRZ kroku — a wtedy krok byl juz
+        # policzony.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-07, 21:14-21:37).
+        # Konto padlo na "invalid message id". Kroki 6, 7, 8 i 9
+        # przelecialy z rzedu, kazdy konczac sie "MAIN — decyzja:
+        # (brak decyzji)", bo wszystkie role zwracaly pusty tekst.
+        # Cztery kroki z budzetu MAX_STEPS poszly na awarie, o ktorej
+        # program juz wiedzial. Czekanie na cudze serwery to nie jest
+        # krok agenta — tak samo jak czekanie na reset limitu Gemini.
+        _cooldown = _pozostaly_cooldown_konta("MAIN")
+
+        if _cooldown > 0:
+
+            _deepseek_circuit_wait("MAIN")
+
+            continue
+
         step += 1
 
         print()
@@ -24489,6 +24524,30 @@ def run_agent(goal):
 
             )
 
+
+        # v266: pusta odpowiedz to nie jest zepsuty JSON — to brak
+        # odpowiedzi. W logu 2026-09-07 21:14:27 sesja MAIN padla na
+        # "invalid message id", zwrocila 0 znakow, a my mowilismy
+        # "Niepoprawny JSON. Naprawiam." i slalismy prosbe o poprawke
+        # do sesji, ktora wlasnie umarla. Nazywamy rzecz po imieniu i
+        # nie marnujemy na to kolejnego zapytania.
+        if decision is None and not str(raw or "").strip():
+
+            log(
+                "MAIN",
+                "MAIN nie odpowiedzial nic — to nie jest zla "
+                "odpowiedz, tylko jej brak. Nie prosze o poprawke."
+            )
+
+            last_result = {
+                "status": "MAIN_BEZ_ODPOWIEDZI",
+                "message": (
+                    "Sesja MAIN nie zwrocila w tym kroku zadnej "
+                    "tresci."
+                )
+            }
+
+            continue
 
         if decision is None:
 
