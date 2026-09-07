@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v259
+AEL-MINI AUTONOMOUS AGENT v260
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v259")
+    print("             AEL-MINI AUTONOMOUS AGENT v260")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3274,6 +3274,20 @@ _SENTENCE_END = ".!?\"')]}`”…»"
 # normalne zakonczenie wyliczenia, nie urwanie.
 _LIST_LINE_RE = re.compile(r"^\s*(?:[-*•+>|]|\d+[.)])\s")
 
+# Znaki formatowania Markdown, ktore moga stac PO kropce.
+#
+# ZAOBSERWOWANY REALNY BUG (log 2026-09-07, kroki 9-15). Marek konczyl
+# wypowiedzi pogrubieniem: "**Ruszamy z krokiem Tomka.**", "**Koncze.**",
+# "**Ruszamy – zielone swiatlo.**". Sprawdzalismy TYLKO ostatni znak,
+# widzielismy gwiazdke i uznawalismy zdanie za urwane w polowie.
+#
+# Co sie dzialo dalej: prosilismy o dalszy ciag SKONCZONEJ wypowiedzi,
+# model uprzejmie dopisywal kolejne dwa tysiace znakow, my je
+# doklejalismy — a nowy koniec znowu byl pogrubiony. I jeszcze raz.
+# 2437 -> 4845 -> 7307 znakow, w kazdym kroku, i wszystko to szlo do
+# calego zespolu jako opinia Marka.
+_ZDOBNIKI_NA_KONCU = "*_~ \t"
+
 
 def _deepseek_looks_truncated(text, status):
 
@@ -3303,6 +3317,16 @@ def _deepseek_looks_truncated(text, status):
     if _LIST_LINE_RE.match(ostatnia_linia):
         # Wyliczenie zakonczone pozycja bez kropki — normalne.
         return False, None
+
+    # Zdanie w pogrubieniu konczy sie tam, gdzie kropka — a nie tam,
+    # gdzie zamykajace gwiazdki. Patrz _ZDOBNIKI_NA_KONCU.
+    bez_zdobnikow = stripped.rstrip(_ZDOBNIKI_NA_KONCU)
+
+    if bez_zdobnikow and bez_zdobnikow[-1] in _SENTENCE_END:
+        return False, None
+
+    if bez_zdobnikow:
+        stripped = bez_zdobnikow
 
     if stripped[-1] in ":,;":
         # Dwukropek/przecinek na koncu to zapowiedz, ktora nie
@@ -3335,6 +3359,17 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
             session, prompt, action
         )
     except Exception as e:
+
+        # v260: gdy prosilismy o action='continue', awaryjne
+        # session.send_message() NIE jest tym samym — wysyla nowa
+        # wiadomosc (jedna spacje) i dostaje SWIEZY tekst, ktory
+        # potem doklejalismy do skonczonej wypowiedzi jak dalszy
+        # ciag. To 422 mialo od v190 wylaczac caly mechanizm, ale
+        # bylo tutaj polykane, wiec wylaczenie nigdy nie
+        # nastepowalo i to samo powtarzalo sie w kazdym kroku.
+        if action:
+            raise
+
         log(
             "DEEPSEEK",
             name + ": EKSPERYMENT (przechwytywanie statusu) nie "
