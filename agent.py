@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v267
+AEL-MINI AUTONOMOUS AGENT v268
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v267")
+    print("             AEL-MINI AUTONOMOUS AGENT v268")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2968,6 +2968,96 @@ def _deepseek_circuit_wait(name):
 _deepseek_last_send = {}
 _deepseek_pacing_lock = _threading.Lock()
 
+# Odstep, ktory faktycznie trzymamy na danym koncie. Rosnie, gdy
+# serwer mowi, ze wysylamy za szybko, i wraca do wartosci bazowej,
+# gdy przestaje.
+_deepseek_odstep = {}
+
+# Komunikaty, ktore znacza "za duzo zapytan", a nie "zepsuta
+# rozmowa". Uzytkownik widzi je takze na samej stronie DeepSeeka,
+# gdy pyta tam recznie w tym samym czasie.
+_PRZECIAZENIE_RE = re.compile(
+    r"too\s+frequent|rate\s*limit|too\s+many\s+requests|\b429\b|"
+    r"invalid\s+message\s+id|biz_code\"?\s*:\s*26",
+    re.IGNORECASE
+)
+
+# Ile najwyzej gotowi jestesmy czekac miedzy wiadomosciami.
+_DEEPSEEK_MAX_ODSTEP = 45.0
+
+
+def _wyglada_na_przeciazenie(tekst):
+    """Czy ten blad mowi 'za szybko', a nie 'cos zepsute'."""
+
+    return bool(_PRZECIAZENIE_RE.search(str(tekst or "")))
+
+
+def _biezacy_odstep(account):
+
+    return _deepseek_odstep.get(
+        account, DEEPSEEK_MIN_INTERVAL_SECONDS
+    )
+
+
+def _zwolnij_tempo(name):
+    """
+    Serwer powiedzial "za szybko" — od teraz czekamy dluzej na tym
+    koncie. Podwajamy odstep, do rozsadnego sufitu.
+    """
+
+    account = _account_of(name)
+
+    with _deepseek_pacing_lock:
+
+        nowy = min(
+            _biezacy_odstep(account) * 2,
+            _DEEPSEEK_MAX_ODSTEP
+        )
+
+        if nowy > _biezacy_odstep(account):
+
+            _deepseek_odstep[account] = nowy
+
+            log(
+                "DEEPSEEK",
+                "Serwer mowi, ze wysylamy za szybko — zwalniam na "
+                "koncie " + str(account) + " do "
+                + str(int(nowy)) + "s miedzy wiadomosciami."
+            )
+        else:
+            _deepseek_odstep[account] = nowy
+
+
+def _przyspiesz_po_sukcesie(name):
+    """
+    Poszlo — wracamy w strone tempa bazowego, ale powoli, zeby nie
+    wpasc od razu z powrotem w limit.
+    """
+
+    account = _account_of(name)
+
+    with _deepseek_pacing_lock:
+
+        biezacy = _biezacy_odstep(account)
+
+        if biezacy <= DEEPSEEK_MIN_INTERVAL_SECONDS:
+            return
+
+        nowy = max(
+            DEEPSEEK_MIN_INTERVAL_SECONDS,
+            biezacy * 0.8
+        )
+
+        _deepseek_odstep[account] = nowy
+
+        if nowy <= DEEPSEEK_MIN_INTERVAL_SECONDS:
+            log(
+                "DEEPSEEK",
+                "Konto " + str(account) + " znowu wyrabia — wracam "
+                "do zwyklego odstepu "
+                + str(int(DEEPSEEK_MIN_INTERVAL_SECONDS)) + "s."
+            )
+
 
 def _deepseek_pace(name):
 
@@ -2977,7 +3067,7 @@ def _deepseek_pace(name):
 
         remaining = (
             _deepseek_last_send.get(account, 0.0)
-            + DEEPSEEK_MIN_INTERVAL_SECONDS
+            + _biezacy_odstep(account)
             - time.time()
         )
 
@@ -3917,6 +4007,8 @@ def deepseek(name, message):
                 health["consecutive_failures"] = 0
                 health["trip_count"] = 0
 
+                _przyspiesz_po_sukcesie(name)
+
                 _resume_unverified.discard(name)
                 _save_session_state(name, session)
 
@@ -3943,27 +4035,25 @@ def deepseek(name, message):
                         "ponownie."
                     )
 
-                if attempt == 0:
+                # v268: gdy serwer mowi "za szybko", nie ma zepsutej
+                # rozmowy do naprawiania — jest za duzo zapytan.
+                # Zakladanie wtedy NOWEJ sesji to dokladnie
+                # dokladanie do ognia (kolejna rozmowa na tym samym
+                # koncie), a przy okazji gubi historie roli.
+                # Czekamy dluzej i probujemy w TEJ SAMEJ rozmowie.
+                #
+                # Uzytkownik zglosil to wprost (2026-09-07): "na
+                # stronie przeciazylismy serwer... lepiej jak powraca
+                # do tej samej sesji jak bylo... trzeba jakos mniej
+                # spamowac".
+                if _wyglada_na_przeciazenie(str(e)):
 
-                    # v267: restart ma zaczac od zera, a start_session()
-                    # domyslnie WZNAWIA zapisany stan, jesli go znajdzie.
-                    # Restart po awarii wznawial wiec dokladnie te sesje,
-                    # ktora przed chwila padla.
-                    #
-                    # ZAOBSERWOWANY REALNY BUG (log 2026-09-07, 22:29:39).
-                    # Uzytkownik wlasnie zresetowal wszystkie sesje, po
-                    # czym pierwsza wiadomosc do WOJTKA padla na "invalid
-                    # message id". Restart zameldowal "Sesja WOJTEK: OK
-                    # (wznowiona z poprzedniego uruchomienia)" — czyli
-                    # wzial ten sam, martwy identyfikator — i proba nr 2
-                    # padla identycznie. Dopiero wtedy stan byl czyszczony,
-                    # ale prob juz nie zostalo, wiec rola oddawala pusty
-                    # tekst. To samo stalo sie z RESEARCHEREM.
-                    #
-                    # Zapisany stan czyscimy WCZESNIEJ: druga proba idzie
-                    # do naprawde nowej rozmowy.
-                    _resume_unverified.discard(name)
-                    _clear_session_state(name)
+                    _zwolnij_tempo(name)
+
+                    if attempt == 0:
+                        continue
+
+                if attempt == 0:
 
                     # Pierwsza awaria — próba restartu sesji.
                     log(
