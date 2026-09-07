@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v268
+AEL-MINI AUTONOMOUS AGENT v269
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v268")
+    print("             AEL-MINI AUTONOMOUS AGENT v269")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -18848,6 +18848,73 @@ def _collect_role_messages(speaker_role, text):
         )
 
 
+def _dla_tej_roli(tekst, rola):
+    """
+    Z cudzej wypowiedzi zostawia to, co dotyczy TEJ roli: czesc
+    ogolna (przed pierwszym zwrotem do kogokolwiek) plus akapity
+    zaadresowane wprost do niej.
+
+    Gdy nikt nikogo nie wolal po imieniu, wypowiedz idzie w calosci
+    — to zwykla wypowiedz do wszystkich.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (2026-09-07). Uzytkownik wkleil
+    cala wiadomosc, ktora dostawal Kamil. W srodku siedzialo 2278
+    znakow cudzej wypowiedzi z osobnymi akapitami "Bartku: ...",
+    "Kamilu: ...", "Tomku: ..." — Kamil dostawal wszystkie trzy,
+    lacznie ze szczegolowa instrukcja testu dla Bartka, po czym
+    calosc i tak zostala ucieta w polowie na limicie. Jego wlasny
+    akapit mial cztery zdania.
+
+    Kanal zawolan po imieniu (_ADDRESS_RE) juz to rozpoznaje —
+    uzywamy go tu do CIECIA, nie tylko do skrzynki.
+    """
+
+    tekst = str(tekst or "")
+
+    trafienia = list(_ADDRESS_RE.finditer(tekst))
+
+    if not trafienia:
+        return tekst
+
+    ogolne = tekst[:trafienia[0].start()].strip()
+
+    moje = []
+
+    for i, m in enumerate(trafienia):
+
+        if _VOCATIVE_TO_ROLE.get(m.group(1).upper()) != rola:
+            continue
+
+        koniec = (
+            trafienia[i + 1].start()
+            if i + 1 < len(trafienia) else len(tekst)
+        )
+
+        moje.append(tekst[m.start():koniec].strip())
+
+    czesci = [c for c in ([ogolne] + moje) if c]
+
+    return "\n\n".join(czesci)
+
+
+def _od_kolegi(etykieta, tekst, rola):
+    """
+    Naglowek "Kamil ustalil:" tylko wtedy, gdy pod nim faktycznie
+    cos dla TEJ roli zostalo.
+
+    Bez tego cieciu z _dla_tej_roli towarzyszylby pusty podpis —
+    ktos dostawalby "Wojtek podrzucil:" i nic dalej, czyli scianke
+    do zgadywania, co tam bylo. Lepiej milczec.
+    """
+
+    moje = _dla_tej_roli(tekst, rola).strip()
+
+    if not moje:
+        return ""
+
+    return str(etykieta) + moje
+
+
 def _role_inbox_block(role_name):
     """
     Co ta osoba ma do przeczytania od reszty zespołu — i od razu
@@ -19571,8 +19638,14 @@ def consult_team(
             _only_if_new(role_name, "checklist", checklist_block)
             if not _bez_maszynowni else "",
             _only_if_new(role_name, "main_decision", main_decision_block),
+            # v269: surowy zrzut wywolania narzedzia to maszynownia.
+            # Kamil szuka w sieci i nie uruchamia narzedzi — sam
+            # komunikat bledu ma juz w streszczeniu Oli. Ta sama
+            # zasada, co przy checkliscie i liscie narzedzi telefonu.
             "\nCo się właśnie stało:\n" + report_body
-            + success_values_block + error_details_block + "\n",
+            + success_values_block
+            + ("" if _bez_maszynowni else error_details_block)
+            + "\n",
             _only_if_new(role_name, "tool_hint", tool_hint)
             if not _bez_maszynowni else "",
             # v230: co użytkownik powiedział w trakcie tego celu.
@@ -19887,13 +19960,13 @@ def consult_team(
         # turę (patrz wyżej) — to realna, zweryfikowana odpowiedź, nie
         # sztywny szablon.
         wojtek_extra = (
-            (
+            _od_kolegi(
                 "\n\nDODATKOWO: kolega z zespołu napisał to (jeśli da "
                 "się to sprawdzić w sieci, zweryfikuj i uwzględnij "
-                "wynik, w przeciwnym razie zignoruj):\n" + wojtek_out
+                "wynik, w przeciwnym razie zignoruj):\n",
+                wojtek_out, "RESEARCHER"
             )
-            if consult_wojtek and wojtek_out
-            else ""
+            if consult_wojtek else ""
         )
 
         researcher_context = _team_context(
@@ -20001,11 +20074,17 @@ def consult_team(
             extra=(
                 _only_if_new(
                     "PLANNER", "od_kamila",
-                    "\nKamil ustalił:\n" + researcher_out
+                    _od_kolegi(
+                        "\nKamil ustalił:\n",
+                        researcher_out, "PLANNER"
+                    )
                 )
                 + _only_if_new(
                     "PLANNER", "od_wojtka",
-                    "\nWojtek podrzucił:\n" + wojtek_out
+                    _od_kolegi(
+                        "\nWojtek podrzucił:\n",
+                        wojtek_out, "PLANNER"
+                    )
                 )
                 + critic_feedback_block
                 + planner_question_block
@@ -20115,17 +20194,25 @@ def consult_team(
             "ENGINEER",
             include_android=goal_needs_android,
             extra=(
+                # Plan Tomka idzie w CALOSCI — to jest rzecz, ktora
+                # Bartek ma wykonac, nie cudza rozmowa obok.
                 _only_if_new(
                     "ENGINEER", "od_tomka",
                     "\nTomek proponuje:\n" + planner_out
                 )
                 + _only_if_new(
                     "ENGINEER", "od_kamila",
-                    "\nKamil ustalił:\n" + researcher_out
+                    _od_kolegi(
+                        "\nKamil ustalił:\n",
+                        researcher_out, "ENGINEER"
+                    )
                 )
                 + _only_if_new(
                     "ENGINEER", "od_wojtka",
-                    "\nWojtek podrzucił:\n" + wojtek_out
+                    _od_kolegi(
+                        "\nWojtek podrzucił:\n",
+                        wojtek_out, "ENGINEER"
+                    )
                 )
                 + _only_if_new(
                     "ENGINEER", "project_file",
