@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v275
+AEL-MINI AUTONOMOUS AGENT v276
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v275")
+    print("             AEL-MINI AUTONOMOUS AGENT v276")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -1746,6 +1746,10 @@ _pending_team_warnings = []
 # pisze Bartek, na dysk kładzie Python, Gemini uruchamia.
 _kod_bartka_teraz = ""
 
+# Plik zapisany kodem, ktory MAIN przepisal do tresci
+# zadania — patrz termux_write_file i consult_engineer.
+_kod_z_drugiej_reki = ""
+
 # Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
 # wkleja w nia kod Bartka — patrz termux_write_file().
 _tresc_zadania_teraz = ""
@@ -1838,9 +1842,98 @@ def _set_current_project_file(path):
     _engineer_current_file = str(path) if path else None
 
 
-def _current_project_file_block():
+# Skad wiadomo, KTORA linia pliku sie wywalila. Traceback
+# Pythona, komunikat basha i awk/sed mowia to wprost — wystarczy
+# przeczytac, zamiast pokazywac caly plik i kazac szukac.
+_LINIA_BLEDU_RE = re.compile(
+    r'File\s+"([^"]+)",\s+line\s+(\d+)'          # Python
+    r"|([^\s:]+):\s*line\s+(\d+)"                 # bash
+    r"|([^\s:]+):(\d+):\s",                       # sed/awk/gcc
+    re.IGNORECASE
+)
+
+# Ile linii wokol feralnej pokazujemy.
+_OKOLICA_BLEDU = 40
+
+
+def _linia_bledu_w(sciezka, tekst_bledu):
+    """
+    Numer linii, na ktorej wywalil sie TEN plik — albo 0.
+
+    Ta sama sztuczka, ktora po stronie agent.py robi od dawna
+    extract_function_source(): zamiast podawac 12000 znakow i
+    liczyc, ze ktos znajdzie w nich wlasciwe miejsce, wycinamy
+    dokladnie to miejsce, o ktorym mowi blad.
+    """
+
+    tekst = str(tekst_bledu or "")
+
+    if not tekst.strip():
+        return 0
+
+    nazwa = str(sciezka).split("/")[-1]
+
+    for m in _LINIA_BLEDU_RE.finditer(tekst):
+
+        for plik_g, linia_g in ((1, 2), (3, 4), (5, 6)):
+
+            plik = m.group(plik_g)
+
+            if not plik:
+                continue
+
+            if plik.split("/")[-1] != nazwa:
+                continue
+
+            try:
+                return int(m.group(linia_g))
+            except (TypeError, ValueError):
+                return 0
+
+    return 0
+
+
+def _okolica_linii(tresc, linia):
+    """Kawalek pliku wokol wskazanej linii, z numeracja."""
+
+    linie = tresc.split("\n")
+
+    od = max(0, linia - 1 - _OKOLICA_BLEDU // 2)
+    do = min(len(linie), od + _OKOLICA_BLEDU)
+
+    szerokosc = len(str(do))
+
+    return "\n".join(
+        str(nr + 1).rjust(szerokosc) + " | " + linie[nr]
+        for nr in range(od, do)
+    ), od + 1, do
+
+
+def _plik_w_grze(*teksty):
+    """
+    Czy plik, nad ktorym pracujemy, pada w tym, co sie wlasnie
+    dzieje — w planie albo w bledzie.
+    """
+
+    if not _engineer_current_file:
+        return False
+
+    nazwa = str(_engineer_current_file).split("/")[-1].strip()
+
+    if not nazwa:
+        return False
+
+    return any(nazwa in str(t or "") for t in teksty)
+
+
+def _current_project_file_block(tekst_bledu=""):
     """
     Aktualna tresc pliku, odczytana Z DYSKU TERAZ.
+
+    Gdy z bledu da sie wyczytac numer linii — pokazujemy okolice tej
+    linii, z numeracja, zamiast calego pliku. Naprawiajacy dostaje
+    wtedy dokladnie to miejsce, ktore ma poprawic, a nie poczatek i
+    koniec pliku z dziura w srodku.
 
     Zwraca "" gdy nie ma nad czym pracowac albo pliku nie da sie
     odczytac — nigdy nie zgadujemy, co w nim jest.
@@ -1876,6 +1969,25 @@ def _current_project_file_block():
         "znak, razem z wcięciami. Fragment musi występować w pliku "
         "dokładnie raz, inaczej poprawka zostanie odrzucona.]\n"
     )
+
+    linia = _linia_bledu_w(p, tekst_bledu)
+
+    if linia and 0 < linia <= tresc.count("\n") + 1:
+
+        okolica, od, do = _okolica_linii(tresc, linia)
+
+        return (
+            "\n\nTAK WYGLĄDA " + str(p) + " W MIEJSCU, KTÓRE SIĘ "
+            "WYWALIŁO — linia " + str(linia) + ", pokazuję "
+            + str(od) + "-" + str(do) + " z " + str(
+                tresc.count("\n") + 1
+            ) + " (odczytane z dysku w tej chwili):\n"
+            + okolica
+            + "\n\n[Numery linii są tylko dla orientacji — nie ma "
+            "ich w pliku. Resztę pliku możesz odczytać przez "
+            "termux_read_file.]"
+            + stopka
+        )
 
     if len(tresc) <= _PROJECT_FILE_MAX:
         return naglowek + tresc + stopka
@@ -9575,11 +9687,25 @@ def termux_write_file(path, content, append=False):
                         "path": str(p)
                     }
 
+                _wprost_od_bartka = bool(
+                    extract_code_block(_kod_bartka_teraz or "")
+                )
+
                 _skad = (
                     "kod Bartka"
-                    if extract_code_block(_kod_bartka_teraz or "")
+                    if _wprost_od_bartka
                     else "kod z treści zadania"
                 )
+
+                # v276: kod z tresci zadania NIE jest kodem Bartka —
+                # to wersja, ktora MAIN przepisal z pamieci do
+                # TASK-a. Plik powstaje (inaczej cofnelibysmy v265 i
+                # zespol znowu dostawalby "BRAK_KODU_DO_ZAPISU"), ale
+                # nazywamy rzecz po imieniu i wolamy autora, zeby w
+                # nastepnej naradzie zobaczyl, co naprawde wyladowalo
+                # na dysku.
+                if not _wprost_od_bartka:
+                    globals()["_kod_z_drugiej_reki"] = str(p)
 
                 log(
                     "GEMINI",
@@ -9593,8 +9719,8 @@ def termux_write_file(path, content, append=False):
                     "bytes": len(_kod.encode("utf-8")),
                     "written_by": "python",
                     "message": (
-                        "Ten plik zapisalem ja, kodem Bartka z tej "
-                        "narady — jest na dysku, w calosci. Twoja "
+                        "Ten plik zapisalem ja, " + _skad
+                        + " — jest na dysku, w calosci. Twoja "
                         "czesc to uruchomienie go i sprawdzenie, co "
                         "z tego wyszlo."
                     )
@@ -19643,6 +19769,14 @@ def consult_team(
                 + _wypisane
             )
 
+    # v276: surowy wynik ostatniego zadania — stad
+    # _linia_bledu_w() wyczyta, ktora linia pliku sie wywalila.
+    # Nie idzie do nikogo w tej postaci; sluzy do WYCINANIA.
+    _tekst_bledu = (
+        json.dumps(last_result, ensure_ascii=False, default=str)
+        if isinstance(last_result, dict) else str(last_result or "")
+    )
+
     error_details_block = ""
 
     if (
@@ -19957,6 +20091,10 @@ def consult_team(
         or _pyta_marek == "ENGINEER"
         or _main_chcial_kod
         or _brak_kodu_bartka
+        # v276: na dysku wyladowal kod przepisany przez MAIN-a.
+        # Autor ma go zobaczyc — dostanie AKTUALNY STAN PLIKU i sam
+        # zdecyduje, czy to jest to, co napisal.
+        or bool(_kod_z_drugiej_reki)
         or str(
             last_result.get("status")
             if isinstance(last_result, dict) else ""
@@ -20341,7 +20479,7 @@ def consult_team(
                 )
                 + _only_if_new(
                     "ENGINEER", "project_file",
-                    _current_project_file_block()
+                    _current_project_file_block(_tekst_bledu)
                 )
                 + _engineer_feedback_block()
                 + engineer_critic_block
@@ -20439,7 +20577,14 @@ def consult_team(
                 )
                 + _only_if_new(
                     "CRITIC", "project_file",
-                    _current_project_file_block()
+                    # v276: Marek dostaje ten plik, gdy jest w tym
+                    # kroku o czym mowic — pada w planie Tomka albo
+                    # w tym, co sie wlasnie wywalilo. Inaczej to
+                    # kilka tysiecy znakow cudzego kodu, ktorego w
+                    # tej turze nie ocenia.
+                    _current_project_file_block(_tekst_bledu)
+                    if _plik_w_grze(planner_out, _tekst_bledu)
+                    else ""
                 )
                 + critic_answer_block
                 + main_override_block
@@ -20662,6 +20807,11 @@ def consult_team(
     _kod_bartka_teraz = (
         results.get("ENGINEER", "") if consult_engineer else ""
     )
+
+    if consult_engineer:
+        # Bartek wlasnie widzial stan pliku — powod do wolania go
+        # wygasa, zeby nie wracal co krok.
+        globals()["_kod_z_drugiej_reki"] = ""
 
     return {
         # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
