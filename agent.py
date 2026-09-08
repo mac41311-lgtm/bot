@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v280
+AEL-MINI AUTONOMOUS AGENT v281
 
 ARCHITEKTURA:
 
@@ -1742,7 +1742,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v280")
+    print("             AEL-MINI AUTONOMOUS AGENT v281")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10223,6 +10223,10 @@ def termux_write_file(path, content, append=False):
             _kod = (
                 extract_code_block(_kod_bartka_teraz or "")
                 or extract_code_block(_tresc_zadania_teraz or "")
+                # v281: MAIN potrafi przepisac kod do zadania bez
+                # ogrodzenia z backtickow, samym heredokiem — a to
+                # jest tresc tego pliku powiedziana wprost.
+                or _kod_z_heredoca(_tresc_zadania_teraz, p)
             )
 
             _blokada = (
@@ -17313,6 +17317,50 @@ _HEREDOC_BLOK_RE = re.compile(
 )
 
 
+def _kod_z_heredoca(tekst, sciezka):
+    """
+    Tresc pliku wypisana heredokiem: `cat > plik << 'EOF' ... EOF`.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-08 22:53). Tomek
+    napisal skrypt w bloku ```bash, Marek go zatwierdzil, a MAIN
+    przepisal go do zadania BEZ ogrodzenia z backtickow — samym
+    heredokiem. extract_code_block szuka ```, wiec nie znalazl nic,
+    i termux_write_file odmowil zapisu z BRAK_KODU_DO_ZAPISU.
+    Kod byl w zadaniu, na wyciagniecie reki, znak w znak.
+
+    Heredok NIE JEST podpowiedzia, tylko jednoznacznym poleceniem:
+    "do tego pliku ma trafic dokladnie to". Wystarczy sprawdzic, czy
+    mowi o TYM pliku, ktory wlasnie zapisujemy.
+    """
+
+    tekst = str(tekst or "")
+
+    if not tekst.strip():
+        return ""
+
+    nazwa = str(sciezka).split("/")[-1].strip()
+
+    if not nazwa:
+        return ""
+
+    for m in re.finditer(
+        r"(?:cat|tee)\s+(?:-a\s+)?>{1,2}\s*(\S+)\s*"
+        r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\s*\n"
+        r"(.*?)\n\2\s*$",
+        tekst,
+        re.DOTALL | re.MULTILINE
+    ):
+
+        cel = m.group(1).strip().strip("'\"")
+
+        if cel.split("/")[-1] != nazwa:
+            continue
+
+        return m.group(3)
+
+    return ""
+
+
 def _bez_heredocow(code):
     """Skrypt bez tresci plikow, ktore sam wypisuje."""
 
@@ -20583,6 +20631,31 @@ def consult_team(
     # oceniac.
     _zawolani = set(_role_inbox.keys())
 
+    def _zawolany_teraz(rola):
+        """
+        Czy ktos zawolal te osobe — licząc TAKZE to, co padlo juz
+        w tym kroku.
+
+        ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-08 22:51, krok
+        1). Wojtek napisal "Bartek: kod i komendy pomijam...", Marek
+        napisal "Bartku: Nie czekaj, wykonuj kroki 1-3" — a w logu
+        stalo: "Bartek nie odzywa sie w tym kroku, nikt go nie
+        zawolal po imieniu". Bo _zawolani liczylo sie RAZ, na gorze
+        kroku, zanim ktokolwiek sie odezwal.
+
+        Kolejnosc w kroku to Wojtek, Kamil, Tomek, Ola, Bartek,
+        Marek — Wojtek zawolal Bartka na pierwszej pozycji, Bartek
+        odpowiada na piatej, wiec mogl odpowiedziec od razu. Zamiast
+        tego MAIN wyslal zadanie z zapisem pliku, kodu nie bylo i
+        krok poszedl w BRAK_KODU_DO_ZAPISU.
+
+        Uzytkownik prosil o to wprost: "kto zostaje wywolany ten
+        odp, taka interakcja ludzka". Zawolanie sprzed sekundy to
+        nadal zawolanie.
+        """
+
+        return str(rola) in _role_inbox
+
     _pyta_marek = (_critic_question or {}).get("role")
 
     fresh_tool_error = (
@@ -20774,6 +20847,10 @@ def consult_team(
     # ogóle konsultowane w tym kroku) mogły od razu wpłynąć na plan
     # z TEGO SAMEGO kroku, zamiast czekać na następny.
 
+    consult_researcher = (
+        consult_researcher or _zawolany_teraz("RESEARCHER")
+    )
+
     if consult_researcher:
 
         # Jeśli Wojtek właśnie coś twierdził/o coś pytał (patrz wyżej),
@@ -20868,6 +20945,10 @@ def consult_team(
             + _critic_question.get("text", "")
         )
 
+    consult_planner = (
+        consult_planner or _zawolany_teraz("PLANNER")
+    )
+
     if not consult_planner:
 
         log(
@@ -20922,6 +21003,8 @@ def consult_team(
 
         _role_response_cache["PLANNER"] = results["PLANNER"]
         _collect_role_messages("PLANNER", results["PLANNER"])
+
+    consult_browser = consult_browser or _zawolany_teraz("BROWSER")
 
     if consult_browser:
 
@@ -20992,6 +21075,10 @@ def consult_team(
             "— dzięki temu odpowiedź do niego wróci):\n"
             + _critic_question.get("text", "")
         )
+
+    consult_engineer = (
+        consult_engineer or _zawolany_teraz("ENGINEER")
+    )
 
     if not consult_engineer:
 
@@ -21113,6 +21200,8 @@ def consult_team(
         )
 
         _main_override_for_critic = None
+
+    consult_critic = consult_critic or _zawolany_teraz("CRITIC")
 
     if not consult_critic:
 
