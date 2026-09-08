@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v269
+AEL-MINI AUTONOMOUS AGENT v270
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v269")
+    print("             AEL-MINI AUTONOMOUS AGENT v270")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2024,6 +2024,19 @@ _role_seen_blocks = {}
 def _reset_step_by_step_memory():
     """Nowy cel = zaczynamy rozmowe od zera."""
     _role_seen_blocks.clear()
+
+
+def _bez_maszynowni_dla(rola):
+    """
+    Czy ta osoba pracuje przy tym telefonie.
+
+    Kamil szuka w sieci i niczego tu nie uruchamia — warsztat
+    Termuksa, stan dysku i surowe zrzuty narzedzi nie sa jego
+    sprawa. Regula siedzi w jednym miejscu, bo pyta o nia i
+    _core_context_for, i _team_file_answers_block.
+    """
+
+    return str(rola) == "RESEARCHER"
 
 
 def _only_if_new(role, key, block):
@@ -19319,8 +19332,14 @@ def consult_team(
     # Gemini) — patrz _pending_team_warnings. Doklejane TĄ SAMĄ
     # ramką co sygnały z narzędzi i opróżniane, żeby nie wracały w
     # kolejnych krokach jako "stare rzeczy".
+    # v270: to sa zdania samego Pythona do zespolu, nie zrzut z
+    # narzedzia — a siedzialy w srodku tool_hint, ktory dla Kamila
+    # jest wylaczony. Wychodza wiec do wlasnego kanalu i docieraja
+    # do wszystkich, bo do wszystkich byly mowione.
+    python_zauwazyl = ""
+
     if _pending_team_warnings:
-        tool_hint += (
+        python_zauwazyl = (
             "\n\nZauważyłem jeszcze to:\n"
             + "\n".join(
                 "- " + str(w) for w in _pending_team_warnings[:8]
@@ -19338,9 +19357,6 @@ def consult_team(
         "odpowiedział: dowolną. Wybór należy do was.\n"
         if _goal_delegates_decision(goal) else ""
     )
-
-    _file_answers = _team_file_answers_block()
-    file_answers_block = ("\n" + _file_answers + "\n") if _file_answers else ""
 
     progress_snapshot = _goal_progress_snapshot(goal)
 
@@ -19618,7 +19634,19 @@ def consult_team(
         # to co koledzy powiedzieli wprost do niego — zostaje.
         # Warsztat Termuksa i awarie narzedzi — nie; od tego sa ci,
         # ktorzy przy nim siedza.
-        _bez_maszynowni = (role_name == "RESEARCHER")
+        _bez_maszynowni = _bez_maszynowni_dla(role_name)
+
+        # v270: relacja z wykonania to opis maszynowni. Kamil ma
+        # zdanie Oli i temat kroku; surowy przebieg zadania w
+        # Termuxie byl u niego najdluzszym kawalkiem, jaki nie
+        # dotyczyl niczego, o co go pytamy. Wartosci wypisane przez
+        # narzedzie zostaja — to konkretny fakt, nie przebieg.
+        _co_sie_stalo = (
+            ("" if _bez_maszynowni
+             else "\nCo się właśnie stało:\n" + report_body)
+            + success_values_block
+            + ("" if _bez_maszynowni else error_details_block)
+        )
 
         pieces = [
             # v200: temat tez nie moze byc sztywna formulka wracajaca
@@ -19631,10 +19659,16 @@ def consult_team(
             # cos"), mowimy to raz kazdej roli — zanim ktokolwiek
             # zacznie ukladac warianty do wyboru dla uzytkownika.
             _only_if_new(role_name, "delegacja", delegacja_block),
-            _only_if_new(role_name, "files", file_answers_block),
+            _only_if_new(
+                role_name, "files",
+                (lambda _o: ("\n" + _o + "\n") if _o else "")(
+                    _team_file_answers_block(role_name)
+                )
+            ),
             # v208: nie caly listing co krok, tylko roznica —
             # patrz _progress_for_role().
-            _progress_for_role(role_name, progress_snapshot),
+            "" if _bez_maszynowni
+            else _progress_for_role(role_name, progress_snapshot),
             _only_if_new(role_name, "checklist", checklist_block)
             if not _bez_maszynowni else "",
             _only_if_new(role_name, "main_decision", main_decision_block),
@@ -19642,12 +19676,10 @@ def consult_team(
             # Kamil szuka w sieci i nie uruchamia narzedzi — sam
             # komunikat bledu ma juz w streszczeniu Oli. Ta sama
             # zasada, co przy checkliscie i liscie narzedzi telefonu.
-            "\nCo się właśnie stało:\n" + report_body
-            + success_values_block
-            + ("" if _bez_maszynowni else error_details_block)
-            + "\n",
+            (_co_sie_stalo + "\n") if _co_sie_stalo else "",
             _only_if_new(role_name, "tool_hint", tool_hint)
             if not _bez_maszynowni else "",
+            _only_if_new(role_name, "python_zauwazyl", python_zauwazyl),
             # v230: co użytkownik powiedział w trakcie tego celu.
             # Przez _only_if_new, więc mówimy to raz — ale plik żyje
             # do końca celu, więc nowe zdanie użytkownika dotrze
@@ -20521,12 +20553,12 @@ def consult_team(
     # naradzie, zeby w NASTEPNEJ dostac na nie konkretna odpowiedz
     # od Pythona (patrz _remember_team_file_questions).
     _remember_team_file_questions([
-        results.get("PLANNER", ""),
-        results.get("CRITIC", ""),
-        results.get("ENGINEER", ""),
-        results.get("RESEARCHER", ""),
-        results.get("BROWSER", ""),
-        readable_report,
+        ("PLANNER", results.get("PLANNER", "")),
+        ("CRITIC", results.get("CRITIC", "")),
+        ("ENGINEER", results.get("ENGINEER", "")),
+        ("RESEARCHER", results.get("RESEARCHER", "")),
+        ("BROWSER", results.get("BROWSER", "")),
+        (None, readable_report),
     ])
 
     # Kod, ktory Bartek napisal w TEJ naradzie, odlozony tam, gdzie
@@ -22509,7 +22541,7 @@ def _gdzie_naprawde_lezy(command):
     return ""
 
 
-def _answer_readonly_requests(role_texts):
+def _answer_readonly_requests(pary):
     """
     Wykonuje czytajace polecenia, ktore zespol sam napisal, i zwraca
     gotowe odpowiedzi. Zero zadan do DeepSeeka, zero do Gemini.
@@ -22518,7 +22550,7 @@ def _answer_readonly_requests(role_texts):
     odpowiedzi = []
     zrobione = []
 
-    for text in role_texts:
+    for rola, text in pary:
 
         for command in _extract_commands_from_text(text):
 
@@ -22536,10 +22568,11 @@ def _answer_readonly_requests(role_texts):
             try:
                 wynik = execute_shell(command, timeout=15)
             except Exception as e:
-                odpowiedzi.append(
+                odpowiedzi.append((
+                    rola,
                     "- `" + command + "` -> nie udalo sie uruchomic ("
                     + str(e) + ")"
-                )
+                ))
                 continue
 
             out = str(wynik.get("stdout", "") or "").strip()
@@ -22563,9 +22596,10 @@ def _answer_readonly_requests(role_texts):
                         "polecenie (np. grep po tym, czego szukasz).)"
                     )
 
-                odpowiedzi.append(
+                odpowiedzi.append((
+                    rola,
                     "- `" + command + "` wypisało:\n" + pokazane
-                )
+                ))
             elif err:
 
                 tresc = (
@@ -22584,12 +22618,13 @@ def _answer_readonly_requests(role_texts):
                     if gdzie:
                         tresc += "\n  " + gdzie
 
-                odpowiedzi.append(tresc)
+                odpowiedzi.append((rola, tresc))
             else:
-                odpowiedzi.append(
+                odpowiedzi.append((
+                    rola,
                     "- `" + command + "` wykonało się, ale nic nie "
                     "wypisało (pusty wynik)."
-                )
+                ))
 
             log(
                 "TERMUX",
@@ -22600,7 +22635,7 @@ def _answer_readonly_requests(role_texts):
     return odpowiedzi
 
 
-def _remember_team_file_questions(role_texts):
+def _remember_team_file_questions(pary):
     """
     Zapamietuje, o co zespol pytal w TEJ naradzie. Sam niczego nie
     uruchamia — patrz _team_file_answers_block(), ktory robi to
@@ -22623,12 +22658,21 @@ def _remember_team_file_questions(role_texts):
     del _team_file_answers[:]
     del _team_file_pytania[:]
 
-    for t in role_texts:
-        _team_file_pytania.append(str(t or ""))
+    for rola, t in pary:
+        _team_file_pytania.append((rola, str(t or "")))
 
 
-def _policz_odpowiedzi_dla_zespolu(role_texts):
-    """Uruchamia sondy TERAZ i sklada z nich odpowiedzi."""
+def _policz_odpowiedzi_dla_zespolu(pary):
+    """
+    Uruchamia sondy TERAZ i sklada z nich odpowiedzi — kazda z
+    adresatem, czyli z ta osoba, ktora o to pytala.
+
+    Wczesniej pytania pieciu rol szly do jednego worka, a wynik do
+    wszystkich: Bartek pytal o config.txt, a `cat` tego pliku
+    dostawal tez Tomek, Marek, Ola i Kamil. Pierwszy, kto o cos
+    zapytal, dostaje odpowiedz; reszta uslyszy o niej wtedy, gdy on
+    ja przytoczy — tak jak w rozmowie.
+    """
 
     # v210: zanim policzymy pliki — po prostu wykonujemy czytajace
     # polecenia, ktore zespol sam napisal. Patrz
@@ -22638,7 +22682,7 @@ def _policz_odpowiedzi_dla_zespolu(role_texts):
 
     try:
         odpowiedzi.extend(
-            _answer_readonly_requests(role_texts)
+            _answer_readonly_requests(pary)
         )
     except Exception as _e:
         log(
@@ -22648,14 +22692,18 @@ def _policz_odpowiedzi_dla_zespolu(role_texts):
         )
 
     seen = []
+    kto_pytal = {}
 
-    for text in role_texts:
+    for rola, text in pary:
         for match in _TEAM_MENTIONED_PATH_RE.finditer(str(text or "")):
             candidate = match.group(0).rstrip(".,;:)\'\"`")
             if candidate not in seen:
                 seen.append(candidate)
+                kto_pytal[candidate] = rola
 
     for candidate in seen[:8]:
+
+        rola = kto_pytal.get(candidate)
 
         try:
             p = _resolve_home_relative_path(
@@ -22668,9 +22716,10 @@ def _policz_odpowiedzi_dla_zespolu(role_texts):
 
         try:
             if p.exists():
-                odpowiedzi.append(
+                odpowiedzi.append((
+                    rola,
                     "- " + candidate + ": " + _file_answer_body(p)
-                )
+                ))
                 continue
         except Exception:
             continue
@@ -22700,18 +22749,24 @@ def _policz_odpowiedzi_dla_zespolu(role_texts):
         except Exception:
             pass
 
-        odpowiedzi.append(
+        odpowiedzi.append((
+            rola,
             "- " + candidate + ": NIE MA takiego pliku." + hint
-        )
+        ))
 
     return odpowiedzi
 
 
-def _team_file_answers_block():
+def _team_file_answers_block(role_name):
     """
-    Odpowiedzi na pytania z poprzedniej narady — liczone TERAZ, tuz
-    przed podaniem ich zespolowi, zeby mowily o dysku takim, jaki
-    jest w tej chwili. Patrz _remember_team_file_questions().
+    Odpowiedz dla TEJ osoby na to, o co ONA pytala — liczona TERAZ,
+    tuz przed podaniem, zeby mowila o dysku takim, jaki jest w tej
+    chwili. Patrz _remember_team_file_questions().
+
+    Sondy odpalaja sie raz, przy pierwszym pytajacym; kazdy dostaje
+    swoja czesc wyniku. To, co wynika z samego raportu (bez
+    pytajacego), to maszynownia — wiec omija Kamila tak samo jak
+    checklista i lista narzedzi telefonu.
     """
 
     if _team_file_pytania:
@@ -22731,12 +22786,19 @@ def _team_file_answers_block():
                 + str(_e)
             )
 
-    if not _team_file_answers:
+    wspolne = not _bez_maszynowni_dla(role_name)
+
+    moje = [
+        tresc for rola, tresc in _team_file_answers
+        if rola == role_name or (rola is None and wspolne)
+    ]
+
+    if not moje:
         return ""
 
     return (
         "Uruchomiłem to, o co pytaliście — macie już wynik:\n"
-        + "\n".join(_team_file_answers)
+        + "\n".join(moje)
     )
 
 
