@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v270
+AEL-MINI AUTONOMOUS AGENT v271
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v270")
+    print("             AEL-MINI AUTONOMOUS AGENT v271")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2474,6 +2474,7 @@ def _set_current_goal(goal):
     _reset_powody_zakonczenia()
     _role_inbox.clear()
     _role_response_cache.clear()
+    _wyciagniecia_na_wierzch.clear()
 
     global _main_chcial_kod
     _main_chcial_kod = False
@@ -23804,6 +23805,170 @@ def _decision_asks_for_web_credential_without_url(decision):
     return bool(_WEB_CREDENTIAL_REQUEST_RE.search(text))
 
 
+_PROSBA_O_PRZELACZENIE_RE = re.compile(
+    r"prze..cz|na\s+wierzch|wierzchu|pierwsz\w*\s+plan\w*|"
+    r"wr..\s+do\s+\w|otw..rz\s+(?:aplikacj|program)|"
+    r"uruchom\s+(?:aplikacj|program)|wybierz\s+z\s+ostatnich",
+    re.IGNORECASE
+)
+
+_PAKIET_W_TEKSCIE_RE = re.compile(
+    r"\b(?:[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}"
+    r"|(?:com|org|net|io|dev|app|eu|pl|me)\.[a-z0-9_]+)\b"
+)
+
+# Ile razy w tym celu wyciagalismy dana aplikacje sami. Gdy mimo
+# dwoch prob nadal nie ma jej na wierzchu, to znaczy, ze przeszkadza
+# cos, czego z Pythona nie widac — wtedy dopiero pytamy czlowieka.
+_wyciagniecia_na_wierzch = {}
+_MAX_WYCIAGNIEC = 2
+
+
+def _pakiet_zainstalowany(pakiet):
+
+    try:
+        wynik = execute_shell(
+            "adb shell pm list packages " + shlex.quote(pakiet),
+            timeout=15
+        )
+    except Exception:
+        return False
+
+    return ("package:" + pakiet) in str(wynik.get("stdout", "") or "")
+
+
+def _pakiet_do_wyciagniecia(tekst):
+    """
+    O ktora aplikacje chodzi w tej prosbie — po nazwie pakietu albo
+    po nazwie wlasnej, jaka znamy z _ZNANE_PAKIETY.
+    """
+
+    tekst = str(tekst or "")
+
+    for pakiet, etykieta in _ZNANE_PAKIETY.items():
+
+        if pakiet in tekst:
+            return pakiet
+
+        nazwa = etykieta.split(" (")[0].split(" — ")[0].strip()
+
+        # Tylko nazwy wlasne ("Termux", "Chrome"). "ekran glowny" to
+        # opis, ktory trafi sie w dowolnym zdaniu o ekranie.
+        if (
+            nazwa
+            and " " not in nazwa
+            and nazwa[:1].isupper()
+            and re.search(r"\b" + re.escape(nazwa) + r"\b",
+                          tekst, re.IGNORECASE)
+        ):
+            return pakiet
+
+    sprawdzone = []
+
+    for m in _PAKIET_W_TEKSCIE_RE.finditer(tekst):
+
+        kandydat = m.group(0)
+
+        if kandydat in sprawdzone:
+            continue
+
+        sprawdzone.append(kandydat)
+
+        if len(sprawdzone) > 4:
+            break
+
+        if _pakiet_zainstalowany(kandydat):
+            return kandydat
+
+    return ""
+
+
+def _sam_wyciagnij_na_wierzch(decision):
+    """
+    Prosba do czlowieka, ktora sprowadza sie do "przelacz sie na
+    aplikacje X" — a to potrafi zrobic sam Python.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-08, krok 2). Agent
+    zatrzymal caly bieg i poprosil uzytkownika: "Przelacz sie recznie
+    na aplikacje Termux (com.termux). Otworz ostatnie aplikacje
+    (przycisk kwadratu) i wybierz Termux". Chrome byl na wierzchu
+    dlatego, ze AGENT sam go tam wystawil — przez niego rozmawia z
+    DeepSeekiem. Czyli program kazal czlowiekowi posprzatac stan,
+    ktory sam wywolal, i to takim ruchem, na ktory ma wlasne
+    narzedzie (android_launch_app).
+
+    Zwraca gotowy last_result, gdy sam sobie poradzil, albo None —
+    wtedy prosba idzie do czlowieka normalna droga.
+    """
+
+    tekst = (
+        str(decision.get("reason") or "")
+        + " "
+        + str(decision.get("instructions") or "")
+    )
+
+    if not _PROSBA_O_PRZELACZENIE_RE.search(tekst):
+        return None
+
+    # Gdy w tej samej prosbie chodzi tez o klucz/konto/logowanie,
+    # przelaczenie ekranu niczego nie zalatwia — to robota czlowieka.
+    if _WEB_CREDENTIAL_REQUEST_RE.search(tekst):
+        return None
+
+    pakiet = _pakiet_do_wyciagniecia(tekst)
+
+    if not pakiet:
+        return None
+
+    if _wyciagniecia_na_wierzch.get(pakiet, 0) >= _MAX_WYCIAGNIEC:
+        return None
+
+    _wyciagniecia_na_wierzch[pakiet] = (
+        _wyciagniecia_na_wierzch.get(pakiet, 0) + 1
+    )
+
+    etykieta = _ZNANE_PAKIETY.get(pakiet, pakiet)
+
+    log(
+        "MAIN",
+        "Prosba do uzytkownika sprowadza sie do wyciagniecia "
+        + etykieta + " na wierzch — robie to sam, bez zatrzymywania "
+        "biegu."
+    )
+
+    try:
+        android_launch_app(pakiet)
+    except Exception as e:
+        log("MAIN", "Nie udalo sie uruchomic " + pakiet + ": " + str(e))
+        return None
+
+    na_wierzchu, _ = _foreground_app()
+
+    if na_wierzchu != pakiet:
+        log(
+            "MAIN",
+            "Po uruchomieniu na wierzchu jest "
+            + str(na_wierzchu or "nie wiadomo co")
+            + ", a nie " + pakiet + " — pytam uzytkownika."
+        )
+        return None
+
+    _pending_team_warnings.append(
+        "Na wierzchu był nie ten ekran, co trzeba, więc sam "
+        "wyciągnąłem " + etykieta + " — nie zatrzymywałem biegu i "
+        "nie pytałem o to użytkownika."
+    )
+
+    return {
+        "status": "EKRAN_PRZELACZONY",
+        "ok": True,
+        "message": (
+            "Na wierzchu jest teraz " + etykieta
+            + " — przełączyłem ekran sam."
+        )
+    }
+
+
 def _need_user_login_with_contact_gate(
     decision, contact_gate_redirects, credential_gate_redirects=0
 ):
@@ -23820,6 +23985,15 @@ def _need_user_login_with_contact_gate(
     wywołujący musi nadpisać obie swoje lokalne zmienne licznika
     wynikiem.
     """
+
+    sam_zrobione = _sam_wyciagnij_na_wierzch(decision)
+
+    if sam_zrobione is not None:
+        return (
+            sam_zrobione,
+            contact_gate_redirects,
+            credential_gate_redirects
+        )
 
     if (
         _decision_asks_for_contact_info(decision)
