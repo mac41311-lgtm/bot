@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v273
+AEL-MINI AUTONOMOUS AGENT v274
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v273")
+    print("             AEL-MINI AUTONOMOUS AGENT v274")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -18964,7 +18964,32 @@ def _dla_tej_roli(tekst, rola):
     return "\n\n".join(czesci)
 
 
-def _od_kolegi(etykieta, tekst, rola):
+def _dla_zespolu(autor, tekst, limit, klucz=None, rola=None):
+    """
+    Wypowiedz przekazywana dalej: NAJPIERW komu, POTEM ile.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-08). Wojtek napisal
+    3422 znaki, w tym akapit do Kamila konczacy sie slowami
+    "sprawdz w sieci dwa fakty:" i lista tych faktow. Limit dla
+    Wojtka to 2000 znakow, wiec _role_output_for_team ucialo ogon
+    ZANIM _dla_tej_roli zdazylo wybrac czesc Kamila. Kamil dostal
+    zlecenie bez tresci i odpisal: "napisales tylko 'sprawdz w
+    sieci dwa fakty:' i urwales".
+
+    Cala reszta wypowiedzi — akapity do Marka i do Tomka — zjadla
+    Kamilowi budzet na jego wlasny. Gdy najpierw wybierzemy jego
+    czesc, ta czesc jest krotka i miesci sie w calosci.
+    """
+
+    tekst = str(tekst or "")
+
+    if rola:
+        tekst = _dla_tej_roli(tekst, rola)
+
+    return _role_output_for_team(autor, tekst, limit, klucz)
+
+
+def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     """
     Naglowek "Kamil ustalil:" tylko wtedy, gdy pod nim faktycznie
     cos dla TEJ roli zostalo.
@@ -18979,7 +19004,9 @@ def _od_kolegi(etykieta, tekst, rola):
     if not moje:
         return ""
 
-    return str(etykieta) + moje
+    return str(etykieta) + _role_output_for_team(
+        autor, moje, limit, klucz
+    )
 
 
 def _role_inbox_block(role_name):
@@ -20024,14 +20051,6 @@ def consult_team(
             )
         )
 
-    # v206: przez WSPÓLNY kanał (patrz _role_output_for_team) —
-    # inaczej adnotacje o ucięciu/skróceniu nie docierają do tych,
-    # którzy tę wypowiedź faktycznie czytają i oceniają.
-    wojtek_out = _role_output_for_team(
-        "Wojtek", results.get("WOJTEK", ""),
-        ROLE_LIMIT_WOJTEK, "WOJTEK"
-    )
-
     # RESEARCHER PRZED PLANNEREM — żeby świeże ustalenia (gdy w
     # ogóle konsultowane w tym kroku) mogły od razu wpłynąć na plan
     # z TEGO SAMEGO kroku, zamiast czekać na następny.
@@ -20050,7 +20069,8 @@ def consult_team(
                 "\n\nDODATKOWO: kolega z zespołu napisał to (jeśli da "
                 "się to sprawdzić w sieci, zweryfikuj i uwzględnij "
                 "wynik, w przeciwnym razie zignoruj):\n",
-                wojtek_out, "RESEARCHER"
+                results.get("WOJTEK", ""), "RESEARCHER",
+                "Wojtek", ROLE_LIMIT_WOJTEK, "WOJTEK"
             )
             if consult_wojtek else ""
         )
@@ -20099,11 +20119,6 @@ def consult_team(
                 "(RESEARCHER nie był jeszcze konsultowany.)"
             )
         )
-
-    researcher_out = _role_output_for_team(
-        "Kamil (RESEARCHER)", results.get("RESEARCHER", ""),
-        ROLE_LIMIT_RESEARCHER, "RESEARCHER"
-    )
 
     # Zarzut Marka do POPRZEDNIEGO planu Tomka — patrz
     # _critic_verdict_for_planner. Bez tego Tomek planuje obok tej
@@ -20162,14 +20177,16 @@ def consult_team(
                     "PLANNER", "od_kamila",
                     _od_kolegi(
                         "\nKamil ustalił:\n",
-                        researcher_out, "PLANNER"
+                        results.get("RESEARCHER", ""), "PLANNER",
+                        "Kamil (RESEARCHER)", ROLE_LIMIT_RESEARCHER, "RESEARCHER"
                     )
                 )
                 + _only_if_new(
                     "PLANNER", "od_wojtka",
                     _od_kolegi(
                         "\nWojtek podrzucił:\n",
-                        wojtek_out, "PLANNER"
+                        results.get("WOJTEK", ""), "PLANNER",
+                        "Wojtek", ROLE_LIMIT_WOJTEK, "WOJTEK"
                     )
                 )
                 + critic_feedback_block
@@ -20290,14 +20307,16 @@ def consult_team(
                     "ENGINEER", "od_kamila",
                     _od_kolegi(
                         "\nKamil ustalił:\n",
-                        researcher_out, "ENGINEER"
+                        results.get("RESEARCHER", ""), "ENGINEER",
+                        "Kamil (RESEARCHER)", ROLE_LIMIT_RESEARCHER, "RESEARCHER"
                     )
                 )
                 + _only_if_new(
                     "ENGINEER", "od_wojtka",
                     _od_kolegi(
                         "\nWojtek podrzucił:\n",
-                        wojtek_out, "ENGINEER"
+                        results.get("WOJTEK", ""), "ENGINEER",
+                        "Wojtek", ROLE_LIMIT_WOJTEK, "WOJTEK"
                     )
                 )
                 + _only_if_new(
@@ -20630,8 +20649,11 @@ def consult_team(
         "planner":   _role_output_for_team(
             "Tomek (PLANNER)", results.get("PLANNER", ""), 4000, "PLANNER"
         ),
-        "researcher": _role_output_for_team(
-            "Kamil (RESEARCHER)", results.get("RESEARCHER", ""), 4000, "RESEARCHER"
+        # MAIN dostaje czesc wspolna, ale liczona z CALEJ
+        # wypowiedzi — patrz _dla_zespolu().
+        "researcher": _dla_zespolu(
+            "Kamil (RESEARCHER)", results.get("RESEARCHER", ""),
+            4000, "RESEARCHER", rola="MAIN"
         ),
         "engineer":  _engineer_for_team(results.get("ENGINEER", "")),
         # Pełna, nieskrócona odpowiedź ENGINEER — NIE
@@ -20648,11 +20670,13 @@ def consult_team(
         "critic":    _role_output_for_team(
             "Marek (CRITIC)", results.get("CRITIC", ""), 4000, "CRITIC"
         ),
-        "browser":   _role_output_for_team(
-            "Ola (BROWSER)", results.get("BROWSER", ""), 2000, "BROWSER"
+        "browser":   _dla_zespolu(
+            "Ola (BROWSER)", results.get("BROWSER", ""),
+            2000, "BROWSER", rola="MAIN"
         ),
-        "wojtek":    _role_output_for_team(
-            "Wojtek", results.get("WOJTEK", ""), 1500, "WOJTEK"
+        "wojtek":    _dla_zespolu(
+            "Wojtek", results.get("WOJTEK", ""),
+            1500, "WOJTEK", rola="MAIN"
         ),
         # v195: zapis wymiany zdan Marek <-> Tomek/Bartek, ktora
         # odbyla sie w TYM kroku. MAIN musi widziec nie tylko koncowy
@@ -20956,19 +20980,18 @@ tym kroku dopytać jedną osobę:
     #     uzasadnieniem — musi wiec wiedziec, czego dotyczy, takze
     #     gdy Marek zaczyna od "Tomku, twoj plan zaklada...".
     # Wymiana wokol zastrzezenia to ten sam dialog, wiec tez cala.
-    for _wstep, _tekst, _tnij in (
-        ("Tomek zaplanował tak:", team.get("planner", ""), False),
-        ("Bartek na to:", team.get("engineer", ""), False),
-        ("Kamil sprawdził:", team.get("researcher", ""), True),
-        ("Marek ocenia:", team.get("critic", ""), False),
-        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:",
-         _exchange, False),
-        ("Ola streszcza:", team.get("browser", ""), True),
-        ("Wojtek podrzucił:", team.get("wojtek", ""), True),
+    # Kamil, Ola i Wojtek sa juz wyciete dla MAIN-a przy skladaniu
+    # team (patrz _dla_zespolu, rola="MAIN") — tam, gdzie widac cala
+    # wypowiedz, a nie jej pierwsze 2000 znakow.
+    for _wstep, _tekst in (
+        ("Tomek zaplanował tak:", team.get("planner", "")),
+        ("Bartek na to:", team.get("engineer", "")),
+        ("Kamil sprawdził:", team.get("researcher", "")),
+        ("Marek ocenia:", team.get("critic", "")),
+        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:", _exchange),
+        ("Ola streszcza:", team.get("browser", "")),
+        ("Wojtek podrzucił:", team.get("wojtek", "")),
     ):
-
-        if _tnij:
-            _tekst = _dla_tej_roli(_tekst, "MAIN")
 
         if str(_tekst or "").strip():
             _glosy.append(_wstep + "\n" + str(_tekst).strip())
