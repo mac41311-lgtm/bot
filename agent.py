@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v279
+AEL-MINI AUTONOMOUS AGENT v280
 
 ARCHITEKTURA:
 
@@ -391,6 +391,12 @@ MEMORY_DIR = AGENT_DIR / "memory"
 #   przebieg .log  — to, co widac na ekranie, plus numer kroku,
 #   zdarzenia .jsonl — liczby: ile, do kogo, z jakich blokow.
 PRZEBIEG_DIR = MEMORY_DIR / "przebieg"
+
+# Katalog widoczny z Androida — menedzer plikow, wyslanie na maila,
+# podpiecie do rozmowy. ~/storage/shared to dowiazanie, ktore robi
+# `termux-setup-storage`; gdy uzytkownik go nie zrobil, po prostu
+# nie ma czego kopiowac i nic sie nie dzieje.
+PRZEBIEG_NA_TELEFONIE = HOME / "storage" / "shared" / "AEL-MINI"
 
 # Ustawiane raz przy starcie biegu — patrz zacznij_zapis_biegu().
 _plik_przebiegu = None
@@ -937,6 +943,52 @@ def ustaw_krok(numer):
         pokaz_podsumowanie_biegu()
 
 
+def skopiuj_przebieg_na_telefon():
+    """
+    Kopia obu plikow tam, gdzie widzi je Android.
+
+    Zrodlem prawdy zostaje ~/agent/memory/przebieg — tam pisze sam
+    agent i tam nic nie moze zniknac. To jest tylko kopia do
+    wyciagniecia z telefonu, odswiezana razem z podsumowaniem.
+
+    Cicha, gdy nie ma dostepu do pamieci wspoldzielonej: brak
+    `termux-setup-storage` nie moze byc powodem, zeby cokolwiek w
+    biegu poszlo nie tak.
+    """
+
+    if _plik_przebiegu is None:
+        return ""
+
+    zrodlo = HOME / "storage" / "shared"
+
+    if not zrodlo.exists():
+        return ""
+
+    try:
+        PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
+
+        skopiowane = []
+
+        for plik in (_plik_przebiegu, _plik_zdarzen):
+
+            if plik is None or not plik.exists():
+                continue
+
+            cel = PRZEBIEG_NA_TELEFONIE / plik.name
+
+            cel.write_bytes(plik.read_bytes())
+
+            skopiowane.append(cel)
+
+        if not skopiowane:
+            return ""
+
+        return str(PRZEBIEG_NA_TELEFONIE)
+
+    except Exception:
+        return ""
+
+
 def pokaz_podsumowanie_biegu():
     """Liczby tego biegu — na ekran i do przebiegu."""
 
@@ -956,6 +1008,17 @@ def pokaz_podsumowanie_biegu():
 
     print(ramka)
     dopisz_do_przebiegu(ramka)
+
+    gdzie = skopiuj_przebieg_na_telefon()
+
+    if gdzie:
+        print("  Kopia do wyciągnięcia z telefonu: " + gdzie)
+    elif _plik_przebiegu is not None:
+        print(
+            "  Zapis biegu: " + str(_plik_przebiegu.parent)
+            + "  (żeby mieć to widoczne z Androida: "
+            "termux-setup-storage)"
+        )
 
 
 def dopisz_do_przebiegu(linia):
@@ -1679,7 +1742,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v279")
+    print("             AEL-MINI AUTONOMOUS AGENT v280")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
