@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v274
+AEL-MINI AUTONOMOUS AGENT v275
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v274")
+    print("             AEL-MINI AUTONOMOUS AGENT v275")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16294,18 +16294,33 @@ def _task_carries_engineer_code(task_text, engineer_full):
 # dokladnie tym, czym kod Bartka dla Piotra — przedmiotem oceny.
 # Przedmiotu oceny sie nie przycina.
 
-# Plan jest OCENIANYM artefaktem — ma przechodzic caly.
-ROLE_LIMIT_PLANNER = 8000
-
-# Ustalenia Kamila bywaja dluga lista zrodel; scinamy pozno.
-ROLE_LIMIT_RESEARCHER = 4000
-
-# Wojtek to jeden pomysl/jedno pytanie — tu 2000 realnie starcza.
-ROLE_LIMIT_WOJTEK = 2000
-
-# Zarzut Marka jest dla Tomka/Bartka tym, czym plan dla Marka —
-# przedmiotem odpowiedzi. Ucieta polowa zarzutu = odpowiedz obok.
-ROLE_LIMIT_CRITIC = 4000
+# ============================================================
+# NIE TNIEMY NIKOMU WYPOWIEDZI (v275)
+# ============================================================
+#
+# Osobne limity per rola (8000/4000/2000) byly obejsciem sprzed
+# adresowania: jedna wypowiedz szla do wszystkich, wiec trzeba bylo
+# ograniczac, ile kazdy z niej dostanie. Od v269 kazdy dostaje
+# swoja czesc, a od v274 wybieramy ja PRZED mierzeniem dlugosci —
+# wiec nikt nie placi juz dlugoscia za cudze akapity. Wtedy limit
+# przestaje cokolwiek chronic, a zaczyna szkodzic: ucieta polowa
+# zdania to informacja, ktorej odbiorca nie ma jak odzyskac.
+#
+# Kosztowaly nas realnie. Log 2026-08-30: Bartek pisal 4370-9040
+# znakow przy limicie 4000, wiec zespol widzial "...[skrocono]..."
+# i uznal, ze kodu W OGOLE NIE MA — cztery kroki klotni o cos,
+# czego nie bylo. Log 2026-09-04: Marek szesc razy zablokowal plan
+# "bo urywa sie w polowie Kroku 2", a urwalismy go my. Log
+# 2026-09-08: Kamil dostal "sprawdz w sieci dwa fakty:" bez tych
+# faktow.
+#
+# Zostaje JEDEN sufit i nie jest regula stylu, tylko bezpiecznikiem
+# na wypadek, gdy model sie zapetli i wyprodukuje wypowiedz nie do
+# wyslania. Najdluzsza zaobserwowana wypowiedz to ~9000 znakow,
+# wiec przy normalnej rozmowie to sie nie odpala. Gdyby jednak
+# odpalilo, _role_output_for_team i tak mowi wprost, kto skrocil i
+# ile zostalo.
+LIMIT_BEZPIECZENSTWA = 30000
 
 
 def _role_output_for_team(role_label, text, limit, role_key=None):
@@ -16378,7 +16393,7 @@ def _role_output_for_team(role_label, text, limit, role_key=None):
     )
 
 
-def _engineer_for_team(text, limit=4000):
+def _engineer_for_team(text, limit=LIMIT_BEZPIECZENSTWA):
     """
     Wersja odpowiedzi Bartka pokazywana RESZCIE ZESPOŁU (Tomek, Marek).
 
@@ -18308,7 +18323,7 @@ CRITIC_STREAK_HARD_STOP = 6
 #
 # Log 2026-09-04 (v205): Marek zglosil BLOKUJ szesc razy, za kazdym
 # razem o to samo (plan urywa sie w polowie). Przyczyne usuwamy
-# wyzej (ROLE_LIMIT_PLANNER), ale sam MECHANIZM patowy zostaje i
+# wyzej (LIMIT_BEZPIECZENSTWA), ale sam MECHANIZM patowy zostaje i
 # powtorzy sie przy nastepnym nieporozumieniu: kazda rola widzi
 # tylko biezacy krok, wiec nikt w zespole nie ma jak zauwazyc, ze
 # to juz trzecia identyczna runda. Python ma — trzyma poprzedni
@@ -18907,10 +18922,15 @@ def _collect_role_messages(speaker_role, text):
             # przekazywać.
             continue
 
+        # v275: bez short(). To jest wiadomosc napisana WPROST do
+        # tej osoby — jesli cokolwiek ma dojsc w calosci, to
+        # wlasnie to. 600 znakow bylo obejsciem z czasow, gdy
+        # skrzynka szla obok pelnej wypowiedzi i dublowala ja;
+        # od v269 to jest jej wlasny, jedyny egzemplarz.
         _role_inbox.setdefault(adresat, []).append(
             (
                 _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role)),
-                short(tresc, 600)
+                tresc
             )
         )
 
@@ -20070,7 +20090,7 @@ def consult_team(
                 "się to sprawdzić w sieci, zweryfikuj i uwzględnij "
                 "wynik, w przeciwnym razie zignoruj):\n",
                 results.get("WOJTEK", ""), "RESEARCHER",
-                "Wojtek", ROLE_LIMIT_WOJTEK, "WOJTEK"
+                "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
             )
             if consult_wojtek else ""
         )
@@ -20178,7 +20198,7 @@ def consult_team(
                     _od_kolegi(
                         "\nKamil ustalił:\n",
                         results.get("RESEARCHER", ""), "PLANNER",
-                        "Kamil (RESEARCHER)", ROLE_LIMIT_RESEARCHER, "RESEARCHER"
+                        "Kamil (RESEARCHER)", LIMIT_BEZPIECZENSTWA, "RESEARCHER"
                     )
                 )
                 + _only_if_new(
@@ -20186,7 +20206,7 @@ def consult_team(
                     _od_kolegi(
                         "\nWojtek podrzucił:\n",
                         results.get("WOJTEK", ""), "PLANNER",
-                        "Wojtek", ROLE_LIMIT_WOJTEK, "WOJTEK"
+                        "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
                     )
                 )
                 + critic_feedback_block
@@ -20245,7 +20265,7 @@ def consult_team(
     # przecięty na 2000, bez słowa o tym, kto go przeciął.
     planner_out = _role_output_for_team(
         "Tomek (PLANNER)", results.get("PLANNER", ""),
-        ROLE_LIMIT_PLANNER, "PLANNER"
+        LIMIT_BEZPIECZENSTWA, "PLANNER"
     )
 
     # Zarzut Marka do POPRZEDNIEJ propozycji Bartka — ta sama zasada
@@ -20308,7 +20328,7 @@ def consult_team(
                     _od_kolegi(
                         "\nKamil ustalił:\n",
                         results.get("RESEARCHER", ""), "ENGINEER",
-                        "Kamil (RESEARCHER)", ROLE_LIMIT_RESEARCHER, "RESEARCHER"
+                        "Kamil (RESEARCHER)", LIMIT_BEZPIECZENSTWA, "RESEARCHER"
                     )
                 )
                 + _only_if_new(
@@ -20316,7 +20336,7 @@ def consult_team(
                     _od_kolegi(
                         "\nWojtek podrzucił:\n",
                         results.get("WOJTEK", ""), "ENGINEER",
-                        "Wojtek", ROLE_LIMIT_WOJTEK, "WOJTEK"
+                        "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
                     )
                 )
                 + _only_if_new(
@@ -20484,19 +20504,19 @@ def consult_team(
             # rozmowy, ktora ta rola juz prowadzi — nie odprawa.
             _who + ", Marek na to:\n\n"
             # v206: wspolny kanal zamiast golego short() — patrz
-            # ROLE_LIMIT_PLANNER. Polowa zarzutu to zarzut, na
+            # LIMIT_BEZPIECZENSTWA. Polowa zarzutu to zarzut, na
             # ktory nie da sie odpowiedziec.
             + _role_output_for_team(
                 "Marek (CRITIC)", _critic_out_full,
-                ROLE_LIMIT_CRITIC, "CRITIC"
+                LIMIT_BEZPIECZENSTWA, "CRITIC"
             )
             + "\n\nCo Ty na to?"
         )
 
-        team_exchange.append(("Marek", short(_critic_out_full, 900)))
+        team_exchange.append(("Marek", _critic_out_full))
         team_exchange.append((
             "Tomek" if _addressee == "PLANNER" else "Bartek",
-            short(_reply, 900)
+            _reply
         ))
 
         if not str(_reply or "").strip():
@@ -20521,7 +20541,7 @@ def consult_team(
         else:
             _reply_for_critic = _role_output_for_team(
                 "Tomek (PLANNER)", _reply,
-                ROLE_LIMIT_PLANNER, "PLANNER"
+                LIMIT_BEZPIECZENSTWA, "PLANNER"
             )
 
         _verdict = deepseek(
@@ -20540,7 +20560,7 @@ def consult_team(
             )
             break
 
-        team_exchange.append(("Marek", short(_verdict, 900)))
+        team_exchange.append(("Marek", _verdict))
 
         _critic_out_full = _verdict
         results["CRITIC"] = _verdict
@@ -20584,10 +20604,10 @@ def consult_team(
         # v206: zarzut niesiony do NASTEPNEGO kroku szedl przez gole
         # short(..., 1200) — czyli Tomek dostawal rano polowe uwagi,
         # ktora wieczorem miala go zablokowac. Ten sam kanal co
-        # reszta (patrz ROLE_LIMIT_CRITIC).
+        # reszta (patrz LIMIT_BEZPIECZENSTWA).
         _critic_carry = _role_output_for_team(
             "Marek (CRITIC)", _critic_out_full,
-            ROLE_LIMIT_CRITIC, "CRITIC"
+            LIMIT_BEZPIECZENSTWA, "CRITIC"
         )
 
         # v206: czy to JUZ BYLO? Python trzyma poprzedni zarzut i
@@ -20647,13 +20667,14 @@ def consult_team(
         # v190: pusta odpowiedź roli MUSI być widoczna jako awaria,
         # nie jako milcząca zgoda — patrz _role_output_for_team().
         "planner":   _role_output_for_team(
-            "Tomek (PLANNER)", results.get("PLANNER", ""), 4000, "PLANNER"
+            "Tomek (PLANNER)", results.get("PLANNER", ""),
+            LIMIT_BEZPIECZENSTWA, "PLANNER"
         ),
         # MAIN dostaje czesc wspolna, ale liczona z CALEJ
         # wypowiedzi — patrz _dla_zespolu().
         "researcher": _dla_zespolu(
             "Kamil (RESEARCHER)", results.get("RESEARCHER", ""),
-            4000, "RESEARCHER", rola="MAIN"
+            LIMIT_BEZPIECZENSTWA, "RESEARCHER", rola="MAIN"
         ),
         "engineer":  _engineer_for_team(results.get("ENGINEER", "")),
         # Pełna, nieskrócona odpowiedź ENGINEER — NIE
@@ -20668,15 +20689,16 @@ def consult_team(
             results.get("ENGINEER", "") if consult_engineer else ""
         ),
         "critic":    _role_output_for_team(
-            "Marek (CRITIC)", results.get("CRITIC", ""), 4000, "CRITIC"
+            "Marek (CRITIC)", results.get("CRITIC", ""),
+            LIMIT_BEZPIECZENSTWA, "CRITIC"
         ),
         "browser":   _dla_zespolu(
             "Ola (BROWSER)", results.get("BROWSER", ""),
-            2000, "BROWSER", rola="MAIN"
+            LIMIT_BEZPIECZENSTWA, "BROWSER", rola="MAIN"
         ),
         "wojtek":    _dla_zespolu(
             "Wojtek", results.get("WOJTEK", ""),
-            1500, "WOJTEK", rola="MAIN"
+            LIMIT_BEZPIECZENSTWA, "WOJTEK", rola="MAIN"
         ),
         # v195: zapis wymiany zdan Marek <-> Tomek/Bartek, ktora
         # odbyla sie w TYM kroku. MAIN musi widziec nie tylko koncowy
