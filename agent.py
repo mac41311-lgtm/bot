@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v276
+AEL-MINI AUTONOMOUS AGENT v277
 
 ARCHITEKTURA:
 
@@ -384,6 +384,11 @@ CRITIC_STATE = STATE_DIR / "critic.json"
 BROWSER_STATE = STATE_DIR / "browser.json"
 
 GEMINI_STATE_FILE = STATE_DIR / "gemini.json"
+
+# Stan KLUCZY Gemini — osobno od stanu zadania. Patrz
+# mark_quota(): wczesniej jedno i drugie mieszkalo w
+# gemini.json, a kazda interakcja nadpisywala plik w calosci.
+GEMINI_KEYS_FILE = STATE_DIR / "gemini_keys.json"
 
 LAST_RESULT_FILE = AGENT_DIR / "last_result.json"
 
@@ -1283,7 +1288,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v276")
+    print("             AEL-MINI AUTONOMOUS AGENT v277")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8354,10 +8359,40 @@ def load_gemini_keys():
     return keys
 
 
-def gemini_state():
+# ============================================================
+# WYCZERPANY KLUCZ GEMINI WRACA DO GRY (v277)
+# ============================================================
+#
+# Byly tu dwa bledy wskazujace w PRZECIWNE strony, ktore sie
+# nawzajem maskowaly — dlatego nigdy nie bylo tego widac w logu
+# jako jednej awarii.
+#
+# 1. mark_quota() zapisywalo "ten klucz padl" do gemini.json, ale
+#    KAZDA udana interakcja z Gemini nadpisywala ten sam plik
+#    w calosci ({"task_id": ..., "interaction_id": ...}). write_json
+#    nadpisuje, nie doklada. Wiedza o wyczerpanym kluczu znikala
+#    wiec po jednym wywolaniu i agent wracal do martwego klucza:
+#    429, przelaczenie, zapomnienie, znowu 429.
+#
+# 2. W druga strone: key_disabled() czytalo tylko "status", a pole
+#    "time" nie bylo czytane NIGDZIE. Gdyby wpis jednak przetrwal,
+#    klucz bylby martwy na zawsze — mimo ze limit Gemini sie
+#    odnawia. Wskrzeszal go dopiero "wyczysc".
+#
+# Teraz: stan kluczy ma wlasny plik, a "time" jest czytane. Odstep
+# rosnie tak samo, jak przy przeciazeniu DeepSeeka (v268): pierwszy
+# raz krotko, bo 429 to zwykle limit na minute; gdy ten sam klucz
+# pada zaraz po powrocie, to znaczy, ze to limit dzienny — wtedy
+# podwajamy, zeby nie dobijac sie co chwile. Udane wywolanie
+# kasuje wpis.
+_GEMINI_COOLDOWN_START = 60.0
+_GEMINI_COOLDOWN_MAX = 6 * 3600.0
+
+
+def gemini_keys_state():
 
     value = read_json(
-        GEMINI_STATE_FILE,
+        GEMINI_KEYS_FILE,
         {}
     )
 
@@ -8367,45 +8402,83 @@ def gemini_state():
     return value
 
 
-def save_gemini_state(value):
+def save_gemini_keys_state(value):
 
     write_json(
-        GEMINI_STATE_FILE,
+        GEMINI_KEYS_FILE,
         value
     )
 
 
 def mark_quota(key_name):
 
-    state = gemini_state()
+    state = gemini_keys_state()
 
-    state[key_name] = {
-        "status":
-            "QUOTA_EXHAUSTED",
-        "time":
-            time.time()
+    poprzedni = state.get(str(key_name)) or {}
+
+    try:
+        byl_odstep = float(poprzedni.get("cooldown") or 0.0)
+        byl_kiedy = float(poprzedni.get("time") or 0.0)
+    except (TypeError, ValueError):
+        byl_odstep, byl_kiedy = 0.0, 0.0
+
+    # Padl znowu tuz po tym, jak wrocil do gry — poprzedni odstep
+    # byl za krotki.
+    if byl_odstep and (time.time() - byl_kiedy) < byl_odstep * 3:
+        odstep = min(byl_odstep * 2, _GEMINI_COOLDOWN_MAX)
+    else:
+        odstep = _GEMINI_COOLDOWN_START
+
+    state[str(key_name)] = {
+        "status": "QUOTA_EXHAUSTED",
+        "time": time.time(),
+        "cooldown": odstep
     }
 
-    save_gemini_state(
-        state
+    save_gemini_keys_state(state)
+
+    log(
+        "GEMINI",
+        "Klucz " + str(key_name) + " odstawiony na "
+        + str(int(odstep // 60)) + " min — potem sam wroci do gry."
     )
+
+
+def mark_key_ok(key_name):
+    """Klucz odpowiedzial — nie ma powodu go dalej omijac."""
+
+    state = gemini_keys_state()
+
+    if str(key_name) in state:
+
+        del state[str(key_name)]
+
+        save_gemini_keys_state(state)
+
+        log(
+            "GEMINI",
+            "Klucz " + str(key_name) + " znowu odpowiada — "
+            "wraca do normalnego uzycia."
+        )
 
 
 def key_disabled(key_name):
 
-    state = gemini_state()
-
-    info = state.get(
-        key_name
-    )
+    info = gemini_keys_state().get(str(key_name))
 
     if not info:
         return False
 
-    return (
-        info.get("status")
-        == "QUOTA_EXHAUSTED"
-    )
+    if info.get("status") != "QUOTA_EXHAUSTED":
+        return False
+
+    try:
+        czekaj = float(info.get("cooldown") or _GEMINI_COOLDOWN_START)
+        kiedy = float(info.get("time") or 0.0)
+    except (TypeError, ValueError):
+        return False
+
+    return (time.time() - kiedy) < czekaj
 
 
 def init_gemini():
@@ -13824,6 +13897,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             input=prompt,
             tools=gemini_tools(_task_haystack)
         )
+
+        # Klucz odpowiedzial — jesli byl odstawiony, wraca.
+        mark_key_ok(key_name)
 
         interaction_id = getattr(
             interaction,
