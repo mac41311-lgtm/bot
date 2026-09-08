@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v281
+AEL-MINI AUTONOMOUS AGENT v282
 
 ARCHITEKTURA:
 
@@ -1742,7 +1742,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v281")
+    print("             AEL-MINI AUTONOMOUS AGENT v282")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11584,6 +11584,48 @@ def _kod_wyjscia_to_odpowiedz(command, result):
     return ""
 
 
+# ============================================================
+# DLUGIEJ ROBOTY SIE NIE PRZERYWA (v282)
+# ============================================================
+#
+# COMMAND_TIMEOUT to 120 sekund. Pobranie modelu, kompilacja APK
+# czy `pkg install` nie ma prawa sie w tym zmiescic — a po timeoucie
+# proces jest ZABIJANY i zostaje "ok": false, "error": "Timeout".
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (przeglad dysku 2026-09-09).
+# W ~/.cache/huggingface lezalo 1,5 GB plikow z koncowka
+# .downloadInProgress: dwa urwane pobrania modelu Qwen (982 MB i
+# 470 MB). Zespol probowal, timeout zabijal, zespol probowal
+# jeszcze raz — i za kazdym razem zaczynal od zera, zostawiajac
+# kolejny ogryzek. Zadna z tych prob nie miala szansy sie udac,
+# bo 982 MB przez 120 sekund nie przejdzie.
+#
+# termux_run_background istnieje od dawna i nie ma zadnego limitu
+# czasu. Brakowalo tylko jednego: zeby po timeoucie robota tam
+# WROCILA, zamiast konczyc sie porazka. Nie prosimy nikogo, zeby
+# "pamietal uzyc narzedzia w tle" — Python widzi, co sie stalo, i
+# przenosi to sam.
+_DLUGA_ROBOTA_RE = re.compile(
+    r"\b(?:curl|wget|aria2c|"
+    r"git\s+clone|git\s+pull|"
+    r"pkg\s+(?:install|upgrade|update)|apt\s+(?:install|upgrade)|"
+    r"pip3?\s+install|python3?\s+-m\s+pip\s+install|"
+    r"npm\s+(?:install|ci)|yarn\s+install|"
+    r"cargo\s+(?:build|install)|"
+    r"gradlew|gradle|make|cmake|ninja|"
+    r"ffmpeg|"
+    r"huggingface-cli|hf\s+download|ollama\s+pull|"
+    r"unzip|tar)\b",
+    re.IGNORECASE
+)
+
+
+def _to_dluga_robota(command):
+    """Czy ta komenda z natury trwa dluzej niz nasz limit."""
+
+    return bool(_DLUGA_ROBOTA_RE.search(str(command or "")))
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -11671,6 +11713,48 @@ def termux_run(command):
             return bg
 
         result = execute_shell(command_str)
+
+        # v282: timeout na dlugiej robocie to nie porazka, tylko
+        # zly sposob uruchomienia. Przenosimy ja w tlo i mowimy
+        # wprost, gdzie sprawdzic postep — zamiast oddawac "Timeout"
+        # i pozwalac, zeby zespol zaczynal od zera.
+        if (
+            isinstance(result, dict)
+            and result.get("error") == "Timeout"
+            and _to_dluga_robota(command_str)
+        ):
+
+            log(
+                "TERMUX",
+                "To zajmie wiecej niz " + str(COMMAND_TIMEOUT)
+                + " s — przenosze w tlo zamiast przerywac."
+            )
+
+            bg2 = termux_run_background(command_str)
+
+            if isinstance(bg2, dict) and bg2.get("ok"):
+
+                bg2["przeniesione_w_tlo"] = True
+
+                bg2["message"] = (
+                    "Ta komenda nie miesci sie w limicie "
+                    + str(COMMAND_TIMEOUT) + " s, wiec nie "
+                    "przerywalem jej — leci dalej w tle. Postep "
+                    "sprawdzisz w log_file (termux_read_file) albo "
+                    "przez termux_check_process. Nie uruchamiaj jej "
+                    "drugi raz: druga kopia zaczelaby od zera."
+                )
+
+                _pending_team_warnings.append(
+                    "Komenda `" + short(command_str, 120)
+                    + "` nie zmieściła się w limicie czasu, więc "
+                    "przeniosłem ją w tło — leci dalej, nie trzeba "
+                    "jej ponawiać."
+                )
+
+                _zglos_to_co_przybylo(_przed)
+
+                return bg2
 
         _zglos_to_co_przybylo(_przed)
 
