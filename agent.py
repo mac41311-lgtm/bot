@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v272
+AEL-MINI AUTONOMOUS AGENT v273
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v272")
+    print("             AEL-MINI AUTONOMOUS AGENT v273")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -23779,6 +23779,43 @@ _CZYNNOSC_CZLOWIEKA_RE = re.compile(
 )
 
 
+def _granica_tekstu_dla_czlowieka(task_text):
+    """
+    Od ktorego miejsca zadanie przestaje byc robota, a zaczyna byc
+    tekstem dla czlowieka. -1, gdy takiego miejsca nie ma.
+
+    Ciecie idzie od POCZATKU LINII, w ktorej pada zwrot do
+    czlowieka — inaczej zostawaloby wiszace "**Krok 4 – ".
+    """
+
+    tekst = str(task_text or "")
+
+    pozycje = [
+        m.start()
+        for m in (
+            _TASK_IS_USER_QUESTION_RE.search(tekst),
+            _TEKST_DLA_UZYTKOWNIKA_RE.search(tekst),
+        )
+        if m
+    ]
+
+    if not pozycje:
+        return -1
+
+    return tekst.rfind("\n", 0, min(pozycje)) + 1
+
+
+def _czesc_maszynowa_zadania(task_text):
+    """Ta czesc zadania, ktora da sie po prostu wykonac."""
+
+    granica = _granica_tekstu_dla_czlowieka(task_text)
+
+    if granica < 0:
+        return str(task_text or "")
+
+    return str(task_text or "")[:granica]
+
+
 def _decision_task_is_user_question(decision):
 
     if str(decision.get("type") or "").upper() != "TASK":
@@ -23786,13 +23823,38 @@ def _decision_task_is_user_question(decision):
 
     task_text = str(decision.get("task") or "")
 
-    if _TASK_IS_USER_QUESTION_RE.search(task_text):
-        return True
+    prosi = (
+        bool(_TASK_IS_USER_QUESTION_RE.search(task_text))
+        or bool(
+            # Tekst zaadresowany do czlowieka, ktory ma cos zrobic
+            # rekami.
+            _TEKST_DLA_UZYTKOWNIKA_RE.search(task_text)
+            and _CZYNNOSC_CZLOWIEKA_RE.search(task_text)
+        )
+    )
 
-    # Tekst zaadresowany do czlowieka, ktory ma cos zrobic rekami.
-    return bool(
-        _TEKST_DLA_UZYTKOWNIKA_RE.search(task_text)
-        and _CZYNNOSC_CZLOWIEKA_RE.search(task_text)
+    if not prosi:
+        return False
+
+    # v273: DOPIERO gdy zadanie jest tym W CALOSCI — tak, jak mowi
+    # komentarz nad _TEKST_DLA_UZYTKOWNIKA_RE. Kod tego nie robil:
+    # wystarczyl jeden akapit dla czlowieka, zeby cale zadanie
+    # poszlo do niego.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-08, kroki 2-6).
+    # Zadanie mialo cztery kroki: przelacz na Termux, zapisz numer
+    # do .env, otworz strone logowania, a NA KONCU wyswietl
+    # uzytkownikowi instrukcje. Trzy pierwsze byly zwyklymi
+    # komendami. Calosc szla do czlowieka, wiec numer nigdy nie
+    # trafil do .env, przegladarka nigdy sie nie otworzyla, a
+    # uzytkownik piec razy z rzedu byl pytany o rzecz, ktora
+    # program mial wlasnie zrobic.
+    #
+    # Gdy przed tekstem dla czlowieka jest realna robota — najpierw
+    # ja robimy. To, co dla czlowieka, MAIN powie jeszcze raz w
+    # nastepnym kroku, juz samo, i wtedy petla stanie jak nalezy.
+    return not _extract_commands_from_text(
+        _czesc_maszynowa_zadania(task_text)
     )
 
 
@@ -25333,6 +25395,28 @@ Zwróć tylko JSON.
             }
 
             dtype = "NEED_USER_LOGIN"
+
+        # v273: zadanie mieszane — robota plus akapit dla czlowieka.
+        # Robote wykonujemy, akapit odcinamy: Gemini i tak umie z nim
+        # zrobic tylko echo do terminala, ktorego uzytkownik nie
+        # oglada (to byl bug z v188). MAIN powtorzy te prosbe w
+        # nastepnym kroku, juz sama, i wtedy petla stanie naprawde.
+        if dtype == "TASK":
+
+            _cale_zadanie = str(decision.get("task") or "").strip()
+            _maszynowa = _czesc_maszynowa_zadania(_cale_zadanie).strip()
+
+            if _maszynowa and _maszynowa != _cale_zadanie:
+
+                log(
+                    "MAIN",
+                    "W zadaniu jest robota i osobno tekst dla "
+                    "człowieka — wykonuję robotę, tekst zostawiam "
+                    "(wróci sam, gdy zostanie już tylko on)."
+                )
+
+                decision = dict(decision)
+                decision["task"] = _maszynowa
 
         # Czytelne zdanie zamiast surowego JSON — patrz
         # _main_human_line() i komentarz przy _speak(name, text)
