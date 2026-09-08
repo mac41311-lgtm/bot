@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v277
+AEL-MINI AUTONOMOUS AGENT v279
 
 ARCHITEKTURA:
 
@@ -376,6 +376,30 @@ STATE_DIR = AGENT_DIR / "state"
 QUEUE_DIR = AGENT_DIR / "queue"
 RESULTS_DIR = AGENT_DIR / "results"
 MEMORY_DIR = AGENT_DIR / "memory"
+
+# ============================================================
+# CO SIE NAPRAWDE DZIALO (v278)
+# ============================================================
+#
+# log() bylo dotad samym print(): caly przebieg zyl wylacznie w
+# buforze terminala. Zeby cokolwiek sprawdzic, uzytkownik musial
+# recznie wkleic kawalek ekranu — a to, co najbardziej potrzebne
+# (ile znakow poszlo do ktorej roli i z czego sie skladalo), nie
+# bylo widoczne NIGDZIE, bo prompt sklada sie w pamieci i ginie.
+#
+# Dwa strumienie, bo sluza do czego innego:
+#   przebieg .log  — to, co widac na ekranie, plus numer kroku,
+#   zdarzenia .jsonl — liczby: ile, do kogo, z jakich blokow.
+PRZEBIEG_DIR = MEMORY_DIR / "przebieg"
+
+# Ustawiane raz przy starcie biegu — patrz zacznij_zapis_biegu().
+_plik_przebiegu = None
+_plik_zdarzen = None
+
+# Numer kroku, ktory wlasnie trwa. Bez niego wszystkie liczby
+# lezalyby w jednym worku i nie dalo by sie powiedziec, KIEDY cos
+# poszlo nie tak.
+_biezacy_krok = 0
 
 MAIN_STATE = STATE_DIR / "main.json"
 PLANNER_STATE = STATE_DIR / "planner.json"
@@ -854,7 +878,359 @@ def now():
     return datetime.now().strftime("%H:%M:%S")
 
 
+def zacznij_zapis_biegu(cel=""):
+    """
+    Otwiera pliki tego biegu. Nazwa to data i godzina startu, wiec
+    kolejne uruchomienia nie nadpisuja sie nawzajem.
+    """
+
+    global _plik_przebiegu, _plik_zdarzen, _biezacy_krok
+
+    _biezacy_krok = 0
+
+    try:
+        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+
+        stempel = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        _plik_przebiegu = PRZEBIEG_DIR / (stempel + ".log")
+        _plik_zdarzen = PRZEBIEG_DIR / (stempel + ".jsonl")
+
+        _plik_przebiegu.write_text(
+            "CEL: " + str(cel or "").strip() + "\n\n",
+            encoding="utf-8"
+        )
+        _plik_zdarzen.write_text("", encoding="utf-8")
+
+        zapisz_zdarzenie("start", cel=str(cel or "").strip())
+
+    except Exception:
+        # Brak miejsca albo praw — zapis jest pomocniczy i nigdy
+        # nie moze wywrocic samego biegu.
+        _plik_przebiegu = None
+        _plik_zdarzen = None
+
+
+# Co ile krokow pokazujemy liczby. Rzadziej niz co krok, bo to
+# ma byc przeglad, a nie kolejna sciana w logu.
+_CO_ILE_PODSUMOWANIE = 5
+
+
+def ustaw_krok(numer):
+    """Od tej chwili wszystko, co zapisujemy, nalezy do tego kroku."""
+
+    global _biezacy_krok
+
+    try:
+        poprzedni = _biezacy_krok
+        _biezacy_krok = int(numer)
+    except (TypeError, ValueError):
+        return
+
+    zapisz_zdarzenie("krok")
+
+    if (
+        poprzedni
+        and _biezacy_krok > poprzedni
+        and poprzedni % _CO_ILE_PODSUMOWANIE == 0
+    ):
+        pokaz_podsumowanie_biegu()
+
+
+def pokaz_podsumowanie_biegu():
+    """Liczby tego biegu — na ekran i do przebiegu."""
+
+    tekst = podsumowanie_biegu()
+
+    if not tekst:
+        return
+
+    ramka = (
+        "\n" + "=" * 60
+        + "\n  JAK IDZIE KOMUNIKACJA (liczone przez Pythona, "
+        "bez pytania nikogo)\n"
+        + "=" * 60 + "\n"
+        + tekst + "\n"
+        + "=" * 60
+    )
+
+    print(ramka)
+    dopisz_do_przebiegu(ramka)
+
+
+def dopisz_do_przebiegu(linia):
+
+    if _plik_przebiegu is None:
+        return
+
+    try:
+        with open(_plik_przebiegu, "a", encoding="utf-8") as f:
+            f.write(str(linia).rstrip() + "\n")
+    except Exception:
+        pass
+
+
+def zapisz_zdarzenie(typ, **pola):
+    """
+    Jedno zdarzenie w formacie, ktory da sie policzyc — po jednym
+    JSON-ie na linie. Nigdy nie rzuca: to jest notatnik obok
+    roboty, nie sama robota.
+    """
+
+    if _plik_zdarzen is None:
+        return
+
+    try:
+        wpis = {"krok": _biezacy_krok, "typ": str(typ)}
+        wpis.update(pola)
+
+        with open(_plik_zdarzen, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(wpis, ensure_ascii=False, default=str)
+                + "\n"
+            )
+    except Exception:
+        pass
+
+
+# ============================================================
+# CZUJNIK: LICZBY, NIE OPINIE (v279)
+# ============================================================
+#
+# Wszystko ponizej liczy sam Python, z pliku zdarzen — ZERO
+# wywolan do DeepSeeka i Gemini. To jest ta czesc, ktora ma
+# chodzic zawsze, bo nic nie kosztuje.
+#
+# Mierzymy dokladnie te rzeczy, ktore w tej sesji okazaly sie
+# realnymi awariami, a byly widoczne dopiero wtedy, gdy uzytkownik
+# recznie wkleil kawalek ekranu:
+#
+#   - ile znakow poszlo do ktorej roli (spam w promptach),
+#   - z jakich blokow to bylo (co konkretnie ciac),
+#   - ile bramka _only_if_new realnie oszczedzila,
+#   - kroki, w ktorych nie padlo ANI JEDNO wywolanie narzedzia
+#     (narada mielila, robota stala),
+#   - zdania typu "urwales", "nie widze", "nie mam" — czyli
+#     moment, w ktorym ktos NIE DOSTAL tego, co mial dostac.
+
+# Ktos mowi wprost, ze czegos nie dostal. To najtansza i
+# najpewniejsza oznaka zepsutej komunikacji, jaka mamy: nie
+# domysl, tylko cytat.
+_NIE_DOSTAL_RE = re.compile(
+    r"urwa[łl]e[śs]|urywa\s+si[eę]|uci[eę]t|"
+    r"nie\s+widz[eę]\b|nie\s+mam\s+(?:tego|tych|dost[eę]pu|kodu)|"
+    r"nie\s+znalaz[łl]em\s+w\s+(?:twojej|Twojej)\s+wiadomo|"
+    r"podaj\s+mi\s+je|brakuje\s+(?:tresci|treści|fragmentu)",
+    re.IGNORECASE
+)
+
+
+def _wczytaj_zdarzenia(sciezka):
+    """Zdarzenia jednego biegu. Zepsute linie po prostu pomijamy."""
+
+    zdarzenia = []
+
+    try:
+        with open(sciezka, encoding="utf-8") as f:
+            for linia in f:
+                linia = linia.strip()
+                if not linia:
+                    continue
+                try:
+                    zdarzenia.append(json.loads(linia))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+
+    return zdarzenia
+
+
+def policz_bieg(sciezka=None):
+    """
+    Liczby jednego biegu. Zwraca slownik — nic nie drukuje, zeby
+    dalo sie tego uzyc i do wyswietlenia, i do porownania biegow.
+    """
+
+    sciezka = sciezka or _plik_zdarzen
+
+    if not sciezka:
+        return {}
+
+    zdarzenia = _wczytaj_zdarzenia(sciezka)
+
+    if not zdarzenia:
+        return {}
+
+    wynik = {
+        "cel": "",
+        "kroki": 0,
+        "do_roli": {},          # rola -> znaki lacznie
+        "pytan_do_roli": {},    # rola -> ile razy pytana
+        "bloki": {},            # (rola, blok) -> znaki
+        "oszczedzone": 0,       # ile _only_if_new nie wyslalo
+        "narzedzia": 0,
+        "kroki_bez_narzedzia": [],
+        "nie_dostal": [],       # (krok, rola) — ktos zglosil brak
+    }
+
+    narzedzia_w_kroku = {}
+    kroki = set()
+
+    for z in zdarzenia:
+
+        typ = z.get("typ")
+        krok = z.get("krok") or 0
+        rola = str(z.get("rola") or "")
+        znaki = int(z.get("znaki") or 0)
+
+        if krok:
+            kroki.add(krok)
+
+        if typ == "start":
+            wynik["cel"] = str(z.get("cel") or "")
+
+        elif typ == "prompt":
+            wynik["do_roli"][rola] = (
+                wynik["do_roli"].get(rola, 0) + znaki
+            )
+            wynik["pytan_do_roli"][rola] = (
+                wynik["pytan_do_roli"].get(rola, 0) + 1
+            )
+
+        elif typ == "blok":
+            klucz = rola + "/" + str(z.get("co") or "")
+            wynik["bloki"][klucz] = (
+                wynik["bloki"].get(klucz, 0) + znaki
+            )
+
+        elif typ == "blok_powtorka":
+            wynik["oszczedzone"] += znaki
+
+        elif typ == "narzedzie":
+            wynik["narzedzia"] += 1
+            narzedzia_w_kroku[krok] = (
+                narzedzia_w_kroku.get(krok, 0) + 1
+            )
+
+        elif typ == "wypowiedz":
+            # Czy ktos wprost powiedzial, ze czegos nie dostal.
+            pass
+
+    wynik["kroki"] = len(kroki)
+
+    wynik["kroki_bez_narzedzia"] = sorted(
+        k for k in kroki if not narzedzia_w_kroku.get(k)
+    )
+
+    return wynik
+
+
+def znajdz_zgloszone_braki(sciezka_przebiegu=None):
+    """
+    Miejsca, w ktorych ktos napisal wprost, ze czegos nie dostal.
+
+    Czytamy z PRZEBIEGU, nie ze zdarzen — bo tam jest tresc
+    wypowiedzi, a nie tylko jej dlugosc.
+    """
+
+    sciezka_przebiegu = sciezka_przebiegu or _plik_przebiegu
+
+    if not sciezka_przebiegu:
+        return []
+
+    znaleziska = []
+    krok = 0
+    kto = ""
+
+    try:
+        with open(sciezka_przebiegu, encoding="utf-8") as f:
+            for linia in f:
+
+                if linia.startswith("--- KROK "):
+                    try:
+                        krok = int(linia.split()[2])
+                    except (IndexError, ValueError):
+                        pass
+                    continue
+
+                if linia.startswith("--- ") and "(" in linia:
+                    kto = linia[4:].split("(")[0].strip()
+                    continue
+
+                m = _NIE_DOSTAL_RE.search(linia)
+
+                if m:
+                    znaleziska.append({
+                        "krok": krok,
+                        "kto": kto,
+                        "cytat": linia.strip()[:200]
+                    })
+    except Exception:
+        return []
+
+    return znaleziska
+
+
+def podsumowanie_biegu(sciezka=None, sciezka_przebiegu=None):
+    """Te same liczby, ulozone w kilka linijek do przeczytania."""
+
+    dane = policz_bieg(sciezka)
+
+    if not dane:
+        return ""
+
+    linie = [
+        "Kroków: " + str(dane["kroki"])
+        + ", wywołań narzędzi: " + str(dane["narzedzia"])
+    ]
+
+    if dane["kroki_bez_narzedzia"]:
+        linie.append(
+            "Kroki bez ani jednego narzędzia: "
+            + ", ".join(str(k) for k in dane["kroki_bez_narzedzia"])
+        )
+
+    for rola, znaki in sorted(
+        dane["do_roli"].items(), key=lambda x: -x[1]
+    ):
+        razy = dane["pytan_do_roli"].get(rola, 0) or 1
+        linie.append(
+            "  " + rola.ljust(20) + str(znaki).rjust(8)
+            + " znaków w " + str(razy) + " wiadomościach"
+            + " (średnio " + str(znaki // razy) + ")"
+        )
+
+    if dane["bloki"]:
+        linie.append("Najcięższe bloki:")
+        for klucz, znaki in sorted(
+            dane["bloki"].items(), key=lambda x: -x[1]
+        )[:8]:
+            linie.append("  " + klucz.ljust(28) + str(znaki).rjust(8))
+
+    if dane["oszczedzone"]:
+        linie.append(
+            "Powtórek nie wysłano: " + str(dane["oszczedzone"])
+            + " znaków"
+        )
+
+    braki = znajdz_zgloszone_braki(sciezka_przebiegu)
+
+    if braki:
+        linie.append("Ktoś zgłosił, że czegoś nie dostał:")
+        for b in braki[:5]:
+            linie.append(
+                "  krok " + str(b["krok"]) + ", " + (b["kto"] or "?")
+                + ": " + b["cytat"]
+            )
+
+    return "\n".join(linie)
+
+
 def log(tag, message):
+    dopisz_do_przebiegu(
+        f"[{now()}] [krok {_biezacy_krok}] [{tag}] {message}"
+    )
     print(
         f"[{now()}] [{tag}] {message}",
         flush=True
@@ -891,6 +1267,21 @@ def _speak(role, text, preview_chars=400):
 
     speaker, color, topic = _ROLE_SPEAKERS.get(
         role, (role, "white", "")
+    )
+
+    # v278: w terminalu podglad, w pliku CALOSC. To jest sama
+    # rozmowa zespolu — jesli czegos nie zapiszemy tutaj, nie da
+    # sie potem sprawdzic, kto co komu powiedzial.
+    dopisz_do_przebiegu(
+        "\n--- " + speaker + " (" + str(role) + ") ---\n"
+        + str(text or "").strip() + "\n"
+    )
+
+    zapisz_zdarzenie(
+        "wypowiedz",
+        rola=str(role),
+        kto=speaker,
+        znaki=len(str(text or ""))
     )
 
     body = short(str(text or ""), preview_chars).strip()
@@ -1288,7 +1679,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v277")
+    print("             AEL-MINI AUTONOMOUS AGENT v279")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2181,9 +2572,24 @@ def _only_if_new(role, key, block):
     slot = (str(role), str(key))
 
     if _role_seen_blocks.get(slot) == block:
+        # v278: powtorke tez notujemy — to liczba, ktora mowi, ile
+        # bramka _only_if_new realnie oszczedza.
+        zapisz_zdarzenie(
+            "blok_powtorka",
+            rola=str(role),
+            co=str(key),
+            znaki=len(block)
+        )
         return ""
 
     _role_seen_blocks[slot] = block
+
+    zapisz_zdarzenie(
+        "blok",
+        rola=str(role),
+        co=str(key),
+        znaki=len(block)
+    )
 
     return block
 
@@ -2572,6 +2978,10 @@ def _set_current_goal(goal):
     Nowy cel = wszyscy dostają go raz, przy swojej pierwszej
     wiadomości w tym celu. Woływane z run_agent() na starcie.
     """
+
+    # v278: nowy cel to nowy bieg — od tego momentu przebieg i
+    # liczby ida do wlasnej pary plikow.
+    zacznij_zapis_biegu(goal)
 
     global _current_goal_text
 
@@ -3856,6 +4266,16 @@ def deepseek(name, message):
     """
 
     global _continue_action_supported
+
+    # v278: jedno gardlo, przez ktore idzie KAZDE pytanie do roli —
+    # wiec jedyne miejsce, gdzie da sie uczciwie zmierzyc, ile
+    # naprawde do niej poszlo. Prompt sklada sie w pamieci i ginie;
+    # bez tego zapisu nie ma czego liczyc.
+    zapisz_zdarzenie(
+        "prompt",
+        rola=str(name),
+        znaki=len(str(message or ""))
+    )
 
     _deepseek_circuit_wait(name)
 
@@ -14144,6 +14564,8 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     "GEMINI",
                     f"narzędzie #{tool_calls}: {name}"
                 )
+
+                zapisz_zdarzenie("narzedzie", nazwa=str(name))
 
                 # --------------------------------------------
                 # LIMIT ask_deepseek NA TASK
@@ -25196,12 +25618,15 @@ def run_agent(goal):
 
         step += 1
 
+        ustaw_krok(step)
+
         print()
         print(
             "--- KROK "
             + str(step)
             + " ---"
         )
+        dopisz_do_przebiegu("\n\n--- KROK " + str(step) + " ---")
 
         # Wykryj nowe/zmienione narzędzia w custom_tools/ — tanie
         # (stat() na plikach), gdy nic się nie zmieniło.
@@ -26596,6 +27021,8 @@ Zwróć tylko JSON.
             except Exception:
                 pass
 
+            pokaz_podsumowanie_biegu()
+
             return
 
         # ------------------------------------------------------
@@ -26754,6 +27181,8 @@ Zwróć tylko JSON.
     print("=" * 72)
     print("OSIĄGNIĘTO LIMIT KROKÓW")
     print("=" * 72)
+
+    pokaz_podsumowanie_biegu()
 
     write_json(
         LAST_RESULT_FILE,
