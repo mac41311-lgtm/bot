@@ -20887,15 +20887,34 @@ tym kroku dopytać jedną osobę:
     # nie pojawiają, zamiast wchodzić pustą rubryką.
     _glosy = []
 
-    for _wstep, _tekst in (
-        ("Tomek zaplanował tak:", team.get("planner", "")),
-        ("Bartek na to:", team.get("engineer", "")),
-        ("Kamil sprawdził:", team.get("researcher", "")),
-        ("Marek ocenia:", team.get("critic", "")),
-        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:", _exchange),
-        ("Ola streszcza:", team.get("browser", "")),
-        ("Wojtek podrzucił:", team.get("wojtek", "")),
+    # v270: MAIN dostaje to, na czym decyduje — nie cudze
+    # przekazywanie sobie roboty. Nikt nie wola MAIN-a po imieniu,
+    # wiec _dla_tej_roli zostawia mu czesc wspolna, a akapity
+    # "Bartku: uruchom vosk i wypisz confidence" odpadaja: to umowa
+    # miedzy dwojka ludzi, a nie material do decyzji o TASK-u.
+    #
+    # Trzech glosow NIE tniemy, i to z tego samego powodu, dla
+    # ktorego plan Tomka idzie w calosci do Bartka (v269): MAIN je
+    # WYKONUJE, nie tylko czyta.
+    #   - plan Tomka jest tym, co MAIN zamienia w TASK,
+    #   - u Bartka siedzi kod, a kod nie moze byc ciety (v192),
+    #   - werdykt Marka MAIN albo przyjmuje, albo obchodzi z
+    #     uzasadnieniem — musi wiec wiedziec, czego dotyczy, takze
+    #     gdy Marek zaczyna od "Tomku, twoj plan zaklada...".
+    # Wymiana wokol zastrzezenia to ten sam dialog, wiec tez cala.
+    for _wstep, _tekst, _tnij in (
+        ("Tomek zaplanował tak:", team.get("planner", ""), False),
+        ("Bartek na to:", team.get("engineer", ""), False),
+        ("Kamil sprawdził:", team.get("researcher", ""), True),
+        ("Marek ocenia:", team.get("critic", ""), False),
+        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:",
+         _exchange, False),
+        ("Ola streszcza:", team.get("browser", ""), True),
+        ("Wojtek podrzucił:", team.get("wojtek", ""), True),
     ):
+
+        if _tnij:
+            _tekst = _dla_tej_roli(_tekst, "MAIN")
 
         if str(_tekst or "").strip():
             _glosy.append(_wstep + "\n" + str(_tekst).strip())
