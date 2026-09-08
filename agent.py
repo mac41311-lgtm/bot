@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v271
+AEL-MINI AUTONOMOUS AGENT v272
 
 ARCHITEKTURA:
 
@@ -1283,7 +1283,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v271")
+    print("             AEL-MINI AUTONOMOUS AGENT v272")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2475,6 +2475,9 @@ def _set_current_goal(goal):
     _role_inbox.clear()
     _role_response_cache.clear()
     _wyciagniecia_na_wierzch.clear()
+
+    global _powiedziane_o_komendach
+    _powiedziane_o_komendach = False
 
     global _main_chcial_kod
     _main_chcial_kod = False
@@ -4471,6 +4474,52 @@ _ZNANE_PAKIETY = {
 }
 
 
+# Czy zespol slyszal juz w tym celu, jak dzialaja komendy. Patrz
+# _powiedz_jak_leca_komendy() nizej.
+_powiedziane_o_komendach = False
+
+
+def _powiedz_jak_leca_komendy(pakiet):
+    """
+    Jedno zdanie, ktore Python wie, a zespol nie: komendy nie ida
+    przez ekran.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-08, krok 2). Na
+    wierzchu byl Chrome. Marek uznal to za przeszkode ("potrzebny
+    jest terminal, aby wpisywac polecenia"), MAIN zrobil z tego
+    prosbe do czlowieka i caly bieg stanal. Tymczasem execute_shell
+    to subprocess.run(shell=True) we WLASNYM procesie agenta —
+    komenda wykonuje sie tak samo, gdy na wierzchu jest Chrome,
+    gra albo wygaszacz. Rozmowa z zespolem tez nie idzie przez
+    zadne okno, tylko HTTP-em przez opendeep.
+
+    Zespol nie mial jak tego wiedziec: widzi zrzut ekranu i
+    wnioskuje z niego to, co wnioskuje czlowiek patrzacy na telefon.
+    Wiec mowimy to raz — wtedy, kiedy sytuacja naprawde zachodzi
+    (na wierzchu jest cos innego niz nasz terminal), a nie co krok
+    i nie na zapas.
+    """
+
+    global _powiedziane_o_komendach
+
+    if _powiedziane_o_komendach:
+        return
+
+    if not pakiet or pakiet == "com.termux":
+        return
+
+    _powiedziane_o_komendach = True
+
+    _pending_team_warnings.append(
+        "Na wierzchu ekranu jest teraz co innego niż nasz terminal, "
+        "ale komendy i tak uruchamiam sam, ze swojego procesu — nie "
+        "wpisuję ich w widoczne okno, więc nic tu nie stoi na "
+        "przeszkodzie. Z zespołem rozmawiam po sieci, nie przez "
+        "przeglądarkę. A gdy jakiś krok naprawdę potrzebuje "
+        "konkretnej aplikacji na wierzchu, sam ją tam wyciągam."
+    )
+
+
 def _foreground_app():
     """
     (pakiet, czytelna nazwa) aplikacji na wierzchu albo (None, None),
@@ -4676,7 +4725,11 @@ def android_summary(with_header=True):
             # v222: jedno zdanie o tym, co jest na wierzchu — patrz
             # _foreground_app(). Idzie PRZED hierarchią, bo to jest
             # rzecz, którą czytelnik i tak musi z niej wywnioskować.
-            _, _app_label = _foreground_app()
+            _app_pakiet, _app_label = _foreground_app()
+
+            # v272: zespol wlasnie dostaje zrzut ekranu — to jedyna
+            # chwila, w ktorej ten fakt jest mu do czegos potrzebny.
+            _powiedz_jak_leca_komendy(_app_pakiet)
 
             naglowek = (
                 "Na wierzchu jest teraz: " + _app_label
