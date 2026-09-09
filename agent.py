@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v284
+AEL-MINI AUTONOMOUS AGENT v285
 
 ARCHITEKTURA:
 
@@ -1766,7 +1766,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v284")
+    print("             AEL-MINI AUTONOMOUS AGENT v285")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10257,9 +10257,12 @@ def termux_write_file(path, content, append=False):
             #
             # Ten kod tez napisal DeepSeek, nie Gemini — podzial rol
             # zostaje nietkniety, a plik po prostu powstaje.
+            # v285: sciezka idzie do wyboru bloku — przy kilku
+            # plikach w jednej wiadomosci to ona rozstrzyga, ktory
+            # blok jest tym plikiem.
             _kod = (
-                extract_code_block(_kod_bartka_teraz or "")
-                or extract_code_block(_tresc_zadania_teraz or "")
+                extract_code_block(_kod_bartka_teraz or "", p)
+                or extract_code_block(_tresc_zadania_teraz or "", p)
                 # v281: MAIN potrafi przepisac kod do zadania bez
                 # ogrodzenia z backtickow, samym heredokiem — a to
                 # jest tresc tego pliku powiedziana wprost.
@@ -10285,7 +10288,7 @@ def termux_write_file(path, content, append=False):
                     }
 
                 _wprost_od_bartka = bool(
-                    extract_code_block(_kod_bartka_teraz or "")
+                    extract_code_block(_kod_bartka_teraz or "", p)
                 )
 
                 _skad = (
@@ -16341,7 +16344,131 @@ def extract_function_source(source, function_name):
     return source[start:end].rstrip()
 
 
-def extract_code_block(text):
+# Shebang mowi o jezyku pliku dokladniej niz znacznik po ```.
+_SHEBANG_JEZYK = (
+    ("python", ".py"),
+    ("bash", ".sh"),
+    ("/sh", ".sh"),
+    ("zsh", ".sh"),
+    ("node", ".js"),
+    ("ruby", ".rb"),
+    ("perl", ".pl"),
+)
+
+
+def _rozszerzenie_z_shebanga(kod):
+    """Rozszerzenie, na ktore wskazuje pierwsza linia bloku."""
+
+    pierwsza = str(kod or "").lstrip().split("\n", 1)[0].lower()
+
+    if not pierwsza.startswith("#!"):
+        return ""
+
+    for slowo, rozszerzenie in _SHEBANG_JEZYK:
+        if slowo in pierwsza:
+            return rozszerzenie
+
+    return ""
+
+
+def _blok_dla_pliku(text, sciezka, kandydaci):
+    """
+    Ktory z kilku blokow jest tresca TEGO pliku.
+
+    ZAOBSERWOWANY REALNY BUG (log 2026-09-09, krok 1). Bartek podal
+    w jednej wiadomosci TRZY pliki: sprawdz_audio.sh (bash),
+    lokalny_asystent.py i vapi_asystent.py (python). Kazdy z
+    shebangiem. Regula z v192 — "shebang, przy remisie najdluzszy" —
+    wybrala wiec najdluzszy, czyli lokalny_asystent.py, i Python
+    zapisal Pythona do pliku .sh. Bash odpowiedzial:
+
+        sprawdz_audio.sh: line 2: import: command not found
+        line 7: `def mow(tekst):'
+
+    Krok spalony, a kod Bartka byl w porzadku — pomylilismy sie my.
+
+    Regula z v192 byla dobra dla JEDNEGO pliku podanego w kilku
+    kawalkach. Przy kilku plikach naraz trzeba spytac inaczej: nie
+    "ktory blok jest najwazniejszy", tylko "ktory jest tym plikiem".
+    Dwa sygnaly, oba sa w wiadomosci:
+
+      1. nazwa pliku napisana tuz nad blokiem (Bartek pisze
+         "#### 1. `sprawdz_audio.sh` - test sprzetu"),
+      2. shebang albo znacznik jezyka zgodny z rozszerzeniem.
+
+    Zwraca None, gdy zaden sygnal nie rozstrzyga — wtedy decyduje
+    stara regula.
+    """
+
+    nazwa = str(sciezka or "").split("/")[-1].strip()
+
+    if not nazwa or not kandydaci:
+        return None
+
+    bloki = list(
+        re.finditer(
+            r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
+            str(text or ""),
+            re.DOTALL
+        )
+    )
+
+    # 1. NAZWA NAD BLOKIEM — najmocniejszy sygnal, bo autor sam
+    #    powiedzial, co to jest.
+    for m in bloki:
+
+        nad = text[max(0, m.start() - 400):m.start()]
+
+        if nazwa in nad:
+
+            kod = m.group(2).lstrip(" \t").rstrip("\n")
+
+            if kod.strip():
+                return kod
+
+    # 2. JEZYK ZGODNY Z ROZSZERZENIEM.
+    kropka = nazwa.lower().rfind(".")
+
+    if kropka < 0:
+        return None
+
+    rozszerzenie = nazwa.lower()[kropka:]
+
+    if rozszerzenie not in _ROZSZERZENIA_ZAJETE:
+        return None
+
+    pasujace = []
+
+    for m in bloki:
+
+        kod = m.group(2).lstrip(" \t").rstrip("\n")
+
+        if not kod.strip():
+            continue
+
+        z_shebanga = _rozszerzenie_z_shebanga(kod)
+
+        if z_shebanga:
+            if z_shebanga == rozszerzenie:
+                pasujace.append(kod)
+            continue
+
+        znacznik = (m.group(1) or "").strip().lower()
+
+        if znacznik and znacznik in _ROZSZERZENIA_JEZYKA:
+            if rozszerzenie in _ROZSZERZENIA_JEZYKA[znacznik]:
+                pasujace.append(kod)
+
+    if len(pasujace) == 1:
+        return pasujace[0]
+
+    if pasujace:
+        return max(pasujace, key=len)
+
+    return None
+
+
+def extract_code_block(text, sciezka=None):
     """
     Wyciąga zawartość PIERWSZEGO bloku ```...``` z tekstu.
 
@@ -16400,6 +16527,16 @@ def extract_code_block(text):
 
     if len(candidates) == 1:
         return candidates[0]
+
+    # v285: gdy wiemy, DO JAKIEGO pliku to leci, blok wybiera sie
+    # sam — patrz _blok_dla_pliku(). Regula "shebang, potem
+    # najdluzszy" zostaje dla przypadku, gdy pliku nie znamy.
+    if sciezka:
+
+        trafiony = _blok_dla_pliku(text, sciezka, candidates)
+
+        if trafiony is not None:
+            return trafiony
 
     def _score(code):
         return (
