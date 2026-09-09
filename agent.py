@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v292
+AEL-MINI AUTONOMOUS AGENT v293
 
 ARCHITEKTURA:
 
@@ -64,6 +64,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import hashlib
 import difflib
 import subprocess
@@ -528,6 +529,63 @@ DLUGA_ROBOTA_TIMEOUT = int(
     os.environ.get(
         "DLUGA_ROBOTA_TIMEOUT",
         "1800"
+    )
+)
+
+
+# ============================================================
+# CZAS MIERZONY PRACA, NIE ZEGAREM (v293)
+# ============================================================
+#
+# Kazdy staly limit jest zly w obie strony naraz. Za krotki —
+# zabija kompilacje, ktora potrzebowala jeszcze dwoch minut. Za
+# dlugi — kaze czekac pol godziny na petle nieskonczona, ktora nie
+# skonczy sie NIGDY.
+#
+# Zegar nie odpowiada na wlasciwe pytanie. Wlasciwe pytanie brzmi:
+# czy ten program COS ROBI. A na to da sie odpowiedziec, bo mamy
+# jego wyjscie w pliku i jego procesy w /proc:
+#
+#   1. rosnie plik z wyjsciem  -> pracuje i mowi o tym,
+#   2. rosnie czas CPU procesu -> pracuje w milczeniu (kompilacja,
+#      liczenie, pakowanie),
+#   3. ani jedno, ani drugie   -> STOI. Czeka na cos, czego nie
+#      dostanie, albo umarl w polowie.
+#
+# Wiec zadeklarowany limit (COMMAND_TIMEOUT / DLUGA_ROBOTA_TIMEOUT)
+# znaczy od teraz co innego niz dotad: nie "tyle wolno ci zyc",
+# tylko "tyle wolno ci NIC NIE ROBIC". Program, ktory pracuje,
+# pracuje dalej. Program, ktory stoi, konczy sie tak samo szybko
+# jak wczesniej.
+#
+# Zostaja dwa hamulce na petle nieskonczona:
+#
+#   SUFIT_CZASU — twarda gorna granica, zeby jeden krok nie zjadl
+#   calego dnia, nawet gdy proces uczciwie miele CPU.
+#
+#   "krecenie sie w kolko" — gdy program sypie wyjsciem, ale w kolko
+#   tym samym. Rosnacy plik nie jest wtedy dowodem postepu, tylko
+#   dowodem petli, i mowimy o tym wprost, zamiast czekac do sufitu.
+SUFIT_CZASU = int(
+    os.environ.get(
+        "SUFIT_CZASU",
+        "7200"
+    )
+)
+
+# Ile ostatnich linii ogladamy, szukajac petli, i ile RÓŻNYCH linii
+# musi w nich byc, zeby uznac to za normalna prace.
+W_KOLKO_LINII = int(
+    os.environ.get(
+        "W_KOLKO_LINII",
+        "300"
+    )
+)
+
+W_KOLKO_ROZNYCH = int(
+    os.environ.get(
+        "W_KOLKO_ROZNYCH",
+        "4"
     )
 )
 
@@ -1806,7 +1864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v292")
+    print("             AEL-MINI AUTONOMOUS AGENT v293")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2272,6 +2330,90 @@ _kod_bartka_teraz = ""
 # Plik zapisany kodem, ktory MAIN przepisal do tresci
 # zadania — patrz termux_write_file i consult_engineer.
 _kod_z_drugiej_reki = ""
+
+# v293: co NAPRAWDE napisali autorzy kodu — Bartek (ENGINEER) i Ania
+# (CODE_FIXER) — z podzialem na kroki, najnowsze na koncu.
+#
+# Dotad pamietalismy tylko _kod_bartka_teraz, czyli wypowiedz Bartka
+# z BIEZACEJ narady. Gdy w danym kroku nikt go nie zawolal, to pole
+# bylo puste i jedynym zrodlem tresci pliku zostawal TASK od MAIN —
+# czyli kod PRZEPISANY z pamieci przez kogos, kto go nie pisal.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09, kroki 15 i 16).
+# MAIN wkleil kod do zadania, Python ustalil sciezke
+# (~/assistant_full.py, potem ~/assistant_vad.py) i... nic. Bartek
+# milczal w tych krokach, wiec blok kodu nie znalazl sie nigdzie,
+# krok konczyl sie na ENGINEER_CODE_MISSING i przepadal. Dwa kroki
+# pod rzad, bez jednego dotkniecia telefonu.
+#
+# Autor pisze kod raz. Nie ma powodu, zeby ten kod znikal tylko
+# dlatego, ze w kolejnej naradzie rozmawiali inni.
+_kod_autorow = []
+
+# Ile ostatnich wypowiedzi autorow trzymamy.
+_PAMIEC_AUTOROW = 8
+
+
+def _zapamietaj_kod_autora(rola, tekst):
+    """
+    Odklada wypowiedz autora kodu, jesli faktycznie jest w niej kod.
+    Nigdy nie rzuca — to notatnik, nie robota.
+    """
+
+    try:
+        tresc = str(tekst or "")
+
+        if "```" not in tresc and "<<<<<<<" not in tresc:
+            return
+
+        _kod_autorow.append({
+            "krok": _biezacy_krok,
+            "rola": str(rola),
+            "tekst": tresc,
+        })
+
+        del _kod_autorow[:-_PAMIEC_AUTOROW]
+
+    except Exception:
+        pass
+
+
+def _kod_autora_dla(sciezka):
+    """
+    Kod TEGO pliku, napisany przez autora — Bartka albo Anie —
+    niekoniecznie w tym kroku. Zwraca (kod, rola, krok) albo None.
+
+    Warunek jest ostry: wypowiedz musi WYMIENIAC nazwe tego pliku.
+    Bez tego wzielibysmy blok z zupelnie innego pliku tylko dlatego,
+    ze byl ostatni.
+    """
+
+    nazwa = Path(str(sciezka or "")).name
+
+    if not nazwa:
+        return None
+
+    for wpis in reversed(_kod_autorow):
+
+        if nazwa not in wpis["tekst"]:
+            continue
+
+        kod = extract_code_block(wpis["tekst"], nazwa)
+
+        if kod and kod.strip():
+            return (kod, wpis["rola"], wpis["krok"])
+
+    return None
+
+
+def _kto_to_napisal(rola):
+    """Imie autora, tak jak zespol go wola."""
+
+    return {
+        "ENGINEER": "Bartek",
+        "CODE_FIXER": "Ania",
+        "CODE_REVIEWER": "Piotr",
+    }.get(str(rola), str(rola))
 
 # Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
 # wkleja w nia kod Bartka — patrz termux_write_file().
@@ -3171,6 +3313,10 @@ def _set_current_goal(goal):
     # dopisujemy tam zdanie, ktorego juz nikt nie odczyta — i wracalo
     # ono do zespolu przy nastepnym celu, bez zadnego kontekstu.
     del _pending_team_warnings[:]
+
+    # v293: kod pisany pod POPRZEDNI cel nie ma czego szukac w
+    # nowym — patrz _kod_autorow.
+    del _kod_autorow[:]
 
     global _powiedziane_o_komendach
     _powiedziane_o_komendach = False
@@ -7714,9 +7860,15 @@ def execute_shell(command, timeout=None):
                 "utf-8", errors="replace"
             )
 
+        # v293: dlaczego przerwalismy — "stoi", "sufit" albo
+        # "w kolko". Samo slowo "Timeout" kazalo zespolowi zgadywac
+        # i zwykle zgadywal zle (log 2026-09-09: caly przeglad kodu
+        # o objawie, ktorego nie bylo).
         return {
             "ok": False,
             "error": "Timeout",
+            "powod": getattr(e, "powod", ""),
+            "co_sie_stalo": getattr(e, "szczegol", ""),
             "command": command,
             "timeout": effective_timeout,
             "duration_s": round(
@@ -10426,8 +10578,17 @@ def termux_write_file(path, content, append=False):
             # v285: sciezka idzie do wyboru bloku — przy kilku
             # plikach w jednej wiadomosci to ona rozstrzyga, ktory
             # blok jest tym plikiem.
+            # v293: kolejnosc jest cala tresc tej zmiany. Najpierw
+            # to, co autor powiedzial TERAZ; potem to, co ten sam
+            # autor powiedzial o TYM pliku wczesniej; a dopiero na
+            # koncu przepisana wersja MAIN-a. MAIN nigdy nie pisze
+            # kodu — jesli kod jest w jego zadaniu, to jest CZYJAS
+            # kopia, i nie ma powodu przedkladac kopii nad oryginal.
+            _z_pamieci = _kod_autora_dla(p)
+
             _kod = (
                 extract_code_block(_kod_bartka_teraz or "", p)
+                or (_z_pamieci[0] if _z_pamieci else None)
                 or extract_code_block(_tresc_zadania_teraz or "", p)
                 # v281: MAIN potrafi przepisac kod do zadania bez
                 # ogrodzenia z backtickow, samym heredokiem — a to
@@ -10457,11 +10618,26 @@ def termux_write_file(path, content, append=False):
                     extract_code_block(_kod_bartka_teraz or "", p)
                 )
 
-                _skad = (
-                    "kod Bartka"
-                    if _wprost_od_bartka
-                    else "kod z treści zadania"
+                # v293: mowimy dokladnie, czyj to kod i z ktorego
+                # kroku — inaczej nikt nie wie, co naprawde lezy na
+                # dysku.
+                _z_pamieci_uzyte = (
+                    not _wprost_od_bartka
+                    and _z_pamieci
+                    and _z_pamieci[0] == _kod
                 )
+
+                if _wprost_od_bartka:
+                    _skad = "kod Bartka"
+
+                elif _z_pamieci_uzyte:
+                    _skad = (
+                        "kod, ktory " + _kto_to_napisal(_z_pamieci[1])
+                        + " napisal w kroku " + str(_z_pamieci[2])
+                    )
+
+                else:
+                    _skad = "kod z treści zadania"
 
                 # v276: kod z tresci zadania NIE jest kodem Bartka —
                 # to wersja, ktora MAIN przepisal z pamieci do
@@ -10470,7 +10646,12 @@ def termux_write_file(path, content, append=False):
                 # nazywamy rzecz po imieniu i wolamy autora, zeby w
                 # nastepnej naradzie zobaczyl, co naprawde wyladowalo
                 # na dysku.
-                if not _wprost_od_bartka:
+                # v293: "z drugiej reki" znaczy TERAZ dokladnie to,
+                # co powinno znaczyc: kod, ktorego nie napisal jego
+                # autor. Kod autora z wczesniejszego kroku jest
+                # oryginalem, nie kopia — nie ma po co wolac Bartka,
+                # zeby ogladal wlasna prace.
+                if not _wprost_od_bartka and not _z_pamieci_uzyte:
                     globals()["_kod_z_drugiej_reki"] = str(p)
 
                 log(
@@ -11856,6 +12037,145 @@ def _ostatnia_tresciwa_linia(sciezka, ile=160):
     return ""
 
 
+def _ubij_grupe(proces, pgid):
+    """
+    Konczy program RAZEM z tym, co odpalil.
+
+    proces.kill() ubija sama powloke. Jej dzieci — kompilator,
+    ffmpeg, nagrywarka — zostaja i dalej miela telefon, choc nikt
+    juz na nie nie czeka. Skoro przerywamy, to przerywamy naprawde.
+    Uzywane WYLACZNIE przy przerwaniu: program, ktory skonczyl sie
+    sam, zostawia swoje tlo w spokoju (o to chodzi np. przy
+    "python asystent.py &").
+    """
+
+    if pgid:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except Exception:
+            pass
+
+    try:
+        proces.kill()
+    except Exception:
+        pass
+
+    try:
+        proces.wait(timeout=10)
+    except Exception:
+        pass
+
+
+def _czas_cpu_grupy(pgid):
+    """
+    Ile sekund CPU spalila CALA grupa procesow — czyli program i
+    wszystko, co odpalil. Zwraca 0.0, gdy nie da sie tego odczytac
+    (inny system, brak /proc, proces juz zniknal).
+
+    Czytamy grupe, a nie sam proces, bo prawdziwa robote prawie
+    zawsze wykonuje wnuk: powloka odpala `gradle`, `ffmpeg` albo
+    `python`, a sama tylko czeka. Sam pid powiedzialby wiec "zero
+    CPU" o kompilacji, ktora wlasnie grzeje telefon.
+    """
+
+    if not pgid:
+        return 0.0
+
+    try:
+        tiki = float(os.sysconf("SC_CLK_TCK")) or 100.0
+    except Exception:
+        tiki = 100.0
+
+    razem = 0
+
+    try:
+        for wpis in os.listdir("/proc"):
+
+            if not wpis.isdigit():
+                continue
+
+            try:
+                with open("/proc/" + wpis + "/stat", "rb") as f:
+                    dane = f.read().decode("utf-8", errors="replace")
+            except Exception:
+                continue
+
+            # Nazwa procesu jest w nawiasach i moze zawierac spacje —
+            # liczymy pola dopiero za ostatnim ")".
+            ciecie = dane.rfind(")")
+
+            if ciecie < 0:
+                continue
+
+            pola = dane[ciecie + 2:].split()
+
+            if len(pola) < 15:
+                continue
+
+            try:
+                # stat: 3. pole po nazwie to pgrp, 12. i 13. to
+                # utime i stime (liczac od zera w tej liscie).
+                if int(pola[2]) != int(pgid):
+                    continue
+
+                razem += int(pola[11]) + int(pola[12])
+
+            except Exception:
+                continue
+
+    except Exception:
+        return 0.0
+
+    return razem / tiki
+
+
+def _kreci_sie_w_kolko(sciezka):
+    """
+    Czy program sypie wyjsciem, ale w kolko tym samym.
+
+    Rosnacy plik zwykle znaczy "pracuje". Ale petla nieskonczona tez
+    potrafi pisac — i wtedy rosnacy plik jest dowodem na cos wprost
+    przeciwnego. Rozroznia je jedna rzecz: petla powtarza garstke
+    tych samych linii, a prawdziwa robota mowi za kazdym razem cos
+    innego (inny plik, inny procent, inny modul).
+
+    Zwraca powtarzajaca sie linie albo "".
+    """
+
+    try:
+        rozmiar = os.path.getsize(sciezka)
+    except Exception:
+        return ""
+
+    # Zanim uznamy cokolwiek za petle, musi tego byc naprawde duzo.
+    if rozmiar < 20000:
+        return ""
+
+    try:
+        with open(sciezka, "rb") as f:
+            f.seek(max(0, rozmiar - 200000))
+            ogon = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+    linie = [
+        l.strip()
+        for l in ogon.split("\n")[1:]
+        if l.strip()
+    ][-W_KOLKO_LINII:]
+
+    if len(linie) < W_KOLKO_LINII:
+        return ""
+
+    rozne = set(linie)
+
+    if len(rozne) > W_KOLKO_ROZNYCH:
+        return ""
+
+    # Najczestsza z nich — to ja zespol zobaczy.
+    return max(rozne, key=linie.count)
+
+
 def _przeczytaj_po_cichu(sciezka):
     """Tresc pliku albo pusty napis — nigdy wyjatek."""
 
@@ -11939,20 +12259,99 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             stdout=wy,
             stderr=bl,
             cwd=str(HOME),
-            stdin=subprocess.DEVNULL
+            stdin=subprocess.DEVNULL,
+            # v293: wlasna grupa procesow. Dwa powody, oba realne:
+            # umiemy dzieki temu policzyc CPU CALEJ roboty (wnuki
+            # tez), a przy przerywaniu ubijamy grupe, zamiast
+            # zostawiac na telefonie sieroty, ktore dalej miela.
+            start_new_session=True
         )
 
+        try:
+            pgid = os.getpgid(proces.pid)
+        except Exception:
+            pgid = None
+
         nastepny_podglad = time.time() + PODGLAD_CO_SEKUND
+
+        # Stan "czy on cokolwiek robi" — patrz komentarz przy
+        # SUFIT_CZASU.
+        ostatni_ruch = time.time()
+        ostatni_rozmiar = 0
+        ostatni_cpu = 0.0
+        nastepne_sprawdzenie_petli = time.time() + 1.0
+        sufit = started.timestamp() + max(limit, SUFIT_CZASU)
+        powod = ""
+        szczegol = ""
 
         while True:
 
             if proces.poll() is not None:
                 break
 
-            if (time.time() - started.timestamp()) > limit:
+            teraz = time.time()
 
-                proces.kill()
-                proces.wait()
+            # --- czy cos sie ruszylo? ---
+
+            try:
+                rozmiar = (
+                    os.path.getsize(wy.name) + os.path.getsize(bl.name)
+                )
+            except Exception:
+                rozmiar = ostatni_rozmiar
+
+            if rozmiar > ostatni_rozmiar:
+                ostatni_rozmiar = rozmiar
+                ostatni_ruch = teraz
+
+            elif (teraz - ostatni_ruch) > krok:
+
+                # Milczy — ale moze po prostu liczy. CPU sprawdzamy
+                # dopiero tutaj, zeby nie chodzic po /proc co
+                # sekunde bez potrzeby.
+                cpu = _czas_cpu_grupy(pgid)
+
+                if cpu > ostatni_cpu + 0.1:
+                    ostatni_cpu = cpu
+                    ostatni_ruch = teraz
+
+            # --- kiedy przerywamy ---
+
+            if (teraz - ostatni_ruch) > limit:
+                powod = "stoi"
+                szczegol = (
+                    "przez " + str(int(teraz - ostatni_ruch))
+                    + " s nic nie wypisał i nie zużył procesora"
+                )
+
+            elif teraz > sufit:
+                powod = "sufit"
+                szczegol = (
+                    "pracował bez przerwy "
+                    + str(int((teraz - started.timestamp()) // 60))
+                    + " min i doszedł do naszej górnej granicy"
+                )
+
+            elif teraz >= nastepne_sprawdzenie_petli:
+
+                # Petla nieskonczona, ktora GADA. Rosnacy plik nie
+                # jest wtedy dowodem postepu. Sprawdzamy raz na
+                # sekunde, nie co obrot petli — czytanie ogona pliku
+                # 20 razy na sekunde nie ma sensu.
+                nastepne_sprawdzenie_petli = teraz + 1.0
+
+                w_kolko = _kreci_sie_w_kolko(wy.name)
+
+                if w_kolko:
+                    powod = "w kolko"
+                    szczegol = (
+                        "w kółko wypisuje to samo: "
+                        + short(w_kolko, 120)
+                    )
+
+            if powod:
+
+                _ubij_grupe(proces, pgid)
 
                 # v292: to, co program zdazyl wypisac ZANIM go
                 # ubilismy, jest zwykle jedyna wskazowka, na czym
@@ -11964,16 +12363,29 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 wy.flush()
                 bl.flush()
 
-                raise subprocess.TimeoutExpired(
+                log(
+                    "TERMUX",
+                    "Przerywam po "
+                    + str(round(teraz - started.timestamp(), 1))
+                    + " s: " + szczegol + "."
+                )
+
+                blad = subprocess.TimeoutExpired(
                     command,
                     limit,
                     output=_przeczytaj_po_cichu(wy.name),
                     stderr=_przeczytaj_po_cichu(bl.name)
                 )
 
-            if gadaj and time.time() >= nastepny_podglad:
+                # v293: sam "Timeout" nie mowi nic. To mowi.
+                blad.powod = powod
+                blad.szczegol = szczegol
 
-                nastepny_podglad = time.time() + PODGLAD_CO_SEKUND
+                raise blad
+
+            if gadaj and teraz >= nastepny_podglad:
+
+                nastepny_podglad = teraz + PODGLAD_CO_SEKUND
 
                 minut = int(
                     (datetime.now() - started).total_seconds() // 60
@@ -12149,17 +12561,24 @@ def termux_run(command):
         # zly sposob uruchomienia. Przenosimy ja w tlo i mowimy
         # wprost, gdzie sprawdzic postep — zamiast oddawac "Timeout"
         # i pozwalac, zeby zespol zaczynal od zera.
+        # v293: w tlo przenosimy TYLKO to, co naprawde pracowalo az
+        # do gornej granicy. Program, ktory stal w miejscu albo
+        # krecil sie w kolko, w tle bedzie robil dokladnie to samo —
+        # tyle ze juz nikt tego nie zobaczy. Takie uruchomienie od
+        # nowa to byla czysta strata.
         if (
             isinstance(result, dict)
             and result.get("error") == "Timeout"
+            and result.get("powod") == "sufit"
             and _to_dluga_robota(command_str)
         ):
 
             log(
                 "TERMUX",
-                "Czekalem " + str(DLUGA_ROBOTA_TIMEOUT // 60)
-                + " min i nadal sie nie skonczylo — przenosze w "
-                "tlo, zeby nie blokowac agenta."
+                "Pracowalo bez przerwy "
+                + str(int(float(result.get("duration_s") or 0) // 60))
+                + " min i nadal trwa — przenosze w tlo, zeby nie "
+                "blokowac agenta."
             )
 
             bg2 = termux_run_background(command_str)
@@ -12318,17 +12737,40 @@ def termux_run(command):
             # Zamiast tego zwracamy WSZYSTKO, co przechwyciliśmy,
             # plus jednoznaczną, praktyczną podpowiedź.
 
-            result["suggested_next_step"] = (
-                "Komenda przekroczyła "
-                + str(result.get("timeout"))
-                + "s i została zatrzymana — ale zdążyła coś zrobić, "
-                "więc faktyczny stan widać przez termux_ls albo "
-                "termux_read_file na spodziewany plik wynikowy. "
-                "Ta sama komenda przez termux_run skończy się tak "
-                "samo; jeśli to naprawdę musi trwać dłużej, jest od "
-                "tego termux_run_background i podglądanie przez "
-                "termux_check_process."
-            )
+            # v293: powtorzenie tej samej komendy ma sens tylko w
+            # jednym z tych trzech przypadkow, i za kazdym razem
+            # innym. Mowimy w ktorym.
+            _powod = str(result.get("powod") or "")
+            _co = str(result.get("co_sie_stalo") or "")
+
+            if _powod == "stoi":
+                result["suggested_next_step"] = (
+                    "Komenda STANĘŁA — " + _co + " — więc ją "
+                    "zatrzymałem. Puszczona jeszcze raz stanie w tym "
+                    "samym miejscu: czeka na coś, czego tu nie "
+                    "dostanie (wejście z klawiatury, potwierdzenie, "
+                    "sieć). Stan po niej widać przez termux_ls albo "
+                    "termux_read_file."
+                )
+
+            elif _powod == "w kolko":
+                result["suggested_next_step"] = (
+                    "Komenda kręciła się w kółko — " + _co + " — i "
+                    "sama by się nie skończyła. Powtarzanie jej nic "
+                    "nie da; to jest do poprawienia w kodzie."
+                )
+
+            else:
+                result["suggested_next_step"] = (
+                    "Komenda pracowała cały czas i doszła do naszej "
+                    "górnej granicy (" + str(result.get("duration_s"))
+                    + " s) — nie stanęła, po prostu tyle jej trzeba. "
+                    "Zdążyła coś zrobić, więc faktyczny stan widać "
+                    "przez termux_ls albo termux_read_file. Jeśli to "
+                    "normalne dla tej roboty, jest od tego "
+                    "termux_run_background i podglądanie przez "
+                    "termux_check_process."
+                )
 
         return result
 
@@ -17188,14 +17630,38 @@ def _run_script_directly(path, task_text):
 
     if blad == "Timeout":
 
-        _ile = shell_result.get("timeout")
+        # v293: mowimy, CO go zatrzymalo, bo za kazdym razem znaczy
+        # to co innego i za kazdym razem zespol ma zrobic co innego.
+        _powod = str(shell_result.get("powod") or "")
+        _co = str(shell_result.get("co_sie_stalo") or "")
 
-        naglowek = (
-            "Nie zdążył się skończyć — po "
-            + str(_ile) + " s przerwałem go i tyle poniżej zdążył "
-            "wypisać. To nie jest błąd w kodzie: program po prostu "
-            "dalej pracował, kiedy skończył się czas."
-        )
+        if _powod == "stoi":
+            naglowek = (
+                "Przerwałem go, bo STANĄŁ — " + _co + ". To nie jest "
+                "błąd składni: program żyje, tylko na coś czeka i "
+                "nigdy się tego nie doczeka."
+            )
+
+        elif _powod == "w kolko":
+            naglowek = (
+                "Przerwałem go, bo kręci się w kółko — " + _co
+                + ". Pisze bez końca, ale wciąż to samo, więc to "
+                "pętla, nie postęp."
+            )
+
+        elif _powod == "sufit":
+            naglowek = (
+                "Przerwałem go, choć cały czas pracował — " + _co
+                + ". Jeżeli to normalne dla tej roboty, trzeba ją "
+                "podzielić na mniejsze kawałki albo puścić w tle."
+            )
+
+        else:
+            naglowek = (
+                "Nie zdążył się skończyć — po "
+                + str(shell_result.get("timeout")) + " s przerwałem "
+                "go i tyle poniżej zdążył wypisać."
+            )
 
     elif blad:
         naglowek = "Nie dało się go uruchomić: " + blad
@@ -18573,6 +19039,13 @@ def review_and_fix_project_file(path, run_result):
         "(kopiuj fragment SZUKAJ dokładnie stąd):\n\n"
         + tresc
         + "\n\nNapisz minimalną poprawkę."
+    )
+
+    # v293: poprawka Ani to tez kod autora — z nazwa pliku w tresci,
+    # wiec _kod_autora_dla() ja znajdzie.
+    _zapamietaj_kod_autora(
+        "CODE_FIXER",
+        str(target) + "\n" + str(poprawka or "")
     )
 
     if "BRAK BEZPIECZNEGO PATCHA" in str(poprawka or "").upper():
@@ -22472,6 +22945,12 @@ def consult_team(
     _kod_bartka_teraz = (
         results.get("ENGINEER", "") if consult_engineer else ""
     )
+
+    # v293: i to samo do pamieci dluzszej niz jeden krok — patrz
+    # _kod_autorow. Kod Bartka nie ma znikac tylko dlatego, ze w
+    # nastepnej naradzie rozmawiali inni.
+    if consult_engineer:
+        _zapamietaj_kod_autora("ENGINEER", results.get("ENGINEER", ""))
 
     if consult_engineer:
         # Bartek wlasnie widzial stan pliku — powod do wolania go
@@ -27629,9 +28108,40 @@ Zwróć tylko JSON.
                     None
                     if _patch_wynik.get("applied")
                     else extract_code_block(
-                        team.get("engineer_full", "")
+                        team.get("engineer_full", ""),
+                        write_target
                     )
                 )
+
+                # v293: Bartek milczal w tym kroku (nikt go nie
+                # zawolal), ale kod TEGO pliku napisal wczesniej —
+                # i nadal go mamy. Patrz _kod_autorow.
+                #
+                # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09,
+                # kroki 15 i 16). Python ustalil sciezke, powiedzial
+                # "Zapisuje go sam do ~/assistant_full.py" i na tym
+                # krok sie konczyl — bo blok kodu byl tylko w
+                # przepisanej wersji MAIN-a, a stad go nie bralismy.
+                # Dwa kroki pod rzad, zero dotkniec telefonu.
+                _z_pamieci = (
+                    None
+                    if (engineer_code or _patch_wynik.get("applied"))
+                    else _kod_autora_dla(write_target)
+                )
+
+                if _z_pamieci:
+
+                    engineer_code = _z_pamieci[0]
+
+                    log(
+                        "MAIN",
+                        _kto_to_napisal(_z_pamieci[1]) + " nie "
+                        "zabierał głosu w tym kroku, ale kod "
+                        + Path(str(write_target)).name + " napisał "
+                        "w kroku " + str(_z_pamieci[2])
+                        + " — kładę na dysk jego wersję, nie "
+                        "przepisaną."
+                    )
 
             if write_target:
 
