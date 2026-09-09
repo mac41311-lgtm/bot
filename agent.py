@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v285
+AEL-MINI AUTONOMOUS AGENT v286
 
 ARCHITEKTURA:
 
@@ -1105,7 +1105,14 @@ def zapisz_zdarzenie(typ, **pola):
 # domysl, tylko cytat.
 _NIE_DOSTAL_RE = re.compile(
     r"urwa[łl]e[śs]|urywa\s+si[eę]|uci[eę]t|"
-    r"nie\s+widz[eę]\b|nie\s+mam\s+(?:tego|tych|dost[eę]pu|kodu)|"
+    # v286: samo "nie widze" to za malo — Marek napisal "nie widze
+    # blokerow", czyli POCHWALE, a czujnik zglosil to jako brak.
+    # Musi paść, CZEGO nie widzi.
+    r"nie\s+widz[eę]\s+(?:tego|tych|kodu|b[łl][eę]du|tre[śs]ci|"
+    r"wiadomo[śs]ci|fragmentu|danych|wynik|nic\b|"
+    r"[żz]adnego|[żz]adnych|w\s+[Tt]wojej)|"
+    r"nie\s+mam\s+(?:tego|tych|dost[eę]pu|kodu)|"
+    r"nie\s+do[łl][aą]czy[łl]e[śs]|"
     r"nie\s+znalaz[łl]em\s+w\s+(?:twojej|Twojej)\s+wiadomo|"
     r"podaj\s+mi\s+je|brakuje\s+(?:tresci|treści|fragmentu)",
     re.IGNORECASE
@@ -1230,9 +1237,25 @@ def znajdz_zgloszone_braki(sciezka_przebiegu=None):
     krok = 0
     kto = ""
 
+    # v286: przebieg zawiera TAKZE nasze wlasne podsumowania (patrz
+    # pokaz_podsumowanie_biegu), a w nich cytaty z wczesniejszych
+    # znalezisk. Bez tego czujnik znajdowal sam siebie i ten sam
+    # cytat wracal przy kazdym kolejnym podsumowaniu.
+    w_podsumowaniu = False
+
     try:
         with open(sciezka_przebiegu, encoding="utf-8") as f:
             for linia in f:
+
+                if "JAK IDZIE KOMUNIKACJA" in linia:
+                    w_podsumowaniu = True
+                    continue
+
+                if linia.startswith("--- "):
+                    w_podsumowaniu = False
+
+                if w_podsumowaniu:
+                    continue
 
                 if linia.startswith("--- KROK "):
                     try:
@@ -1766,7 +1789,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v285")
+    print("             AEL-MINI AUTONOMOUS AGENT v286")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -18015,6 +18038,45 @@ def _opis_awarii(run_result):
 
     if not czesci:
         czesci.append(short(str(run_result.get("report") or ""), 1500))
+
+    czesci = [c for c in czesci if str(c).strip()]
+
+    # v286: ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09, krok 8).
+    # Piotr dostal "A tak to sie skonczylo przy uruchomieniu:" i pod
+    # tym NIC — bo wynik nie mial ani returncode, ani stdout, ani
+    # stderr, ani report, a "\n".join([""]) to pusty string.
+    # Napisal wprost:
+    #
+    #   "nie dolaczyles komunikatu bledu — napisales 'A tak to sie
+    #    skonczylo przy uruchomieniu:' i... nic dalej. Nie moge
+    #    jednoznacznie wskazac przyczyny, bo nie widze bledu."
+    #
+    # Mial racje i przeglad poszedl na marne. Python MIAL ten wynik
+    # w reku — tyle ze w polach, ktorych ta funkcja nie znala.
+    if not czesci:
+
+        try:
+            surowe = json.dumps(
+                run_result, ensure_ascii=False, default=str
+            )
+        except Exception:
+            surowe = str(run_result)
+
+        if surowe.strip() not in ("", "{}", "null", "None"):
+            czesci.append(
+                "Znanych pol (kod wyjscia, stdout, stderr, raport) "
+                "tu nie ma, wiec oddaje caly wynik tak, jak go mam:\n"
+                + short(surowe, 2000)
+            )
+
+    if not czesci:
+        # Nawet to jest fakt, ktory Piotr musi znac: nie ukrywamy
+        # bledu, tylko go nie ma. Inaczej szuka po omacku.
+        return (
+            "Uruchomienie nie zostawilo po sobie ZADNEGO sladu — ani "
+            "kodu wyjscia, ani wyjscia, ani bledu. To tez jest trop: "
+            "moze proces w ogole nie wystartowal."
+        )
 
     return "\n".join(czesci)
 
