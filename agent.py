@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v283
+AEL-MINI AUTONOMOUS AGENT v284
 
 ARCHITEKTURA:
 
@@ -1766,7 +1766,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v283")
+    print("             AEL-MINI AUTONOMOUS AGENT v284")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21946,6 +21946,37 @@ tym kroku dopytać jedną osobę:
 
     # v191: bez "CEL AGENTA" — MAIN dostał cel raz (patrz
     # _goal_briefing_for) i ma go w historii swojej rozmowy.
+    # ============================================================
+    # MAIN TEZ NIE POWTARZA SIE W KOLKO (v284)
+    # ============================================================
+    #
+    # Do tej pory _only_if_new bylo w calym pliku uzyte dla MAIN-a
+    # DOKLADNIE RAZ (topic). Cala reszta szla co krok, takze wtedy,
+    # gdy nic sie nie zmienilo — a zrzut kart Chrome i hierarchia
+    # ekranu to po 2000 znakow kazdy. W realnym biegu (2026-09-08)
+    # prompt MAIN-a mial 12444 znaki, najwiecej ze wszystkich.
+    #
+    # Sesja MAIN-a jest ciagla, dokladnie jak sesje rol, wiec
+    # niezmieniony ekran ma on juz w swojej historii rozmowy.
+    # Ta sama zasada, ten sam mechanizm — bez wyjatku dla MAIN-a.
+    _chrome_dla_maina = _only_if_new("MAIN", "chrome", chrome_block)
+    _android_dla_maina = _only_if_new("MAIN", "android", android_block)
+
+    # Formaty odpowiedzi MAIN ma w swoim prompcie systemowym —
+    # przypominanie ich w KAZDEJ wiadomosci bylo jedynym stalym
+    # zdaniem, jakie mu co krok doklejalismy. Idzie raz; gdy
+    # kiedykolwiek odpowie nie-JSON-em, sciezka naprawcza nizej
+    # ("Poprzednia odpowiedz nie byla poprawnym JSON") niesie
+    # format ze soba. Kod reaguje na to, co sie stalo, zamiast
+    # przypominac na zapas.
+    _format_block = _only_if_new(
+        "MAIN",
+        "format",
+        "\nZdecyduj i odpowiedz samym JSON-em — formaty "
+        "(TASK/DONE/FAILED/NEED_USER_LOGIN/ASK) masz w swoim "
+        "prompcie systemowym.\n"
+    )
+
     prompt = f"""{_main_topic_block}
 Co się właśnie stało:
 {_facts}
@@ -21953,9 +21984,8 @@ Co się właśnie stało:
 {status_interpretation_block}
 
 {critic_streak_block}{repair_rule_block}{team_block}
-{chrome_block}{android_block}
-{ask_block}
-Zdecyduj i odpowiedz samym JSON-em — formaty (TASK/DONE/FAILED/NEED_USER_LOGIN/ASK) masz w swoim prompcie systemowym.
+{_chrome_dla_maina}{_android_dla_maina}
+{ask_block}{_format_block}
 {ask_contract_block}"""
 
     return deepseek(
@@ -26095,6 +26125,10 @@ def run_agent(goal):
                 "MAIN",
                 "Niepoprawny JSON. Naprawiam."
             )
+
+            # v284: format wraca do obiegu — skoro raz sie posypalo,
+            # nastepna zwykla wiadomosc znowu go przypomni.
+            _role_seen_blocks.pop(("MAIN", "format"), None)
 
             repair = deepseek(
                 "MAIN",
