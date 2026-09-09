@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+
+# katalogi tymczasowe testow — nie naleza do programu
+kluczehome/
+naprawhome/
+przebieghome/
+sondahome/
+kopiahome/
