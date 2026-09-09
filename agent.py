@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v288
+AEL-MINI AUTONOMOUS AGENT v289
 
 ARCHITEKTURA:
 
@@ -1804,7 +1804,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v288")
+    print("             AEL-MINI AUTONOMOUS AGENT v289")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3682,10 +3682,48 @@ _deepseek_odstep = {}
 # rozmowa". Uzytkownik widzi je takze na samej stronie DeepSeeka,
 # gdy pyta tam recznie w tym samym czasie.
 _PRZECIAZENIE_RE = re.compile(
-    r"too\s+frequent|rate\s*limit|too\s+many\s+requests|\b429\b|"
-    r"invalid\s+message\s+id|biz_code\"?\s*:\s*26",
+    r"too\s+frequent|rate\s*limit|too\s+many\s+requests|\b429\b",
     re.IGNORECASE
 )
+
+# ============================================================
+# ZERWANA ROZMOWA TO NIE PRZECIAZENIE (v289)
+# ============================================================
+#
+# W v268 wrzucilem "invalid message id" do jednego worka z
+# "Messages too frequent". To byl blad i widac go w logu z
+# 2026-09-09 19:05.
+#
+# Uzytkownik odmowil resetu sesji ("n"), wiec role wznowily sie z
+# zapisanego stanu — a serwer tego stanu juz nie zna. Kazda rola
+# dostawala wtedy:
+#
+#   biz_code:26, "invalid message id"
+#
+# i szla sciezka przeciazenia: zwolnij i sprobuj JESZCZE RAZ w tej
+# samej, martwej rozmowie. Odstep podwajal sie po kazdej probie
+# (12 s, 24 s...), dla kazdej z dziesieciu rol osobno. Bieg nie
+# ruszal z miejsca i uzytkownik musial przerwac Ctrl+C:
+#
+#   "sesje sie laduja na stronie, nie ma stopu".
+#
+# To sa dwie rozne awarie:
+#   "za szybko"          -> rozmowa jest dobra, jest ich za duzo.
+#                           Czekamy dluzej, ta sama rozmowa (v268).
+#   "invalid message id" -> rozmowa jest ZERWANA. Czekanie nie
+#                           naprawi jej nigdy — trzeba zaczac nowa,
+#                           i to TERAZ, nie przy nastepnym starcie.
+_ZERWANA_ROZMOWA_RE = re.compile(
+    r"invalid\s+message\s+id|biz_code\"?\s*:\s*26|"
+    r"session\s+not\s+found|chat\s+session.*not\s+exist",
+    re.IGNORECASE
+)
+
+
+def _rozmowa_zerwana(blad):
+    """Czy serwer mowi, ze tej rozmowy juz nie ma."""
+
+    return bool(_ZERWANA_ROZMOWA_RE.search(str(blad or "")))
 
 # Ile najwyzej gotowi jestesmy czekac miedzy wiadomosciami.
 _DEEPSEEK_MAX_ODSTEP = 45.0
@@ -4745,9 +4783,8 @@ def deepseek(name, message):
                         "DEEPSEEK",
                         f"Wznowiona sesja {name} nie zadziałała na "
                         "pierwszej prawdziwej wiadomości — czyszczę "
-                        "zapisany stan, restart zacznie od zera "
-                        "zamiast próbować tego samego wznowienia "
-                        "ponownie."
+                        "zapisany stan i zaczynam nową rozmowę od "
+                        "razu, w tym biegu."
                     )
 
                 # v268: gdy serwer mowi "za szybko", nie ma zepsutej
@@ -4761,7 +4798,13 @@ def deepseek(name, message):
                 # stronie przeciazylismy serwer... lepiej jak powraca
                 # do tej samej sesji jak bylo... trzeba jakos mniej
                 # spamowac".
-                if _wyglada_na_przeciazenie(str(e)):
+                # v289: zerwana rozmowa NIE jest przeciazeniem —
+                # patrz _rozmowa_zerwana(). Czekanie jej nie
+                # naprawi, wiec idziemy prosto do zalozenia nowej.
+                if (
+                    _wyglada_na_przeciazenie(str(e))
+                    and not _rozmowa_zerwana(str(e))
+                ):
 
                     _zwolnij_tempo(name)
 
