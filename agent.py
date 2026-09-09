@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v286
+AEL-MINI AUTONOMOUS AGENT v287
 
 ARCHITEKTURA:
 
@@ -1057,6 +1057,20 @@ def dopisz_do_przebiegu(linia):
         pass
 
 
+def _poczatek_bloku(block, ile=90):
+    """
+    Kilkadziesiat pierwszych znakow bloku, w jednej linii.
+
+    Rozmiar mowi ILE poszlo, ale nie CO. Bez tego nie da sie
+    odpowiedziec na pytanie "czy sondy po plikach powtarzaja te same
+    listingi" — a to wlasnie takie pytania decyduja, co warto ciac.
+    Kilkadziesiat znakow starcza, zeby rozpoznac powtorke, i nie
+    rozdyma pliku.
+    """
+
+    return " ".join(str(block or "").split())[:ile]
+
+
 def zapisz_zdarzenie(typ, **pola):
     """
     Jedno zdarzenie w formacie, ktory da sie policzyc — po jednym
@@ -1789,7 +1803,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v286")
+    print("             AEL-MINI AUTONOMOUS AGENT v287")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2657,6 +2671,36 @@ def _bez_maszynowni_dla(rola):
     return str(rola) == "RESEARCHER"
 
 
+# "[NIEAKTUALNE — X nie byl pytany w tym kroku, ponizej jego
+# ostatnia znana odpowiedz]" — dopisek Pythona, nie tresc autora.
+_ZNACZNIK_NIEAKTUALNE_RE = re.compile(
+    r"\[NIEAKTUALNE[^\]]*\]\s*",
+    re.IGNORECASE
+)
+
+
+def _bez_znacznika_nieaktualne(block):
+    """
+    Sama tresc, bez naszego dopisku o tym, ze jest stara.
+
+    ZAOBSERWOWANY REALNY BUG (log 2026-09-09, krok 6). Tomek nie byl
+    w tym kroku pytany, wiec results["PLANNER"] to byl znacznik plus
+    jego POPRZEDNI plan z pamieci. Znacznik zmienia tekst, wiec
+    _only_if_new widzialo "nowy blok" i wysylalo ten sam plan
+    jeszcze raz — 4230 znakow do Bartka i drugie tyle do Marka, obu
+    juz to czytalo krok wczesniej.
+
+    Log w tej samej chwili mowil wprost: "MAIN ma jego ostatni
+    plan". Wiedzielismy, ze to stare, i wyslalismy to jako nowe.
+
+    Porownujemy wiec sama tresc. Gdy autor naprawde powiedzial cos
+    nowego, blok idzie normalnie — razem ze znacznikiem, zeby
+    odbiorca wiedzial, ze to nie jest swieza wypowiedz.
+    """
+
+    return _ZNACZNIK_NIEAKTUALNE_RE.sub("", str(block or "")).strip()
+
+
 def _only_if_new(role, key, block):
     """
     Zwraca blok tylko wtedy, gdy dla TEJ roli rozni sie od tego, co
@@ -2681,24 +2725,30 @@ def _only_if_new(role, key, block):
 
     slot = (str(role), str(key))
 
-    if _role_seen_blocks.get(slot) == block:
+    # v287: porownujemy TRESC, nie opakowanie — patrz
+    # _bez_znacznika_nieaktualne().
+    odcisk = _bez_znacznika_nieaktualne(block)
+
+    if _role_seen_blocks.get(slot) == odcisk:
         # v278: powtorke tez notujemy — to liczba, ktora mowi, ile
         # bramka _only_if_new realnie oszczedza.
         zapisz_zdarzenie(
             "blok_powtorka",
             rola=str(role),
             co=str(key),
-            znaki=len(block)
+            znaki=len(block),
+            poczatek=_poczatek_bloku(block)
         )
         return ""
 
-    _role_seen_blocks[slot] = block
+    _role_seen_blocks[slot] = odcisk
 
     zapisz_zdarzenie(
         "blok",
         rola=str(role),
         co=str(key),
-        znaki=len(block)
+        znaki=len(block),
+        poczatek=_poczatek_bloku(block)
     )
 
     return block
