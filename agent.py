@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v282
+AEL-MINI AUTONOMOUS AGENT v283
 
 ARCHITEKTURA:
 
@@ -501,6 +501,30 @@ COMMAND_TIMEOUT = int(
     os.environ.get(
         "COMMAND_TIMEOUT",
         "120"
+    )
+)
+
+# ============================================================
+# NA DLUGA ROBOTE SIE CZEKA (v283)
+# ============================================================
+#
+# 120 sekund to nasza wlasna stala, nie ograniczenie systemu —
+# subprocess przyjmuje dowolny timeout. Kompilacji ani pobierania
+# nie ma po co przerywac: przerwana kompilacja to zmarnowany czas,
+# a przerwane pobieranie to ogryzek na dysku (patrz v282: 1,5 GB
+# plikow .downloadInProgress).
+#
+# Wiec czekamy i oddajemy PRAWDZIWY wynik — udalo sie albo nie.
+# Zespol dostaje to, co naprawde wyszlo, zamiast slowa "Timeout",
+# ktore nie mowi nic poza tym, ze my sie znudzilismy.
+#
+# Sufit jest po to, zeby zawieszony proces nie zablokowal agenta na
+# zawsze — a nie zeby ograniczac normalna robote. Dopiero po nim
+# komenda idzie w tlo (patrz termux_run).
+DLUGA_ROBOTA_TIMEOUT = int(
+    os.environ.get(
+        "DLUGA_ROBOTA_TIMEOUT",
+        "1800"
     )
 )
 
@@ -1742,7 +1766,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v282")
+    print("             AEL-MINI AUTONOMOUS AGENT v283")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7420,9 +7444,22 @@ def execute_shell(command, timeout=None):
                 "blocked_by_safety_gate": True
             }
 
-    effective_timeout = int(
-        timeout or COMMAND_TIMEOUT
-    )
+    # v283: gdy wywolujacy nie narzucil limitu, dobieramy go do
+    # tego, co ta komenda ma zrobic. Sondy po plikach wolaja z
+    # timeout=15 i to zostaje bez zmian.
+    if timeout:
+        effective_timeout = int(timeout)
+    elif _to_dluga_robota(command):
+        effective_timeout = DLUGA_ROBOTA_TIMEOUT
+        log(
+            "TERMUX",
+            "To jest robota na dluzej (pobieranie/kompilacja) — "
+            "czekam do skutku, maks. "
+            + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Ekran moze "
+            "chwile stac, to normalne."
+        )
+    else:
+        effective_timeout = COMMAND_TIMEOUT
 
     started = datetime.now()
 
@@ -11726,8 +11763,9 @@ def termux_run(command):
 
             log(
                 "TERMUX",
-                "To zajmie wiecej niz " + str(COMMAND_TIMEOUT)
-                + " s — przenosze w tlo zamiast przerywac."
+                "Czekalem " + str(DLUGA_ROBOTA_TIMEOUT // 60)
+                + " min i nadal sie nie skonczylo — przenosze w "
+                "tlo, zeby nie blokowac agenta."
             )
 
             bg2 = termux_run_background(command_str)
@@ -11737,19 +11775,21 @@ def termux_run(command):
                 bg2["przeniesione_w_tlo"] = True
 
                 bg2["message"] = (
-                    "Ta komenda nie miesci sie w limicie "
-                    + str(COMMAND_TIMEOUT) + " s, wiec nie "
-                    "przerywalem jej — leci dalej w tle. Postep "
-                    "sprawdzisz w log_file (termux_read_file) albo "
-                    "przez termux_check_process. Nie uruchamiaj jej "
-                    "drugi raz: druga kopia zaczelaby od zera."
+                    "Czekalem na to "
+                    + str(DLUGA_ROBOTA_TIMEOUT // 60)
+                    + " min i nadal trwa, wiec nie przerywalem — "
+                    "leci dalej w tle. Postep sprawdzisz w log_file "
+                    "(termux_read_file) albo przez "
+                    "termux_check_process. Nie uruchamiaj jej drugi "
+                    "raz: druga kopia zaczelaby od zera."
                 )
 
                 _pending_team_warnings.append(
                     "Komenda `" + short(command_str, 120)
-                    + "` nie zmieściła się w limicie czasu, więc "
-                    "przeniosłem ją w tło — leci dalej, nie trzeba "
-                    "jej ponawiać."
+                    + "` chodzi już ponad "
+                    + str(DLUGA_ROBOTA_TIMEOUT // 60)
+                    + " min, więc przeniosłem ją w tło — leci dalej, "
+                    "nie trzeba jej ponawiać."
                 )
 
                 _zglos_to_co_przybylo(_przed)
