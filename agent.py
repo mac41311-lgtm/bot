@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v293
+AEL-MINI AUTONOMOUS AGENT v294
 
 ARCHITEKTURA:
 
@@ -1864,7 +1864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v293")
+    print("             AEL-MINI AUTONOMOUS AGENT v294")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12007,11 +12007,30 @@ _DLUGA_ROBOTA_RE = re.compile(
 )
 
 
-# Co ile sekund mowimy, na czym stoi dluga robota.
+# Po ilu sekundach ciszy odzywamy sie PIERWSZY raz i co ile potem.
+#
+# v294: dotad podglad wlaczal sie WYLACZNIE przy robocie rozpoznanej
+# jako dluga (pobieranie, kompilacja) i mowil co 60 sekund. Efekt
+# widac w logu 2026-09-09 22:53: skrypt ruszyl o 23:04:10, uzytkownik
+# przerwal go recznie o 23:11:57, a przez te 7 minut 47 sekund
+# ekran nie pokazal ANI JEDNEJ linii. Nie bylo z czego wywnioskowac,
+# czy cos sie dzieje, czy agent umarl.
+#
+# Wiec: po dziesieciu sekundach kazdej komendy — nie tylko dlugiej —
+# mowimy, ile to trwa i co ten program wlasnie wypisal. Krotkie
+# komendy koncza sie wczesniej niz te dziesiec sekund, wiec dla nich
+# nic sie nie zmienia.
+PODGLAD_OD_SEKUND = int(
+    os.environ.get(
+        "PODGLAD_OD_SEKUND",
+        "10"
+    )
+)
+
 PODGLAD_CO_SEKUND = int(
     os.environ.get(
         "PODGLAD_CO_SEKUND",
-        "60"
+        "15"
     )
 )
 
@@ -12272,7 +12291,10 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         except Exception:
             pgid = None
 
-        nastepny_podglad = time.time() + PODGLAD_CO_SEKUND
+        # v294: pierwsze zdanie po dziesieciu sekundach, nie po
+        # minucie — i dla KAZDEJ komendy, nie tylko dla dlugiej.
+        # Patrz PODGLAD_OD_SEKUND.
+        nastepny_podglad = time.time() + PODGLAD_OD_SEKUND
 
         # Stan "czy on cokolwiek robi" — patrz komentarz przy
         # SUFIT_CZASU.
@@ -12383,24 +12405,35 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 raise blad
 
-            if gadaj and teraz >= nastepny_podglad:
+            if teraz >= nastepny_podglad:
 
                 nastepny_podglad = teraz + PODGLAD_CO_SEKUND
 
-                minut = int(
-                    (datetime.now() - started).total_seconds() // 60
+                _ile = int(teraz - started.timestamp())
+
+                _jak_dlugo = (
+                    str(_ile) + " s"
+                    if _ile < 120
+                    else str(_ile // 60) + " min"
                 )
 
                 na_czym = (
                     _ostatnia_tresciwa_linia(bl.name)
                     or _ostatnia_tresciwa_linia(wy.name)
-                    or "(program nic jeszcze nie wypisał)"
+                    or ""
                 )
 
-                log(
-                    "TERMUX",
-                    "Leci " + str(minut) + " min: " + na_czym
-                )
+                if na_czym:
+                    log("TERMUX", "Leci " + _jak_dlugo + ": " + na_czym)
+
+                else:
+                    # Cisza tez jest informacja — i to wazna, bo
+                    # wlasnie ona konczy sie przerwaniem.
+                    log(
+                        "TERMUX",
+                        "Leci " + _jak_dlugo + ", nic jeszcze nie "
+                        "wypisał (" + short(command, 70) + ")"
+                    )
 
             time.sleep(krok)
 
@@ -12516,7 +12549,23 @@ def termux_run(command):
         # _zglos_to_co_przybylo().
         _przed = _co_lezy_w_home()
 
-        if _looks_long_running(command_str):
+        # v294: to samo dla programu, ktory z zalozenia sie nie
+        # konczy — nawet gdy to Gemini go uruchamia, a nie Python.
+        # Patrz _program_bez_konca(): czekanie na wynik strumienia
+        # to czekanie na cos, co nie nadejdzie.
+        _bez_konca_tu = _program_bez_konca(
+            _tresc_uruchamianego_skryptu(command_str)
+        )
+
+        if _bez_konca_tu:
+            log(
+                "TERMUX",
+                "To jest strumien, nie zadanie do skonczenia ("
+                + _bez_konca_tu + ") — puszczam w tle i zdaje relacje, "
+                "zamiast czekac na wynik, ktorego nie bedzie."
+            )
+
+        if _looks_long_running(command_str) or _bez_konca_tu:
 
             bg = termux_run_background(command_str)
 
@@ -12529,6 +12578,21 @@ def termux_run(command):
                     return skonczone
 
                 bg["status"] = "AUTO_BACKGROUNDED"
+
+                if _bez_konca_tu:
+                    bg["reason"] = (
+                        "Ten program nie ma końca: " + _bez_konca_tu
+                        + ". Puściłem go w tle — i tak ma być, to "
+                        "strumień, nie zadanie do skończenia. Co "
+                        "mówi, widać w log_file (termux_read_file), "
+                        "a czy żyje — przez termux_check_process(pid)."
+                        " Puszczony drugi raz przez termux_run "
+                        "zawiesiłby czekanie na wynik, którego nie "
+                        "będzie."
+                    )
+                    _zglos_to_co_przybylo(_przed)
+                    return bg
+
                 bg["reason"] = (
                     "Komenda rozpoznana jako długotrwała "
                     "(pasuje do wzorca gradle/npm/apt/pip/git/"
@@ -17575,6 +17639,239 @@ def _task_is_simple_run(task_text, success_condition, written_path):
     return written_path
 
 
+# v294: program, ktory Z ZALOZENIA sie nie konczy.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09 22:53, krok 5).
+# Bartek napisal stream_arecord.sh:
+#
+#     arecord -f S16_LE -r 16000 -c 1 -t raw - 2>/dev/null \
+#       | while true; do head -c 1024 | nc -u "$HOST" "$PORT"; done
+#
+# To jest STRUMIEN. `arecord` bez -d nagrywa do konca swiata, a
+# `while true` nie ma warunku wyjscia. Ten program nie ma sie prawa
+# skonczyc — i nie powinien, bo o to wlasnie chodzilo w celu
+# ("mikrofon ma dzialac jak strumien wysylany na polaczenie").
+#
+# A my uruchomilismy go na pierwszym planie i zaczelismy CZEKAC na
+# wynik. Wyniku nie ma i nie bedzie. Agent stal 7 minut 47 sekund,
+# az uzytkownik przerwal go recznie.
+#
+# Zaden pomiar w trakcie tego nie uratuje: program zyje, miele CPU,
+# wiec nie "stoi"; nic nie wypisuje, wiec nie "kreci sie w kolko".
+# Kazdy uczciwy czujnik powie "pracuje" — bo pracuje. Odpowiedz nie
+# lezy w czekaniu, tylko w tym, ZEBY NIE CZEKAC: usluga ma chodzic w
+# tle, a my mamy po kilku sekundach powiedziec, ze wstala i co
+# zdazyla wypisac.
+#
+# Widac to PRZED uruchomieniem, w tresci pliku, ktory sami wlasnie
+# zapisalismy. Petla bez `break` i narzedzia, ktore z definicji nie
+# koncza sie same.
+# Poczatek linii ALBO po potoku/sredniku/&& — bo w prawdziwym
+# skrypcie petla najczesciej wisi wlasnie za potokiem:
+#   arecord ... | while true; do ... done
+_PETLA_BEZ_KONCA_RE = re.compile(
+    r"(?:^|[|;&]\s*|\bdo\s+)\s*"
+    r"(?:while\s+(?:true\b|:|\[\s*1\s*\])"
+    r"|until\s+false\b"
+    r"|for\s*\(\s*;\s*;\s*\))",
+    re.MULTILINE | re.IGNORECASE
+)
+
+# Narzedzia, ktore chodza az do ubicia. Kazde z nich ma tez postac
+# ograniczona (-d, -c, -w, --duration) — wtedy koniec JEST.
+_STRUMIEN_BEZ_KONCA = (
+    (re.compile(r"\barecord\b"), re.compile(r"\s-[dD]\s|--duration")),
+    (re.compile(r"\btail\b[^\n|]*\s-[a-zA-Z]*f"), None),
+    (re.compile(r"\btermux-microphone-record\b"), re.compile(r"\s-l\s")),
+    (re.compile(r"\bnc\b[^\n]*\s-l"), re.compile(r"\s-w\s")),
+    (re.compile(r"\bffmpeg\b[^\n]*\s-f\s+(?:alsa|android_camera)"),
+     re.compile(r"\s-t\s")),
+)
+
+
+def _program_bez_konca(tresc):
+    """
+    Czy ten skrypt z natury nie ma konca. Zwraca powod albo "".
+
+    Nie zgadujemy przyszlosci — czytamy, co w pliku napisano. Petla
+    bez `break` albo narzedzie, ktore chodzi do ubicia, to nie jest
+    "dluga robota". To jest USLUGA, i czekanie na jej wynik nie ma
+    sensu, bo wyniku nie bedzie.
+
+    `timeout N ...` w srodku zmienia wszystko — wtedy koniec jest
+    wpisany wprost i czekamy normalnie.
+    """
+
+    tekst = str(tresc or "")
+
+    if not tekst.strip():
+        return ""
+
+    # Ktos juz zadbal o koniec — nie mieszamy sie.
+    if re.search(r"^\s*timeout\s+\d", tekst, re.MULTILINE):
+        return ""
+
+    dopasowanie = _PETLA_BEZ_KONCA_RE.search(tekst)
+
+    if dopasowanie and not re.search(r"\bbreak\b|\bexit\b", tekst):
+        return (
+            "jest w nim `"
+            + dopasowanie.group(0).strip().lstrip("|;& ").strip()
+            + "` bez `break` — ta pętla się nie kończy"
+        )
+
+    for wzorzec, ogranicznik in _STRUMIEN_BEZ_KONCA:
+
+        trafienie = wzorzec.search(tekst)
+
+        if not trafienie:
+            continue
+
+        if ogranicznik and ogranicznik.search(tekst):
+            continue
+
+        return (
+            "`" + trafienie.group(0).strip() + "` chodzi aż do "
+            "zatrzymania — sam się nie skończy"
+        )
+
+    return ""
+
+
+# Ile sekund dajemy usludze na to, zeby wstala i cos powiedziala,
+# zanim zdamy z niej relacje.
+ROZRUCH_USLUGI = int(
+    os.environ.get(
+        "ROZRUCH_USLUGI",
+        "8"
+    )
+)
+
+
+def _uruchom_jako_usluge(path, command, powod):
+    """
+    Program bez konca puszczamy w tlo, dajemy mu chwile na rozruch i
+    opowiadamy, co z tego wyszlo — zamiast czekac na wynik, ktorego
+    nie bedzie.
+
+    Zwraca wynik w tym samym ksztalcie co _run_script_directly, wiec
+    dla reszty programu nic sie nie zmienia.
+    """
+
+    log(
+        "MAIN",
+        path.name + " nie ma końca (" + powod + ") — nie czekam na "
+        "jego wynik, tylko puszczam go w tle i za "
+        + str(ROZRUCH_USLUGI) + " s mówię, co z tego wyszło."
+    )
+
+    tlo = termux_run_background(command)
+
+    zapisz_zdarzenie(
+        "narzedzie",
+        nazwa="termux_run_background (Python, bez Gemini)"
+    )
+
+    if not isinstance(tlo, dict) or not tlo.get("ok"):
+
+        raport = (
+            "Nie udało się uruchomić " + path.name + " w tle: "
+            + str((tlo or {}).get("error"))
+        )
+
+        log("MAIN", raport)
+
+        return {
+            "ok": False,
+            "status": "GEMINI_TOOL_ERROR",
+            "key": "python",
+            "executed_by": "python",
+            "tool": "termux_run_background",
+            "tool_result": tlo,
+            "shell_result": tlo,
+            "report": raport,
+            "tool_calls": 1,
+            "tool_trace": [{
+                "tool": "termux_run_background (Python, bez Gemini)",
+                "ok": False,
+                "evidence": short(str((tlo or {}).get("error")), 200),
+            }],
+            "tool_warnings": [],
+            "confirmed_texts": [],
+        }
+
+    plik_logu = str(tlo.get("log_file") or "")
+
+    # Rozruch. Przez ten czas na ekranie widac, ze cos sie dzieje —
+    # inaczej znowu bylaby cisza.
+    _do_kiedy = time.time() + ROZRUCH_USLUGI
+
+    while time.time() < _do_kiedy:
+        time.sleep(1)
+
+    wyjscie = _przeczytaj_po_cichu(plik_logu).strip()
+
+    zyje = bool(
+        termux_check_process(tlo.get("pid")).get("running")
+    )
+
+    if zyje:
+        stan = (
+            "Po " + str(ROZRUCH_USLUGI) + " s nadal działa (PID "
+            + str(tlo.get("pid")) + ") — i tak ma być, to strumień, "
+            "nie zadanie do skończenia."
+        )
+
+    else:
+        stan = (
+            "Ale zgasł w ciągu " + str(ROZRUCH_USLUGI) + " s — czyli "
+            "coś w nim jest nie tak, bo miał chodzić dalej."
+        )
+
+    raport = (
+        "Python uruchomił " + path.name + " W TLE, bo ten program nie "
+        "ma końca: " + powod + ".\n"
+        + stan + "\n"
+        + "Log na żywo: " + plik_logu
+        + " (termux_read_file, albo termux_check_process po PID).\n"
+        + (
+            "CO WYPISAŁ DO TEJ PORY:\n" + short(wyjscie, 3000)
+            if wyjscie
+            else "Nic jeszcze nie wypisał."
+        )
+    )
+
+    log("MAIN", path.name + ": " + stan)
+
+    if wyjscie:
+        log(
+            "TERMUX",
+            path.name + " mówi: "
+            + short(_ostatnia_tresciwa_linia(plik_logu), 160)
+        )
+
+    return {
+        # Usluga, ktora wstala i chodzi, to sukces. Usluga, ktora
+        # zgasla po sekundzie, nie jest.
+        "ok": bool(zyje),
+        "status": "COMPLETED" if zyje else "GEMINI_TOOL_ERROR",
+        "key": "python",
+        "executed_by": "python",
+        "tool": None if zyje else "termux_run_background",
+        "tool_result": None if zyje else tlo,
+        "shell_result": dict(tlo, stdout=wyjscie, w_tle=True),
+        "report": raport,
+        "tool_calls": 1,
+        "tool_trace": [{
+            "tool": "termux_run_background (Python, bez Gemini)",
+            "ok": bool(zyje),
+            "evidence": short(wyjscie or stan, 400),
+        }],
+        "tool_warnings": [],
+        "confirmed_texts": [],
+    }
+
+
 def _run_script_directly(path, task_text):
     """
     Uruchamia zapisany skrypt przez to samo execute_shell, ktorego
@@ -17591,6 +17888,15 @@ def _run_script_directly(path, task_text):
         command = "python " + shlex.quote(str(path))
     else:
         command = "bash " + shlex.quote(str(path))
+
+    # v294: zanim uruchomimy — sprawdzamy, czy ten program ma w ogole
+    # koniec. Patrz _program_bez_konca(). Strumien nie ma i mial nie
+    # miec; czekanie na jego wynik to czekanie na cos, co nie
+    # nadejdzie.
+    _bez_konca = _program_bez_konca(read_text(path))
+
+    if _bez_konca:
+        return _uruchom_jako_usluge(path, command, _bez_konca)
 
     log("MAIN", "Uruchamiam bezpośrednio: " + command)
 
