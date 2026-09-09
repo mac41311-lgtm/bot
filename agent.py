@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v287
+AEL-MINI AUTONOMOUS AGENT v288
 
 ARCHITEKTURA:
 
@@ -65,6 +65,7 @@ import shutil
 import hashlib
 import difflib
 import subprocess
+import tempfile
 import traceback
 import uuid
 import html
@@ -1803,7 +1804,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v287")
+    print("             AEL-MINI AUTONOMOUS AGENT v288")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7528,8 +7529,8 @@ def execute_shell(command, timeout=None):
             "TERMUX",
             "To jest robota na dluzej (pobieranie/kompilacja) — "
             "czekam do skutku, maks. "
-            + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Ekran moze "
-            "chwile stac, to normalne."
+            + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Co "
+            + str(PODGLAD_CO_SEKUND) + " s bede pisal, na czym stoi."
         )
     else:
         effective_timeout = COMMAND_TIMEOUT
@@ -7567,6 +7568,13 @@ def execute_shell(command, timeout=None):
         # sie od razu i czytelnie, a terminal uzytkownika zostaje
         # nietkniety. Wykonawca i tak nie ma klawiatury -- udawanie,
         # ze ma, moglo tylko zaszkodzic.
+        # v288: dluga robota leci z podgladem — patrz
+        # _uruchom_z_podgladem(). Krotkie komendy jak dotad.
+        if effective_timeout >= DLUGA_ROBOTA_TIMEOUT:
+            return _uruchom_z_podgladem(
+                command, effective_timeout, started
+            )
+
         result = subprocess.run(
             command,
             shell=True,
@@ -11731,6 +11739,144 @@ _DLUGA_ROBOTA_RE = re.compile(
     r"unzip|tar)\b",
     re.IGNORECASE
 )
+
+
+# Co ile sekund mowimy, na czym stoi dluga robota.
+PODGLAD_CO_SEKUND = int(
+    os.environ.get(
+        "PODGLAD_CO_SEKUND",
+        "60"
+    )
+)
+
+
+def _ostatnia_tresciwa_linia(sciezka, ile=160):
+    """Ostatnia niepusta linia pliku — czyli to, na czym stoimy."""
+
+    try:
+        with open(sciezka, "rb") as f:
+            try:
+                f.seek(-8192, 2)
+            except OSError:
+                f.seek(0)
+            ogon = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+    for linia in reversed(ogon.split("\n")):
+        linia = " ".join(linia.split())
+        if linia:
+            return linia[:ile]
+
+    return ""
+
+
+def _uruchom_z_podgladem(command, limit, started):
+    """
+    Dluga robota, ale nie po ciemku.
+
+    subprocess.run() blokuje az do konca — przy pobieraniu modelu
+    albo kompilacji APK to znaczy kilkanascie minut CISZY. Uzytkownik
+    widzi tylko jedno zdanie "czekam do skutku, maks. 30 min" i nie
+    ma pojecia, czy cos sie dzieje, czy proces umarl.
+    "puść mi, jak to się kompiluje i co się kompiluje w logach".
+
+    Wiec: wyjscie leci do plikow, a my co PODGLAD_CO_SEKUND mowimy,
+    ile to juz trwa i na czym stoi (ostatnia linia, ktora program
+    wypisal). Zwracamy dokladnie taki sam slownik jak zwykla
+    sciezka — dla wywolujacego nic sie nie zmienia.
+    """
+
+    wy = tempfile.NamedTemporaryFile(
+        mode="w+", suffix=".out", delete=False, encoding="utf-8"
+    )
+    bl = tempfile.NamedTemporaryFile(
+        mode="w+", suffix=".err", delete=False, encoding="utf-8"
+    )
+
+    try:
+        proces = subprocess.Popen(
+            command,
+            shell=True,
+            executable=_SHELL_EXECUTABLE,
+            stdout=wy,
+            stderr=bl,
+            cwd=str(HOME),
+            stdin=subprocess.DEVNULL
+        )
+
+        nastepny_podglad = time.time() + PODGLAD_CO_SEKUND
+
+        while True:
+
+            if proces.poll() is not None:
+                break
+
+            if (time.time() - started.timestamp()) > limit:
+
+                proces.kill()
+                proces.wait()
+
+                raise subprocess.TimeoutExpired(command, limit)
+
+            if time.time() >= nastepny_podglad:
+
+                nastepny_podglad = time.time() + PODGLAD_CO_SEKUND
+
+                minut = int(
+                    (datetime.now() - started).total_seconds() // 60
+                )
+
+                na_czym = (
+                    _ostatnia_tresciwa_linia(bl.name)
+                    or _ostatnia_tresciwa_linia(wy.name)
+                    or "(program nic jeszcze nie wypisał)"
+                )
+
+                log(
+                    "TERMUX",
+                    "Leci " + str(minut) + " min: " + na_czym
+                )
+
+            time.sleep(1)
+
+        wy.flush()
+        bl.flush()
+
+        with open(wy.name, encoding="utf-8", errors="replace") as f:
+            stdout = f.read()
+
+        with open(bl.name, encoding="utf-8", errors="replace") as f:
+            stderr = f.read()
+
+        minut = int((datetime.now() - started).total_seconds() // 60)
+
+        log(
+            "TERMUX",
+            "Skonczylo sie po " + str(minut) + " min, kod wyjscia "
+            + str(proces.returncode) + "."
+        )
+
+        return {
+            "ok": proces.returncode == 0,
+            "returncode": proces.returncode,
+            "stdout": short(stdout, 6000),
+            "stderr": short(stderr, 6000),
+            "command": command,
+            "timeout": limit,
+            "duration_s": round(
+                (datetime.now() - started).total_seconds(), 1
+            )
+        }
+
+    finally:
+
+        for uchwyt in (wy, bl):
+            try:
+                uchwyt.close()
+                os.unlink(uchwyt.name)
+            except Exception:
+                pass
 
 
 def _to_dluga_robota(command):
