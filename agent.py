@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v289
+AEL-MINI AUTONOMOUS AGENT v290
 
 ARCHITEKTURA:
 
@@ -1804,7 +1804,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v289")
+    print("             AEL-MINI AUTONOMOUS AGENT v290")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4838,6 +4838,42 @@ def deepseek(name, message):
                     prompt = prompt_map.get(name)
 
                     if prompt:
+
+                        # v290: "restart czysci historie" bylo
+                        # nieprawda. start_session() wznawia z
+                        # _load_session_state(), wiec restart
+                        # wracal do TEJ SAMEJ rozmowy — takze wtedy,
+                        # gdy padla wlasnie dlatego, ze serwer jej
+                        # juz nie zna.
+                        #
+                        # Log 2026-09-09 19:36, krok 7:
+                        #   CRITIC proba 1 blad: invalid message id
+                        #   Restartuje sesje CRITIC...
+                        #   Sesja CRITIC: OK (WZNOWIONA z
+                        #     poprzedniego uruchomienia)
+                        #   CRITIC proba 2 blad: invalid message id
+                        #
+                        # Marek zamilkl w kroku, w ktorym MAIN
+                        # oglaszal DONE — czyli dokladnie wtedy, gdy
+                        # byl najbardziej potrzebny.
+                        #
+                        # Przy zerwanej rozmowie kasujemy zapisany
+                        # stan PRZED restartem, zeby powstala
+                        # naprawde nowa. Przy zwyklej awarii sieci
+                        # zostawiamy wznawianie — tam historia jest
+                        # cenna i nic jej nie zepsulo.
+                        if _rozmowa_zerwana(str(e)):
+
+                            _resume_unverified.discard(name)
+                            _clear_session_state(name)
+
+                            log(
+                                "DEEPSEEK",
+                                "Rozmowa " + name + " jest zerwana — "
+                                "restart zaklada NOWA, nie wznawia "
+                                "tej samej."
+                            )
+
                         # v191: jak wyżej — restart czyści historię,
                         # więc cel trzeba powiedzieć jeszcze raz.
                         _goal_briefed.discard(name)
