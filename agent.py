@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v290
+AEL-MINI AUTONOMOUS AGENT v291
 
 ARCHITEKTURA:
 
@@ -1804,7 +1804,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v290")
+    print("             AEL-MINI AUTONOMOUS AGENT v291")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3163,6 +3163,12 @@ def _set_current_goal(goal):
     _role_inbox.clear()
     _role_response_cache.clear()
     _wyciagniecia_na_wierzch.clear()
+
+    # v291: to, co Python zauwazyl przy POPRZEDNIM celu, nie ma
+    # czego szukac w nowym. Przy zamknieciu celu (_czego_nikt_nie_tknal)
+    # dopisujemy tam zdanie, ktorego juz nikt nie odczyta — i wracalo
+    # ono do zespolu przy nastepnym celu, bez zadnego kontekstu.
+    del _pending_team_warnings[:]
 
     global _powiedziane_o_komendach
     _powiedziane_o_komendach = False
@@ -4715,6 +4721,31 @@ def deepseek(name, message):
                             )
 
                     except Exception as retry_error:
+
+                        # v291: gdy ponowienie padlo, bo rozmowa jest
+                        # ZERWANA, nie ma sensu oddawac pustki —
+                        # trzeba zalozyc nowa rozmowe. Rzucamy dalej,
+                        # zeby zlapala to ta sama obsluga, co przy
+                        # zwyklym bledzie (patrz _rozmowa_zerwana i
+                        # restart nizej).
+                        #
+                        # Log 2026-09-09, kroki 3 i 6: Marek oddal
+                        # PUSTO dwa razy wlasnie tedy — ponowienie
+                        # dostawalo "invalid message id", a my
+                        # zapisywalismy to jako "brak opinii". W
+                        # kroku, w ktorym MAIN oglaszal DONE, nie
+                        # bylo wiec nikogo, kto by go zatrzymal.
+                        if _rozmowa_zerwana(str(retry_error)):
+
+                            log(
+                                "DEEPSEEK",
+                                name + ": ponowienie po pustej "
+                                "odpowiedzi trafilo na zerwana "
+                                "rozmowe — zakladam nowa zamiast "
+                                "oddawac pustke."
+                            )
+
+                            raise
 
                         log(
                             "DEEPSEEK",
@@ -24849,16 +24880,37 @@ def verify_final(goal=""):
     # $HOME, z tym samym wymogiem świeżości, co FINAL_OK.txt (musi
     # powstać PO starcie tego celu) — żeby APK z zupełnie innego,
     # wcześniejszego zadania nie mógł po cichu zaliczyć nowego.
+    # v291: ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09
+    # 19:37). Cel mowil wprost "zajstalowac apk na telfonie z
+    # dzialajaca aplikacja", zespol nie zbudowal ZADNEGO APK — a
+    # mimo to zobaczylismy "CEL ZAKONCZONY".
+    #
+    # Bo ten glob bral wszystkie pliki .apk z apk_output, bez
+    # pytania KIEDY powstaly. Lezacy tam APK z wczorajszego celu
+    # (gra, cokolwiek) zaliczal nowy.
+    #
+    # Komentarz z v224 mowil to wprost: "z tym samym wymogiem
+    # swiezosci, co FINAL_OK.txt — zeby APK z zupelnie innego,
+    # wczesniejszego zadania nie mogl po cichu zaliczyc nowego".
+    # _swieze_apk_pod_home to robilo. Ta jedna galaz nie. Robi
+    # teraz.
     kandydaci = []
 
     if APK_OUTPUT_DIR.exists():
-        kandydaci.extend(
-            sorted(
-                APK_OUTPUT_DIR.glob("*.apk"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True
-            )
-        )
+
+        for _apk in sorted(
+            APK_OUTPUT_DIR.glob("*.apk"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        ):
+
+            try:
+                if _apk.stat().st_mtime < goal_started_at:
+                    continue
+            except Exception:
+                continue
+
+            kandydaci.append(_apk)
 
     kandydaci.extend(_swieze_apk_pod_home(goal_started_at, kandydaci))
 
@@ -24866,7 +24918,9 @@ def verify_final(goal=""):
         apk_detail = (
             "Nie znalazłem pliku .apk ani w " + str(APK_OUTPUT_DIR)
             + ", ani nigdzie indziej pod " + str(HOME)
-            + " (szukałem plików zbudowanych w trakcie tego celu)."
+            + " — szukałem WYŁĄCZNIE plików zbudowanych po "
+            "starcie tego celu. Starszy APK, gdyby tam leżał, "
+            "jest dowodem na poprzednie zadanie, nie na to."
         )
 
     for kandydat in kandydaci[:5]:
@@ -25005,6 +25059,23 @@ def verify_final(goal=""):
         c["ok"]
         for c in checks
         if c.get("required", True)
+    )
+
+    # v291: werdykt szedl wylacznie przez print(), wiec w pliku
+    # przebiegu nie bylo po nim ANI SLADU. Gdy cel zamknal sie
+    # niesluznie, nie dalo sie potem sprawdzic, ktory check to
+    # przepuscil — trzeba bylo zgadywac z samego kodu.
+    log(
+        "MAIN",
+        "Weryfikacja fizyczna: "
+        + ("PRZESZŁA" if all_required_ok else "NIE PRZESZŁA")
+        + ". " + "; ".join(
+            ("[wymagane] " if c.get("required", True) else "")
+            + str(c.get("check")) + ": "
+            + ("ok" if c.get("ok") else "NIE")
+            + " — " + short(str(c.get("detail") or ""), 200)
+            for c in checks
+        )
     )
 
     return {
