@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v291
+AEL-MINI AUTONOMOUS AGENT v292
 
 ARCHITEKTURA:
 
@@ -53,7 +53,9 @@ DeepSeek:
 
 """
 
+import ast
 import atexit
+import builtins
 import os
 import sys
 import json
@@ -1804,7 +1806,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v291")
+    print("             AEL-MINI AUTONOMOUS AGENT v292")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7679,45 +7681,18 @@ def execute_shell(command, timeout=None):
         # nietkniety. Wykonawca i tak nie ma klawiatury -- udawanie,
         # ze ma, moglo tylko zaszkodzic.
         # v288: dluga robota leci z podgladem — patrz
-        # _uruchom_z_podgladem(). Krotkie komendy jak dotad.
-        if effective_timeout >= DLUGA_ROBOTA_TIMEOUT:
-            return _uruchom_z_podgladem(
-                command, effective_timeout, started
-            )
-
-        result = subprocess.run(
-            command,
-            shell=True,
-            executable=_SHELL_EXECUTABLE,
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
-            cwd=str(HOME),
-            stdin=subprocess.DEVNULL
+        # _uruchom_z_podgladem().
+        # v292: a od teraz leca TAMTEDY WSZYSTKIE komendy. Nie dla
+        # podgladu (ten dalej wlacza sie tylko przy dlugim limicie),
+        # tylko dlatego, ze capture_output=True czekalo na EOF na
+        # potoku — czyli na kazdy proces puszczony w tle przez `&`,
+        # nawet gdy sam skrypt dawno sie skonczyl. Piecosekundowy
+        # skrypt nagrywajacy potrafil przez to wisiec pelne 120 s i
+        # wrocic jako "Timeout". Cala reszta programu dostaje
+        # dokladnie ten sam slownik co dotad.
+        return _uruchom_z_podgladem(
+            command, effective_timeout, started
         )
-
-        return {
-            "ok":
-                result.returncode == 0,
-            "returncode":
-                result.returncode,
-            "stdout":
-                short(
-                    result.stdout,
-                    6000
-                ),
-            "stderr":
-                short(
-                    result.stderr,
-                    6000
-                ),
-            "command": command,
-            "timeout": effective_timeout,
-            "duration_s": round(
-                (datetime.now() - started).total_seconds(),
-                1
-            )
-        }
 
     except subprocess.TimeoutExpired as e:
 
@@ -11881,7 +11856,17 @@ def _ostatnia_tresciwa_linia(sciezka, ile=160):
     return ""
 
 
-def _uruchom_z_podgladem(command, limit, started):
+def _przeczytaj_po_cichu(sciezka):
+    """Tresc pliku albo pusty napis — nigdy wyjatek."""
+
+    try:
+        with open(sciezka, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def _uruchom_z_podgladem(command, limit, started, gadaj=None):
     """
     Dluga robota, ale nie po ciemku.
 
@@ -11895,7 +11880,49 @@ def _uruchom_z_podgladem(command, limit, started):
     ile to juz trwa i na czym stoi (ostatnia linia, ktora program
     wypisal). Zwracamy dokladnie taki sam slownik jak zwykla
     sciezka — dla wywolujacego nic sie nie zmienia.
+
+    v292: tedy ida JUZ WSZYSTKIE komendy, nie tylko dlugie — bo
+    plikowe wyjscie naprawia druga, znacznie gorsza rzecz.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09 20:48, krok 1).
+    Skrypt record_opus.sh robil doslownie to:
+
+        termux-microphone-record -f /sdcard/test.raw &
+        REC_PID=$!
+        sleep 5
+        kill $REC_PID
+        ffmpeg ... ; ls -l /sdcard/test.opus
+
+    Czyli: piec sekund roboty. A trwalo to 120 sekund i skonczylo
+    sie timeoutem. Powod nie ma nic wspolnego z mikrofonem:
+    subprocess.run(capture_output=True) czyta potok AZ DO EOF, a
+    koniec potoku nastepuje dopiero wtedy, gdy zamknie go OSTATNI
+    proces, ktory go trzyma. Nagrywarka poszla w tlo (`&`),
+    odziedziczyla ten sam stdout i zostala przy zyciu — wiec EOF nie
+    przychodzil, mimo ze sam skrypt dawno sie skonczyl. Python
+    czekal do konca limitu i meldowal "Timeout".
+
+    Zespol dostawal wtedy skrypt "ktory sie zawiesza" i szukal bledu
+    w kodzie, ktorego tam nie ma. W tym biegu kosztowalo to caly
+    przeglad Piotra (teoria o returncode=None w subprocess) i dwie
+    minuty czekania na nic.
+
+    Popen + poll() nie ma tego problemu: czekamy na NASZE dziecko,
+    a nie na zamkniecie potoku przez wnuki. Wyjscie i tak leci do
+    plikow, wiec nie ma czego blokowac. Skrypt konczacy sie w 5
+    sekund wraca po 5 sekundach — nawet jesli zostawil po sobie
+    nagrywarke w tle.
+
+    `gadaj` mowi tylko, czy o tym opowiadamy w logu (przy krotkiej
+    komendzie nie ma o czym) — domyslnie po dlugosci limitu.
     """
+
+    if gadaj is None:
+        gadaj = limit >= DLUGA_ROBOTA_TIMEOUT
+
+    # Krotka komenda ma wrocic natychmiast po zakonczeniu, a nie po
+    # zaokragleniu w gore do pelnej sekundy.
+    krok = 1.0 if gadaj else 0.05
 
     wy = tempfile.NamedTemporaryFile(
         mode="w+", suffix=".out", delete=False, encoding="utf-8"
@@ -11927,9 +11954,24 @@ def _uruchom_z_podgladem(command, limit, started):
                 proces.kill()
                 proces.wait()
 
-                raise subprocess.TimeoutExpired(command, limit)
+                # v292: to, co program zdazyl wypisac ZANIM go
+                # ubilismy, jest zwykle jedyna wskazowka, na czym
+                # utknal — a szlo dotad do kosza (TimeoutExpired
+                # rzucany bez tresci, a plik za chwile kasowany w
+                # finally). Zespol dostawal samo slowo "Timeout" i
+                # zgadywal. Teraz partial wraca razem z wyjatkiem,
+                # tak samo jak przy subprocess.run.
+                wy.flush()
+                bl.flush()
 
-            if time.time() >= nastepny_podglad:
+                raise subprocess.TimeoutExpired(
+                    command,
+                    limit,
+                    output=_przeczytaj_po_cichu(wy.name),
+                    stderr=_przeczytaj_po_cichu(bl.name)
+                )
+
+            if gadaj and time.time() >= nastepny_podglad:
 
                 nastepny_podglad = time.time() + PODGLAD_CO_SEKUND
 
@@ -11948,7 +11990,7 @@ def _uruchom_z_podgladem(command, limit, started):
                     "Leci " + str(minut) + " min: " + na_czym
                 )
 
-            time.sleep(1)
+            time.sleep(krok)
 
         wy.flush()
         bl.flush()
@@ -11961,11 +12003,12 @@ def _uruchom_z_podgladem(command, limit, started):
 
         minut = int((datetime.now() - started).total_seconds() // 60)
 
-        log(
-            "TERMUX",
-            "Skonczylo sie po " + str(minut) + " min, kod wyjscia "
-            + str(proces.returncode) + "."
-        )
+        if gadaj:
+            log(
+                "TERMUX",
+                "Skonczylo sie po " + str(minut) + " min, kod wyjscia "
+                + str(proces.returncode) + "."
+            )
 
         return {
             "ok": proces.returncode == 0,
@@ -11990,9 +12033,28 @@ def _uruchom_z_podgladem(command, limit, started):
 
 
 def _to_dluga_robota(command):
-    """Czy ta komenda z natury trwa dluzej niz nasz limit."""
+    """
+    Czy ta komenda z natury trwa dluzej niz nasz limit.
 
-    return bool(_DLUGA_ROBOTA_RE.search(str(command or "")))
+    v292: patrzymy takze DO SRODKA uruchamianego skryptu. Sama
+    komenda brzmi wtedy "bash ~/record_opus.sh" albo "python
+    ~/build.py" i nie ma w niej ani slowa o kompilacji czy
+    pobieraniu — cala dluga robota siedzi w pliku. W logu 2026-09-09
+    skrypt wolal ffmpeg i mial na wszystko 120 sekund, bo nikt do
+    niego nie zajrzal. Ta sama tresc pliku, ktora od v262 czytaja
+    strazniki dzwonienia, wystarczy tez tutaj.
+    """
+
+    tekst = str(command or "")
+
+    if _DLUGA_ROBOTA_RE.search(tekst):
+        return True
+
+    return bool(
+        _DLUGA_ROBOTA_RE.search(
+            _tresc_uruchamianego_skryptu(tekst)
+        )
+    )
 
 
 def termux_run(command):
@@ -16750,7 +16812,7 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
 
         if nazwa in nad:
 
-            kod = m.group(2).lstrip(" \t").rstrip("\n")
+            kod = _wyrownaj_blok(m.group(2))
 
             if kod.strip():
                 return kod
@@ -16770,7 +16832,7 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
 
     for m in bloki:
 
-        kod = m.group(2).lstrip(" \t").rstrip("\n")
+        kod = _wyrownaj_blok(m.group(2))
 
         if not kod.strip():
             continue
@@ -16795,6 +16857,67 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
         return max(pasujace, key=len)
 
     return None
+
+
+def _wyrownaj_blok(raw):
+    """
+    Sprowadza blok ```...``` do postaci, w ktorej da sie go zapisac
+    jako plik.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09 20:48, krok 4).
+    Bartek wyliczal kroki i blok kodu wylądował W SRODKU punktu
+    listy, czyli z wcieciem:
+
+        2. **Utwórz plik `~/assistant_proto.py`**:
+           ```python
+           import struct
+           import subprocess
+           ...
+           ```
+
+    Wyrazenie regularne bierze tresc po "```python\n", wiec pierwsza
+    linia zaczynala sie od trzech spacji tak samo jak reszta. Stare
+    `raw.lstrip(" \t")` obcinalo wciecie TYLKO na samym poczatku
+    napisu, czyli w pierwszej linii — a kolejne zostawaly z trzema
+    spacjami. Do pliku szlo wiec:
+
+        import struct
+           import subprocess
+
+    i Python odpowiadal "IndentationError: unexpected indent" w
+    linii 2. Zespol zobaczyl to jako "plik nie powstal / cos zjadlo
+    kod" i przez kilka krokow sprawdzal bajt po bajcie pierwsze
+    linie pliku, zamiast pisac asystenta.
+
+    Wiec: zdejmujemy wciecie WSPOLNE dla calego bloku (to jest
+    wcieciem listy, nie kodu) — zaleznosci wewnatrz kodu zostaja
+    nietkniete, bo wszystkie linie traca dokladnie tyle samo.
+    Dopiero potem zostaje stary lstrip pierwszej linii (v192:
+    DeepSeek lubi zostawic pojedyncza spacje zaraz po ```python).
+    """
+
+    tekst = str(raw or "").replace("\t", "    ")
+
+    linie = tekst.split("\n")
+
+    # Ostatnia linia to zwykle samo wciecie zamykajacego ``` —
+    # nie jest czescia kodu i nie moze decydowac o niczym.
+    tresciwe = [l for l in linie if l.strip()]
+
+    if tresciwe:
+
+        wspolne = min(
+            len(l) - len(l.lstrip(" "))
+            for l in tresciwe
+        )
+
+        if wspolne:
+            linie = [
+                l[wspolne:] if l.strip() else l
+                for l in linie
+            ]
+
+    return "\n".join(linie).lstrip(" ").rstrip()
 
 
 def extract_code_block(text, sciezka=None):
@@ -16847,7 +16970,7 @@ def extract_code_block(text, sciezka=None):
     candidates = []
 
     for raw in blocks:
-        code = raw.lstrip(" \t").rstrip("\n")
+        code = _wyrownaj_blok(raw)
         if code.strip():
             candidates.append(code)
 
@@ -17037,16 +17160,73 @@ def _run_script_directly(path, task_text):
 
     ok = bool(shell_result.get("ok"))
 
-    stdout = str(shell_result.get("stdout") or "").strip()
-    stderr = str(shell_result.get("stderr") or "").strip()
+    # v292: przy timeoucie/awarii powloki wynik NIE MA pola
+    # "returncode" ani "stdout" — ma "error" i *_partial. Stary
+    # raport skladal sie wtedy doslownie z jednego zdania i
+    # "Kod wyjścia: None", bez ani slowa o tym, ze minal limit.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09 20:51 -> 20:53).
+    # record_opus.sh wisial pelne 120 sekund i zostal ubity. Piotr
+    # dostal do przegladu "Kod wyjścia: None", uznal to za
+    # returncode=None z subprocess i napisal caly przeglad o tym,
+    # ze "proces nie zakonczyl sie, skrypt utknal" — czyli o
+    # objawie, ktory wymyslil nasz wlasny raport. Prawdziwa
+    # przyczyna (limit czasu) nie padla ani razu.
+    stdout = str(
+        shell_result.get("stdout")
+        or shell_result.get("stdout_partial")
+        or ""
+    ).strip()
+
+    stderr = str(
+        shell_result.get("stderr")
+        or shell_result.get("stderr_partial")
+        or ""
+    ).strip()
+
+    blad = str(shell_result.get("error") or "").strip()
+
+    if blad == "Timeout":
+
+        _ile = shell_result.get("timeout")
+
+        naglowek = (
+            "Nie zdążył się skończyć — po "
+            + str(_ile) + " s przerwałem go i tyle poniżej zdążył "
+            "wypisać. To nie jest błąd w kodzie: program po prostu "
+            "dalej pracował, kiedy skończył się czas."
+        )
+
+    elif blad:
+        naglowek = "Nie dało się go uruchomić: " + blad
+
+    elif "returncode" in shell_result:
+        naglowek = "Kod wyjścia: " + str(shell_result.get("returncode"))
+
+    else:
+        naglowek = "Powłoka nie podała kodu wyjścia."
 
     raport = (
         "Python uruchomił " + path.name + " bezpośrednio przez "
         "Termux (bez Gemini).\n"
-        + "Kod wyjścia: " + str(shell_result.get("returncode")) + "\n"
+        + naglowek + "\n"
         + ("WYJŚCIE:\n" + short(stdout, 3000) + "\n" if stdout else "")
-        + ("BŁĘDY:\n" + short(stderr, 2000) if stderr else "")
+        + ("BŁĘDY:\n" + short(stderr, 2000) + "\n" if stderr else "")
+        + (
+            "Program nic nie zdążył wypisać.\n"
+            if not stdout and not stderr else ""
+        )
     ).strip()
+
+    # Ten sam fakt musi trafic tam, gdzie uzytkownik czyta przebieg —
+    # dotad cale to uruchomienie szlo wylacznie przez print(), wiec
+    # w pliku logu po "Uruchamiam bezposrednio: ..." nie bylo JUZ NIC.
+    log("MAIN", path.name + ": " + naglowek)
+
+    zapisz_zdarzenie(
+        "narzedzie",
+        nazwa="termux_run (Python, bez Gemini)"
+    )
 
     warnings = []
 
@@ -17995,6 +18175,107 @@ def _looks_like_python_script(code, target_path):
     )
 
 
+def _nazwy_znikad(code):
+    """
+    Nazwy, ktorych ten kod uzywa NA POZIOMIE MODULU, a ktore nigdzie
+    w nim nie powstaja i nie sa wbudowane. Zwraca liste par
+    (numer_linii, nazwa), posortowana. Pusta lista = kod jest
+    samodzielny.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09, kroki 13-21).
+    Do assistant_with_hotword.py trafil FRAGMENT petli wyjety ze
+    srodka innego pliku:
+
+        segments = []
+        for i in range(TOTAL_SEC // SEGMENT_SEC):
+            subprocess.run([...])
+            ...
+
+    Skladniowo bez zarzutu — _python_syntax_error() nie mial sie do
+    czego przyczepic. Ale TOTAL_SEC, SEGMENT_SEC, subprocess, time i
+    os nie istnieja tu nigdzie, wiec plik nie mial szansy zrobic
+    czegokolwiek poza NameError w drugiej linii. Zespol tego nie
+    wiedzial: dostawal "kod sie wysypal", Piotr robil przeglad,
+    Ania poprawiala, Bartek pisal od nowa — osiem krokow nad plikiem,
+    ktory nigdy nie byl plikiem.
+
+    To sprawdzenie jest tanie i pewne: nie zgaduje, tylko czyta, co
+    w tym kodzie powstaje, a co jest tylko uzywane. Celowo liczymy
+    jako "powstaje" takze przypisania ze srodka funkcji — wolimy nic
+    nie powiedziec niz powiedziec cos nieprawdziwego.
+    """
+
+    try:
+        drzewo = ast.parse(str(code or ""))
+    except Exception:
+        return []                       # od skladni jest inna funkcja
+
+    powstaje = set()
+
+    for w in ast.walk(drzewo):
+
+        if isinstance(w, ast.Name) and isinstance(w.ctx, ast.Store):
+            powstaje.add(w.id)
+
+        elif isinstance(w, (ast.Import, ast.ImportFrom)):
+            for alias in w.names:
+                powstaje.add(
+                    (alias.asname or alias.name).split(".")[0]
+                )
+
+        elif isinstance(
+            w, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            powstaje.add(w.name)
+
+        elif isinstance(w, ast.arg):
+            powstaje.add(w.arg)
+
+        elif isinstance(w, ast.ExceptHandler) and w.name:
+            powstaje.add(w.name)
+
+        elif isinstance(w, (ast.Global, ast.Nonlocal)):
+            powstaje.update(w.names)
+
+    wbudowane = set(dir(builtins)) | {
+        "__file__", "__name__", "__doc__", "__spec__",
+        "__loader__", "__package__", "__builtins__",
+    }
+
+    braki = {}
+
+    def obejrzyj(node):
+
+        for dziecko in ast.iter_child_nodes(node):
+
+            # Wnetrze funkcji/klasy wykonuje sie pozniej i moze
+            # liczyc na to, co dopisze wywolujacy — nie oceniamy go.
+            if isinstance(
+                dziecko,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                continue
+
+            if (
+                isinstance(dziecko, ast.Name)
+                and isinstance(dziecko.ctx, ast.Load)
+                and dziecko.id not in powstaje
+                and dziecko.id not in wbudowane
+            ):
+                braki.setdefault(
+                    dziecko.id,
+                    getattr(dziecko, "lineno", 0)
+                )
+
+            obejrzyj(dziecko)
+
+    obejrzyj(drzewo)
+
+    return sorted(
+        ((linia, nazwa) for nazwa, linia in braki.items())
+    )
+
+
 def _python_syntax_error(code):
     """
     Zwraca czytelny opis błędu składni, jeśli `code` NIE jest
@@ -18048,16 +18329,121 @@ _SEARCH_REPLACE_RE = re.compile(
 )
 
 
+# v292: to samo, tyle ze powiedziane po ludzku.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-09, krok 13). Bartek
+# nie uzyl znacznikow <<<<<<< SZUKAJ, tylko napisal normalnie:
+#
+#     **STARY FRAGMENT (do zastąpienia) — od `segments = []` ...:**
+#     ```python
+#     ...stara petla...
+#     ```
+#     **NOWY FRAGMENT (wklej w to samo miejsce):**
+#     ```python
+#     ...nowa petla...
+#     ```
+#
+# Dla programu byly to po prostu dwa bloki kodu, wiec poszla zwykla
+# sciezka "zapisz kod do pliku" — a ta bierze blok NAJDLUZSZY.
+# Najdluzszy byl STARY, czyli dokladnie ten, ktory Bartek kazal
+# WYRZUCIC. Wladowal sie do pliku jako CALA jego tresc: dwie linie
+# zaczynajace sie od `for i in range(TOTAL_SEC // SEGMENT_SEC)`, bez
+# importow, bez stalych, bez niczego. Python odpowiedzial
+# "NameError: name 'TOTAL_SEC' is not defined" i zespol przez
+# osiem kolejnych krokow debugowal plik, ktorego nikt nigdy nie
+# napisal.
+#
+# Nie wymagamy wiec skladni ze znacznikami — wystarczy, ze ktos
+# powie "stary/obecny fragment" i zaraz potem "nowy/poprawiony
+# fragment". To jest normalna rozmowa, tylko czytana do konca.
+_STARY_FRAGMENT_RE = re.compile(
+    r"(?:star[aeyąą]|obecn|dotychczasow|poprzedni|przed\s+zmian)\w*"
+    r"\s+(?:fragment|kod|wersj|blok|linij|linie)",
+    re.IGNORECASE
+)
+
+_NOWY_FRAGMENT_RE = re.compile(
+    r"(?:now[aey]|poprawion|zmienion|docelow|po\s+zmianie)\w*"
+    r"\s+(?:fragment|kod|wersj|blok|linij|linie)",
+    re.IGNORECASE
+)
+
+
+def _pary_stary_nowy(text):
+    """
+    Poprawka fragmentu opisana slowami, a nie znacznikami.
+
+    Szuka bloku ```...``` zapowiedzianego jako STARY i nastepnego po
+    nim, zapowiedzianego jako NOWY. Zwraca [(stary, nowy)] albo [].
+    """
+
+    tekst = str(text or "")
+
+    bloki = [
+        (m.start(), _wyrownaj_blok(m.group(1)))
+        for m in re.finditer(
+            r"```[a-zA-Z0-9_+-]*\n(.*?)```",
+            tekst,
+            re.DOTALL
+        )
+    ]
+
+    bloki = [(poz, kod) for poz, kod in bloki if kod.strip()]
+
+    if len(bloki) < 2:
+        return []
+
+    pary = []
+
+    for i in range(len(bloki) - 1):
+
+        poz_stary, stary = bloki[i]
+        poz_nowy, nowy = bloki[i + 1]
+
+        # Zapowiedz to ostatnie zdanie PRZED blokiem — bierzemy
+        # kawalek tekstu miedzy poprzednim blokiem a tym.
+        przed_starym = tekst[
+            (bloki[i - 1][0] if i else 0):poz_stary
+        ]
+
+        miedzy = tekst[poz_stary:poz_nowy]
+
+        # "miedzy" zawiera caly stary blok — zapowiedz nowego jest
+        # po jego zamknieciu.
+        ogon = miedzy.rsplit("```", 1)[-1]
+
+        if not _STARY_FRAGMENT_RE.search(przed_starym):
+            continue
+
+        if not _NOWY_FRAGMENT_RE.search(ogon):
+            continue
+
+        if stary == nowy:
+            continue
+
+        pary.append((stary, nowy))
+
+    return pary
+
+
 def extract_search_replace_blocks(text):
     """
     Wyciaga WSZYSTKIE bloki SZUKAJ/ZAMIEN z wypowiedzi. Jedna
     poprawka moze dotyczyc kilku miejsc w pliku.
+
+    v292: gdy znacznikow nie ma, probujemy przeczytac to samo
+    powiedziane po ludzku — patrz _pary_stary_nowy().
     """
 
-    return [
+    znacznikowe = [
         (m.group(1), m.group(2))
         for m in _SEARCH_REPLACE_RE.finditer(str(text or ""))
     ]
+
+    if znacznikowe:
+        return znacznikowe
+
+    return _pary_stary_nowy(text)
 
 
 def _verify_patched_syntax(path, content):
@@ -27423,6 +27809,54 @@ Zwróć tylko JSON.
                                 "osobnym krokiem."
                             )
                         }
+
+                        continue
+
+                    # ------------------------------------------
+                    # BEZPIECZEŃSTWO: skladnia moze byc idealna, a
+                    # kod i tak nie byc PLIKIEM — tylko fragmentem
+                    # wyjetym ze srodka innego pliku. Patrz
+                    # _nazwy_znikad(): to sie naprawde zdarzylo i
+                    # kosztowalo osiem krokow.
+                    # ------------------------------------------
+
+                    _znikad = _nazwy_znikad(engineer_code)
+
+                    if _znikad:
+
+                        _lista = ", ".join(
+                            nazwa + " (linia " + str(linia) + ")"
+                            for linia, nazwa in _znikad[:6]
+                        )
+
+                        last_result = {
+                            "status":
+                                "ENGINEER_CODE_IS_ONLY_A_FRAGMENT",
+                            "message": (
+                                "Nie położyłem tego do "
+                                + str(target_path) + ", bo to nie "
+                                "jest cały plik, tylko kawałek "
+                                "czegoś większego: używa " + _lista
+                                + ", a nigdzie tutaj tego nie ma. "
+                                "Uruchomiony osobno wywali "
+                                "NameError w pierwszej linii, która "
+                                "tego dotknie. Jeżeli to miała być "
+                                "poprawka istniejącego pliku — "
+                                "powiedz, którego, a nałożę sam "
+                                "ten fragment. Jeżeli nowy plik — "
+                                "potrzebuję go w całości, razem z "
+                                "importami i stałymi."
+                            )
+                        }
+
+                        _pending_team_warnings.append(
+                            "Blok, który miał być całym plikiem "
+                            + target_path.name + ", używa " + _lista
+                            + " — a tego w nim nie ma. To wygląda "
+                            "na fragment wyjęty ze środka innego "
+                            "pliku, więc go nie zapisałem; sam z "
+                            "siebie i tak by się nie uruchomił."
+                        )
 
                         continue
 
