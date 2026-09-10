@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v294
+AEL-MINI AUTONOMOUS AGENT v295
 
 ARCHITEKTURA:
 
@@ -1864,7 +1864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v294")
+    print("             AEL-MINI AUTONOMOUS AGENT v295")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21435,16 +21435,65 @@ def _collect_role_messages(speaker_role, text):
     Wiadomość do samego siebie pomijamy: role otwierają wypowiedzi
     przedstawieniem się ("Tomku tutaj", "Bartek here") i to nie jest
     zwrócenie się do kogokolwiek.
+
+    v295: wiadomosc siega do NASTEPNEGO zawolania po imieniu (albo
+    do konca wypowiedzi) — czyli dokladnie tyle, ile autor do tej
+    osoby napisal.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-10, kroki 10, 12,
+    13). Marek napisal do Kamila:
+
+        Kamilu: powtarzam listę trzeci raz, tym razem bez urwania.
+        Trzy rzeczy, każda do sprawdzenia w sieci:
+
+        1) piper-tts w repo Termuksa — ...
+        2) openWakeWord — ...
+        3) Porcupine — ...
+
+    Kamil dostal PIERWSZA LINIE. Same slowa "powtarzam liste trzeci
+    raz... Trzy rzeczy, kazda do sprawdzenia w sieci:" — i nic
+    wiecej. Trzech rzeczy nie bylo.
+
+    Powod: _ADDRESS_RE ma re.MULTILINE, wiec `$` konczy sie na
+    zlamaniu linii, a `.` nie lapie znaku nowej linii. m.group(2) to
+    zawsze DOKLADNIE JEDNA LINIA. Kazda wieloliniowa wiadomosc do
+    kolegi — a wiec kazda lista, kazde wyliczenie, kazdy blok kodu —
+    docierala obcieta do pierwszego zdania.
+
+    Marek probowal trzy razy, za kazdym razem widzial, ze nie
+    dochodzi, i za trzecim napisal: "Jesli ta wiadomosc znowu
+    dojdzie do Ciebie ucieta, powiedz — sprobuje innym kanalem".
+    Innego kanalu nie ma. To my go ucinalismy.
+
+    _dla_tej_roli() od dawna robi to poprawnie — tnie od zawolania
+    do nastepnego zawolania. Tu bierzemy dokladnie te sama miare.
     """
 
-    for m in _ADDRESS_RE.finditer(str(text or "")):
+    tekst = str(text or "")
+
+    trafienia = list(_ADDRESS_RE.finditer(tekst))
+
+    for i, m in enumerate(trafienia):
 
         adresat = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
 
         if not adresat or adresat == speaker_role:
             continue
 
-        tresc = " ".join(m.group(2).split())
+        koniec = (
+            trafienia[i + 1].start()
+            if i + 1 < len(trafienia) else len(tekst)
+        )
+
+        # Od tresci (bez samego "Kamilu:", bo imie nadawcy i tak
+        # stoi wyzej) do nastepnego zawolania.
+        surowe = tekst[m.start(2):koniec]
+
+        # Puste linie i wciecia zostawiamy — w liscie i w kodzie one
+        # NIOSA znaczenie. Zdejmujemy tylko ogony spacji.
+        tresc = "\n".join(
+            linia.rstrip() for linia in surowe.splitlines()
+        ).strip()
 
         if len(tresc) < 15:
             # Samo zawołanie po imieniu, bez treści — nie ma czego
@@ -21569,22 +21618,57 @@ def _role_inbox_block(role_name):
     if not wiadomosci:
         return ""
 
+    # v295: dotad bylo wiadomosci[-3:] — przy czterech nadawcach
+    # najstarszy przepadal po cichu, a on sam byl przekonany, ze
+    # napisal. Nadawcow jest szescioro, wiec nie ma czego ograniczac;
+    # gdy ktos napisal dwa razy, sklejamy to w jedna wiadomosc od
+    # niego, zamiast wyrzucac starsza.
+    od_kogo = {}
+
+    for nadawca, tresc in wiadomosci:
+        od_kogo.setdefault(nadawca, []).append(tresc)
+
     lines = []
 
-    for nadawca, tresc in wiadomosci[-3:]:
-        lines.append(nadawca + " mówi do Ciebie: " + tresc)
+    for nadawca, kawalki in od_kogo.items():
+        lines.append(
+            nadawca + " mówi do Ciebie: " + "\n\n".join(kawalki)
+        )
 
     # Przyklad bierzemy z imienia OSTATNIEGO nadawcy, nie ze
     # sztywnego "Wojtku" — inaczej Wojtek dostawal podpowiedz, zeby
     # odpisac samemu sobie.
-    _ostatni = wiadomosci[-1][0]
-    _przyklad = _WOLACZ.get(_ostatni, _ostatni)
+    _imiona = [
+        _WOLACZ.get(nadawca, nadawca)
+        for nadawca in od_kogo
+    ]
 
-    return (
-        "\n" + "\n".join(lines)
-        + "\n(Odpowiesz mu, zaczynając linię jego imieniem — "
+    _przyklad = (
+        _imiona[0] if len(_imiona) == 1
+        else " / ".join(_imiona)
+    )
+
+    blok = (
+        "\n" + "\n\n".join(lines)
+        + "\n(Odpowiesz, zaczynając linię jego imieniem — "
         "\"" + _przyklad + ": ...\" — to do niego wróci.)\n"
     )
+
+    # v295: skrzynka byla JEDYNYM blokiem, ktorego czujnik nie
+    # widzial — nie idzie przez _only_if_new (i slusznie, bo raz
+    # przeczytana znika), wiec w przebiegu nie bylo po niej sladu.
+    # Przez to nie dalo sie odpowiedziec na proste pytanie "czy
+    # wiadomosc Marka doszla do Kamila" inaczej niz czytajac cala
+    # rozmowe. Teraz widac to jak kazdy inny blok.
+    zapisz_zdarzenie(
+        "blok",
+        rola=str(role_name),
+        co="skrzynka",
+        znaki=len(blok),
+        poczatek=_poczatek_bloku(blok)
+    )
+
+    return blok
 
 
 # Pytanie Marka czekające na odpowiedź: {"role":..., "text":..., "wiek":int}
