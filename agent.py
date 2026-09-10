@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v296
+AEL-MINI AUTONOMOUS AGENT v297
 
 ARCHITEKTURA:
 
@@ -1864,7 +1864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v296")
+    print("             AEL-MINI AUTONOMOUS AGENT v297")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21540,6 +21540,60 @@ _ADDRESS_RE = re.compile(
 _role_inbox = {}
 
 
+def _zawolania(text):
+    """
+    Kto do kogo i CO — po jednym wpisie na zawolanie po imieniu.
+
+    Zwraca [(rola_adresata, tresc), ...]. Tresc siega do nastepnego
+    zawolania (albo do konca wypowiedzi) i konczy sie tam, gdzie
+    autor zaczyna mowic do wykonawcy.
+
+    v297: jedna miara dla wszystkich, ktorzy czytaja ten kanal.
+    _collect_role_messages() dostalo ja w v295, ale
+    _extract_critic_question() i _extract_answer_for_critic() nadal
+    braly m.group(2), czyli DOKLADNIE JEDNA LINIE — ten sam blad,
+    tylko w innym miejscu. Odpowiedz "Marku: ..." rozpisana na kilka
+    linii docierala do Marka jako pierwsze zdanie.
+
+    Ma to znaczenie tym wieksze, ze od v297 nie ma juz formatki
+    "ODPOWIEDZ DLA MARKA:" — zwykle zawolanie po imieniu jest teraz
+    GLOWNA droga, wiec musi dowozic calosc.
+    """
+
+    tekst = str(text or "")
+
+    trafienia = list(_ADDRESS_RE.finditer(tekst))
+
+    wynik = []
+
+    for i, m in enumerate(trafienia):
+
+        rola = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
+
+        if not rola:
+            continue
+
+        koniec = (
+            trafienia[i + 1].start()
+            if i + 1 < len(trafienia) else len(tekst)
+        )
+
+        surowe = _utnij_na_sekcji_wykonawcy(tekst[m.start(2):koniec])
+
+        tresc = "\n".join(
+            linia.rstrip() for linia in surowe.splitlines()
+        ).strip()
+
+        # "**Kamilu:** tresc" — gwiazdki sprzed imienia zjada juz
+        # wzorzec, ale te ZA dwukropkiem zostawaly i kazda taka
+        # wiadomosc zaczynala sie od "** ".
+        tresc = tresc.lstrip("*_ \t").strip()
+
+        wynik.append((rola, tresc))
+
+    return wynik
+
+
 def _collect_role_messages(speaker_role, text):
     """
     Wyławia z wypowiedzi zwroty do konkretnych osób i odkłada je do
@@ -21582,36 +21636,10 @@ def _collect_role_messages(speaker_role, text):
     do nastepnego zawolania. Tu bierzemy dokladnie te sama miare.
     """
 
-    tekst = str(text or "")
+    for adresat, tresc in _zawolania(text):
 
-    trafienia = list(_ADDRESS_RE.finditer(tekst))
-
-    for i, m in enumerate(trafienia):
-
-        adresat = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
-
-        if not adresat or adresat == speaker_role:
+        if adresat == speaker_role:
             continue
-
-        koniec = (
-            trafienia[i + 1].start()
-            if i + 1 < len(trafienia) else len(tekst)
-        )
-
-        # Od tresci (bez samego "Kamilu:", bo imie nadawcy i tak
-        # stoi wyzej) do nastepnego zawolania.
-        surowe = _utnij_na_sekcji_wykonawcy(tekst[m.start(2):koniec])
-
-        # Puste linie i wciecia zostawiamy — w liscie i w kodzie one
-        # NIOSA znaczenie. Zdejmujemy tylko ogony spacji.
-        tresc = "\n".join(
-            linia.rstrip() for linia in surowe.splitlines()
-        ).strip()
-
-        # "**Kamilu:** tresc" — gwiazdki sprzed imienia zjada juz
-        # wzorzec, ale te ZA dwukropkiem zostawaly i kazda taka
-        # wiadomosc zaczynala sie od "** ".
-        tresc = tresc.lstrip("*_ \t").strip()
 
         if len(tresc) < 15:
             # Samo zawołanie po imieniu, bez treści — nie ma czego
@@ -21770,24 +21798,19 @@ def _role_inbox_block(role_name):
                 nadawca + " napisał to wyżej wprost do Ciebie."
             )
 
-    # Przyklad bierzemy z imienia OSTATNIEGO nadawcy, nie ze
-    # sztywnego "Wojtku" — inaczej Wojtek dostawal podpowiedz, zeby
-    # odpisac samemu sobie.
-    _imiona = [
-        _WOLACZ.get(nadawca, nadawca)
-        for nadawca in od_kogo
-    ]
-
-    _przyklad = (
-        _imiona[0] if len(_imiona) == 1
-        else " / ".join(_imiona)
-    )
-
-    blok = (
-        "\n" + "\n\n".join(lines)
-        + "\n(Odpowiesz, zaczynając linię jego imieniem — "
-        "\"" + _przyklad + ": ...\" — to do niego wróci.)\n"
-    )
+    # v297: nie ma tu juz zdania "(Odpowiesz, zaczynajac linie jego
+    # imieniem — "Wojtku: ..." — to do niego wroci.)".
+    #
+    # Szlo z KAZDA dostarczona wiadomoscia i bylo instrukcja, JAK
+    # pisac — a zalozenie tego programu jest odwrotne: normalna
+    # rozmowa, bez szablonow. Do tego mowilo im rzecz, ktora kazdy
+    # z nich uslyszal juz raz, we wlasnym prompcie na starcie sesji,
+    # i ktora i tak robia sami: w logach Ola, Wojtek, Marek i Tomek
+    # wolaja sie po imieniu bez przerwy, nikt ich o to nie prosil w
+    # danej turze.
+    #
+    # Zostaje sama tresc: kto co do kogo powiedzial.
+    blok = "\n" + "\n\n".join(lines) + "\n"
 
     # v295: skrzynka byla JEDYNYM blokiem, ktorego czujnik nie
     # widzial — nie idzie przez _only_if_new (i slusznie, bo raz
@@ -21999,14 +22022,13 @@ def _extract_critic_question(text):
     # Zwykle zwrocenie sie po imieniu — ten sam kanal, ktorym gada
     # caly zespol (patrz _ADDRESS_RE). Bierzemy pierwsze zdanie do
     # Tomka albo Bartka, ktore jest pytaniem.
-    for dopasowanie in _ADDRESS_RE.finditer(text):
-
-        rola = _VOCATIVE_TO_ROLE.get(dopasowanie.group(1).upper())
+    # v297: cale zawolanie, nie pierwsza linia — patrz _zawolania().
+    for rola, tresc in _zawolania(text):
 
         if rola not in ("PLANNER", "ENGINEER"):
             continue
 
-        tresc = " ".join(dopasowanie.group(2).split())
+        tresc = " ".join(tresc.split())
 
         if "?" not in tresc or len(tresc) < 15:
             continue
@@ -22027,16 +22049,14 @@ def _extract_answer_for_critic(text, fallback_limit=400):
 
     text = str(text or "")
 
-    for dopasowanie in _ADDRESS_RE.finditer(text):
+    # v297: cale zawolanie, nie pierwsza linia — patrz _zawolania().
+    # Od v297 to jest GLOWNA droga odpowiedzi do Marka (formatki
+    # "ODPOWIEDZ DLA MARKA:" juz nikomu nie dyktujemy), wiec musi
+    # dowozic wszystko, co ktos do niego napisal.
+    for rola, tresc in _zawolania(text):
 
-        if _VOCATIVE_TO_ROLE.get(
-            dopasowanie.group(1).upper()
-        ) == "CRITIC":
-
-            tresc = " ".join(dopasowanie.group(2).split())
-
-            if len(tresc) >= 15:
-                return short(tresc, 500)
+        if rola == "CRITIC" and len(tresc) >= 15:
+            return short(" ".join(tresc.split()), 500)
 
     m = _CRITIC_ANSWER_RE.search(text)
 
@@ -22951,10 +22971,16 @@ def consult_team(
     planner_question_block = ""
 
     if _critic_question and _critic_question.get("role") == "PLANNER":
+        # v297: bez formatki. Bylo tu "odpowiedz mu w swojej
+        # wypowiedzi, zaczynajac linie od "ODPOWIEDZ DLA MARKA:"" —
+        # czyli dyktowanie napisu co do znaku, i to przy kazdym
+        # pytaniu Marka. Nic nie umozliwialo:
+        # _extract_answer_for_critic() od dawna szuka NAJPIERW
+        # zwyklego "Marku: ...", starej formatki tylko w drugiej
+        # kolejnosci, a gdy nie ma zadnej — bierze poczatek
+        # wypowiedzi. Kanal dziala bez rozkazywania.
         planner_question_block = (
-            "\n\nMarek pyta Cię wprost (odpowiedz mu w swojej "
-            "wypowiedzi, zaczynając linię od \"ODPOWIEDŹ DLA MARKA:\" "
-            "— dzięki temu odpowiedź do niego wróci):\n"
+            "\n\nMarek pyta Cię wprost:\n"
             + _critic_question.get("text", "")
         )
 
@@ -23082,10 +23108,9 @@ def consult_team(
     engineer_question_block = ""
 
     if _critic_question and _critic_question.get("role") == "ENGINEER":
+        # v297: to samo co u Tomka — bez dyktowania napisu.
         engineer_question_block = (
-            "\n\nMarek pyta Cię wprost (odpowiedz mu w swojej "
-            "wypowiedzi, zaczynając linię od \"ODPOWIEDŹ DLA MARKA:\" "
-            "— dzięki temu odpowiedź do niego wróci):\n"
+            "\n\nMarek pyta Cię wprost:\n"
             + _critic_question.get("text", "")
         )
 
