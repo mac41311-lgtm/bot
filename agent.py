@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v295
+AEL-MINI AUTONOMOUS AGENT v296
 
 ARCHITEKTURA:
 
@@ -1864,7 +1864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v295")
+    print("             AEL-MINI AUTONOMOUS AGENT v296")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2846,6 +2846,68 @@ def _bez_znacznika_nieaktualne(block):
     return _ZNACZNIK_NIEAKTUALNE_RE.sub("", str(block or "")).strip()
 
 
+# v296: co dana osoba dostala w BIEZACYM kroku — {rola: (krok, [tresci])}.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-10 22:25, kroki 2-10).
+# Bartek dostawal w jednym prompcie:
+#
+#   Wojtek podrzucił: Bartku: zgoda przy +48 i przy testach za 2 zl...
+#   (1761 znakow)
+#   ...
+#   Wojtek mówi do Ciebie: zgoda przy +48 i przy testach za 2 zl...
+#   (te same slowa raz jeszcze)
+#
+# Dwa kanaly niosly to samo: bloki od_tomka/od_kamila/od_wojtka i
+# skrzynka. Do v295 skrzynka wiozla tylko PIERWSZA LINIE, wiec ta
+# dublura byla malutka i nikt jej nie zauwazyl. Gdy skrzynka zaczela
+# dowozic cala tresc — jak powinna — dublura urosla do pelnego
+# rozmiaru i powtarzala sie w KAZDYM kroku.
+#
+# Wiec: skrzynka mowi tylko to, czego ta osoba jeszcze w tym kroku
+# nie przeczytala. Nadawca zostaje wymieniony tak czy inaczej, zeby
+# adresat wiedzial, ze to bylo napisane WPROST do niego i ze wypada
+# odpisac.
+_juz_dostal = {}
+
+
+def _zapamietaj_co_dostal(rola, blok):
+    """Odklada tresc, ktora ta osoba wlasnie dostala w tym kroku."""
+
+    klucz = str(rola)
+    krok, teksty = _juz_dostal.get(klucz, (None, None))
+
+    if krok != _biezacy_krok or teksty is None:
+        teksty = []
+        _juz_dostal[klucz] = (_biezacy_krok, teksty)
+
+    teksty.append(str(blok or ""))
+
+
+def _juz_to_czytal(rola, tresc):
+    """
+    Czy ta osoba widziala juz te slowa w tym kroku.
+
+    Porownujemy na zwinietych bialych znakach — ten sam akapit
+    przechodzi przez dwa kanaly inaczej zlamany.
+    """
+
+    krok, teksty = _juz_dostal.get(str(rola), (None, None))
+
+    if krok != _biezacy_krok or not teksty:
+        return False
+
+    igla = " ".join(str(tresc or "").split())
+
+    if len(igla) < 40:
+        # Krotkie zdanie moze sie powtorzyc przypadkiem — przy takim
+        # wolimy powiedziec dwa razy niz zgubic.
+        return False
+
+    stog = " ".join(" ".join(teksty).split())
+
+    return igla in stog
+
+
 def _only_if_new(role, key, block):
     """
     Zwraca blok tylko wtedy, gdy dla TEJ roli rozni sie od tego, co
@@ -2887,6 +2949,12 @@ def _only_if_new(role, key, block):
         return ""
 
     _role_seen_blocks[slot] = odcisk
+
+    # v296: zapamietujemy, co ta osoba NAPRAWDE dostala w tym kroku —
+    # patrz _juz_dostal i _role_inbox_block(). Bez tego ta sama
+    # wypowiedz kolegi szla do niej dwa razy: raz jako "Wojtek
+    # podrzucil:", raz jako "Wojtek mowi do Ciebie:".
+    _zapamietaj_co_dostal(role, block)
 
     zapisz_zdarzenie(
         "blok",
@@ -21415,6 +21483,51 @@ _WOLACZ = {
     "Bartek": "Bartku", "Wojtek": "Wojtku", "Ola": "Olu",
 }
 
+# v296: gdzie KONCZY sie wiadomosc do kolegi, gdy nie konczy jej
+# zawolanie kogos innego.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-10 22:25, krok 1-2).
+# Tomek napisal:
+#
+#     **Kamilu:** nie zrobimy jeszcze weryfikacji numeru PL, bo nie
+#     mamy kluczy. Najpierw krok 0 Twojego planu...
+#
+#     **Jeden krok dla Gemini (wykonaj teraz):**
+#     1. Otworz Termux.
+#     2. Wpisz i zatwierdz dokladnie: ...
+#
+# Druga czesc nie jest do Kamila — jest dla wykonawcy. Ale to nie
+# jest zawolanie po imieniu, wiec od v295 wpadala do wiadomosci
+# Kamila razem z reszta. Kamil odpisal: "nie moge wykonac tego kroku,
+# nie mam dostepu do Termuxa ani do telefonu — jestem modelem
+# jezykowym". Mial racje i stracil na to cala ture.
+#
+# Naglowek nazywajacy wykonawce konczy wiadomosc prywatna tak samo
+# jak zawolanie kogos innego. To jest fakt z tekstu, nie zgadywanie:
+# autor sam napisal, do kogo mowi.
+_SEKCJA_WYKONAWCY_RE = re.compile(
+    r"^[\s*_#>-]*(?:[^\W\d_]+\s+){0,3}dla\s+"
+    r"(?:gemini|wykonawc\w*|main\w*)\b",
+    re.MULTILINE | re.IGNORECASE
+)
+
+
+def _utnij_na_sekcji_wykonawcy(fragment):
+    """
+    Zostawia z akapitu to, co jest do KOLEGI — bez sekcji, ktora
+    autor zaadresowal do wykonawcy.
+    """
+
+    tekst = str(fragment or "")
+
+    m = _SEKCJA_WYKONAWCY_RE.search(tekst)
+
+    if not m or m.start() == 0:
+        return tekst
+
+    return tekst[:m.start()]
+
+
 _ADDRESS_RE = re.compile(
     r"^[\s*_#>-]*(?:DO\s+)?("
     + "|".join(sorted(_VOCATIVE_TO_ROLE, key=len, reverse=True))
@@ -21487,13 +21600,18 @@ def _collect_role_messages(speaker_role, text):
 
         # Od tresci (bez samego "Kamilu:", bo imie nadawcy i tak
         # stoi wyzej) do nastepnego zawolania.
-        surowe = tekst[m.start(2):koniec]
+        surowe = _utnij_na_sekcji_wykonawcy(tekst[m.start(2):koniec])
 
         # Puste linie i wciecia zostawiamy — w liscie i w kodzie one
         # NIOSA znaczenie. Zdejmujemy tylko ogony spacji.
         tresc = "\n".join(
             linia.rstrip() for linia in surowe.splitlines()
         ).strip()
+
+        # "**Kamilu:** tresc" — gwiazdki sprzed imienia zjada juz
+        # wzorzec, ale te ZA dwukropkiem zostawaly i kazda taka
+        # wiadomosc zaczynala sie od "** ".
+        tresc = tresc.lstrip("*_ \t").strip()
 
         if len(tresc) < 15:
             # Samo zawołanie po imieniu, bez treści — nie ma czego
@@ -21631,9 +21749,26 @@ def _role_inbox_block(role_name):
     lines = []
 
     for nadawca, kawalki in od_kogo.items():
-        lines.append(
-            nadawca + " mówi do Ciebie: " + "\n\n".join(kawalki)
-        )
+
+        # v296: co ta osoba juz przeczytala w tym kroku innym
+        # kanalem (blok "Wojtek podrzucil:"), tego nie wklejamy
+        # drugi raz — patrz _juz_dostal.
+        nowe = [
+            k for k in kawalki
+            if not _juz_to_czytal(role_name, k)
+        ]
+
+        if nowe:
+            lines.append(
+                nadawca + " mówi do Ciebie: " + "\n\n".join(nowe)
+            )
+
+        else:
+            # Tresc juz jest wyzej, ale to, ze byla napisana WPROST
+            # do niego, nie jest z niej widoczne. Jedno zdanie.
+            lines.append(
+                nadawca + " napisał to wyżej wprost do Ciebie."
+            )
 
     # Przyklad bierzemy z imienia OSTATNIEGO nadawcy, nie ze
     # sztywnego "Wojtku" — inaczej Wojtek dostawal podpowiedz, zeby
