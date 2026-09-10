@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v297
+AEL-MINI AUTONOMOUS AGENT v298
 
 ARCHITEKTURA:
 
@@ -1864,7 +1864,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v297")
+    print("             AEL-MINI AUTONOMOUS AGENT v298")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6509,6 +6509,16 @@ def android_paste_text(text, target_text):
             wpisana wartość).
     """
 
+    # v298: wklejanie do terminala agenta to ten sam blad co pisanie
+    # — patrz _pisanie_do_wlasnego_terminala(). W logu 2026-09-10
+    # nie udalo sie zreszta ani razu ("Menu kontekstowe nie pokazalo
+    # opcji Wklej"), bo terminal nie ma pola do wklejania.
+    _odmowa = _pisanie_do_wlasnego_terminala("Wklejenie tekstu")
+
+    if _odmowa:
+        _odmowa["action"] = "paste_text"
+        return _odmowa
+
     clipboard_result = android_set_clipboard(text)
 
     if not clipboard_result.get("ok"):
@@ -6570,6 +6580,61 @@ def android_paste_text(text, target_text):
     }
 
 
+def _pisanie_do_wlasnego_terminala(co_robimy):
+    """
+    Czy to, co zaraz zrobimy na ekranie, poleci w terminal, w ktorym
+    dziala sam agent. Zwraca gotowa odmowe albo None.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-10 18:43, kroki 1-3).
+    Zespol probowal uruchomic komende w Termuksie tak, jak zrobilby to
+    czlowiek: klikniecie w pole wejscia (545, 1882), wklejenie tekstu,
+    ENTER. Na wierzchu byl Termux — czyli WLASNY terminal agenta.
+    W efekcie:
+
+      - znaki poszly na stdin procesu, ktory czyta wejscie od
+        uzytkownika,
+      - wklejenie i tak sie nie udalo ("Menu kontekstowe nie pokazalo
+        opcji Wklej"),
+      - a screenshot_ocr odczytal z ekranu... wlasny log agenta
+        ("[18:46:17] [QUEUE] Dodano 20260910_184617_95d27d").
+
+    Wyjscia komendy nie bylo i byc nie moglo. Bartek podsumowal to
+    tak: "od trzech tur krecimy sie w kolko z jedna komenda i nie
+    wraca z niej output".
+
+    Od v222 Python o tym MOWIL — po fakcie, jako ostrzezenie przy
+    wyniku. Nie wystarczylo: klikniecie juz sie odbylo, znaki juz
+    byly w terminalu, a zespol probowal dalej. Wiec od teraz nie
+    mowimy, tylko nie robimy — i podajemy droge, ktora dziala.
+
+    Komendy w Termuksie NIE wymagaja zadnego ekranu: execute_shell
+    uruchamia je w procesie samego agenta (patrz termux_run), wiec
+    dziala niezaleznie od tego, co jest na wierzchu.
+    """
+
+    pakiet, _etykieta = _foreground_app()
+
+    if pakiet != "com.termux":
+        return None
+
+    return {
+        "ok": False,
+        "error": (
+            co_robimy + " poszłoby w Termux — czyli w terminal, w "
+            "którym działa sam agent. Znaki wylądowałyby na jego "
+            "własnym wejściu, a wyniku komendy nikt by nie zobaczył "
+            "(zdarzyło się to naprawdę: trzy tury pod rząd bez "
+            "outputu). Nie zrobiłem tego. Komenda w Termuksie nie "
+            "potrzebuje ekranu — termux_run uruchamia ją w procesie "
+            "agenta, obojętnie co jest na wierzchu. Jeżeli chodziło o "
+            "INNĄ aplikację, wyciągnij ją najpierw "
+            "(android_launch_app) i sprawdź android_state."
+        ),
+        "blocked_by_safety_gate": True,
+        "foreground": "com.termux"
+    }
+
+
 def android_tap(x, y):
 
     if android_device is None:
@@ -6587,6 +6652,23 @@ def android_tap(x, y):
     # ją mówi — i zespół dowiaduje się o tym w tym samym kroku, a nie
     # dwa kroki później.
     pakiet, etykieta = _foreground_app()
+
+    # v298: samo ostrzezenie nie wystarczylo — patrz
+    # _pisanie_do_wlasnego_terminala(). Klikniecie w terminal agenta
+    # nie ma poprawnego zastosowania: znaki ida na jego wlasne
+    # wejscie, a wyniku i tak nie ma skad wziac.
+    _odmowa = _pisanie_do_wlasnego_terminala(
+        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")"
+    )
+
+    if _odmowa:
+        _pending_team_warnings.append(
+            "Ktoś chciał kliknąć w ekran (" + str(x) + ", " + str(y)
+            + "), a na wierzchu był Termux — czyli terminal samego "
+            "agenta. Nie kliknąłem: komenda w Termuksie i tak nie "
+            "potrzebuje ekranu, termux_run uruchamia ją wprost."
+        )
+        return _odmowa
 
     try:
 
@@ -6641,6 +6723,15 @@ def android_type(text):
             "ok": False,
             "error": "Android niedostępny"
         }
+
+    # v298: to jest ten przypadek, w ktorym znaki naprawde ladowaly
+    # na stdin agenta — patrz _pisanie_do_wlasnego_terminala().
+    _odmowa = _pisanie_do_wlasnego_terminala(
+        "Wpisanie tekstu na ekranie"
+    )
+
+    if _odmowa:
+        return _odmowa
 
     try:
 
@@ -12103,8 +12194,41 @@ PODGLAD_CO_SEKUND = int(
 )
 
 
+def _po_ludzku_rozmiar(bajty):
+    """Ile tego jest, powiedziane tak, jak mowi czlowiek."""
+
+    try:
+        bajty = int(bajty)
+    except Exception:
+        return "0 B"
+
+    if bajty < 1024:
+        return str(bajty) + " B"
+
+    if bajty < 1024 * 1024:
+        return str(round(bajty / 1024.0, 1)) + " kB"
+
+    return str(round(bajty / (1024.0 * 1024.0), 1)) + " MB"
+
+
 def _ostatnia_tresciwa_linia(sciezka, ile=160):
-    """Ostatnia niepusta linia pliku — czyli to, na czym stoimy."""
+    """
+    Ostatnia niepusta linia pliku — czyli to, na czym stoimy.
+
+    v298: tniemy TAKZE na \r, nie tylko na \n.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-10 18:43, krok 21).
+    curl rysuje pasek postepu nadpisujac jedna linie znakiem powrotu
+    karetki. Bez ciecia na \r cala historia paska byla JEDNA linia,
+    a `" ".join(linia.split())` sklejalo ja w scianke liczb:
+
+        0 0 0 0 0 0 0 0 0 0 146.4M 0 410.6k 0 0 342.0k 0 07:18
+        00:01 07:17 405.0k 0 146.4M 0 757.7k 0 0 338.0k 0 ...
+
+    Uzytkownik prosil, zeby widziec, CO sie pobiera i kompiluje.
+    Dostawal to. Po podzieleniu na klatki widac ostatnia z nich —
+    czyli faktyczny stan pobierania.
+    """
 
     try:
         with open(sciezka, "rb") as f:
@@ -12116,10 +12240,10 @@ def _ostatnia_tresciwa_linia(sciezka, ile=160):
     except Exception:
         return ""
 
-    for linia in reversed(ogon.split("\n")):
-        linia = " ".join(linia.split())
-        if linia:
-            return linia[:ile]
+    for klatka in reversed(ogon.replace("\r", "\n").split("\n")):
+        klatka = " ".join(klatka.split())
+        if klatka:
+            return klatka[:ile]
 
     return ""
 
@@ -12371,6 +12495,10 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         ostatni_cpu = 0.0
         nastepne_sprawdzenie_petli = time.time() + 1.0
         sufit = started.timestamp() + max(limit, SUFIT_CZASU)
+
+        # v298: zeby nie powtarzac w kolko tego samego zdania.
+        ostatnio_powiedziane = ""
+        rozmiar_przy_podgladzie = 0
         powod = ""
         szczegol = ""
 
@@ -12491,8 +12619,43 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                     or ""
                 )
 
-                if na_czym:
+                # v298: to samo zdanie w kolko to nie meldunek.
+                #
+                # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-10
+                # 18:43). Przez szesc minut kompilacji podglad
+                # napisal 27 razy "Leci N min: ===BUILD===", bo
+                # gradle nie zamknal zadnej nowej linii. Przy
+                # instalacji SDK — 17 razy "===INST===". Uzytkownik
+                # chcial widziec, co sie dzieje; dostal jedno slowo
+                # powtorzone czterdziesci cztery razy.
+                #
+                # Gdy nie ma nowej linii, mowimy to, co JEST nowe:
+                # ile wyjscia przybylo od poprzedniego meldunku.
+                # Rosnacy plik to dowod, ze robota idzie, nawet gdy
+                # program milczy.
+                _przybylo = rozmiar - rozmiar_przy_podgladzie
+                rozmiar_przy_podgladzie = rozmiar
+
+                if na_czym and na_czym != ostatnio_powiedziane:
+                    ostatnio_powiedziane = na_czym
                     log("TERMUX", "Leci " + _jak_dlugo + ": " + na_czym)
+
+                elif _przybylo > 0:
+                    log(
+                        "TERMUX",
+                        "Leci " + _jak_dlugo + ": przybyło "
+                        + _po_ludzku_rozmiar(_przybylo)
+                        + ", wciąż "
+                        + (short(na_czym, 60) if na_czym else "cicho")
+                    )
+
+                elif na_czym:
+                    log(
+                        "TERMUX",
+                        "Leci " + _jak_dlugo + ": nic nowego od "
+                        + str(int(teraz - ostatni_ruch)) + " s ("
+                        + short(na_czym, 60) + ")"
+                    )
 
                 else:
                     # Cisza tez jest informacja — i to wazna, bo
