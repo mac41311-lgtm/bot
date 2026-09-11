@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v299
+AEL-MINI AUTONOMOUS AGENT v300
 
 ARCHITEKTURA:
 
@@ -1390,6 +1390,26 @@ def podsumowanie_biegu(sciezka=None, sciezka_przebiegu=None):
         + ", wywołań narzędzi: " + str(dane["narzedzia"])
     ]
 
+    # v300: ile zeszło z kont DeepSeeka w ostatniej godzinie. To jest
+    # liczba, od ktorej zalezy, czy uzytkownik zobaczy limit strony —
+    # wiec ma byc widoczna razem z reszta, a nie dopiero wtedy, gdy
+    # bedzie za pozno.
+    for _konto in sorted(_deepseek_wyslane):
+
+        _uzyte = len(_posprzataj_okno(_konto, time.time()))
+
+        if not _uzyte:
+            continue
+
+        linie.append(
+            "Konto DeepSeek " + str(_konto) + ": " + str(_uzyte)
+            + " wiadomości w ostatniej godzinie z "
+            + str(_budzet_konta_teraz(_konto))
+            + " (zostaje " + str(_budzet_konta(_konto))
+            + " dla nas, " + str(DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
+            + " dla Ciebie)."
+        )
+
     if dane["kroki_bez_narzedzia"]:
         linie.append(
             "Kroki bez ani jednego narzędzia: "
@@ -1884,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v299")
+    print("             AEL-MINI AUTONOMOUS AGENT v300")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3406,6 +3426,11 @@ def _set_current_goal(goal):
     # nowym — patrz _kod_autorow.
     del _kod_autorow[:]
 
+    # v300: o oszczedzaniu mowimy raz na cel. Samego budzetu NIE
+    # zerujemy — strona nie zapomina o naszych wiadomosciach tylko
+    # dlatego, ze my zaczelismy nowy cel.
+    _powiedziane_o_oszczedzaniu.clear()
+
     global _powiedziane_o_komendach
     _powiedziane_o_komendach = False
 
@@ -4012,6 +4037,14 @@ def _zwolnij_tempo(name):
         else:
             _deepseek_odstep[account] = nowy
 
+    # v300: sam odstep to za malo. Skoro serwer liczy SZTUKI, to
+    # przy "za szybko" obcinamy takze budzet godzinowy — i zostaje
+    # obciety do konca uruchomienia. Nasz domyslny budzet jest
+    # zgadniety (DeepSeek nie podaje swojego); to jest jedyny moment,
+    # w ktorym dostajemy od strony prawdziwa informacje zwrotna, wiec
+    # z niej korzystamy.
+    _obetnij_budzet(account)
+
 
 def _przyspiesz_po_sukcesie(name):
     """
@@ -4044,9 +4077,248 @@ def _przyspiesz_po_sukcesie(name):
             )
 
 
+# ============================================================
+# BUDZET, NIE TYLKO ODSTEP (v300)
+# ============================================================
+#
+# Do tej pory pilnowalismy WYLACZNIE odstepu miedzy wiadomosciami
+# (DEEPSEEK_MIN_INTERVAL_SECONDS, domyslnie 6 s) i zwalnialismy
+# dopiero wtedy, gdy serwer sam powiedzial "Messages too frequent".
+# To jest reakcja, nie ostroznosc — a strona DeepSeeka nie liczy
+# odstepow, tylko SZTUKI w oknie czasu. Odstep 6 s przepuszcza
+# dziesiec wiadomosci na minute i zadna z nich nie jest "za szybko"
+# z osobna.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (uzytkownik, 2026-09-11): "konta sa
+# spamowane za szybko, bo limit strony mi sie wyswietlil na jednym
+# koncie". Policzone z przebiegu 26 krokow: konto 1 (MAIN, CRITIC,
+# RESEARCHER, WOJTEK, ESTIMATOR) wzielo 106 wiadomosci, konto 2
+# (PLANNER, ENGINEER, BROWSER, PIOTR, ANIA) — 82. Przy krokach co
+# ~90 s to jest okolo 90 wiadomosci na godzine na konto 1, w
+# rownych porcjach po cztery. Do tego uzytkownik pyta DeepSeeka
+# recznie w tej samej przegladarce, na tym samym koncie — i to jego
+# pytanie dostaje sciane.
+#
+# Wiec pilnujemy tego, co strona naprawde liczy: ILE wiadomosci
+# poszlo na to konto w ostatniej godzinie. Gdy budzet sie konczy —
+# czekamy tyle, ile trzeba, zeby najstarsza wiadomosc wypadla z
+# okna. Nie zgadujemy i nie czekamy na to, az serwer sie obrazi.
+DEEPSEEK_NA_GODZINE = int(
+    os.environ.get(
+        "DEEPSEEK_NA_GODZINE",
+        "90"
+    )
+)
+
+# Ile z budzetu zostawiamy dla CZLOWIEKA. Uzytkownik pyta DeepSeeka
+# recznie na tym samym koncie i jego pytanie nie moze przegrac z
+# nasza narada.
+DEEPSEEK_REZERWA_DLA_CZLOWIEKA = int(
+    os.environ.get(
+        "DEEPSEEK_REZERWA_DLA_CZLOWIEKA",
+        "10"
+    )
+)
+
+_OKNO_BUDZETU = 3600.0
+
+# Znaczniki czasu wyslanych wiadomosci, osobno na konto.
+_deepseek_wyslane = {}
+
+
+def _posprzataj_okno(account, teraz):
+    """Wyrzuca z licznika wiadomosci starsze niz godzina."""
+
+    znaczniki = _deepseek_wyslane.setdefault(account, [])
+    granica = teraz - _OKNO_BUDZETU
+
+    while znaczniki and znaczniki[0] < granica:
+        znaczniki.pop(0)
+
+    return znaczniki
+
+
+def _budzet_konta(account):
+    """Ile wiadomosci wolno jeszcze wyslac na tym koncie w tej godzinie."""
+
+    znaczniki = _posprzataj_okno(account, time.time())
+
+    return max(
+        0,
+        _budzet_konta_teraz(account)
+        - DEEPSEEK_REZERWA_DLA_CZLOWIEKA
+        - len(znaczniki)
+    )
+
+
+def _budzet_roli(name):
+    """To samo, ale pytane imieniem roli."""
+
+    try:
+        return _budzet_konta(_account_of(name))
+    except Exception:
+        return DEEPSEEK_NA_GODZINE
+
+
+def _ile_czekac_na_budzet(account, teraz):
+    """
+    Ile sekund do zwolnienia jednego miejsca w oknie. 0, gdy budzet
+    jest.
+    """
+
+    znaczniki = _posprzataj_okno(account, teraz)
+
+    wolne = (
+        _budzet_konta_teraz(account)
+        - DEEPSEEK_REZERWA_DLA_CZLOWIEKA
+        - len(znaczniki)
+    )
+
+    if wolne > 0 or not znaczniki:
+        return 0.0
+
+    return max(0.0, znaczniki[0] + _OKNO_BUDZETU - teraz)
+
+
+# Ile wiadomosci na konto musi zostac, zeby glosy dodatkowe mialy
+# jeszcze sens. Ponizej tego MAIN, Tomek i Marek dokancza cel sami.
+_BUDZET_NA_GLOSY_DODATKOWE = 12
+
+# Zeby nie powtarzac tego zdania w kazdym kroku.
+_powiedziane_o_oszczedzaniu = set()
+
+
+# Budzet obciety po tym, jak strona powiedziala "za szybko" —
+# osobno na konto, trzymany do konca uruchomienia.
+_budzet_obciety = {}
+
+_BUDZET_MINIMALNY = 20
+
+
+def _budzet_konta_teraz(account):
+    """Ile wiadomosci na godzine wolno na tym koncie w tej chwili."""
+
+    return _budzet_obciety.get(account, DEEPSEEK_NA_GODZINE)
+
+
+def _obetnij_budzet(account):
+    """
+    Strona powiedziala "za szybko" — nasz budzet byl za duzy.
+    Scinamy go o jedna trzecia i zostawiamy sciety.
+    """
+
+    biezacy = _budzet_konta_teraz(account)
+
+    nowy = max(_BUDZET_MINIMALNY, int(biezacy * 0.66))
+
+    if nowy < biezacy:
+
+        _budzet_obciety[account] = nowy
+
+        log(
+            "DEEPSEEK",
+            "Konto " + str(account) + ": skoro strona mówi, że za "
+            "szybko, to mój budżet był za duży — schodzę z "
+            + str(biezacy) + " do " + str(nowy)
+            + " wiadomości na godzinę i już przy tym zostaję."
+        )
+
+
+def _oszczedzamy_konto(name):
+    """
+    Czy na koncie tej roli zostalo juz tak malo, ze nie stac nas na
+    glos dodatkowy.
+
+    Nie dotyczy MAIN-a, Tomka ani Marka — bez nich nie ma kroku.
+    """
+
+    if name in ("MAIN", "PLANNER", "CRITIC", "ENGINEER"):
+        return False
+
+    try:
+        zostalo = _budzet_roli(name)
+    except Exception:
+        return False
+
+    if zostalo > _BUDZET_NA_GLOSY_DODATKOWE:
+        return False
+
+    konto = _account_of(name)
+
+    if konto not in _powiedziane_o_oszczedzaniu:
+
+        _powiedziane_o_oszczedzaniu.add(konto)
+
+        log(
+            "DEEPSEEK",
+            "Konto " + str(konto) + ": zostało " + str(zostalo)
+            + " wiadomości na tę godzinę, więc głosy dodatkowe "
+            "(Kamil, Ola, Wojtek) siadają, a cel dokańczają MAIN, "
+            "Tomek, Marek i Bartek. Limit strony byłby gorszy."
+        )
+
+    return True
+
+
+def _czekaj_na_budzet(account):
+    """
+    Czeka, az w oknie zwolni sie miejsce — ale NIE po ciemku i NIE
+    pod blokada.
+
+    Czekanie na budzet potrafi trwac kilkanascie minut. Cisza przez
+    ten czas wyglada dokladnie tak samo jak zawieszony agent, a to
+    juz raz kosztowalo uzytkownika Ctrl+C (log 2026-09-09). Wiec co
+    minute mowimy, ile jeszcze.
+
+    Blokady tu nie trzymamy, bo jest wspolna dla obu kont — drugie
+    konto ma swoj wlasny limit i nie ma powodu, zeby stalo.
+    """
+
+    powiedziane = False
+
+    while True:
+
+        with _deepseek_pacing_lock:
+            zostalo = _ile_czekac_na_budzet(account, time.time())
+
+        if zostalo <= 0:
+            return
+
+        if not powiedziane:
+
+            powiedziane = True
+
+            log(
+                "DEEPSEEK",
+                "Konto " + str(account) + ": wyczerpany budżet na tę "
+                "godzinę (" + str(_budzet_konta_teraz(account))
+                + " wiadomości, w tym "
+                + str(DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
+                + " zostawione dla Ciebie). Czekam "
+                + str(int(zostalo // 60)) + " min, aż zwolni się "
+                "miejsce — to lepsze niż ściana na koncie."
+            )
+
+        elif int(zostalo) % 60 < 2:
+
+            log(
+                "DEEPSEEK",
+                "Konto " + str(account) + ": jeszcze "
+                + str(int(zostalo // 60) + 1) + " min do wolnego "
+                "miejsca."
+            )
+
+        time.sleep(min(60.0, zostalo))
+
+
 def _deepseek_pace(name):
 
     account = _account_of(name)
+
+    # v300: najpierw budzet godzinowy, potem odstep. Budzet mowi
+    # "ile", odstep mowi "jak gesto" — to dwie rozne rzeczy i strona
+    # liczy te pierwsza.
+    _czekaj_na_budzet(account)
 
     with _deepseek_pacing_lock:
 
@@ -4059,7 +4331,9 @@ def _deepseek_pace(name):
         if remaining > 0:
             time.sleep(remaining)
 
-        _deepseek_last_send[account] = time.time()
+        _teraz = time.time()
+        _deepseek_last_send[account] = _teraz
+        _posprzataj_okno(account, _teraz).append(_teraz)
 
 
 # ------------------------------------------------------------
@@ -22962,16 +23236,25 @@ def consult_team(
     goal_needs_android = _goal_mentions_android(goal)
     goal_needs_chrome = _chrome_relevant_now(goal, last_result)
 
+    # v300: gdy budzet konta sie konczy, wydajemy go na to, co
+    # decyduje. Patrz _oszczedzamy_konto(): MAIN musi sie odezwac,
+    # bo to on wybiera nastepny krok; Tomek proponuje, Marek ocenia.
+    # Kamil, Ola i Wojtek to glosy dodatkowe — jeden krok bez nich
+    # kosztuje mniej niz sciana na koncie w polowie celu.
     consult_researcher = (
-        (step % 3 == 1)
-        or fresh_tool_error
-        or "RESEARCHER" in _zawolani
-        or _pyta_marek == "RESEARCHER"
+        (
+            (step % 3 == 1)
+            or fresh_tool_error
+            or "RESEARCHER" in _zawolani
+            or _pyta_marek == "RESEARCHER"
+        )
+        and not _oszczedzamy_konto("RESEARCHER")
     )
 
     consult_browser = (
         goal_needs_chrome
         and ((step % 3 == 1) or "BROWSER" in _zawolani)
+        and not _oszczedzamy_konto("BROWSER")
     )
 
     # WOJTEK to jedyna rola, która NIE dostaje core_context (bez
@@ -22982,9 +23265,12 @@ def consult_team(
     # jak RESEARCHER (oszczędzanie limitu/sesji) — to rola
     # dodatkowa/inspiracyjna, nie krytyczna dla decyzji MAIN.
     consult_wojtek = (
-        (step % 3 == 1)
-        or fresh_tool_error
-        or "WOJTEK" in _zawolani
+        (
+            (step % 3 == 1)
+            or fresh_tool_error
+            or "WOJTEK" in _zawolani
+        )
+        and not _oszczedzamy_konto("WOJTEK")
     )
 
     # Pytanie Marka to tez zawolanie — inaczej Tomek wchodzil w
