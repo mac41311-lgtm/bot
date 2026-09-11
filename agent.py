@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v300
+AEL-MINI AUTONOMOUS AGENT v301
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v300")
+    print("             AEL-MINI AUTONOMOUS AGENT v301")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2841,6 +2841,36 @@ _role_seen_blocks = {}
 def _reset_step_by_step_memory():
     """Nowy cel = zaczynamy rozmowe od zera."""
     _role_seen_blocks.clear()
+
+
+def _ekran_bez_mapy_klikania(tekst):
+    """
+    Zrzut ekranu bez drzewa widgetow, gdy na wierzchu jest WLASNY
+    terminal agenta.
+
+    Drzewo widgetow to mapa do klikania: "ESC | click=true |
+    bounds=[9,1263][160,1376]". Ma sens, gdy ktos bedzie w to
+    klikal. W terminalu agenta nikt nie bedzie — od v298 nie wolno
+    (patrz _pisanie_do_wlasnego_terminala), bo znaki ladowalyby na
+    jego wlasnym wejsciu.
+
+    Zostaje jedno zdanie: co jest na wierzchu. To jest fakt, ktory
+    ma znaczenie. Reszta to 2000 znakow wspolrzednych przyciskow,
+    ktorych nikt nie nacisnie — a szly do czterech rol, w kazdym
+    kroku.
+    """
+
+    tekst = str(tekst or "")
+
+    if "com.termux" not in tekst:
+        return tekst
+
+    linie = [l for l in tekst.split("\n") if l.strip()]
+
+    if not linie:
+        return tekst
+
+    return linie[0]
 
 
 def _bez_maszynowni_dla(rola):
@@ -23085,7 +23115,31 @@ def consult_team(
             else _progress_for_role(role_name, progress_snapshot),
             _only_if_new(role_name, "checklist", checklist_block)
             if not _bez_maszynowni else "",
-            _only_if_new(role_name, "main_decision", main_decision_block),
+            # v301: decyzja MAIN-a to maszynownia — patrz
+            # _bez_maszynowni_dla().
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (uzytkownik pokazal
+            # prompt Kamila z biegu 2026-09-11). Kamil dostal:
+            #
+            #   "Po ostatniej naradzie MAIN zdecydowal tak: TASK —
+            #    APK jest zainstalowany... test v1 — transport: apka
+            #    laczy sie z server.py po WS... Warunki stopu: brak
+            #    potwierdzenia instalacji, port 8765 zajety przed
+            #    startem, brak linii [ws] client connected..."
+            #
+            # ...a pod spodem jedno slowo: "Kamilu?".
+            #
+            # Kamil szuka w sieci. Nie zainstaluje APK, nie otworzy
+            # portu 8765, nie przeczyta logu. Policzone z przebiegu:
+            # ten blok to bylo 12 817 z 22 066 znakow, ktore do niego
+            # poszly — 58%, i ani jeden z nich nie byl dla niego.
+            #
+            # Tomkowi, Bartkowi i Markowi ta decyzja jest potrzebna
+            # (planuja, pisza i oceniaja wlasnie ja) i tam zostaje.
+            "" if _bez_maszynowni
+            else _only_if_new(
+                role_name, "main_decision", main_decision_block
+            ),
             # v269: surowy zrzut wywolania narzedzia to maszynownia.
             # Kamil szuka w sieci i nie uruchamia narzedzi — sam
             # komunikat bledu ma juz w streszczeniu Oli. Ta sama
@@ -23130,7 +23184,10 @@ def consult_team(
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(
-            android_text if android_text is not None else android_summary(),
+            _ekran_bez_mapy_klikania(
+                android_text if android_text is not None
+                else android_summary()
+            ),
             2000
         )
         + "\n"
@@ -24272,7 +24329,10 @@ def main_decide(
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(
-            android_text if android_text is not None else android_summary(),
+            _ekran_bez_mapy_klikania(
+                android_text if android_text is not None
+                else android_summary()
+            ),
             3500
         ) + "\n"
         if _goal_mentions_android(goal) else ""
