@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v305
+AEL-MINI AUTONOMOUS AGENT v306
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v305")
+    print("             AEL-MINI AUTONOMOUS AGENT v306")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7525,6 +7525,64 @@ def _cleanup_screenshots_silently():
         )
 
 
+# Urzadzenia, ktore proces potrafi TRZYMAC zajete po sobie, i
+# komenda, ktora je zwalnia. Pary sa faktem o Termuksie, nie o
+# jakimkolwiek celu — dopisanie kolejnej pozycji nie wymaga wiedzy o
+# tym, co akurat robi zespol.
+_URZADZENIA_DO_ZWOLNIENIA = (
+    ("termux-microphone-record", ["termux-microphone-record", "-q"]),
+)
+
+
+def _zwolnij_zajete_urzadzenia():
+    """
+    Zwalnia urzadzenie, ktore NAPRAWDE jest w tej chwili zajete.
+
+    v306: sprawdzamy, zanim zwolnimy.
+
+    W v305 wolalem `termux-microphone-record -q` przy KAZDYM wyjsciu
+    z programu. Uzytkownik przypomnial zasade, ktora obowiazuje tu od
+    poczatku: program jest UNIWERSALNY. Cel bywa asystentem glosowym,
+    ale rownie dobrze bywa czymkolwiek innym — i wtedy wolanie
+    komendy od mikrofonu jest zalozeniem o celu, a nie reakcja na
+    fakt.
+
+    Wiec najpierw patrzymy, czy taki proces w ogole chodzi. Chodzi —
+    zwalniamy. Nie chodzi — nie ma czego zwalniac i nie robimy nic.
+    Przy celu bez dzwieku ten kod nie wykona ani jednej komendy.
+
+    Nigdy nie rzuca — to sprzatanie przy wyjsciu.
+    """
+
+    for nazwa, komenda in _URZADZENIA_DO_ZWOLNIENIA:
+
+        try:
+            czy_chodzi = subprocess.run(
+                ["pgrep", "-f", nazwa],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).returncode == 0
+
+        except Exception:
+            continue
+
+        if not czy_chodzi:
+            continue
+
+        print("Zwalniam " + nazwa + " — zostalo zajete.")
+
+        try:
+            subprocess.run(
+                komenda,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+
 def _zatrzymaj_to_co_zostawilismy():
     """
     Przy wyjsciu gasimy to, co sami puscilismy w tle — i zwalniamy
@@ -7539,8 +7597,10 @@ def _zatrzymaj_to_co_zostawilismy():
 
     Skoro agent konczy prace, nikt juz nie przeczyta logow tych
     procesow ani nie odbierze ich wynikow. Zostawianie ich przy
-    zyciu nie sluzy nikomu, a mikrofon to rzecz, ktora uzytkownik
-    SLYSZY.
+    zyciu nie sluzy nikomu.
+
+    Osobno zwalniamy urzadzenia, ktore zostaly zajete — ale tylko te,
+    ktore NAPRAWDE sa zajete. Patrz _zwolnij_zajete_urzadzenia().
 
     Nigdy nie rzuca — to sprzatanie przy wyjsciu, nie robota.
     """
@@ -7582,18 +7642,7 @@ def _zatrzymaj_to_co_zostawilismy():
         except Exception:
             continue
 
-    # Mikrofon zwalniamy ZAWSZE, nawet gdy nagrywanie odpalil ktos
-    # inaczej niz przez nasze tlo. To jedna, tania komenda, a
-    # roznica jest slyszalna.
-    try:
-        subprocess.run(
-            ["termux-microphone-record", "-q"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
-    except Exception:
-        pass
+    _zwolnij_zajete_urzadzenia()
 
 
 atexit.register(_zatrzymaj_to_co_zostawilismy)
