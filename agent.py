@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v301
+AEL-MINI AUTONOMOUS AGENT v302
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v301")
+    print("             AEL-MINI AUTONOMOUS AGENT v302")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3456,10 +3456,6 @@ def _set_current_goal(goal):
     # nowym — patrz _kod_autorow.
     del _kod_autorow[:]
 
-    # v300: o oszczedzaniu mowimy raz na cel. Samego budzetu NIE
-    # zerujemy — strona nie zapomina o naszych wiadomosciach tylko
-    # dlatego, ze my zaczelismy nowy cel.
-    _powiedziane_o_oszczedzaniu.clear()
 
     global _powiedziane_o_komendach
     _powiedziane_o_komendach = False
@@ -4022,8 +4018,10 @@ def _rozmowa_zerwana(blad):
 
     return bool(_ZERWANA_ROZMOWA_RE.search(str(blad or "")))
 
-# Ile najwyzej gotowi jestesmy czekac miedzy wiadomosciami.
-_DEEPSEEK_MAX_ODSTEP = 45.0
+# Ile najwyzej gotowi jestesmy czekac miedzy wiadomosciami. v302:
+# odstep bazowy wynika teraz z budzetu (3600/80 = 45 s), wiec sufit
+# na zwalnianie po "za szybko" musi byc wyraznie wyzej.
+_DEEPSEEK_MAX_ODSTEP = 180.0
 
 
 def _wyglada_na_przeciazenie(tekst):
@@ -4033,9 +4031,16 @@ def _wyglada_na_przeciazenie(tekst):
 
 
 def _biezacy_odstep(account):
+    """
+    Odstep, ktory faktycznie trzymamy: wyliczony z budzetu, a gdy
+    serwer kazal zwolnic jeszcze bardziej — ten wiekszy.
+    """
 
-    return _deepseek_odstep.get(
-        account, DEEPSEEK_MIN_INTERVAL_SECONDS
+    z_budzetu = _odstep_z_budzetu(account)
+
+    return max(
+        z_budzetu,
+        _deepseek_odstep.get(account, z_budzetu)
     )
 
 
@@ -4088,22 +4093,23 @@ def _przyspiesz_po_sukcesie(name):
 
         biezacy = _biezacy_odstep(account)
 
-        if biezacy <= DEEPSEEK_MIN_INTERVAL_SECONDS:
+        # v302: podloga to odstep WYNIKAJACY Z BUDZETU, nie stala 6 s.
+        # Sukces znaczy "serwer nas znosi", a nie "mozemy wrocic do
+        # tempa, ktore wywolalo limit".
+        podloga = _odstep_z_budzetu(account)
+
+        if biezacy <= podloga:
             return
 
-        nowy = max(
-            DEEPSEEK_MIN_INTERVAL_SECONDS,
-            biezacy * 0.8
-        )
+        nowy = max(podloga, biezacy * 0.8)
 
         _deepseek_odstep[account] = nowy
 
-        if nowy <= DEEPSEEK_MIN_INTERVAL_SECONDS:
+        if nowy <= podloga:
             log(
                 "DEEPSEEK",
                 "Konto " + str(account) + " znowu wyrabia — wracam "
-                "do zwyklego odstepu "
-                + str(int(DEEPSEEK_MIN_INTERVAL_SECONDS)) + "s."
+                "do zwyklego odstepu " + str(int(podloga)) + "s."
             )
 
 
@@ -4210,19 +4216,17 @@ def _ile_czekac_na_budzet(account, teraz):
     return max(0.0, znaczniki[0] + _OKNO_BUDZETU - teraz)
 
 
-# Ile wiadomosci na konto musi zostac, zeby glosy dodatkowe mialy
-# jeszcze sens. Ponizej tego MAIN, Tomek i Marek dokancza cel sami.
-_BUDZET_NA_GLOSY_DODATKOWE = 12
-
-# Zeby nie powtarzac tego zdania w kazdym kroku.
-_powiedziane_o_oszczedzaniu = set()
-
-
 # Budzet obciety po tym, jak strona powiedziala "za szybko" —
 # osobno na konto, trzymany do konca uruchomienia.
 _budzet_obciety = {}
 
-_BUDZET_MINIMALNY = 20
+# v302: najnizszy budzet, do ktorego schodzimy po kolejnych "za
+# szybko". Musi zostawiac NAM 20 miejsc ponad rezerwa dla czlowieka,
+# bo z tego wynika najwolniejsze tempo: 3600/20 = 180 s miedzy
+# wiadomosciami, czyli dokladnie _DEEPSEEK_MAX_ODSTEP. Inaczej
+# rezerwa zjadalaby polowe minimum i tempo spadaloby do szesciu
+# minut — wolniej, niz sami uznalismy za sensowny sufit.
+_BUDZET_MINIMALNY = DEEPSEEK_REZERWA_DLA_CZLOWIEKA + 20
 
 
 def _budzet_konta_teraz(account):
@@ -4235,6 +4239,10 @@ def _obetnij_budzet(account):
     """
     Strona powiedziala "za szybko" — nasz budzet byl za duzy.
     Scinamy go o jedna trzecia i zostawiamy sciety.
+
+    v302: to obcina TAKZE tempo, bo odstep miedzy wiadomosciami
+    wynika teraz wprost z budzetu — patrz _odstep_z_budzetu().
+    Mniejszy budzet znaczy dluzsze czekanie, nie mniej mowiacych.
     """
 
     biezacy = _budzet_konta_teraz(account)
@@ -4250,44 +4258,54 @@ def _obetnij_budzet(account):
             "Konto " + str(account) + ": skoro strona mówi, że za "
             "szybko, to mój budżet był za duży — schodzę z "
             + str(biezacy) + " do " + str(nowy)
-            + " wiadomości na godzinę i już przy tym zostaję."
+            + " wiadomości na godzinę, czyli z "
+            + str(int(_OKNO_BUDZETU / max(1, biezacy
+                  - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)))
+            + " s na " + str(int(_OKNO_BUDZETU / max(1, nowy
+                  - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)))
+            + " s między wiadomościami. I już przy tym zostaję."
         )
 
 
-def _oszczedzamy_konto(name):
+def _odstep_z_budzetu(account):
     """
-    Czy na koncie tej roli zostalo juz tak malo, ze nie stac nas na
-    glos dodatkowy.
+    Ile sekund miedzy wiadomosciami na tym koncie, zeby budzet
+    godzinowy rozlozyl sie ROWNO.
 
-    Nie dotyczy MAIN-a, Tomka ani Marka — bez nich nie ma kroku.
+    v302: to jest wlasciwa odpowiedz na "limit strony".
+    ---------------------------------------------------------------
+    Uzytkownik: "limity sa z tego ze za szybko wysylamy wiadomosci
+    do agentow, musimy odp wolniej".
+
+    Do v300 pilnowalismy odstepu 6 s i okna godzinnego. Te dwie
+    rzeczy razem daja cos, czego nikt nie chcial: SERIE. W jednym
+    kroku konto 1 dostawalo cztery wiadomosci w 24 sekundy (Kamil,
+    Wojtek, Marek, MAIN), a potem lezalo bezczynnie przez ~70 s.
+    Srednia na godzine wygladala przyzwoicie, ale strona nie patrzy
+    na godzine — patrzy na ostatnia minute. Cztery w 24 sekundy to
+    jest dokladnie ta seria, na ktorej wyskakuje limit.
+
+    Wiec odstep nie jest juz stala. Wynika z budzetu:
+
+        budzet 80 wiadomosci na godzine -> 3600 / 80 = 45 s
+
+    Przy takim odstepie tych samych czterech wiadomosci nie da sie
+    wyslac w 24 sekundy — pojda przez trzy minuty. Nikt nie milczy,
+    nikomu nie skracamy wypowiedzi. Po prostu czekamy miedzy nimi.
+
+    Nie schodzimy ponizej DEEPSEEK_MIN_INTERVAL_SECONDS, zeby dalo
+    sie to swiadomie przyspieszyc z zewnatrz.
     """
 
-    if name in ("MAIN", "PLANNER", "CRITIC", "ENGINEER"):
-        return False
+    budzet = max(
+        1,
+        _budzet_konta_teraz(account) - DEEPSEEK_REZERWA_DLA_CZLOWIEKA
+    )
 
-    try:
-        zostalo = _budzet_roli(name)
-    except Exception:
-        return False
-
-    if zostalo > _BUDZET_NA_GLOSY_DODATKOWE:
-        return False
-
-    konto = _account_of(name)
-
-    if konto not in _powiedziane_o_oszczedzaniu:
-
-        _powiedziane_o_oszczedzaniu.add(konto)
-
-        log(
-            "DEEPSEEK",
-            "Konto " + str(konto) + ": zostało " + str(zostalo)
-            + " wiadomości na tę godzinę, więc głosy dodatkowe "
-            "(Kamil, Ola, Wojtek) siadają, a cel dokańczają MAIN, "
-            "Tomek, Marek i Bartek. Limit strony byłby gorszy."
-        )
-
-    return True
+    return max(
+        DEEPSEEK_MIN_INTERVAL_SECONDS,
+        _OKNO_BUDZETU / float(budzet)
+    )
 
 
 def _czekaj_na_budzet(account):
@@ -23293,25 +23311,28 @@ def consult_team(
     goal_needs_android = _goal_mentions_android(goal)
     goal_needs_chrome = _chrome_relevant_now(goal, last_result)
 
-    # v300: gdy budzet konta sie konczy, wydajemy go na to, co
-    # decyduje. Patrz _oszczedzamy_konto(): MAIN musi sie odezwac,
-    # bo to on wybiera nastepny krok; Tomek proponuje, Marek ocenia.
-    # Kamil, Ola i Wojtek to glosy dodatkowe — jeden krok bez nich
-    # kosztuje mniej niz sciana na koncie w polowie celu.
+    # v302: TU NIE MA ZADNEJ BRAMKI OD LIMITU.
+    #
+    # W v300 dolozylem tu warunek: gdy budzet konta sie konczy,
+    # Kamil, Ola i Wojtek siadaja na krok. Uzytkownik powiedzial
+    # wprost, ze o to NIE chodzilo: "nie mozemy ich ograniczac,
+    # limity sa z tego ze za szybko wysylamy wiadomosci do agentow,
+    # musimy odp wolniej".
+    #
+    # I ma racje. Uciszanie kogos zmienia narade — a problem jest w
+    # TEMPIE, nie w skladzie zespolu ani w dlugosci wypowiedzi.
+    # Limit rozwiazuje sie CZEKANIEM (patrz _odstep_z_budzetu), nie
+    # odbieraniem komus glosu.
     consult_researcher = (
-        (
-            (step % 3 == 1)
-            or fresh_tool_error
-            or "RESEARCHER" in _zawolani
-            or _pyta_marek == "RESEARCHER"
-        )
-        and not _oszczedzamy_konto("RESEARCHER")
+        (step % 3 == 1)
+        or fresh_tool_error
+        or "RESEARCHER" in _zawolani
+        or _pyta_marek == "RESEARCHER"
     )
 
     consult_browser = (
         goal_needs_chrome
         and ((step % 3 == 1) or "BROWSER" in _zawolani)
-        and not _oszczedzamy_konto("BROWSER")
     )
 
     # WOJTEK to jedyna rola, która NIE dostaje core_context (bez
@@ -23322,12 +23343,9 @@ def consult_team(
     # jak RESEARCHER (oszczędzanie limitu/sesji) — to rola
     # dodatkowa/inspiracyjna, nie krytyczna dla decyzji MAIN.
     consult_wojtek = (
-        (
-            (step % 3 == 1)
-            or fresh_tool_error
-            or "WOJTEK" in _zawolani
-        )
-        and not _oszczedzamy_konto("WOJTEK")
+        (step % 3 == 1)
+        or fresh_tool_error
+        or "WOJTEK" in _zawolani
     )
 
     # Pytanie Marka to tez zawolanie — inaczej Tomek wchodzil w
