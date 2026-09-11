@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v307
+AEL-MINI AUTONOMOUS AGENT v308
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v307")
+    print("             AEL-MINI AUTONOMOUS AGENT v308")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2129,10 +2129,16 @@ Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
 # researcher_web_search(), którą i tak wywołujemy dalej jako
 # nieszkodliwy przepust dla tekstu bez markera) zniknęła świadomie —
 # szukanie dzieje się PO STRONIE DeepSeek, nie przez Pythona.
+# v308: pierwsze zdanie brzmialo "Masz wlaczone wyszukiwanie w
+# sieci". To bylo jedyne miejsce w calym zespole, gdzie mowilismy
+# do kogos ustawieniem programu, a nie po ludzku — i od v307 bywa
+# nieprawda, bo po trzech turach samego myslenia Python to
+# wyszukiwanie wylacza. Reszta zespolu od poczatku mowi o nim
+# normalnie: "Kamil sprawdza fakty w sieci". Teraz on sam slyszy o
+# sobie dokladnie to samo zdanie.
 RESEARCHER_PROMPT = """
-Nazywasz się Kamil. Masz włączone wyszukiwanie w sieci — szukaj sam,
-kiedy trzeba sprawdzić fakt. Gdy czegoś nie da się potwierdzić,
-powiedz to wprost i zaproponuj hipotezę albo kolejny krok.
+Nazywasz się Kamil. Sprawdzasz fakty w sieci. Gdy czegoś nie da się
+potwierdzić, powiedz to wprost.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
@@ -4820,6 +4826,24 @@ def _zanotuj_samo_myslenie(name):
 
         sesja.search_enabled = False
         _samo_myslenie_z_rzedu[name] = 0
+
+        # v308: do tej pory wiedzial o tym tylko log. Rola dalej
+        # miala w swoim pierwszym zdaniu, ze szuka w sieci, a zespol
+        # dalej prosil ja "sprawdz w sieci" — o czyms, czego juz nie
+        # ma. Mowimy wiec o tym raz, zwyklym zdaniem, tym samym
+        # kanalem co inne rzeczy zauwazone przez Pythona. To fakt,
+        # nie polecenie: nikomu nie mowimy, jak ma teraz pisac.
+        try:
+            _imie = _ROLE_SPEAKERS.get(name, (name,))[0]
+        except Exception:
+            _imie = name
+
+        _pending_team_warnings.append(
+            _imie + " odpowiadał samym myśleniem, bez treści, "
+            + str(_SAMO_MYSLENIE_PROG) + " tury z rzędu, więc "
+            "wyłączyłem mu wyszukiwanie w sieci — od teraz pisze "
+            "bez wyszukiwarki."
+        )
 
         log(
             "DEEPSEEK",
