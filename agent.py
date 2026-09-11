@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v298
+AEL-MINI AUTONOMOUS AGENT v299
 
 ARCHITEKTURA:
 
@@ -1295,6 +1295,12 @@ def policz_bieg(sciezka=None):
     return wynik
 
 
+# Linia, ktora wypisal sam Python: "[13:30:24] [krok 3] [TAG] ...".
+_LINIA_LOGU_RE = re.compile(
+    r"^\[\d{2}:\d{2}:\d{2}\]\s*\[krok\s+\d+\]\s*\["
+)
+
+
 def znajdz_zgloszone_braki(sciezka_przebiegu=None):
     """
     Miejsca, w ktorych ktos napisal wprost, ze czegos nie dostal.
@@ -1341,6 +1347,20 @@ def znajdz_zgloszone_braki(sciezka_przebiegu=None):
 
                 if linia.startswith("--- ") and "(" in linia:
                     kto = linia[4:].split("(")[0].strip()
+                    continue
+
+                # v299: wlasny log Pythona to nie jest skarga roli.
+                #
+                # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-11).
+                # Czujnik zameldowal: "Ktos zglosil, ze czegos nie
+                # dostal: krok 3, Marek: [13:30:24] [krok 3]
+                # [DEEPSEEK] MAIN: odpowiedz wyglada na ucieta".
+                # To nie Marek — to nasza wlasna notatka o odpowiedzi
+                # DeepSeeka, ktora akurat lezala pod naglowkiem
+                # Marka. Czujnik sluzy do znajdowania problemow;
+                # falszywy alarm w nim jest gorszy niz jego brak, bo
+                # wysyla na bezdroza.
+                if _LINIA_LOGU_RE.match(linia):
                     continue
 
                 m = _NIE_DOSTAL_RE.search(linia)
@@ -1864,7 +1884,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v298")
+    print("             AEL-MINI AUTONOMOUS AGENT v299")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4363,6 +4383,43 @@ _LIST_LINE_RE = re.compile(r"^\s*(?:[-*•+>|]|\d+[.)])\s")
 _ZDOBNIKI_NA_KONCU = "*_~ \t"
 
 
+# v299: statusy, ktore koncza krok BEZ dotkniecia telefonu. Kazdy z
+# nich ma swoj powod w last_result["message"] — patrz run_agent().
+_STATUSY_KROKU_BEZ_WYKONANIA = (
+    "ENGINEER_CODE_MISSING",
+    "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
+    "ENGINEER_CODE_LOOKS_LIKE_PYTHON_SCRIPT",
+    "ENGINEER_CODE_INVALID_PYTHON_SYNTAX",
+    "ENGINEER_CODE_IS_ONLY_A_FRAGMENT",
+    "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
+    "ENGINEER_CODE_WRITE_ERROR",
+    "TASK_DUPLICATE_OF_VERIFIED_POINT",
+    "TASK_ALREADY_SATISFIED_ON_DISK",
+    "WNIOSEK_ZE_SIE_NIE_DA",
+    "UNKNOWN_DECISION",
+    "GEMINI_QUOTA_EXHAUSTED",
+)
+
+
+def _domkniety_json(text):
+    """
+    Czy w tej wypowiedzi siedzi kompletny obiekt JSON.
+
+    To jest pytanie o DOWOD konca, nie o poprawnosc decyzji — stad
+    sama probna analiza, bez patrzenia, co w srodku.
+    """
+
+    tekst = str(text or "").strip()
+
+    if not tekst or "{" not in tekst:
+        return False
+
+    try:
+        return isinstance(parse_json(tekst), dict)
+    except Exception:
+        return False
+
+
 def _deepseek_looks_truncated(text, status):
 
     if status:
@@ -4371,7 +4428,27 @@ def _deepseek_looks_truncated(text, status):
             hint in lowered
             for hint in _TRUNCATION_STATUS_HINTS
         ):
+            # Serwer sam mowi, ze urwal — to bije wszystko inne.
             return True, "status=" + repr(status)
+
+    # v299: DOWOD bije POSZLAKE.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-11, krok 3). MAIN
+    # oddal kompletna decyzje — zadanie konczylo sie zdaniem "Wklej
+    # caly output z konsoli." Ale w calym tekscie wypadla NIEPARZYSTA
+    # liczba ciagow ```, wiec uznalismy odpowiedz za ucieta. Potem:
+    #
+    #   - action='continue' -> 422, mechanizm wylaczony na caly bieg,
+    #   - prosba o dalszy ciag zwykla wiadomoscia -> 9 znakow,
+    #   - te 9 znakow doklejone na koniec gotowego JSON-a,
+    #   - krok 3 skonczyl sie bez jednego wywolania narzedzia.
+    #
+    # Domkniety obiekt JSON jest dowodem, ze wypowiedz sie skonczyla.
+    # Liczba backtickow jest tylko poszlaka — i to slaba, bo w
+    # zadaniu dla wykonawcy backticki chodza parami niekoniecznie po
+    # trzy. Gdy mamy dowod, poszlaki nie sluchamy.
+    if _domkniety_json(text):
+        return False, None
 
     stripped = (text or "").rstrip()
 
@@ -4510,6 +4587,10 @@ _CONTINUATION_TAIL_HINT = 300
 # Ile znakow zachodzenia szukamy przy sklejaniu.
 _CONTINUATION_OVERLAP = 400
 
+# Ponizej tylu znakow "dalszy ciag" nie niesie tresci — patrz
+# _stitch_continuation().
+_OGON_BEZ_TRESCI = 40
+
 # Ile razy Z RZEDU odpowiedzi tej roli byly ucinane.
 _role_cut_streak = {}
 
@@ -4555,7 +4636,26 @@ def _stitch_continuation(text, tail):
     if not tail:
         return text
 
-    return text.rstrip() + "\n" + tail
+    sklejone = text.rstrip() + "\n" + tail
+
+    # v299: doklejenie ma POMOC, nie zaszkodzic.
+    #
+    # W logu 2026-09-11 (krok 3) na prosbe o dalszy ciag przyszlo
+    # DZIEWIEC znakow. Doklejone na koniec gotowej decyzji MAIN-a
+    # nie wnosily nic, a moglo przez nie pojsc cale zadanie. Jesli
+    # oryginal byl domknietym JSON-em, a sklejka juz nie jest —
+    # zostajemy przy oryginale. To nie jest domysl: jedno da sie
+    # sparsowac, drugiego nie.
+    if _domkniety_json(text) and not _domkniety_json(sklejone):
+        return text
+
+    # Te 9 znakow z logu 2026-09-11 nie bylo dokonczeniem niczego —
+    # decyzja byla juz kompletna. Doklejanie takiego ogona do
+    # gotowego JSON-a nie moze nic poprawic, a moze zaszkodzic.
+    if _domkniety_json(text) and len(tail) < _OGON_BEZ_TRESCI:
+        return text
+
+    return sklejone
 
 
 def _ask_for_missing_tail(name, session, text, reason):
@@ -28044,6 +28144,45 @@ def run_agent(goal):
             _deepseek_circuit_wait("MAIN")
 
             continue
+
+        # v299: krok, ktory skonczyl sie bez dotkniecia telefonu, mowi
+        # dlaczego.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-11, krok 3).
+        # MAIN wydal kompletne zadanie, w logu pojawila sie jego
+        # czytelna tresc — i na tym krok sie skonczyl. Ani jednego
+        # wywolania narzedzia, ani jednego slowa dlaczego. Zadna z
+        # bramek konczacych krok (ENGINEER_CODE_MISSING,
+        # TASK_DUPLICATE_OF_VERIFIED_POINT, TASK_ALREADY_SATISFIED_
+        # ON_DISK i siedem innych) nie zostawiala sladu: ustawialy
+        # last_result i robily `continue`. Zespol widzial cisze,
+        # uzytkownik widzial cisze, czujnik pokazywal "krok bez ani
+        # jednego narzedzia" bez powodu.
+        #
+        # Powod ZAWSZE jest — siedzi w last_result. Wystarczy go
+        # powiedziec, raz, w jednym miejscu.
+        _powod_przepadku = (
+            last_result.get("status")
+            if isinstance(last_result, dict) else None
+        )
+
+        if _powod_przepadku in _STATUSY_KROKU_BEZ_WYKONANIA:
+
+            log(
+                "MAIN",
+                "Krok " + str(step) + " skończył się bez wykonania ("
+                + str(_powod_przepadku) + "): "
+                + short(
+                    str(last_result.get("message")
+                        or last_result.get("error") or ""),
+                    300
+                )
+            )
+
+            zapisz_zdarzenie(
+                "krok_bez_wykonania",
+                status=str(_powod_przepadku)
+            )
 
         step += 1
 
