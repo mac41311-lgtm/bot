@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v308
+AEL-MINI AUTONOMOUS AGENT v309
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v308")
+    print("             AEL-MINI AUTONOMOUS AGENT v309")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5585,14 +5585,80 @@ def deepseek(name, message):
 
                         else:
 
-                            log(
-                                "DEEPSEEK",
-                                name + ": ponowienie po pustej "
-                                "odpowiedzi TEŻ puste (status="
-                                + str(retry_status) + ") — zostaje "
-                                "pusty tekst, wywołujący musi to "
-                                "obsłużyć."
+                            # v309: ponowienie tez samo myslenie.
+                            # To jest DRUGA z rzedu urwana
+                            # generacja, a dotad liczylismy tylko
+                            # pierwsza — przez co proba trzech z
+                            # rzedu (patrz _zanotuj_samo_myslenie)
+                            # wymagala szesciu pustych odpowiedzi i
+                            # trzech spalonych krokow.
+                            #
+                            # Log 2026-09-11 20:57: 4294 znaki
+                            # myslenia, pusto, ponowienie tez pusto
+                            # — a licznik zobaczyl z tego jedno.
+                            _szukalo = getattr(
+                                session, "search_enabled", False
                             )
+
+                            if _ostatnie_samo_myslenie:
+                                _zanotuj_samo_myslenie(name)
+
+                            if _szukalo and not getattr(
+                                session, "search_enabled", False
+                            ):
+
+                                # Wlasnie zmienil sie warunek, w
+                                # ktorym ta rola odpowiada. Nie
+                                # czekamy z tym do nastepnego kroku
+                                # — pytamy jeszcze raz od razu, tak
+                                # jak czlowiek, ktory cos przestawil
+                                # i sprawdza, czy pomoglo.
+                                log(
+                                    "DEEPSEEK",
+                                    name + ": pytam jeszcze raz, "
+                                    "juz bez szukania w sieci."
+                                )
+
+                                trzeci_text, trzeci_status = (
+                                    _deepseek_send_experimental(
+                                        name, session, message
+                                    )
+                                )
+
+                                if trzeci_text and trzeci_text.strip():
+
+                                    text = trzeci_text
+
+                                    _zanotuj_odpowiedz_z_trescia(name)
+
+                                    log(
+                                        "DEEPSEEK",
+                                        name + ": bez szukania w "
+                                        "sieci odpowiedzial — "
+                                        + str(len(text))
+                                        + " znakow."
+                                    )
+
+                                else:
+
+                                    log(
+                                        "DEEPSEEK",
+                                        name + ": bez szukania w "
+                                        "sieci tez pusto (status="
+                                        + str(trzeci_status)
+                                        + ") — to nie bylo tym."
+                                    )
+
+                            else:
+
+                                log(
+                                    "DEEPSEEK",
+                                    name + ": ponowienie po pustej "
+                                    "odpowiedzi TEŻ puste (status="
+                                    + str(retry_status) + ") — "
+                                    "zostaje pusty tekst, wywołujący "
+                                    "musi to obsłużyć."
+                                )
 
                     except Exception as retry_error:
 
@@ -22529,10 +22595,29 @@ def _utnij_na_sekcji_wykonawcy(fragment):
     return tekst[:m.start()]
 
 
+# v309: MYSLNIK po imieniu znaczy dokladnie to samo, co dwukropek.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-11, 20:57). Wojtek
+# skonczyl dluga analize zdaniem:
+#
+#     Kamilu — sprawdź w sieci, co o tym wiadomo.
+#
+# Czlowiek czyta to jako zwrocenie sie do Kamila i nie zastanawia
+# sie nad znakiem po imieniu. My wymagalismy dwukropka albo
+# przecinka, wiec dla nas to zawolanie NIE istnialo. Skutkiem bylo
+# to, na co uzytkownik zwrocil uwage: Kamil dostal cala analize
+# (2 tysiace znakow, razem z pytaniami skierowanymi do czlowieka),
+# zamiast jednego zdania, ktore bylo do niego. I nie dostal
+# skrzynki — nigdzie nie bylo widac, ze ktos zwrocil sie do niego
+# wprost.
+#
+# Myslnik musi miec spacje z obu stron. "Kamil-Marek" to nie jest
+# zwrocenie sie do nikogo, a "Kamilu tutaj." (tak role otwieraja
+# wlasne tury) dalej nie jest zawolaniem — bez znaku nie liczymy.
 _ADDRESS_RE = re.compile(
     r"^[\s*_#>-]*(?:DO\s+)?("
     + "|".join(sorted(_VOCATIVE_TO_ROLE, key=len, reverse=True))
-    + r")\s*[:,]\s*(.+)$",
+    + r")(?:\s*[:,]\s*|\s+[\u2014\u2013-]\s+)(.+)$",
     re.IGNORECASE | re.MULTILINE
 )
 
@@ -23934,10 +24019,16 @@ def consult_team(
         # turę (patrz wyżej) — to realna, zweryfikowana odpowiedź, nie
         # sztywny szablon.
         wojtek_extra = (
+            # v309: bylo tu "DODATKOWO: kolega z zespolu napisal to
+            # (jesli da sie to sprawdzic w sieci, zweryfikuj i
+            # uwzglednij wynik, w przeciwnym razie zignoruj)".
+            # Trzy polecenia i warunek w jednej ramce — a to ma byc
+            # zwykle podanie komus cudzej wypowiedzi. Tomek i Bartek
+            # dostaja te sama tresc pod "Wojtek podrzucil:" i nikt
+            # im nie tlumaczy, co maja z nia zrobic. Kamil dostaje
+            # teraz to samo.
             _od_kolegi(
-                "\n\nDODATKOWO: kolega z zespołu napisał to (jeśli da "
-                "się to sprawdzić w sieci, zweryfikuj i uwzględnij "
-                "wynik, w przeciwnym razie zignoruj):\n",
+                "\nWojtek podrzucił:\n",
                 results.get("WOJTEK", ""), "RESEARCHER",
                 "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
             )
