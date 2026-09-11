@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v302
+AEL-MINI AUTONOMOUS AGENT v303
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v302")
+    print("             AEL-MINI AUTONOMOUS AGENT v303")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4439,6 +4439,18 @@ _TRUNCATION_STATUS_HINTS = (
 _continue_action_supported = True
 
 
+# "response/fragments/1/content" -> 1. Brak numeru -> None.
+_NUMER_FRAGMENTU_RE = re.compile(r"fragments/(\d+)")
+
+
+def _numer_fragmentu(sciezka):
+    """Ktorego fragmentu dotyczy ta porcja strumienia."""
+
+    m = _NUMER_FRAGMENTU_RE.search(str(sciezka or ""))
+
+    return int(m.group(1)) if m else None
+
+
 def _deepseek_raw_post_with_action(session, prompt, action):
 
     from opendeep.config import config as _ods_config
@@ -4508,6 +4520,33 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     current_patch_target = "response/content"
     current_fragment_type = "RESPONSE"
 
+    # v303: typ KAZDEGO fragmentu z osobna, po jego numerze.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-11, 26 krokow).
+    # Kamil oddal PUSTA odpowiedz 24 razy — praktycznie nie odezwal
+    # sie ani razu. Uzytkownik wszedl na strone DeepSeeka i zobaczyl
+    # dokladnie to: w pasku myslenia tekst JEST, pod spodem
+    # odpowiedzi NIE MA, i napis "Stopped". Potem wpisal recznie
+    # "oki" i dostal pelna, normalna odpowiedz.
+    #
+    # Powod: `current_fragment_type` bylo jedna, wspolna zmienna.
+    # Gdy odpowiedz zaczyna sie od fragmentu THINK (a u Kamila
+    # zaczyna sie zawsze — ma wlaczone myslenie I szukanie w
+    # sieci), ustawialo sie na "THINK" i JUZ TAK ZOSTAWALO. Kolejne
+    # porcje tekstu przychodza jako gole napisy na sciezce
+    # "response/fragments/1/content" — inny fragment, inny numer, ta
+    # sama zmienna. Warunek "current_fragment_type == THINK"
+    # wyrzucal je wszystkie. Do full_text nie trafialo nic.
+    #
+    # A skoro nic nie trafialo, Python uznawal odpowiedz za pusta i
+    # wysylal pytanie JESZCZE RAZ do tej samej rozmowy — a nowa
+    # wiadomosc zatrzymuje poprzednie generowanie. Stad "Stopped"
+    # na ekranie. Sami je zatrzymywalismy.
+    #
+    # Wiec typ trzymamy per numer fragmentu, tak jak przychodzi w
+    # danych, zamiast jednej lepkiej zmiennej.
+    typ_fragmentu = {}
+
     for line in response.iter_lines():
 
         if not line:
@@ -4565,31 +4604,48 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                         "fragments", []
                     )
                     if fragments:
-                        current_fragment_type = fragments[0].get(
-                            "type", "RESPONSE"
+
+                        # v303: zapamietujemy typ KAZDEGO fragmentu,
+                        # nie tylko zerowego, i bierzemy tresc z
+                        # kazdego, ktory nie jest mysleniem. Dotad
+                        # patrzylismy wylacznie na fragments[0] —
+                        # przy wlaczonym mysleniu to zawsze jest
+                        # THINK, a odpowiedz siedzi w nastepnym.
+                        for _nr, _frag in enumerate(fragments):
+
+                            if not isinstance(_frag, dict):
+                                continue
+
+                            _typ = _frag.get("type", "RESPONSE")
+                            typ_fragmentu[_nr] = _typ
+
+                            if _typ != "THINK":
+                                content += _frag.get("content", "")
+
+                        current_fragment_type = typ_fragmentu.get(
+                            0, "RESPONSE"
                         )
-                        if current_fragment_type == "THINK":
-                            pass
-                        else:
-                            content = fragments[0].get(
-                                "content", ""
-                            )
 
                 elif (
                     isinstance(val, list)
                     and current_patch_target
                     == "response/fragments"
                 ):
+                    # v303: to jest DOPISANIE fragmentow na koniec
+                    # listy — numerujemy je dalej, nie od zera.
                     for frag in val:
-                        if isinstance(frag, dict):
-                            frag_type = frag.get(
-                                "type", "RESPONSE"
-                            )
-                            if frag_type == "THINK":
-                                pass
-                            else:
-                                content = frag.get("content", "")
-                            current_fragment_type = frag_type
+
+                        if not isinstance(frag, dict):
+                            continue
+
+                        frag_type = frag.get("type", "RESPONSE")
+
+                        typ_fragmentu[len(typ_fragmentu)] = frag_type
+
+                        if frag_type != "THINK":
+                            content += frag.get("content", "")
+
+                        current_fragment_type = frag_type
 
                 elif isinstance(val, str):
                     # v189 — zaobserwowany realny bug (log 2026-08-30,
@@ -4620,10 +4676,26 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                     # sciezka z "thinking" w nazwie, zanim
                     # current_fragment_type zdazyl sie przestawic na
                     # "THINK") trafiala do full_text jako tresc.
-                    if (
-                        current_fragment_type == "THINK"
-                        or "thinking" in current_patch_target
-                    ):
+                    # v303: o tym, czy to myslenie, decyduje NUMER
+                    # fragmentu w sciezce — "response/fragments/1/
+                    # content" — a nie jedna lepka zmienna. To
+                    # wlasnie ona zjadala Kamilowi cala odpowiedz:
+                    # raz ustawiona na THINK przez fragment zerowy,
+                    # wyrzucala tekst z fragmentu pierwszego.
+                    _nr = _numer_fragmentu(current_patch_target)
+
+                    if _nr is not None:
+                        _to_myslenie = typ_fragmentu.get(
+                            _nr, "RESPONSE"
+                        ) == "THINK"
+
+                    else:
+                        # Sciezka bez numeru — zostaje stara zasada.
+                        _to_myslenie = (
+                            current_fragment_type == "THINK"
+                        )
+
+                    if _to_myslenie or "thinking" in current_patch_target:
                         pass
                     else:
                         content = val
