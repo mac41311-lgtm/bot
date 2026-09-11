@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v303
+AEL-MINI AUTONOMOUS AGENT v304
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v303")
+    print("             AEL-MINI AUTONOMOUS AGENT v304")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -17114,6 +17114,39 @@ def _success_condition_already_satisfied_message(task_text, success_condition):
     if not files:
         return None
 
+    # v304: plik, ktory POWSTAL W TYM KROKU, nie jest dowodem na to,
+    # ze krok jest zbedny.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-11, krok 2). W
+    # jednej sekundzie:
+    #
+    #   [15:18:56] Zapisano kod ENGINEER bezposrednio do
+    #              ~/mic2text.sh (1892 znakow)
+    #   [15:18:56] Krok 2 skonczyl sie bez wykonania
+    #              (TASK_ALREADY_SATISFIED_ON_DISK):
+    #              juz na dysku: ~/mic2text.sh (1912 B)
+    #
+    # To byl TEN SAM plik. Python sam go zapisal, po czym sam uznal
+    # zadanie za zbedne, bo plik "juz jest" — i krok przepadl.
+    # Zadanie mowilo: zapisz skrypt, nadaj prawa, URUCHOM test.
+    # Zapis to byla jedna trzecia roboty; reszta nie wydarzyla sie
+    # nigdy.
+    #
+    # Ten skrot ma odsiewac zadania zbedne OD POCZATKU, a nie te,
+    # ktore wlasnie zaczelismy wykonywac.
+    _swiezo_zapisane = set(_sciezki_zapisane_w_tym_kroku())
+
+    if _swiezo_zapisane:
+
+        files = [
+            f for f in files
+            if str(_resolve_home_relative_path(f))
+            not in _swiezo_zapisane
+        ]
+
+        if not files:
+            return None
+
     normalized_task = _normalize_task_text(task_text)
     checklist_items = _load_progress_checklist()
 
@@ -18423,17 +18456,33 @@ def _program_bez_konca(tresc):
     "dluga robota". To jest USLUGA, i czekanie na jej wynik nie ma
     sensu, bo wyniku nie bedzie.
 
-    `timeout N ...` w srodku zmienia wszystko — wtedy koniec jest
-    wpisany wprost i czekamy normalnie.
+    v304: PETLA BIJE `timeout`.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-11 15:23,
+    ~/asystent.sh). Skrypt Bartka nagrywal w kolko:
+
+        while true; do
+            timeout 10 termux-microphone-record -f /tmp/in.m4a
+            ...
+        done
+
+    Moj warunek z v294 mowil: "jest `timeout`, ktos zadbal o koniec"
+    — i wylaczal cale sprawdzanie. A `timeout` byl w SRODKU petli.
+    Ogranicza jedno nagranie, nie petle. Program poszedl na pierwszy
+    plan z limitem 30 minut i wisial, wypisujac jedno zdanie
+    ("Asystent start. Tryb: offline") i nic wiecej. Uzytkownik
+    widzial to, co slyszal: mikrofon wlacza sie i wylacza w kolko.
+    Przerwal recznie po trzech minutach.
+
+    Petla bez `break` nie ma konca niezaleznie od tego, co jest w
+    jej srodku. `timeout` zostaje wiec wylacznie przy narzedziach
+    strumieniowych, gdzie naprawde je ogranicza (`timeout 10
+    arecord`).
     """
 
     tekst = str(tresc or "")
 
     if not tekst.strip():
-        return ""
-
-    # Ktos juz zadbal o koniec — nie mieszamy sie.
-    if re.search(r"^\s*timeout\s+\d", tekst, re.MULTILINE):
         return ""
 
     dopasowanie = _PETLA_BEZ_KONCA_RE.search(tekst)
@@ -18445,11 +18494,19 @@ def _program_bez_konca(tresc):
             + "` bez `break` — ta pętla się nie kończy"
         )
 
+    # Poza petla `timeout` naprawde konczy sprawe.
+    _ograniczony_z_zewnatrz = bool(
+        re.search(r"^\s*timeout\s+\d", tekst, re.MULTILINE)
+    )
+
     for wzorzec, ogranicznik in _STRUMIEN_BEZ_KONCA:
 
         trafienie = wzorzec.search(tekst)
 
         if not trafienie:
+            continue
+
+        if _ograniczony_z_zewnatrz:
             continue
 
         if ogranicznik and ogranicznik.search(tekst):
@@ -25672,6 +25729,22 @@ def _head_tail_preview(text, head_chars=150, tail_chars=150):
 _python_written_files = []
 
 
+# v304: pliki zapisane przez Pythona W BIEZACYM KROKU —
+# {numer_kroku: [sciezki]}. Sluzy do jednego: zeby wlasny zapis nie
+# uchodzil za dowod, ze krok jest zbedny (patrz
+# _success_condition_already_satisfied_message).
+_zapisane_w_kroku = {}
+
+
+def _sciezki_zapisane_w_tym_kroku():
+    """Co Python polozyl na dysku w tym kroku. Nigdy nie rzuca."""
+
+    try:
+        return list(_zapisane_w_kroku.get(_biezacy_krok, ()))
+    except Exception:
+        return []
+
+
 def _record_python_written_file(path):
     """
     Zapamiętuje plik, który zapisał SAM PYTHON (nie Gemini), żeby
@@ -25685,6 +25758,18 @@ def _record_python_written_file(path):
 
         if text_path not in _python_written_files:
             _python_written_files.append(text_path)
+
+        # v304: osobno, z numerem kroku — patrz
+        # _sciezki_zapisane_w_tym_kroku().
+        _w_tym_kroku = _zapisane_w_kroku.setdefault(_biezacy_krok, [])
+
+        if text_path not in _w_tym_kroku:
+            _w_tym_kroku.append(text_path)
+
+        # Nie trzymamy historii wszystkich krokow.
+        for _stary_krok in list(_zapisane_w_kroku):
+            if _stary_krok < _biezacy_krok - 1:
+                _zapisane_w_kroku.pop(_stary_krok, None)
 
         # Nie rośniemy w nieskończoność przez długą sesję — liczy
         # się to, co Python zapisał NIEDAWNO w ramach tego celu.
