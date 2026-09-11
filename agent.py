@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v306
+AEL-MINI AUTONOMOUS AGENT v307
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v306")
+    print("             AEL-MINI AUTONOMOUS AGENT v307")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4547,6 +4547,14 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # danych, zamiast jednej lepkiej zmiennej.
     typ_fragmentu = {}
 
+    # v307: ile przyszlo SAMEGO MYSLENIA. Gdy odpowiedz jest pusta,
+    # to rozroznia dwie zupelnie rozne awarie:
+    #   myslenie > 0  -> generacja ruszyla i zostala PRZERWANA
+    #                    (na stronie: szary tekst i "Stopped"),
+    #   myslenie == 0 -> nie przyszlo nic, model nie zaczal.
+    # Bez tej liczby jedno i drugie wygladalo tak samo: "PUSTA".
+    znakow_myslenia = [0]
+
     for line in response.iter_lines():
 
         if not line:
@@ -4619,8 +4627,20 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                             _typ = _frag.get("type", "RESPONSE")
                             typ_fragmentu[_nr] = _typ
 
+                            if _typ == "THINK":
+                                znakow_myslenia[0] += len(
+                                    str(_frag.get("content", ""))
+                                )
+
                             if _typ != "THINK":
-                                content += _frag.get("content", "")
+                                _c = _frag.get("content", "")
+                                # v307: tylko napis. Fragment
+                                # wyszukiwania niesie w "content"
+                                # liste wynikow — `str += list` to
+                                # TypeError, ktory zabijal CALY
+                                # strumien (patrz nizej).
+                                if isinstance(_c, str):
+                                    content += _c
 
                         current_fragment_type = typ_fragmentu.get(
                             0, "RESPONSE"
@@ -4643,7 +4663,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                         typ_fragmentu[len(typ_fragmentu)] = frag_type
 
                         if frag_type != "THINK":
-                            content += frag.get("content", "")
+                            _c = frag.get("content", "")
+                            if isinstance(_c, str):
+                                content += _c
 
                         current_fragment_type = frag_type
 
@@ -4696,7 +4718,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                         )
 
                     if _to_myslenie or "thinking" in current_patch_target:
-                        pass
+                        znakow_myslenia[0] += len(val)
                     else:
                         content = val
 
@@ -4704,6 +4726,25 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                 full_text += content
 
         except json.JSONDecodeError:
+            continue
+
+        except Exception:
+            # v307: JEDEN dziwny kawalek strumienia nie moze zabic
+            # calej odpowiedzi.
+            #
+            # Dotad lapalismy tu WYLACZNIE bledy JSON-a. Kazdy inny
+            # wyjatek — a wystarczy pole innego typu niz sie
+            # spodziewamy — leciat w gore, przerywal petle i zamykal
+            # polaczenie. Serwer widzi wtedy, ze klient sie rozlaczyl,
+            # i oznacza wypowiedz jako przerwana: na stronie zostaje
+            # samo myslenie (szare) i napis "Stopped".
+            #
+            # Tego wlasnie nie dalo sie zobaczyc w logu: my
+            # meldowalismy "odpowiedz PUSTA", a uzytkownik na stronie
+            # widzial urwana w polowie generacje.
+            #
+            # Pomijamy wiec ten jeden kawalek i czytamy dalej. Gorzej
+            # od niepelnej odpowiedzi jest tylko brak odpowiedzi.
             continue
 
     # v189 — siatka bezpieczenstwa na wypadek, gdyby status przeciekl
@@ -4724,7 +4765,82 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             full_text = full_text[len(_leak):]
             break
 
+    if not full_text.strip() and znakow_myslenia[0]:
+        # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.
+        globals()["_ostatnie_samo_myslenie"] = znakow_myslenia[0]
+    else:
+        globals()["_ostatnie_samo_myslenie"] = 0
+
     return full_text, status_seen
+
+
+# Ile znakow SAMEGO myslenia przyszlo w ostatniej odpowiedzi, ktora
+# okazala sie pusta. Zerowane przy kazdej udanej — patrz wyzej.
+_ostatnie_samo_myslenie = 0
+
+
+# Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
+_samo_myslenie_z_rzedu = {}
+
+# Po tylu z rzedu przestajemy probowac tego samego.
+_SAMO_MYSLENIE_PROG = 3
+
+
+def _zanotuj_samo_myslenie(name):
+    """
+    Rola oddala samo myslenie, bez odpowiedzi. Gdy powtarza sie to
+    uparcie, wylaczamy jej szukanie w sieci.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-11, 26 krokow).
+    Kamil — JEDYNA rola z wlaczonym search_enabled — oddal pusta
+    odpowiedz 24 razy. Wszystkie inne role: pojedyncze przypadki.
+    Uzytkownik zobaczyl na stronie, co sie dzieje naprawde: szary
+    tekst myslenia i "Stopped". Potem wpisal tam recznie "oki" i
+    dostal pelna, normalna odpowiedz.
+
+    Nie zgadujemy, dlaczego szukanie w sieci przeszkadza tej sesji.
+    Liczymy fakt: trzy razy z rzedu samo myslenie. Szukanie jest
+    dodatkiem — rola bez niego dalej odpowiada z wlasnej wiedzy i
+    mowi, czego nie potwierdzila. Milczaca rola nie wnosi nic.
+
+    Nigdy nie rzuca.
+    """
+
+    try:
+        ile = _samo_myslenie_z_rzedu.get(name, 0) + 1
+        _samo_myslenie_z_rzedu[name] = ile
+
+        if ile < _SAMO_MYSLENIE_PROG:
+            return
+
+        sesja = sessions.get(name)
+
+        if sesja is None or not getattr(sesja, "search_enabled", False):
+            return
+
+        sesja.search_enabled = False
+        _samo_myslenie_z_rzedu[name] = 0
+
+        log(
+            "DEEPSEEK",
+            name + ": " + str(_SAMO_MYSLENIE_PROG) + " razy z rzedu "
+            "samo myslenie bez odpowiedzi, a jako jedyny ma wlaczone "
+            "szukanie w sieci — wylaczam je w tej sesji. Odpowiada "
+            "dalej z wlasnej wiedzy i sam powie, czego nie "
+            "potwierdzil. Milczaca rola nie wnosi nic."
+        )
+
+    except Exception:
+        pass
+
+
+def _zanotuj_odpowiedz_z_trescia(name):
+    """Rola odpowiedziala normalnie — licznik z zera."""
+
+    try:
+        _samo_myslenie_z_rzedu.pop(name, None)
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -5377,6 +5493,11 @@ def deepseek(name, message):
                     name, truncated, len(str(text or ""))
                 )
 
+                # v307: odpowiedz z trescia zeruje licznik samego
+                # myslenia — patrz _zanotuj_samo_myslenie().
+                if str(text or "").strip():
+                    _zanotuj_odpowiedz_z_trescia(name)
+
                 if not text:
                     text = ""
 
@@ -5392,6 +5513,25 @@ def deepseek(name, message):
                 # przypadek od "ucięte" — jedno ponowienie TEGO
                 # SAMEGO pytania, zanim cokolwiek zwrócimy dalej.
                 if not text.strip():
+
+                    # v307: gdy przyszlo SAMO MYSLENIE, to nie jest
+                    # "pusta odpowiedz" — to jest generacja przerwana
+                    # w polowie. Uzytkownik widzi wtedy na stronie
+                    # szary tekst i napis "Stopped", a my dotad
+                    # meldowalismy to samo, co przy calkowitej ciszy.
+                    # Dwie rozne awarie, dwa rozne zdania.
+                    if _ostatnie_samo_myslenie:
+                        log(
+                            "DEEPSEEK",
+                            name + ": przyszlo "
+                            + str(_ostatnie_samo_myslenie)
+                            + " znakow SAMEGO MYSLENIA, wlasciwej "
+                            "odpowiedzi nie bylo — generacja urwala "
+                            "sie po drodze (na stronie DeepSeeka "
+                            "widac wtedy szary tekst i 'Stopped')."
+                        )
+
+                        _zanotuj_samo_myslenie(name)
 
                     log(
                         "DEEPSEEK",
