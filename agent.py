@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v304
+AEL-MINI AUTONOMOUS AGENT v305
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v304")
+    print("             AEL-MINI AUTONOMOUS AGENT v305")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7523,6 +7523,80 @@ def _cleanup_screenshots_silently():
             "Usunięto " + str(removed) + " zrzutów ekranu "
             "(automatycznie, bez pytania — stała zgoda użytkownika)."
         )
+
+
+def _zatrzymaj_to_co_zostawilismy():
+    """
+    Przy wyjsciu gasimy to, co sami puscilismy w tle — i zwalniamy
+    mikrofon.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-11 15:23).
+    ~/asystent.sh nagrywal w petli. Uzytkownik przerwal agenta
+    Ctrl+C, agent zwolnil wake-lock i wyszedl — a skrypt nagrywal
+    dalej. Uzytkownik pisal: "program mi sie zaciol i go
+    zatrzymalem, ale mikrofon sie wlacza i wylacza". Musial szukac
+    komendy, zeby ubic cos, co my uruchomilismy.
+
+    Skoro agent konczy prace, nikt juz nie przeczyta logow tych
+    procesow ani nie odbierze ich wynikow. Zostawianie ich przy
+    zyciu nie sluzy nikomu, a mikrofon to rzecz, ktora uzytkownik
+    SLYSZY.
+
+    Nigdy nie rzuca — to sprzatanie przy wyjsciu, nie robota.
+    """
+
+    for pid, proces in list(_procesy_w_tle.items()):
+
+        try:
+            if proces.poll() is not None:
+                continue
+
+            print(
+                "Zatrzymuje to, co uruchomilem w tle (pid "
+                + str(pid) + ")."
+            )
+
+            try:
+                _grupa = os.getpgid(pid)
+
+                # Zabezpieczenie: NIGDY nie ubijamy wlasnej grupy.
+                # Procesy w tle dostaja swoja (start_new_session),
+                # ale gdyby to sie kiedys zmienilo, killpg zabilby
+                # terminal uzytkownika razem z agentem.
+                if _grupa and _grupa != os.getpgrp():
+                    os.killpg(_grupa, signal.SIGTERM)
+                else:
+                    proces.terminate()
+
+            except Exception:
+                proces.terminate()
+
+            try:
+                proces.wait(timeout=5)
+            except Exception:
+                try:
+                    proces.kill()
+                except Exception:
+                    pass
+
+        except Exception:
+            continue
+
+    # Mikrofon zwalniamy ZAWSZE, nawet gdy nagrywanie odpalil ktos
+    # inaczej niz przez nasze tlo. To jedna, tania komenda, a
+    # roznica jest slyszalna.
+    try:
+        subprocess.run(
+            ["termux-microphone-record", "-q"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+atexit.register(_zatrzymaj_to_co_zostawilismy)
 
 
 atexit.register(_cleanup_screenshots_silently)
