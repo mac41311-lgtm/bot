@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v317
+AEL-MINI AUTONOMOUS AGENT v318
 
 ARCHITEKTURA:
 
@@ -2066,7 +2066,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v317")
+    print("             AEL-MINI AUTONOMOUS AGENT v318")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5813,14 +5813,35 @@ def deepseek(name, message):
                     # Cisza to co innego: gdy nie przyszlo NIC, nie
                     # ma sie do czego odwolac i pytanie musi pojsc
                     # jeszcze raz w calosci.
+                    _bez_myslenia = False
+
                     if _ostatnie_samo_myslenie:
 
                         _dopytanie = "Podaj wynik."
 
+                        # v318: i to dopytanie idzie BEZ MYSLENIA.
+                        #
+                        # Bieg 2026-09-12 11:22 (v316) — pieciu
+                        # krokach dopytanie poszlo i pieciu razy
+                        # wrocilo znowu puste. Wiec samo dopytanie
+                        # nie wystarczylo, i wiadomo dlaczego:
+                        # wysylalismy je z tymi samymi ustawieniami,
+                        # czyli znowu "najpierw pomysl, potem szukaj"
+                        # — i znowu caly limit dlugosci szedl na
+                        # myslenie.
+                        #
+                        # Uzytkownik, ktory wpisal recznie "oki",
+                        # mial na stronie rozmowe juz przemyslana —
+                        # nie kazal jej myslec drugi raz. Tu robimy
+                        # to samo: rozumowanie juz bylo, ma zostac
+                        # wypisane.
+                        _bez_myslenia = True
+
                         log(
                             "DEEPSEEK",
                             name + ": myslenie przyszlo, odpowiedzi "
-                            "nie — dopytuję w tej samej rozmowie: "
+                            "nie — dopytuję w tej samej rozmowie, "
+                            "bez myślenia i bez szukania: "
                             + _dopytanie
                         )
 
@@ -5837,11 +5858,24 @@ def deepseek(name, message):
 
                     try:
 
-                        retry_text, retry_status = (
-                            _deepseek_send_experimental(
-                                name, session, _dopytanie
+                        _bylo_myslenie = session.thinking_enabled
+                        _bylo_szukanie = session.search_enabled
+
+                        try:
+
+                            if _bez_myslenia:
+                                session.thinking_enabled = False
+                                session.search_enabled = False
+
+                            retry_text, retry_status = (
+                                _deepseek_send_experimental(
+                                    name, session, _dopytanie
+                                )
                             )
-                        )
+
+                        finally:
+                            session.thinking_enabled = _bylo_myslenie
+                            session.search_enabled = _bylo_szukanie
 
                         if retry_text and retry_text.strip():
 
@@ -5890,11 +5924,29 @@ def deepseek(name, message):
                                     "juz bez szukania w sieci."
                                 )
 
-                                trzeci_text, trzeci_status = (
-                                    _deepseek_send_experimental(
-                                        name, session, _dopytanie
-                                    )
+                                # v318: skoro dopytujemy, to bez
+                                # myslenia — tak samo jak wyzej.
+                                _bylo_myslenie = (
+                                    session.thinking_enabled
                                 )
+
+                                try:
+
+                                    if _bez_myslenia:
+                                        session.thinking_enabled = (
+                                            False
+                                        )
+
+                                    trzeci_text, trzeci_status = (
+                                        _deepseek_send_experimental(
+                                            name, session, _dopytanie
+                                        )
+                                    )
+
+                                finally:
+                                    session.thinking_enabled = (
+                                        _bylo_myslenie
+                                    )
 
                                 if trzeci_text and trzeci_text.strip():
 
@@ -6000,7 +6052,16 @@ def deepseek(name, message):
                     # To sa jego slowa — idzie jego tekst.
                     text = _myslenie_z_pierwszej.strip()
 
-                    _zanotuj_odpowiedz_z_trescia(name)
+                    # v318: NIE zerujemy tu licznika samego myslenia.
+                    #
+                    # W v315-v316 zerowalismy — i przez to samo-
+                    # naprawa z v307 nigdy nie dochodzila do skutku.
+                    # Bieg 2026-09-12 11:22: piec krokow z rzedu
+                    # konczylo sie szarym tekstem, a szukanie w sieci
+                    # dalej bylo wlaczone, bo kazde takie
+                    # "uratowanie" kasowalo licznik. Wzielismy tekst
+                    # z rozumowania, ale to nie znaczy, ze rola
+                    # odpowiedziala.
 
                     log(
                         "DEEPSEEK",
