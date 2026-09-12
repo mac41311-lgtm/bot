@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v314
+AEL-MINI AUTONOMOUS AGENT v315
 
 ARCHITEKTURA:
 
@@ -2001,7 +2001,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v314")
+    print("             AEL-MINI AUTONOMOUS AGENT v315")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4673,6 +4673,25 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # Bez tej liczby jedno i drugie wygladalo tak samo: "PUSTA".
     znakow_myslenia = [0]
 
+    # v315: i SAM TEKST myslenia, nie tylko jego dlugosc.
+    #
+    # Uzytkownik otworzyl strone DeepSeeka i przeczytal ten szary
+    # tekst. Stalo tam:
+    #
+    #   "Wniosek: Nie. Bez uprawnien roota publiczne API Androida
+    #    nie moga ani przechwycic, ani wstrzyknac audio rozmow GSM.
+    #    To jest twarda odpowiedz. Ponizej uzasadnienie oparte na
+    #    oficjalnej dokumentacji..."
+    #
+    # To nie jest "rozgrzewka przed odpowiedzia". To JEST odpowiedz
+    # — z wnioskiem, uzasadnieniem i zrodlami. Generacja urywa sie
+    # dopiero potem, wiec do pola z odpowiedzia nie trafia nic, a my
+    # oddawalismy zespolowi "(brak tresci)" i palilismy caly krok.
+    #
+    # Wiec to zapamietujemy. Uzyte jest tylko wtedy, gdy odpowiedzi
+    # naprawde nie ma — patrz deepseek().
+    tekst_myslenia = []
+
     for line in response.iter_lines():
 
         if not line:
@@ -4746,9 +4765,11 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                             typ_fragmentu[_nr] = _typ
 
                             if _typ == "THINK":
-                                znakow_myslenia[0] += len(
-                                    str(_frag.get("content", ""))
-                                )
+                                _m = _frag.get("content", "")
+
+                                if isinstance(_m, str):
+                                    znakow_myslenia[0] += len(_m)
+                                    tekst_myslenia.append(_m)
 
                             if _typ != "THINK":
                                 _c = _frag.get("content", "")
@@ -4837,6 +4858,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
                     if _to_myslenie or "thinking" in current_patch_target:
                         znakow_myslenia[0] += len(val)
+                        tekst_myslenia.append(val)
                     else:
                         content = val
 
@@ -4886,15 +4908,24 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     if not full_text.strip() and znakow_myslenia[0]:
         # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.
         globals()["_ostatnie_samo_myslenie"] = znakow_myslenia[0]
+        globals()["_ostatnie_myslenie_tekst"] = "".join(tekst_myslenia)
     else:
         globals()["_ostatnie_samo_myslenie"] = 0
+        globals()["_ostatnie_myslenie_tekst"] = ""
 
     return full_text, status_seen
+
+
+# Role, ktore oddaja goly JSON, nie ludzka proze (v315).
+_ROLE_ODDAJE_JSON = {"MAIN", "PROGRESS_ESTIMATOR"}
 
 
 # Ile znakow SAMEGO myslenia przyszlo w ostatniej odpowiedzi, ktora
 # okazala sie pusta. Zerowane przy kazdej udanej — patrz wyzej.
 _ostatnie_samo_myslenie = 0
+
+# I co tam bylo napisane (v315).
+_ostatnie_myslenie_tekst = ""
 
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
@@ -5671,6 +5702,10 @@ def deepseek(name, message):
                 # SAMEGO pytania, zanim cokolwiek zwrócimy dalej.
                 if not text.strip():
 
+                    # v315: zapamietujemy szary tekst z TEJ proby,
+                    # zanim ponowienie go nadpisze.
+                    _myslenie_z_pierwszej = _ostatnie_myslenie_tekst
+
                     # v307: gdy przyszlo SAMO MYSLENIE, to nie jest
                     # "pusta odpowiedz" — to jest generacja przerwana
                     # w polowie. Uzytkownik widzi wtedy na stronie
@@ -5827,6 +5862,53 @@ def deepseek(name, message):
                             + str(retry_error) + ") — zostaje pusty "
                             "tekst."
                         )
+
+                # v315: wszystkie proby puste, ale szary tekst BYL.
+                #
+                # Uzytkownik otworzyl strone DeepSeeka i przeczytal,
+                # co tam stoi:
+                #
+                #   "Wniosek: Nie. Bez uprawnien roota publiczne API
+                #    Androida nie moga ani przechwycic, ani
+                #    wstrzyknac audio rozmow GSM. To jest twarda
+                #    odpowiedz. Ponizej uzasadnienie oparte na
+                #    oficjalnej dokumentacji..."
+                #
+                # To jest odpowiedz — z wnioskiem, uzasadnieniem i
+                # zrodlami. Generacja urwala sie dopiero PO niej,
+                # wiec do pola z odpowiedzia nie trafilo nic i
+                # zespol dostawal "(brak tresci)". Wyrzucalismy
+                # gotowa robote i palilismy caly krok.
+                #
+                # Wiec ja bierzemy. Nie zamiast odpowiedzi — dopiero
+                # wtedy, gdy odpowiedzi nie ma po trzech probach.
+                #
+                # MAIN i Ela oddaja goly JSON, wiec ich to nie
+                # dotyczy: ich rozumowanie nie jest JSON-em i tylko
+                # wywrocilo by parsowanie.
+                if (
+                    not text.strip()
+                    and name not in _ROLE_ODDAJE_JSON
+                    and _myslenie_z_pierwszej.strip()
+                ):
+
+                    text = (
+                        "(Generacja urwała się przed odpowiedzią — "
+                        "to jest rozumowanie, które zdążyło "
+                        "przyjść.)\n\n"
+                        + _myslenie_z_pierwszej.strip()
+                    )
+
+                    _zanotuj_odpowiedz_z_trescia(name)
+
+                    log(
+                        "DEEPSEEK",
+                        name + ": odpowiedzi nie bylo, ale szary "
+                        "tekst mysleniowy mial "
+                        + str(len(_myslenie_z_pierwszej))
+                        + " znakow — biore go zamiast oddawac "
+                        "pustke."
+                    )
 
                 # Wcześniej log pokazywał TYLKO długość odpowiedzi —
                 # nie dało się stąd stwierdzić, czy na początku
