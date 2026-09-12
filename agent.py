@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v309
+AEL-MINI AUTONOMOUS AGENT v310
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v309")
+    print("             AEL-MINI AUTONOMOUS AGENT v310")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -22614,10 +22614,32 @@ def _utnij_na_sekcji_wykonawcy(fragment):
 # Myslnik musi miec spacje z obu stron. "Kamil-Marek" to nie jest
 # zwrocenie sie do nikogo, a "Kamilu tutaj." (tak role otwieraja
 # wlasne tury) dalej nie jest zawolaniem — bez znaku nie liczymy.
+# v310: cztery zawolania W JEDNEJ LINII to cztery zawolania.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (log 2026-09-12, 08:37). Wojtek
+# zakonczyl wypowiedz jednym akapitem:
+#
+#     Kamilu: sprawdz, ktore z tych uslug maja SDK na Androida...
+#     Tomek: rozpisz plan od wymagan do gotowego APK. Marek: ocen,
+#     czy lepiej isc w gotowca, czy wlasne WebRTC. Bartek: na razie
+#     wstrzymaj sie z kodem, zbierzemy odpowiedzi.
+#
+# (w tekscie: jedna linia). Wzorzec byl zakotwiczony na POCZATKU
+# LINII, wiec widzial z tego jedno zawolanie — do Kamila — i dawal
+# mu wszystko az do konca linii. Kamil dostawal wiec polecenia
+# Tomka, Marka i Bartka ("wstrzymaj sie z kodem") jako wiadomosc do
+# siebie, a Tomek, Marek i Bartek nie dostawali NIC, choc autor
+# napisal do nich wprost.
+#
+# Zawolanie liczy sie teraz takze w srodku linii — po kropce,
+# wykrzykniku albo pytajniku, czyli tam, gdzie czlowiek widzi
+# koniec poprzedniego zdania. Tresc jest wyszukiwana "przez
+# szybke" (lookahead), zeby wzorzec nie zjadal reszty linii i
+# nastepne imie w tej samej linii dalo sie w ogole znalezc.
 _ADDRESS_RE = re.compile(
-    r"^[\s*_#>-]*(?:DO\s+)?("
+    r"(?:^[\s*_#>-]*|(?<=[.!?\u2026])[ \t]+)(?:DO\s+)?("
     + "|".join(sorted(_VOCATIVE_TO_ROLE, key=len, reverse=True))
-    + r")(?:\s*[:,]\s*|\s+[\u2014\u2013-]\s+)(.+)$",
+    + r")(?:\s*[:,]\s*|\s+[\u2014\u2013-]\s+)(?=(.+))",
     re.IGNORECASE | re.MULTILINE
 )
 
@@ -22880,8 +22902,13 @@ def _role_inbox_block(role_name):
         else:
             # Tresc juz jest wyzej, ale to, ze byla napisana WPROST
             # do niego, nie jest z niej widoczne. Jedno zdanie.
+            # v310: bylo "napisal to WYZEJ". Od v310 ta sama tresc
+            # bywa NIZEJ — wypowiedz kolegi dochodzi przez extra=,
+            # ktore dopinamy za skrzynka. Nie wskazujemy wiec
+            # palcem, tylko mowimy, co sie stalo.
             lines.append(
-                nadawca + " napisał to wyżej wprost do Ciebie."
+                nadawca + " napisał to wprost do Ciebie — masz to "
+                "w jego wypowiedzi."
             )
 
     # v297: nie ma tu juz zdania "(Odpowiesz, zaczynajac linie jego
@@ -23723,6 +23750,17 @@ def consult_team(
     # (CEL/checklist/OSTATNI RAPORT) zostaje — to są fakty, nie
     # przypomnienie tożsamości.
     def _team_context(role_name, include_chrome=False, include_android=False, extra=""):
+
+        # v310: cudza wypowiedz podana przez extra= ("Wojtek
+        # podrzucil:") omijala _only_if_new, a to tam zapisujemy, co
+        # ta osoba juz w tym kroku dostala. Skrzynka nie miala wiec
+        # skad wiedziec, ze to samo zdanie jest nizej, i dokladala
+        # je drugi raz. W logu 2026-09-12 Kamil mial akapit Wojtka
+        # dwa razy: raz jako "Wojtek mowi do Ciebie", raz w calej
+        # jego wypowiedzi.
+        if extra:
+            _zapamietaj_co_dostal(role_name, extra)
+
         pieces = [_core_context_for(role_name)]
 
         # v211: stan ekranu idzie przez _only_if_new — dokladnie tak
