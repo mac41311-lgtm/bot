@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v315
+AEL-MINI AUTONOMOUS AGENT v316
 
 ARCHITEKTURA:
 
@@ -2001,7 +2001,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v315")
+    print("             AEL-MINI AUTONOMOUS AGENT v316")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5725,18 +5725,56 @@ def deepseek(name, message):
 
                         _zanotuj_samo_myslenie(name)
 
-                    log(
-                        "DEEPSEEK",
-                        name + ": odpowiedź PUSTA — ponawiam raz tym "
-                        "samym pytaniem, zanim to pójdzie dalej jako "
-                        "'opinia' tej roli."
-                    )
+                    # v316: gdy myslenie PRZYSZLO, nie powtarzamy
+                    # calego pytania.
+                    #
+                    # Uzytkownik: "a czy nie mozna napisac to, a
+                    # potem podaj wynik, z automatu — po co
+                    # kopiowac? Poczekac, az wyszuka, i potem w tym
+                    # samym kroku podaj wynik".
+                    #
+                    # Ma racje i sam to udowodnil recznie: wszedl na
+                    # strone, gdzie wisialo samo myslenie i
+                    # "Stopped", wpisal "oki" i dostal pelna,
+                    # normalna odpowiedz. Rozmowa juz ma wszystko —
+                    # pytanie, wyszukiwanie, rozumowanie — brakuje
+                    # tylko wyniku.
+                    #
+                    # Powtorzenie calego pytania kazalo mu zaczac od
+                    # zera: szukac drugi raz i myslec drugi raz, i
+                    # drugi raz skonczyc na tym samym limicie. Stad
+                    # "ponowienie TEZ puste" w kazdym logu.
+                    #
+                    # Cisza to co innego: gdy nie przyszlo NIC, nie
+                    # ma sie do czego odwolac i pytanie musi pojsc
+                    # jeszcze raz w calosci.
+                    if _ostatnie_samo_myslenie:
+
+                        _dopytanie = "Podaj wynik."
+
+                        log(
+                            "DEEPSEEK",
+                            name + ": myslenie przyszlo, odpowiedzi "
+                            "nie — dopytuję w tej samej rozmowie: "
+                            + _dopytanie
+                        )
+
+                    else:
+
+                        _dopytanie = message
+
+                        log(
+                            "DEEPSEEK",
+                            name + ": odpowiedź PUSTA — ponawiam raz "
+                            "tym samym pytaniem, zanim to pójdzie "
+                            "dalej jako 'opinia' tej roli."
+                        )
 
                     try:
 
                         retry_text, retry_status = (
                             _deepseek_send_experimental(
-                                name, session, message
+                                name, session, _dopytanie
                             )
                         )
 
@@ -5789,7 +5827,7 @@ def deepseek(name, message):
 
                                 trzeci_text, trzeci_status = (
                                     _deepseek_send_experimental(
-                                        name, session, message
+                                        name, session, _dopytanie
                                     )
                                 )
 
@@ -5892,12 +5930,10 @@ def deepseek(name, message):
                     and _myslenie_z_pierwszej.strip()
                 ):
 
-                    text = (
-                        "(Generacja urwała się przed odpowiedzią — "
-                        "to jest rozumowanie, które zdążyło "
-                        "przyjść.)\n\n"
-                        + _myslenie_z_pierwszej.strip()
-                    )
+                    # v316: bez dopisek od nas. Uzytkownik: "i nic
+                    # nie dodawac, zadnych zabezpieczen itp".
+                    # To sa jego slowa — idzie jego tekst.
+                    text = _myslenie_z_pierwszej.strip()
 
                     _zanotuj_odpowiedz_z_trescia(name)
 
