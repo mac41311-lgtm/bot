@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v323
+AEL-MINI AUTONOMOUS AGENT v324
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v323")
+    print("             AEL-MINI AUTONOMOUS AGENT v324")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8760,6 +8760,77 @@ def android_list_packages(filter_text=None):
 
     result = execute_shell(command, timeout=20)
 
+    # v324: grep, ktory nic nie znalazl, konczy sie jedynka. To nie
+    # jest awaria narzedzia — to odpowiedz "nie ma".
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 21:43, krok 2).
+    # Zespol sprawdzal, czy Linphone sie juz zainstalowal:
+    #
+    #   {"ok": false, "returncode": 1, "stdout": "", "stderr": "",
+    #    "command": "adb shell pm list packages | grep -i linphone"}
+    #
+    # Przeczytali to jako BLAD NARZEDZIA i przez dwa nastepne kroki
+    # szukali obejscia (android_run_in_new_window, pm path, pelne
+    # sciezki), zamiast po prostu poczekac. Uzytkownik: "pobieranie
+    # troche trwa (...) oni widza blad".
+    #
+    # Wiec mowimy prawde: nic nie pasuje. I skoro i tak pytamy, czy
+    # cos JUZ jest na telefonie, patrzymy jeszcze raz po chwili —
+    # dokladnie tak, jak robi czlowiek, ktory wlasnie klikna
+    # "Zainstaluj".
+    _nic_nie_pasuje = (
+        filter_text
+        and result.get("returncode") == 1
+        and not str(result.get("stdout") or "").strip()
+        and not str(result.get("stderr") or "").strip()
+    )
+
+    if _nic_nie_pasuje:
+
+        log(
+            "ANDROID",
+            "Nie ma jeszcze nic pasujacego do '" + str(filter_text)
+            + "'. Patrze drugi raz za "
+            + str(DRUGIE_SPOJRZENIE) + " s — instalacja albo "
+            "pobieranie moga wlasnie trwac."
+        )
+
+        time.sleep(DRUGIE_SPOJRZENIE)
+
+        drugie = execute_shell(command, timeout=20)
+
+        _dalej_nic = (
+            drugie.get("returncode") == 1
+            and not str(drugie.get("stdout") or "").strip()
+            and not str(drugie.get("stderr") or "").strip()
+        )
+
+        if _dalej_nic:
+
+            return {
+                "ok": True,
+                "packages": [],
+                "count": 0,
+                "filter": str(filter_text),
+                "sprawdzone_dwa_razy": True,
+                "message": (
+                    "Nie ma tego na telefonie. Sprawdziłem dwa razy, "
+                    "w odstępie " + str(DRUGIE_SPOJRZENIE)
+                    + " s — na wypadek, gdyby pobieranie albo "
+                    "instalacja właśnie trwały. Dalej pusto."
+                )
+            }
+
+        log(
+            "ANDROID",
+            "Za pierwszym razem nie bylo, po "
+            + str(DRUGIE_SPOJRZENIE) + " s juz jest — instalacja "
+            "wlasnie sie konczyla."
+        )
+
+        result = drugie
+        result["sprawdzone_dwa_razy"] = True
+
     if not result.get("ok"):
         return result
 
@@ -8772,11 +8843,21 @@ def android_list_packages(filter_text=None):
         if line.startswith("package:"):
             packages.append(line[len("package:"):])
 
-    return {
+    _wynik = {
         "ok": True,
         "packages": packages,
         "count": len(packages)
     }
+
+    if result.get("sprawdzone_dwa_razy"):
+        _wynik["sprawdzone_dwa_razy"] = True
+        _wynik["message"] = (
+            "Za pierwszym razem tego nie było — po "
+            + str(DRUGIE_SPOJRZENIE) + " s już jest. Instalacja "
+            "właśnie się kończyła."
+        )
+
+    return _wynik
 
 
 def _ensure_termux_allow_external_apps():
@@ -8925,6 +9006,47 @@ def android_run_in_new_window(command, background=False):
             "zrestartowany po włączeniu, albo właściwości nie "
             "zostały przeładowane). "
         ) + detail
+
+    # v324: ten Termux w ogole nie ma RUN_COMMAND.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 21:43, krok 3):
+    #
+    #   "Error type 3 / Error: Activity class
+    #    {com.termux/com.termux.app.RunCommandActivity}
+    #    does not exist."
+    #
+    # To nie jest kwestia allow-external-apps ani restartu — w tej
+    # wersji Termuksa tej activity po prostu nie ma i zadna liczba
+    # prob tego nie zmieni. A komenda, o ktora chodzilo ("sleep 5;
+    # pm path org.linphone"), swietnie chodzi w naszym wlasnym
+    # procesie. Wiec ja po prostu uruchamiamy i mowimy, co zrobilismy
+    # — zamiast oddawac blad i patrzec, jak zespol szuka obejscia
+    # przez dwa kroki.
+    if (
+        not started
+        and "does not exist" in str(output)
+    ):
+
+        log(
+            "ANDROID",
+            "Ten Termux nie ma RunCommandActivity — osobnego okna "
+            "nie otworze. Uruchamiam te komende u siebie."
+        )
+
+        zamiast = (
+            termux_run_background(command)
+            if background else termux_run(command)
+        )
+
+        if isinstance(zamiast, dict):
+            zamiast["zamiast_nowego_okna"] = (
+                "Ta wersja Termuksa nie ma okna RUN_COMMAND "
+                "(Activity nie istnieje), więc uruchomiłem to samo "
+                "u siebie. Wynik jest ten sam, tylko bez osobnego "
+                "okna na ekranie."
+            )
+
+        return zamiast
 
     return {
         "ok": started,
@@ -13631,6 +13753,12 @@ _DLUGA_ROBOTA_RE = re.compile(
 # mowimy, ile to trwa i co ten program wlasnie wypisal. Krotkie
 # komendy koncza sie wczesniej niz te dziesiec sekund, wiec dla nich
 # nic sie nie zmienia.
+# v324: gdy pytamy, czy cos JUZ jest na telefonie, i nie ma —
+# patrzymy jeszcze raz po tylu sekundach. Pobieranie aplikacji ze
+# sklepu trwa; czlowiek tez by nie uznal pustej listy po sekundzie
+# za odpowiedz ostateczna.
+DRUGIE_SPOJRZENIE = 20
+
 PODGLAD_OD_SEKUND = int(
     os.environ.get(
         "PODGLAD_OD_SEKUND",
@@ -14368,6 +14496,53 @@ def termux_run(command):
             return bg
 
         result = execute_shell(command_str)
+
+        # v324: "termux-am" bez gniazda Termuksa nie uruchomi niczego.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 21:43,
+        # krok 7). Zespol chcial otworzyc Linphone:
+        #
+        #   termux-am start -a android.intent.action.MAIN ...
+        #   -> "Could not connect to socket: No such file or
+        #       directory"  (dwa razy, oba warianty)
+        #
+        # termux-am rozmawia z SAMA APLIKACJA Termux przez gniazdo,
+        # ktorego tu nie ma. Ale ten sam intent puszczony przez adb
+        # dziala — tak wlasnie dziala nasze android_launch_app. Wiec
+        # to robimy, zamiast oddawac blad o gniezdzie, ktory nikomu
+        # nic nie mowi.
+        if (
+            isinstance(result, dict)
+            and not result.get("ok")
+            and "termux-am" in command_str
+            and "Could not connect to socket" in (
+                str(result.get("stdout") or "")
+                + str(result.get("stderr") or "")
+            )
+        ):
+
+            log(
+                "TERMUX",
+                "termux-am nie ma gniazda Termuksa — puszczam ten "
+                "sam intent przez adb."
+            )
+
+            przez_adb = execute_shell(
+                command_str.replace("termux-am", "adb shell am")
+            )
+
+            if isinstance(przez_adb, dict):
+
+                przez_adb["zamiast_termux_am"] = (
+                    "termux-am nie miał gniazda Termuksa "
+                    "(\"Could not connect to socket\"), więc "
+                    "puszczyłem ten sam intent przez adb. Wynik "
+                    "powyżej jest z adb."
+                )
+
+                _zglos_to_co_przybylo(_przed)
+
+                return przez_adb
 
         # v282: timeout na dlugiej robocie to nie porazka, tylko
         # zly sposob uruchomienia. Przenosimy ja w tlo i mowimy
@@ -29903,6 +30078,29 @@ def _handle_need_user_login(decision):
                 "Nie udało się zapisać wklejonej wartości do pliku: "
                 + str(e)
             )
+
+    # v324: czlowiek odpowiedzial — wiec prosba o zalogowanie jest
+    # ZALATWIONA i nie ma prawa isc dalej jako "co MAIN postanowil".
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 21:43, krok 7).
+    # Uzytkownik napisal, ze jest juz zalogowany w Linphone. W tej
+    # samej wiadomosci zespol dostal dwie sprzeczne rzeczy:
+    #
+    #   "Po ostatniej naradzie MAIN zdecydowal tak:
+    #    NEED_USER_LOGIN — Ekran utknal na hCaptcha (...)"
+    #   "Co sie wlasnie stalo:
+    #    Uzytkownik odpowiedzial (...) jest juz zalogowany"
+    #
+    # Pierwsze zdanie stoi WYZEJ i brzmi jak stan biezacy, wiec
+    # dalej rozmawiali o CAPTCHY, ktorej juz nie ma. Uzytkownik:
+    # "napisalem im, ze sie zalogowalem, oni nadal widza blad
+    # aplikacji, nie sprawdzaja".
+    #
+    # Python wie, ze prosba zostala zalatwiona — wiec ja zdejmuje.
+    if str(_main_decision_for_team or "").upper().startswith(
+        "NEED_USER_LOGIN"
+    ):
+        globals()["_main_decision_for_team"] = None
 
     return {
         "status": "USER_RESPONDED_TO_LOGIN_PROMPT",
