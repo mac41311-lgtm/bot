@@ -31030,11 +31030,13 @@ Zwróć tylko JSON.
                     "do wykonania tak jak stoi."
                 )
 
+                # Sam fakt, bez doradzania, co z nim zrobić — to
+                # już ich sprawa.
                 _pending_team_warnings.append(
-                    "Zapis do " + Path(str(write_target)).name
-                    + " pominięty: tej nazwy nie ma nigdzie w tym, "
-                    "co Bartek napisał w tym kroku. Jeśli ten plik "
-                    "ma powstać, ktoś musi podać jego treść."
+                    "Nie zapisałem nic do "
+                    + Path(str(write_target)).name
+                    + " — tej nazwy nie ma ani w tym, co Bartek "
+                    "napisał w tym kroku, ani w treści zadania."
                 )
 
                 write_target = ""
