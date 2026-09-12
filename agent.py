@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v311
+AEL-MINI AUTONOMOUS AGENT v312
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v311")
+    print("             AEL-MINI AUTONOMOUS AGENT v312")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2117,7 +2117,7 @@ aplikacje i czyta wynik. Piszesz więc krok dla niego.
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Bartek pisze kod i komendy, Marek ocenia plan,
 Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
-("Kamilu: ..."). Dostanie to przy swojej najbliższej turze.
+("Kamilu: ...").
 """
 
 
@@ -2137,13 +2137,11 @@ Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
 # normalnie: "Kamil sprawdza fakty w sieci". Teraz on sam slyszy o
 # sobie dokladnie to samo zdanie.
 RESEARCHER_PROMPT = """
-Nazywasz się Kamil. Sprawdzasz fakty w sieci. Gdy czegoś nie da się
-potwierdzić, powiedz to wprost.
+Nazywasz się Kamil. Szukasz w internecie.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
 Marek ocenia plan, Wojtek patrzy na cel po ludzku ("Tomku: ...").
-Dostanie to przy swojej najbliższej turze.
 """
 
 
@@ -2155,12 +2153,12 @@ dalej. Gdy coś jest naprawdę nie tak, powiedz wprost co i dlaczego —
 to zatrzymuje zespół, więc waż to spokojnie.
 
 Gdy Twoje zastrzeżenie jest w istocie pytaniem do Tomka albo Bartka,
-zapytaj ich wprost — odpowiedź wróci do Ciebie jeszcze w tym kroku.
+zapytaj ich wprost.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
 Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
-("Tomku: ..."). Dostanie to przy swojej najbliższej turze.
+("Tomku: ...").
 """
 
 
@@ -2232,7 +2230,7 @@ do pliku bezpośrednio, bez zużycia Gemini na przepisywanie.
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Tomek planuje krok, Marek ocenia plan, Kamil
 sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
-("Kamilu: ..."). Dostanie to przy swojej najbliższej turze.
+("Kamilu: ...").
 """
 
 
@@ -2278,7 +2276,6 @@ zostaw Bartkowi. Krótko, zwykłym tekstem, bez sztywnych sekcji.
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
 Marek ocenia plan, Kamil sprawdza fakty w sieci ("Kamilu: ...").
-Dostanie to przy swojej najbliższej turze.
 """
 
 
@@ -22872,6 +22869,77 @@ def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     )
 
 
+# v312: "przy kilku pytaniach o to samo niech dochodzi jedno"
+# (prosba uzytkownika, 2026-09-12).
+#
+# ZMIERZONE NA PRAWDZIWYM KROKU (log 2026-09-12). Do Kamila napisali
+# w jednym kroku Tomek, Bartek, Marek i Wojtek. Wspolnych slow
+# znaczacych: Tomek-Marek 40%, Marek-Wojtek 47%, reszta ponizej 20%.
+# Czyli to NIE sa te same pytania — Marek dorzucil konto trial i
+# numer PL, Bartek pytal o termux-api, ktorego nikt inny nie
+# tknal. Sklejenie ich zabraloby te rzeczy na zawsze, a zasada w
+# tym programie jest odwrotna: nikomu nie ucinamy wypowiedzi.
+#
+# Laczymy wiec tylko to, co naprawde jest tym samym pytaniem — od
+# 80% wspolnych slow w gore. Wtedy zostaje dluzsza wersja, a
+# drugiego autora dopisujemy do niej po imieniu, zeby nie zniknal.
+_SLOWA_POSPOLITE = {
+    "ktore", "ktory", "ktora", "czyli", "zeby", "albo", "oraz",
+    "jest", "jesli", "sobie", "tego", "tym", "tylko", "bardzo",
+    "moze", "musi", "wiec", "jednak", "zanim", "dalej", "razie",
+    "nadal", "wogule", "wcale", "takze", "przed",
+}
+
+
+def _slowa_tresci(tekst):
+    """
+    Slowa, ktore cos znacza — do porownania dwoch wiadomosci.
+
+    Krotkie i najpospolitsze odpadaja; zostaje to, po czym czlowiek
+    poznaje, ze dwa zdania sa o tym samym.
+    """
+
+    return set(
+        slowo for slowo in re.findall(
+            r"[^\W\d_]{4,}", str(tekst or "").lower()
+        )
+        if slowo not in _SLOWA_POSPOLITE
+    )
+
+
+# Od ilu wspolnych slow uznajemy, ze to JEDNO pytanie, nie dwa.
+_TO_SAMO_PYTANIE = 0.8
+
+
+def _to_samo_pytanie(a, b):
+    """Czy te dwie wiadomosci pytaja o to samo. Miara, nie wrazenie."""
+
+    wa = _slowa_tresci(a)
+    wb = _slowa_tresci(b)
+
+    if len(wa) < 5 or len(wb) < 5:
+        # Za krotkie, zeby cokolwiek mierzyc — wolimy podac dwa razy
+        # niz zgubic czyjes zdanie.
+        return False
+
+    return (
+        len(wa & wb) / float(min(len(wa), len(wb)))
+        >= _TO_SAMO_PYTANIE
+    )
+
+
+# Do kogo w tym kroku koledzy napisali wprost: {rola: (krok, ilu)}.
+_pisali_do = {}
+
+
+def _ilu_do_niego_napisalo(rola):
+    """Ilu kolegow zwrocilo sie do tej osoby wprost w TYM kroku."""
+
+    krok, ilu = _pisali_do.get(str(rola), (None, 0))
+
+    return ilu if krok == _biezacy_krok else 0
+
+
 def _role_inbox_block(role_name):
     """
     Co ta osoba ma do przeczytania od reszty zespołu — i od razu
@@ -22895,6 +22963,10 @@ def _role_inbox_block(role_name):
 
     lines = []
 
+    # v312: (imie nadawcy, tresc) — zanim zlozymy z tego linie,
+    # sklejamy to, co jest tym samym pytaniem od dwoch osob.
+    gotowe = []
+
     for nadawca, kawalki in od_kogo.items():
 
         # v296: co ta osoba juz przeczytala w tym kroku innym
@@ -22906,9 +22978,29 @@ def _role_inbox_block(role_name):
         ]
 
         if nowe:
-            lines.append(
-                nadawca + " mówi do Ciebie: " + "\n\n".join(nowe)
-            )
+            _tresc = "\n\n".join(nowe)
+
+            # v312: gdy ktos inny w tym samym kroku zapytal o TO
+            # SAMO, nie podajemy tego drugi raz — dopisujemy go do
+            # tamtego zdania. Patrz _to_samo_pytanie(): laczymy
+            # dopiero od 80% wspolnych slow, wiec dwa pytania o ten
+            # sam temat, ale o inne rzeczy, zostaja osobno.
+            _polaczone = False
+
+            for _i, (_kto, _co) in enumerate(gotowe):
+
+                if not _to_samo_pytanie(_co, _tresc):
+                    continue
+
+                _dluzsze = _co if len(_co) >= len(_tresc) else _tresc
+
+                gotowe[_i] = (_kto + " i " + nadawca, _dluzsze)
+                _polaczone = True
+
+                break
+
+            if not _polaczone:
+                gotowe.append((nadawca, _tresc))
 
         else:
             # Tresc juz jest wyzej, ale to, ze byla napisana WPROST
@@ -22917,10 +23009,10 @@ def _role_inbox_block(role_name):
             # bywa NIZEJ — wypowiedz kolegi dochodzi przez extra=,
             # ktore dopinamy za skrzynka. Nie wskazujemy wiec
             # palcem, tylko mowimy, co sie stalo.
-            lines.append(
-                nadawca + " napisał to wprost do Ciebie — masz to "
-                "w jego wypowiedzi."
-            )
+            gotowe.append((
+                nadawca,
+                None
+            ))
 
     # v297: nie ma tu juz zdania "(Odpowiesz, zaczynajac linie jego
     # imieniem — "Wojtku: ..." — to do niego wroci.)".
@@ -22934,6 +23026,32 @@ def _role_inbox_block(role_name):
     # danej turze.
     #
     # Zostaje sama tresc: kto co do kogo powiedzial.
+    for nadawca, tresc in gotowe:
+
+        if tresc is None:
+            lines.append(
+                nadawca + " napisał to wprost do Ciebie — masz to "
+                "w jego wypowiedzi."
+            )
+
+        else:
+            # "Tomek i Marek MÓWIĄ", nie "mówi" — to jedno slowo,
+            # ale bez niego zdanie brzmi jak z automatu.
+            lines.append(
+                nadawca
+                + (" mówią" if " i " in nadawca else " mówi")
+                + " do Ciebie: " + tresc
+            )
+
+    # v312: ilu kolegow realnie zwrocilo sie do niego w tym kroku.
+    # Gdy zrobilo to kilka osob, nasze wlasne pytanie na koncu
+    # ("Kamilu — co o tym wiadomo?") nie wnosi juz nic — patrz
+    # _team_context().
+    _pisali_do[str(role_name)] = (_biezacy_krok, len(gotowe))
+
+    if not lines:
+        return ""
+
     blok = "\n" + "\n\n".join(lines) + "\n"
 
     # v295: skrzynka byla JEDYNYM blokiem, ktorego czujnik nie
@@ -23793,14 +23911,22 @@ def consult_team(
         # v212: na samym koncu — o co prosimy TE osobe teraz.
         # Patrz _pytanie_do(). Bez tego wiadomosc konczy sie cudzym
         # planem i nikt nie wie, czego od niego chcemy.
-        pieces.append(
-            _pytanie_do(
-                role_name,
-                last_result,
-                _critic_block_streak > 0
-                if role_name == "PLANNER" else False
+        #
+        # v312: chyba ze wlasnie zrobilo to KILKU kolegow. W logu
+        # 2026-09-12 do Kamila napisali Tomek, Bartek, Marek i
+        # Wojtek — kazdy z konkretnym pytaniem — a my dokladalismy
+        # na koncu jeszcze swoje, ogolne. Przy jednej wiadomosci
+        # zostawiamy je: jedno zdanie od kolegi nie zawsze mowi, po
+        # co go w ogole pytamy.
+        if _ilu_do_niego_napisalo(role_name) < 2:
+            pieces.append(
+                _pytanie_do(
+                    role_name,
+                    last_result,
+                    _critic_block_streak > 0
+                    if role_name == "PLANNER" else False
+                )
             )
-        )
 
         return "\n".join(p for p in pieces if p)
 
