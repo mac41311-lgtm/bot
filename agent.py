@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v324
+AEL-MINI AUTONOMOUS AGENT v325
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v324")
+    print("             AEL-MINI AUTONOMOUS AGENT v325")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4938,6 +4938,21 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     pominiete = [0]
     pierwszy_blad = [""]
 
+    # v325: pierwsze kawalki strumienia, doslownie.
+    #
+    # Pierwsza litera odpowiedzi Kamila ginie od trzech biegow i
+    # wykluczylem juz po kolei: myslenie (myslenie=0), pominiete
+    # kawalki (pominiete=0), urwanie (urwane=False), status (zawsze
+    # FINISHED). Zostal sam POCZATEK strumienia, ktorego nigdzie nie
+    # zapisujemy — a to jedyne miejsce, gdzie moze sie to dziac.
+    #
+    # Bieg 2026-09-12 22:47 pokazal jeszcze jedno: w kroku 5, gdy
+    # myslenie bylo (115 znakow), pierwsza litera BYLA na miejscu.
+    # W pozostalych pieciu krokach myslenia nie bylo wcale i ginelo
+    # od jednego do dwoch znakow. To sa dwie rozne sciezki w tym
+    # czytniku i trzeba zobaczyc, ktora.
+    poczatek_strumienia = []
+
     for line in response.iter_lines():
 
         if not line:
@@ -4959,6 +4974,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
             if not raw_data:
                 continue
+
+            if len(poczatek_strumienia) < 3:
+                poczatek_strumienia.append(raw_data[:150])
 
             data = json.loads(raw_data)
             content = ""
@@ -5187,6 +5205,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         znakow_myslenia[0] = 0
 
     globals()["_ostatnie_myslenie_znaki"] = znakow_myslenia[0]
+    globals()["_poczatek_strumienia"] = " || ".join(
+        poczatek_strumienia
+    )
     globals()["_ostatnie_pominiete"] = pominiete[0]
     globals()["_ostatni_pominiety_blad"] = pierwszy_blad[0]
 
@@ -5233,6 +5254,9 @@ _MYSLENIE_TO_NIE_MYSLENIE = 3
 # czym sie wywrocil pierwszy z nich (v323).
 _ostatnie_pominiete = 0
 _ostatni_pominiety_blad = ""
+
+# Pierwsze trzy kawalki ostatniego strumienia, doslownie (v325).
+_poczatek_strumienia = ""
 
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
@@ -6279,6 +6303,7 @@ def deepseek(name, message):
                     myslenie=int(_ostatnie_myslenie_znaki or 0),
                     pominiete=int(_ostatnie_pominiete or 0),
                     pominiety_blad=str(_ostatni_pominiety_blad or ""),
+                    poczatek_strumienia=str(_poczatek_strumienia or ""),
                     z_myslenia=bool(_wzielismy_myslenie),
                     konto=_account_of(name),
                     tresc=str(text or "")
@@ -30960,6 +30985,59 @@ Zwróć tylko JSON.
                         "Wystarczy, że ktoś powie, jak ten plik ma "
                         "się nazywać."
                     )
+
+            # v325: MAIN wskazal plik, o ktorym Bartek w tym kroku
+            # nie napisal ani slowa.
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 22:47,
+            # krok 3). Cel zapisu: backend/main.py — plik z
+            # POPRZEDNIEGO kroku. A Bartek pisal w tym kroku o czym
+            # innym; jego blok to byly komendy:
+            #
+            #     mkdir -p ~/ai-phone-agent/backend/static
+            #     cd ~/ai-phone-agent/backend
+            #     cat > .env.example <<'EOF'
+            #     ...
+            #
+            # Nazwa "main.py" nie pada w calej jego wypowiedzi ani
+            # razu. Straznik slusznie nie pozwolil zapisac komend do
+            # main.py — ale przy okazji krok 3 przepadl w calosci
+            # (ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT), a komendy byly
+            # dobre i czekaly tylko na uruchomienie.
+            #
+            # Czlowiek, ktory to czyta, widzi to od razu: ten blok
+            # nie jest tym plikiem. Wiec zdejmujemy zly cel zapisu
+            # TERAZ, zanim ruszy cala maszyneria zapisu, i zadanie
+            # leci dalej normalna droga — Gemini wykonuje to, co
+            # dostalo.
+            # Nazwa moze paść u Bartka ALBO w samym zadaniu — MAIN
+            # bywa tym, kto pierwszy nadaje plikowi nazwę ("zapisz to
+            # jako backend/main.py"). Zdejmujemy cel dopiero wtedy,
+            # gdy nie ma go w ŻADNYM z tych dwóch miejsc.
+            if (
+                write_target
+                and Path(str(write_target)).name
+                not in str(team.get("engineer_full", ""))
+                and Path(str(write_target)).name not in str(task_text)
+            ):
+
+                log(
+                    "MAIN",
+                    "MAIN wskazał do zapisu "
+                    + Path(str(write_target)).name
+                    + ", ale Bartek w tym kroku ani razu o tym pliku "
+                    "nie wspomniał — nie zapisuję nic, zadanie idzie "
+                    "do wykonania tak jak stoi."
+                )
+
+                _pending_team_warnings.append(
+                    "Zapis do " + Path(str(write_target)).name
+                    + " pominięty: tej nazwy nie ma nigdzie w tym, "
+                    "co Bartek napisał w tym kroku. Jeśli ten plik "
+                    "ma powstać, ktoś musi podać jego treść."
+                )
+
+                write_target = ""
 
             if write_target:
 
