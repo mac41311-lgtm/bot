@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v318
+AEL-MINI AUTONOMOUS AGENT v319
 
 ARCHITEKTURA:
 
@@ -1335,7 +1335,17 @@ def zapisz_zdarzenie(typ, **pola):
 # najpewniejsza oznaka zepsutej komunikacji, jaka mamy: nie
 # domysl, tylko cytat.
 _NIE_DOSTAL_RE = re.compile(
-    r"urwa[łl]e[śs]|urywa\s+si[eę]|uci[eę]t|"
+    # v319: samo "ucięt" łapało rozmowy O DANYCH, nie o
+    # wiadomościach. Log 2026-09-12, krok 6 — Marek pisał o
+    # cudzysłowach w sed: "regex złapie ucięty string", a czujnik
+    # zgłosił to jako "ktoś nie dostał tego, co miał dostać".
+    # Musi więc paść przy tym słowo o WYPOWIEDZI — w tę albo w
+    # tamtą stronę ("ucięta odpowiedź", "plan jest ucięty").
+    r"urwa[łl]e[śs]|urywa\s+si[eę]|"
+    r"uci[eę]t\w*\s+(?:\w+\s+){0,2}"
+    r"(?:wiadomo|odpowied|wypowied|plan|tekst|zdani|list|tre[śs])|"
+    r"(?:wiadomo|odpowied|wypowied|plan|tekst|zdani|list|tre[śs])"
+    r"\w*\s+(?:\w+\s+){0,2}(?:jest\s+)?uci[eę]t|"
     # v286: samo "nie widze" to za malo — Marek napisal "nie widze
     # blokerow", czyli POCHWALE, a czujnik zglosil to jako brak.
     # Musi paść, CZEGO nie widzi.
@@ -2066,7 +2076,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v318")
+    print("             AEL-MINI AUTONOMOUS AGENT v319")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11814,9 +11824,57 @@ def termux_mkdir(path):
 # skrypt powłoki z tym narzędziem w realnym logu 2026-08-30. `.`
 # (wartość domyślna np. dla termux_ls) traktujemy jako `~` z tego
 # samego powodu.
+# v319: "$HOME/..." i "HOME/..." to jest katalog domowy, nie
+# podkatalog o nazwie HOME.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12, kroki 8-10).
+# MAIN podal sciezke zapisu jako "HOME/models/download-ggml-model.sh",
+# a my zlozylismy ja doslownie:
+#
+#   /data/data/com.termux/files/home/HOME/models/download-ggml-model.sh
+#
+# Zespol zobaczyl to szybciej niz my. Marek w kroku 10:
+#
+#   "To nie jest sciezka $HOME/models/ — to jest doslownie
+#    podkatalog HOME w $HOME. Znaczy: mamy smiecia w zlym miejscu."
+#
+# Kosztowalo to trzy kroki (szukanie pliku, ktory lezal gdzie
+# indziej, spor o 'mv', a na koncu osobne polecenie kasujace
+# ~/HOME). expanduser() rozwija tylko tylde; zmienne srodowiska
+# przechodzily przez nia nietkniete.
+_ZMIENNA_HOME_RE = re.compile(
+    r"^(?:\$\{?(HOME|PREFIX|TMPDIR)\}?|(HOME|PREFIX|TMPDIR))(?=/|$)"
+)
+
+
 def _resolve_home_relative_path(path):
 
-    p = Path(str(path or ".")).expanduser()
+    tekst = str(path or ".")
+
+    # Najpierw zwykle rozwiniecie zmiennych — "$HOME/x", "${HOME}/x".
+    try:
+        rozwiniete = os.path.expandvars(tekst)
+    except Exception:
+        rozwiniete = tekst
+
+    # A gdy dolar gdzies po drodze przepadl (tak przyszlo do nas w
+    # logu z 2026-09-12), zostaje gola nazwa zmiennej na poczatku
+    # sciezki. Zaden normalny projekt nie zaczyna sie katalogiem o
+    # nazwie HOME albo PREFIX, wiec czytamy to tak, jak czyta
+    # czlowiek.
+    m = _ZMIENNA_HOME_RE.match(rozwiniete)
+
+    if m:
+        nazwa = m.group(1) or m.group(2)
+        wartosc = os.environ.get(nazwa)
+
+        if not wartosc and nazwa == "HOME":
+            wartosc = str(HOME)
+
+        if wartosc:
+            rozwiniete = wartosc + rozwiniete[m.end():]
+
+    p = Path(rozwiniete).expanduser()
 
     if not p.is_absolute():
         p = HOME / p
