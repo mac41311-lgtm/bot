@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v316
+AEL-MINI AUTONOMOUS AGENT v317
 
 ARCHITEKTURA:
 
@@ -158,11 +158,76 @@ def wypisz_wyslane(plik, rola=None, krok=None):
             print()
 
 
+def wypisz_wykonane(plik, krok=None):
+    """
+    Co Gemini naprawde uruchomilo i co z tego wyszlo (v317).
+
+    W terminalu wynik narzedzia jest przyciety do 1000 znakow, wiec
+    z samego logu nie dalo sie sprawdzic nawet tego, czy dwa
+    identycznie wygladajace wyniki to bylo to samo polecenie.
+    """
+
+    ostatnie = None
+
+    with open(plik, encoding="utf-8") as f:
+
+        for linia in f:
+
+            try:
+                wpis = json.loads(linia)
+            except Exception:
+                continue
+
+            if wpis.get("typ") not in ("narzedzie", "wynik"):
+                continue
+
+            if krok is not None and wpis.get("krok") != krok:
+                continue
+
+            if wpis.get("typ") == "narzedzie":
+                ostatnie = wpis
+                continue
+
+            print("=" * 60)
+            print("krok %s \u2192 %s  %s" % (
+                wpis.get("krok"),
+                wpis.get("nazwa"),
+                "OK" if wpis.get("ok") else "B\u0141\u0104D"
+            ))
+
+            if ostatnie:
+                _a = ostatnie.get("argumenty")
+
+                if isinstance(_a, dict):
+                    for _k, _v in _a.items():
+                        print("  %s: %s" % (_k, _v))
+
+                elif _a is not None:
+                    print("  " + str(_a))
+
+            print("-" * 60)
+            print(json.dumps(
+                wpis.get("wynik"), ensure_ascii=False,
+                indent=2, default=str
+            ))
+            print()
+
+            ostatnie = None
+
+
 if len(sys.argv) > 2 and sys.argv[1] == "--wyslane":
     wypisz_wyslane(
         sys.argv[2],
         sys.argv[3] if len(sys.argv) > 3 else None,
         int(sys.argv[4]) if len(sys.argv) > 4 else None
+    )
+    raise SystemExit(0)
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--wykonane":
+    wypisz_wykonane(
+        sys.argv[2],
+        int(sys.argv[3]) if len(sys.argv) > 3 else None
     )
     raise SystemExit(0)
 
@@ -2001,7 +2066,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v316")
+    print("             AEL-MINI AUTONOMOUS AGENT v317")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16775,6 +16840,24 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
         _last_call_signature = None
         ask_deepseek_calls = 0
 
+        # v317: te same wywolania, ale NIE pod rzad.
+        #
+        # ZMIERZONE NA PRAWDZIWYM BIEGU (log 2026-09-12, krok 3).
+        # Gemini wykonalo piec polecen, z czego TRZY byly tym samym
+        # inwentarzem Termuksa — wywolania #1, #2 i #5, za kazdym
+        # razem ten sam wynik co do bajtu. Pierwsze trwalo 11 sekund.
+        # Licznik z v211 tego nie zlapal, bo liczyl tylko powtorki
+        # JEDNA PO DRUGIEJ, a tu miedzy nimi byly dwa inne polecenia.
+        # Na dziewiec wywolan narzedzi w calym biegu dwa poszly na
+        # pytanie, na ktore odpowiedz juz lezala na stole.
+        #
+        # Wiec pamietamy wszystkie wywolania w tym zadaniu, nie tylko
+        # ostatnie. Drugie powtorzenie przepuszczamy — sprawdzenie,
+        # czy cos sie zmienilo, to normalna robota. Dopiero przy
+        # trzecim oddajemy zapamietany wynik zamiast uruchamiac to
+        # samo jeszcze raz.
+        _wywolania_w_zadaniu = {}
+
         # ====================================================
         # PĘTLA INTERACTIONS
         # ====================================================
@@ -16985,7 +17068,18 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     f"narzędzie #{tool_calls}: {name}"
                 )
 
-                zapisz_zdarzenie("narzedzie", nazwa=str(name))
+                # v317: sama nazwa narzedzia nie wystarcza. W logu
+                # z 2026-09-12 nie dalo sie sprawdzic, czy trzy
+                # identycznie wygladajace wyniki to naprawde to samo
+                # polecenie — bo komendy nigdzie nie zapisywalismy,
+                # a w terminalu wynik jest przyciety do 1000 znakow.
+                # To ta sama dziura, co przy promptach (v313), tylko
+                # po stronie wykonania.
+                zapisz_zdarzenie(
+                    "narzedzie",
+                    nazwa=str(name),
+                    argumenty=args
+                )
 
                 # --------------------------------------------
                 # LIMIT ask_deepseek NA TASK
@@ -17045,19 +17139,65 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # DISPATCH
                 # --------------------------------------------
 
+                # v317: to samo wywolanie po raz trzeci w tym
+                # zadaniu — patrz _wywolania_w_zadaniu wyzej.
                 try:
-                    result = dispatch_tool(
-                        name,
-                        args
+                    _klucz_wywolania = (
+                        str(name)
+                        + "|" + json.dumps(args, sort_keys=True,
+                                           default=str)
+                    )
+                except Exception:
+                    _klucz_wywolania = None
+
+                _bylo, _stary_wynik = _wywolania_w_zadaniu.get(
+                    _klucz_wywolania, (0, None)
+                ) if _klucz_wywolania else (0, None)
+
+                if _klucz_wywolania and _bylo >= 2:
+
+                    log(
+                        "GEMINI",
+                        str(name) + ": to samo wywolanie po raz "
+                        + str(_bylo + 1) + " w tym zadaniu — oddaje "
+                        "zapamietany wynik, nie uruchamiam tego "
+                        "jeszcze raz."
                     )
 
-                except Exception as e:
+                    result = dict(_stary_wynik) if isinstance(
+                        _stary_wynik, dict
+                    ) else _stary_wynik
 
-                    result = {
-                        "ok": False,
-                        "error": str(e),
-                        "error_type": type(e).__name__
-                    }
+                    if isinstance(result, dict):
+                        result["juz_to_bylo"] = (
+                            "To samo wywołanie z tymi samymi "
+                            "argumentami było już w tym zadaniu "
+                            + str(_bylo) + " razy. Poniżej wynik "
+                            "stamtąd — nic się od tego czasu nie "
+                            "zmieniło z naszej strony."
+                        )
+
+                else:
+
+                    try:
+                        result = dispatch_tool(
+                            name,
+                            args
+                        )
+
+                    except Exception as e:
+
+                        result = {
+                            "ok": False,
+                            "error": str(e),
+                            "error_type": type(e).__name__
+                        }
+
+                if _klucz_wywolania:
+                    _wywolania_w_zadaniu[_klucz_wywolania] = (
+                        _bylo + 1,
+                        _stary_wynik if _bylo >= 2 else result
+                    )
 
                 log(
                     "GEMINI",
@@ -17070,6 +17210,17 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         ),
                         1000
                     )
+                )
+
+                # v317: pelny wynik — do pliku zdarzen, nie na ekran.
+                zapisz_zdarzenie(
+                    "wynik",
+                    nazwa=str(name),
+                    ok=bool(
+                        result.get("ok")
+                        if isinstance(result, dict) else False
+                    ),
+                    wynik=result
                 )
 
                 # v211: to samo narzedzie + te same argumenty + ten
