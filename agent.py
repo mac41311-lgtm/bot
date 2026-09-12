@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v312
+AEL-MINI AUTONOMOUS AGENT v313
 
 ARCHITEKTURA:
 
@@ -76,6 +76,97 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from urllib.parse import urlparse
+
+# ============================================================
+# CO POSZLO DO AGENTOW (v313)
+# ============================================================
+#
+# Uzytkownik: "nie masz w logach co wysylamy, dodaj jeszcze to do
+# logow, co wysylane jest do kazdego z agentow".
+#
+# Ma racje i to byla realna dziura. Kazda naprawa od v308 do v312
+# wyszla z tego, ze RECZNIE wklejal mi wiadomosc, ktora zobaczyl u
+# Kamila na stronie — bo w naszych wlasnych logach byla tylko jej
+# DLUGOSC. Nie bylo widac ani czterech zawolan sklejonych w jedna
+# linie, ani zdublowanego akapitu Wojtka.
+#
+# Tresc idzie do pliku zdarzen biegu (.jsonl) przy kazdej wysylce
+# — patrz deepseek(). Tutaj jest jej czytnik, i celowo stoi PRZED
+# reszta importow: zeby przeczytanie wlasnych wysylek nie wymagalo
+# ani jednej biblioteki bota.
+#
+#     python3 agent.py --wyslane <plik.jsonl> [Kamil] [krok]
+
+_IMIONA_ROL = {
+    "PLANNER": "Tomek",
+    "RESEARCHER": "Kamil",
+    "ENGINEER": "Bartek",
+    "CRITIC": "Marek",
+    "BROWSER": "Ola",
+    "WOJTEK": "Wojtek",
+    "MAIN": "MAIN",
+    "PROGRESS_ESTIMATOR": "Ela",
+    "CODE_REVIEWER": "Piotr",
+    "CODE_FIXER": "Ania",
+}
+
+
+def wypisz_wyslane(plik, rola=None, krok=None):
+    """
+    Wypisuje slowo w slowo to, co poszlo do agentow.
+
+    rola: "Kamil" albo "RESEARCHER" — jedno i drugie.
+    krok: numer kroku, gdy interesuje tylko jeden.
+    """
+
+    szukane = None
+
+    if rola:
+        szukane = str(rola).upper()
+
+        for klucz, imie in _IMIONA_ROL.items():
+            if imie.upper() == szukane:
+                szukane = klucz
+                break
+
+    with open(plik, encoding="utf-8") as f:
+
+        for linia in f:
+
+            try:
+                wpis = json.loads(linia)
+            except Exception:
+                continue
+
+            if wpis.get("typ") != "prompt" or "tresc" not in wpis:
+                continue
+
+            if szukane and str(wpis.get("rola", "")).upper() != szukane:
+                continue
+
+            if krok is not None and wpis.get("krok") != krok:
+                continue
+
+            print("=" * 60)
+            print("krok %s \u2192 %s (%s znak\u00f3w)" % (
+                wpis.get("krok"),
+                _IMIONA_ROL.get(wpis.get("rola"), wpis.get("rola")),
+                wpis.get("znaki")
+            ))
+            print("=" * 60)
+            print(wpis["tresc"])
+            print()
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--wyslane":
+    wypisz_wyslane(
+        sys.argv[2],
+        sys.argv[3] if len(sys.argv) > 3 else None,
+        int(sys.argv[4]) if len(sys.argv) > 4 else None
+    )
+    raise SystemExit(0)
+
+
 from web_search import web_search
 from datetime import datetime
 
@@ -1465,16 +1556,22 @@ def log(tag, message):
 # Ludzkie imiona i kolory ról — żeby narada w terminalu czytała się
 # jak rozmowa, a nie jak zrzut logów. Używane tylko przez _speak().
 _ROLE_SPEAKERS = {
-    "PLANNER": ("Tomek", "cyan", "planowanie"),
-    "RESEARCHER": ("Kamil", "blue", "research"),
-    "ENGINEER": ("Bartek", "green", "technika"),
-    "CRITIC": ("Marek", "yellow", "ocena"),
-    "BROWSER": ("Ola", "magenta", "tłumaczenie"),
-    "WOJTEK": ("Wojtek", "bright_magenta", "pomysły"),
-    "MAIN": ("MAIN", "bold white", "decyzja"),
-    "PROGRESS_ESTIMATOR": ("Ela", "bright_blue", "postęp"),
-    "CODE_REVIEWER": ("Piotr", "bright_yellow", "analiza kodu"),
-    "CODE_FIXER": ("Ania", "bright_green", "poprawka"),
+    "PLANNER": (_IMIONA_ROL["PLANNER"], "cyan", "planowanie"),
+    "RESEARCHER": (_IMIONA_ROL["RESEARCHER"], "blue", "research"),
+    "ENGINEER": (_IMIONA_ROL["ENGINEER"], "green", "technika"),
+    "CRITIC": (_IMIONA_ROL["CRITIC"], "yellow", "ocena"),
+    "BROWSER": (_IMIONA_ROL["BROWSER"], "magenta", "tłumaczenie"),
+    "WOJTEK": (_IMIONA_ROL["WOJTEK"], "bright_magenta", "pomysły"),
+    "MAIN": (_IMIONA_ROL["MAIN"], "bold white", "decyzja"),
+    "PROGRESS_ESTIMATOR": (
+        _IMIONA_ROL["PROGRESS_ESTIMATOR"], "bright_blue", "postęp"
+    ),
+    "CODE_REVIEWER": (
+        _IMIONA_ROL["CODE_REVIEWER"], "bright_yellow", "analiza kodu"
+    ),
+    "CODE_FIXER": (
+        _IMIONA_ROL["CODE_FIXER"], "bright_green", "poprawka"
+    ),
 }
 
 
@@ -1904,7 +2001,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v312")
+    print("             AEL-MINI AUTONOMOUS AGENT v313")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5334,10 +5431,31 @@ def deepseek(name, message):
     # wiec jedyne miejsce, gdzie da sie uczciwie zmierzyc, ile
     # naprawde do niej poszlo. Prompt sklada sie w pamieci i ginie;
     # bez tego zapisu nie ma czego liczyc.
+    #
+    # v313: i CO poszlo, nie tylko ile. Uzytkownik: "nie masz w
+    # logach co wysylamy, dodaj jeszcze to do logow, co wysylane
+    # jest do kazdego z agentow".
+    #
+    # Ma racje i to byla realna dziura w tej sesji: kazda naprawa
+    # od v308 do v312 wychodzila z tego, ze on RECZNIE wklejal mi
+    # wiadomosc, ktora zobaczyl u Kamila. Bez tego nie widzielismy
+    # ani zawolan w jednej linii, ani zdublowanego akapitu Wojtka.
+    # Tresc idzie do pliku zdarzen (.jsonl), zeby dalo sie ja
+    # przeczytac slowo w slowo; w terminalu zostaje jedna linia,
+    # zeby nie zasypac ekranu promptami.
+    _tresc_wyslana = str(message or "")
+
     zapisz_zdarzenie(
         "prompt",
         rola=str(name),
-        znaki=len(str(message or ""))
+        znaki=len(_tresc_wyslana),
+        tresc=_tresc_wyslana
+    )
+
+    log(
+        "WYSYŁKA",
+        str(name) + " ← " + _po_ludzku_rozmiar(len(_tresc_wyslana))
+        + ": " + _poczatek_bloku(_tresc_wyslana, 70)
     )
 
     _deepseek_circuit_wait(name)
