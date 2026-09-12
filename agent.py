@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v321
+AEL-MINI AUTONOMOUS AGENT v322
 
 ARCHITEKTURA:
 
@@ -2217,7 +2217,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v321")
+    print("             AEL-MINI AUTONOMOUS AGENT v322")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5121,10 +5121,37 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             full_text = full_text[len(_leak):]
             break
 
+    # v322: "myslenie" dlugosci jednego znaku to nie jest myslenie.
+    #
+    # ZMIERZONE NA PRAWDZIWYM BIEGU (2026-09-12 13:45). Siedem z
+    # osmiu odpowiedzi Kamila zaczynalo sie od "amilu: sprawdzam" —
+    # bez pierwszej litery. Osma, w kroku 5, miala "Kamilu:" w
+    # calosci. Status FINISHED, nic nie urwane, odpowiedz pelna poza
+    # tym jednym znakiem.
+    #
+    # Pierwsza porcja odpowiedzi przychodzi czasem bez wlasnej
+    # sciezki i lapie na typ POPRZEDNIEGO fragmentu — czyli na
+    # myslenie. To dokladnie ten sam ksztalt bledu, co v303, tylko
+    # w sciezce bez numeru.
+    #
+    # Nie zgadujemy wiec ksztaltu strumienia. Liczymy fakt: jesli
+    # odpowiedz JEST, a calego "myslenia" uzbieralo sie kilka
+    # znakow, to nie bylo myslenie — to byl jej poczatek. Prawdziwe
+    # myslenie ma tysiace znakow (w tej sesji: 1810, 2419, 3347,
+    # 3501, 4294, 4994, 5254).
+    _mysl = "".join(tekst_myslenia)
+
+    if full_text.strip() and 0 < len(_mysl) <= _MYSLENIE_TO_NIE_MYSLENIE:
+        full_text = _mysl + full_text
+        _mysl = ""
+        znakow_myslenia[0] = 0
+
+    globals()["_ostatnie_myslenie_znaki"] = znakow_myslenia[0]
+
     if not full_text.strip() and znakow_myslenia[0]:
         # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.
         globals()["_ostatnie_samo_myslenie"] = znakow_myslenia[0]
-        globals()["_ostatnie_myslenie_tekst"] = "".join(tekst_myslenia)
+        globals()["_ostatnie_myslenie_tekst"] = _mysl
     else:
         globals()["_ostatnie_samo_myslenie"] = 0
         globals()["_ostatnie_myslenie_tekst"] = ""
@@ -5142,6 +5169,15 @@ _ostatnie_samo_myslenie = 0
 
 # I co tam bylo napisane (v315).
 _ostatnie_myslenie_tekst = ""
+
+# Ile znakow myslenia przyszlo w OSTATNIEJ odpowiedzi, niezaleznie
+# od tego, czy byla pusta (v322) — zeby dalo sie to zobaczyc w
+# przebiegu przy kazdej turze, nie tylko przy awarii.
+_ostatnie_myslenie_znaki = 0
+
+# Powyzej tylu znakow uznajemy, ze to naprawde bylo myslenie.
+# Ponizej — to poczatek odpowiedzi, ktory zlapal zly typ fragmentu.
+_MYSLENIE_TO_NIE_MYSLENIE = 3
 
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
@@ -6185,6 +6221,7 @@ def deepseek(name, message):
                     status=str(status or ""),
                     urwane=bool(truncated),
                     samo_myslenie=int(_ostatnie_samo_myslenie or 0),
+                    myslenie=int(_ostatnie_myslenie_znaki or 0),
                     z_myslenia=bool(_wzielismy_myslenie),
                     konto=_account_of(name),
                     tresc=str(text or "")
@@ -23175,9 +23212,39 @@ _WOLACZ = {
 # Naglowek nazywajacy wykonawce konczy wiadomosc prywatna tak samo
 # jak zawolanie kogos innego. To jest fakt z tekstu, nie zgadywanie:
 # autor sam napisal, do kogo mowi.
+# v322: "Gemini: wykonaj dokladnie to, w Termuxie:" konczy
+# wiadomosc prywatna tak samo jak "Jeden krok dla Gemini".
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 13:45, kroki 3-6).
+# Tomek napisal do Kamila, a zaraz pod spodem:
+#
+#     **Gemini: wykonaj dokladnie to, w Termuxie. Jedna komenda,
+#     trzy pliki, surowy wynik na koncu:**
+#
+#     ```bash
+#     set -e
+#     cd /data/data/com.termux/files/home/voice-agent
+#     mkdir -p docs backend app
+#     cat > docs/decyzje.md <<'EOF'
+#     ...
+#
+# Caly ten blok wpadl do skrzynki Kamila. On odpowiadal na to
+# CZTERY TURY Z RZEDU tym samym:
+#
+#     "Nie mam dostepu do Twojego Termuxa. Nie wykonam
+#      `cd ~/voice-agent && mkdir -p ...`. To nie odmowa — to brak
+#      dostepu."
+#
+# Cztery kroki z osmiu. Wzorzec z v296 wymagal slowa "dla"
+# ("krok DLA Gemini"), a autor zwrocil sie do wykonawcy wprost, po
+# imieniu — tak jak wola kazdego innego. To jest fakt z tekstu, nie
+# zgadywanie: sam napisal, do kogo mowi.
 _SEKCJA_WYKONAWCY_RE = re.compile(
-    r"^[\s*_#>-]*(?:[^\W\d_]+\s+){0,3}dla\s+"
-    r"(?:gemini|wykonawc\w*|main\w*)\b",
+    r"^[\s*_#>-]*(?:"
+    r"(?:[^\W\d_]+\s+){0,3}dla\s+(?:gemini|wykonawc\w*|main\w*)\b"
+    r"|(?:gemini|wykonawc\w*|main)\s*[:,]"
+    r"|(?:gemini|wykonawc\w*|main)\s+[\u2014\u2013-]\s+"
+    r")",
     re.MULTILINE | re.IGNORECASE
 )
 
