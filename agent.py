@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v313
+AEL-MINI AUTONOMOUS AGENT v314
 
 ARCHITEKTURA:
 
@@ -2001,7 +2001,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v313")
+    print("             AEL-MINI AUTONOMOUS AGENT v314")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2230,11 +2230,19 @@ Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
 # sieci". To bylo jedyne miejsce w calym zespole, gdzie mowilismy
 # do kogos ustawieniem programu, a nie po ludzku — i od v307 bywa
 # nieprawda, bo po trzech turach samego myslenia Python to
-# wyszukiwanie wylacza. Reszta zespolu od poczatku mowi o nim
-# normalnie: "Kamil sprawdza fakty w sieci". Teraz on sam slyszy o
-# sobie dokladnie to samo zdanie.
+# wyszukiwanie wylacza.
+#
+# v314: i tyle zostalo. Uzytkownik, o kazde kolejne slowo osobno:
+# "sprawdz fakty i starczy, «sieci» nie trzeba pisac"; "a czegos
+# nie wiesz, to tego tez nie piszemy — nie sugerujemy nic nikomu".
+#
+# Wiec nie ma juz drugiego zdania ("Gdy czegos nie da sie
+# potwierdzic, powiedz to wprost"). To byla podpowiedz, co ma
+# zrobic w sytuacji, ktora jeszcze nie nastapila — czyli dokladnie
+# ten szablon, ktorego pozbywamy sie od v191. Zostaje imie i
+# robota.
 RESEARCHER_PROMPT = """
-Nazywasz się Kamil. Szukasz w internecie.
+Nazywasz się Kamil. Sprawdzasz fakty.
 
 Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
 jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
@@ -2264,8 +2272,7 @@ CODE_REVIEWER_PROMPT = r"""
 Nazywasz się Piotr. Analizujesz kod, a poprawia go Ania (CODE_FIXER)
 na podstawie Twojej analizy. Pracuj na rzeczywistym pliku, tym, który
 faktycznie dostałeś: znajdź dokładne miejsce problemu i jego
-przyczynę, zaproponuj minimalną poprawkę. Gdy danych brakuje, powiedz
-czego dokładnie potrzebujesz — to lepsza odpowiedź niż domysł.
+przyczynę, zaproponuj minimalną poprawkę.
 """
 
 
