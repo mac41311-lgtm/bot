@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v319
+AEL-MINI AUTONOMOUS AGENT v320
 
 ARCHITEKTURA:
 
@@ -213,6 +213,97 @@ def wypisz_wykonane(plik, krok=None):
             print()
 
             ostatnie = None
+
+
+def wypisz_rozmowe(plik, rola=None, krok=None):
+    """
+    Rozmowa z jedna osoba: co poszlo i co wrocilo, po kolei (v320).
+
+    To jest widok, ktorego brakowalo najbardziej. Wysylki i
+    odpowiedzi lezaly w pliku osobno, wiec zeby zobaczyc JEDNA ture
+    trzeba bylo przeskakiwac miedzy nimi. Tutaj stoja obok siebie,
+    razem z czasem, statusem i tym, czy odpowiedz jest z szarego
+    tekstu.
+    """
+
+    szukane = None
+
+    if rola:
+        szukane = str(rola).upper()
+
+        for klucz, imie in _IMIONA_ROL.items():
+            if imie.upper() == szukane:
+                szukane = klucz
+                break
+
+    with open(plik, encoding="utf-8") as f:
+
+        for linia in f:
+
+            try:
+                wpis = json.loads(linia)
+            except Exception:
+                continue
+
+            if wpis.get("typ") not in ("prompt", "odpowiedz"):
+                continue
+
+            if szukane and str(wpis.get("rola", "")).upper() != szukane:
+                continue
+
+            if krok is not None and wpis.get("krok") != krok:
+                continue
+
+            imie = _IMIONA_ROL.get(wpis.get("rola"), wpis.get("rola"))
+
+            if wpis.get("typ") == "prompt":
+                print("=" * 60)
+                print("krok %s  \u2192 %s  (%s znak\u00f3w)" % (
+                    wpis.get("krok"), imie, wpis.get("znaki")
+                ))
+                print("=" * 60)
+
+            else:
+                uwagi = []
+
+                if wpis.get("urwane"):
+                    uwagi.append("URWANE")
+
+                if wpis.get("z_myslenia"):
+                    uwagi.append("z szarego tekstu")
+
+                if wpis.get("samo_myslenie"):
+                    uwagi.append(
+                        "samo my\u015blenie: "
+                        + str(wpis.get("samo_myslenie"))
+                    )
+
+                _st = str(wpis.get("status") or "")
+
+                if _st and _st.upper() != "FINISHED":
+                    uwagi.append("status " + _st)
+
+                print("-" * 60)
+                print("%s \u2192  (%s znak\u00f3w, %ss, konto %s)%s" % (
+                    imie,
+                    wpis.get("znaki"),
+                    wpis.get("sekundy"),
+                    wpis.get("konto"),
+                    ("  [" + ", ".join(uwagi) + "]") if uwagi else ""
+                ))
+                print("-" * 60)
+
+            print(wpis.get("tresc", ""))
+            print()
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--rozmowa":
+    wypisz_rozmowe(
+        sys.argv[2],
+        sys.argv[3] if len(sys.argv) > 3 else None,
+        int(sys.argv[4]) if len(sys.argv) > 4 else None
+    )
+    raise SystemExit(0)
 
 
 if len(sys.argv) > 2 and sys.argv[1] == "--wyslane":
@@ -1230,13 +1321,22 @@ def skopiuj_przebieg_na_telefon():
         return ""
 
 
+# v320: przy ktorym kroku ostatnio pokazalismy liczby — zeby przy
+# wyjsciu nie powtarzac tego samego ekranu.
+_krok_ostatniego_podsumowania = None
+
+
 def pokaz_podsumowanie_biegu():
     """Liczby tego biegu — na ekran i do przebiegu."""
+
+    global _krok_ostatniego_podsumowania
 
     tekst = podsumowanie_biegu()
 
     if not tekst:
         return
+
+    _krok_ostatniego_podsumowania = _biezacy_krok
 
     ramka = (
         "\n" + "=" * 60
@@ -1260,6 +1360,47 @@ def pokaz_podsumowanie_biegu():
             + "  (żeby mieć to widoczne z Androida: "
             "termux-setup-storage)"
         )
+
+
+
+def _podsumuj_na_wyjsciu():
+    """
+    Liczby i kopia na telefon TAKZE wtedy, gdy program konczy sie
+    Ctrl+C albo bledem (v320).
+
+    Uzytkownik: "bo aktualizujesz po chyba 5 seriach, albo ja
+    zatrzymuje — po zamknieciu tez zrob aktualizacje, jak docisne
+    Ctrl+C".
+
+    Ma racje: podsumowanie szlo co piaty krok, wiec bieg przerwany
+    w kroku 8 zostawial liczby z kroku 5 i kopie przebiegu sprzed
+    trzech krokow. Wlasnie tak wygladaly dwa ostatnie logi, ktore
+    dostalem — urwane w polowie, bez koncowki.
+
+    Nigdy nie rzuca: to jest sprzatanie po robocie, nie robota.
+    """
+
+    try:
+
+        if _plik_przebiegu is None:
+            return
+
+        if _krok_ostatniego_podsumowania != _biezacy_krok:
+            pokaz_podsumowanie_biegu()
+            return
+
+        # Liczby sa juz aktualne, ale kopia na telefonie moze byc
+        # starsza o kilka linii — odswiezamy ja mimo wszystko.
+        gdzie = skopiuj_przebieg_na_telefon()
+
+        if gdzie:
+            print("  Kopia do wyciągnięcia z telefonu: " + gdzie)
+
+    except Exception:
+        pass
+
+
+atexit.register(_podsumuj_na_wyjsciu)
 
 
 def dopisz_do_przebiegu(linia):
@@ -2076,7 +2217,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v319")
+    print("             AEL-MINI AUTONOMOUS AGENT v320")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5571,6 +5712,11 @@ def deepseek(name, message):
         + ": " + _poczatek_bloku(_tresc_wyslana, 70)
     )
 
+    # v320: od tej chwili liczymy, ile ta rola kazala na siebie
+    # czekac. Do tej pory dalo sie to policzyc tylko recznie, z
+    # roznicy godzin w dwoch liniach terminala.
+    _zegar_roli = time.time()
+
     _deepseek_circuit_wait(name)
 
     lock = _get_session_lock(name)
@@ -5775,6 +5921,8 @@ def deepseek(name, message):
                 # "0 znaków" w logu. Traktujemy to jak osobny
                 # przypadek od "ucięte" — jedno ponowienie TEGO
                 # SAMEGO pytania, zanim cokolwiek zwrócimy dalej.
+                _wzielismy_myslenie = False
+
                 if not text.strip():
 
                     # v315: zapamietujemy szary tekst z TEJ proby,
@@ -6061,6 +6209,7 @@ def deepseek(name, message):
                     # nie dodawac, zadnych zabezpieczen itp".
                     # To sa jego slowa — idzie jego tekst.
                     text = _myslenie_z_pierwszej.strip()
+                    _wzielismy_myslenie = True
 
                     # v318: NIE zerujemy tu licznika samego myslenia.
                     #
@@ -6113,6 +6262,29 @@ def deepseek(name, message):
                     )
                 else:
                     _speak(name, text)
+
+                # v320: druga polowa rozmowy. Zdarzenie "prompt"
+                # (v313) mowilo, CO wyslalismy; teraz obok stoi to,
+                # CO wrocilo i JAK.
+                #
+                # Uzytkownik: "co ci bedzie przydatne do
+                # diagnostyki?". To: tresc odpowiedzi, czas, status
+                # serwera, czy ucielo, ile bylo samego myslenia i
+                # czy musielismy wziac szary tekst. Kazda naprawa od
+                # v307 do v318 wymagala wlasnie tych liczb, a
+                # zbieralismy je z godzin w terminalu.
+                zapisz_zdarzenie(
+                    "odpowiedz",
+                    rola=str(name),
+                    znaki=len(str(text or "")),
+                    sekundy=round(time.time() - _zegar_roli, 1),
+                    status=str(status or ""),
+                    urwane=bool(truncated),
+                    samo_myslenie=int(_ostatnie_samo_myslenie or 0),
+                    z_myslenia=bool(_wzielismy_myslenie),
+                    konto=_account_of(name),
+                    tresc=str(text or "")
+                )
 
                 health = _get_health(_account_of(name))
                 health["consecutive_failures"] = 0
