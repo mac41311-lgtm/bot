@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v322
+AEL-MINI AUTONOMOUS AGENT v323
 
 ARCHITEKTURA:
 
@@ -1274,6 +1274,18 @@ def ustaw_krok(numer):
     ):
         pokaz_podsumowanie_biegu()
 
+    # v323: kopia na telefon po KAZDYM kroku, nie co piaty.
+    #
+    # Bieg 2026-09-12 21:02 skonczyl sie tak, ze system ubil calego
+    # Termuksa w trakcie budowania APK. Przy zabiciu nie wykonuje sie
+    # nic — ani nasze sprzatanie z v320, ani atexit. Zostaje to, co
+    # bylo skopiowane wczesniej, czyli stan sprzed pieciu krokow.
+    #
+    # Kopiowanie dwoch plikow trwa tyle, co nic, a bieg i tak wlasnie
+    # przeszedl do nastepnego kroku.
+    elif poprzedni and _biezacy_krok > poprzedni:
+        skopiuj_przebieg_na_telefon()
+
 
 def skopiuj_przebieg_na_telefon():
     """
@@ -2217,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v322")
+    print("             AEL-MINI AUTONOMOUS AGENT v323")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4908,6 +4920,24 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # naprawde nie ma — patrz deepseek().
     tekst_myslenia = []
 
+    # v323: ile kawalkow strumienia POMINELISMY, bo sie na nich
+    # wywrocilismy — i na czym dokladnie.
+    #
+    # Od v307 jeden dziwny kawalek nie zabija juz calej odpowiedzi:
+    # pomijamy go i czytamy dalej. Ale pomijamy go PO CICHU, a to
+    # znaczy, ze tresc z niego przepada bez sladu.
+    #
+    # W biegu 2026-09-12 21:02 Kamil mial 'myslenie=0' i KAZDA
+    # odpowiedz bez pierwszej litery ("ojtku: sprawdzone"). Reszta
+    # zespolu miala myslenie liczone w tysiacach i poczatki cale.
+    # Czyli u niego ten znak nie wpadl do myslenia — po prostu
+    # zniknal. Jedyne miejsce, gdzie tresc moze zniknac bez sladu,
+    # to wlasnie ten cichy "continue".
+    #
+    # Nie zgaduje wiec dalej ksztaltu strumienia — mierze go.
+    pominiete = [0]
+    pierwszy_blad = [""]
+
     for line in response.iter_lines():
 
         if not line:
@@ -5084,7 +5114,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         except json.JSONDecodeError:
             continue
 
-        except Exception:
+        except Exception as e:
             # v307: JEDEN dziwny kawalek strumienia nie moze zabic
             # calej odpowiedzi.
             #
@@ -5101,6 +5131,16 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             #
             # Pomijamy wiec ten jeden kawalek i czytamy dalej. Gorzej
             # od niepelnej odpowiedzi jest tylko brak odpowiedzi.
+            #
+            # v323: ale juz nie po cichu — patrz `pominiete` wyzej.
+            pominiete[0] += 1
+
+            if not pierwszy_blad[0]:
+                pierwszy_blad[0] = (
+                    type(e).__name__ + ": " + str(e)[:120]
+                    + " | " + str(raw_data)[:200]
+                )
+
             continue
 
     # v189 — siatka bezpieczenstwa na wypadek, gdyby status przeciekl
@@ -5147,6 +5187,16 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         znakow_myslenia[0] = 0
 
     globals()["_ostatnie_myslenie_znaki"] = znakow_myslenia[0]
+    globals()["_ostatnie_pominiete"] = pominiete[0]
+    globals()["_ostatni_pominiety_blad"] = pierwszy_blad[0]
+
+    if pominiete[0]:
+        log(
+            "DEEPSEEK",
+            "pominąłem " + str(pominiete[0]) + " kawałek(ów) "
+            "strumienia — treść z nich przepadła. Pierwszy: "
+            + pierwszy_blad[0]
+        )
 
     if not full_text.strip() and znakow_myslenia[0]:
         # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.
@@ -5178,6 +5228,11 @@ _ostatnie_myslenie_znaki = 0
 # Powyzej tylu znakow uznajemy, ze to naprawde bylo myslenie.
 # Ponizej — to poczatek odpowiedzi, ktory zlapal zly typ fragmentu.
 _MYSLENIE_TO_NIE_MYSLENIE = 3
+
+# Ile kawalkow strumienia pominelismy w ostatniej odpowiedzi i na
+# czym sie wywrocil pierwszy z nich (v323).
+_ostatnie_pominiete = 0
+_ostatni_pominiety_blad = ""
 
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
@@ -6222,6 +6277,8 @@ def deepseek(name, message):
                     urwane=bool(truncated),
                     samo_myslenie=int(_ostatnie_samo_myslenie or 0),
                     myslenie=int(_ostatnie_myslenie_znaki or 0),
+                    pominiete=int(_ostatnie_pominiete or 0),
+                    pominiety_blad=str(_ostatni_pominiety_blad or ""),
                     z_myslenia=bool(_wzielismy_myslenie),
                     konto=_account_of(name),
                     tresc=str(text or "")
@@ -14086,6 +14143,71 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             "returncode": proces.returncode,
             "stdout": short(stdout, 6000),
             "stderr": short(stderr, 6000),
+            "command": command,
+            "timeout": limit,
+            "duration_s": round(
+                (datetime.now() - started).total_seconds(), 1
+            )
+        }
+
+    except subprocess.TimeoutExpired:
+
+        # v323: przerwanie po limicie ma wlasna, starsza obsluge
+        # (przenoszenie w tlo, patrz termux_run) i samo niesie ze
+        # soba przeczytane wyjscie — przepuszczamy je nietkniete.
+        raise
+
+    except Exception as e:
+
+        # v323: awaria W TRAKCIE czekania nie moze skasowac tego, co
+        # juz przyszlo.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 21:02,
+        # krok 5). Budowanie APK szlo 85 sekund, podglad zdazyl
+        # zameldowac "przybylo 17.5 kB", a potem Termux zostal ubity
+        # przez system i czytanie wyjscia padlo:
+        #
+        #   {"ok": false, "error": "[Errno 5] I/O error",
+        #    "command": "bash ~/run_apk_test3.sh", "duration_s": 85.4}
+        #
+        # I tyle zobaczyl zespol. Cale 17.5 kB logu z aapt2,
+        # apksigner i reszty — wyrzucone razem z plikami tymczasowymi
+        # w finally ponizej. A tam bylo dokladnie to, czego szukali.
+        #
+        # TimeoutExpired wyzej od dawna zabiera ze soba to, co
+        # przeczytal. Kazda inna awaria tez powinna.
+        _co_zdazylo = _przeczytaj_po_cichu(wy.name)
+        _bledy = _przeczytaj_po_cichu(bl.name)
+
+        # "[Errno 5] I/O error" przy czytaniu wyjscia znaczy jedno:
+        # terminal przestal istniec. Mowimy to po ludzku, bo numer
+        # bledu nikomu nic nie mowi.
+        _opis = str(e)
+
+        if "Errno 5" in _opis or "I/O error" in _opis:
+            _opis = (
+                "terminal Termuksa przestał istnieć w trakcie "
+                "(system go ubił albo aplikacja została zamknięta) "
+                "— " + _opis
+            )
+
+        log(
+            "TERMUX",
+            "Przerwane po "
+            + str(round(
+                (datetime.now() - started).total_seconds(), 1
+            ))
+            + " s: " + _opis + ". Oddaję to, co zdążyło przyjść ("
+            + _po_ludzku_rozmiar(len(_co_zdazylo) + len(_bledy))
+            + ")."
+        )
+
+        return {
+            "ok": False,
+            "error": _opis,
+            "przerwane_w_trakcie": True,
+            "stdout": short(_co_zdazylo, 6000),
+            "stderr": short(_bledy, 6000),
             "command": command,
             "timeout": limit,
             "duration_s": round(
