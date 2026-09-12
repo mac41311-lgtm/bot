@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v310
+AEL-MINI AUTONOMOUS AGENT v311
 
 ARCHITEKTURA:
 
@@ -1904,7 +1904,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v310")
+    print("             AEL-MINI AUTONOMOUS AGENT v311")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3228,8 +3228,9 @@ _KROTKIE_ZACZEPKI = {
                "\n\nMarku, co Ty na to?"],
     "ENGINEER": ["\n\nBartku?", "\n\nBartku — da się?",
                  "\n\nBartku, Twoja działka."],
+    # v311: nie ma tu juz "sprawdzisz w sieci?" — patrz _pytanie_do().
     "RESEARCHER": ["\n\nKamilu?", "\n\nKamilu — co znalazłeś?",
-                   "\n\nKamilu, sprawdzisz w sieci?"],
+                   "\n\nKamilu, masz coś?"],
     "WOJTEK": ["\n\nWojtku?", "\n\nWojtku — masz pomysł?",
                "\n\nWojtku, a Ty jak byś to zrobił?"],
 }
@@ -3319,12 +3320,22 @@ def _pytanie_pelne(rola, last_result, critic_objection=False):
         # "czego nam tu brakuje?" bylo pytaniem o NAS i tak wlasnie
         # odpowiadal: bilansem naszych brakow zamiast sprawdzonego
         # faktu.
+        #
+        # v311: i nie mowimy mu juz "sprawdz W SIECI". Uzytkownik:
+        # "nie trzeba mu mowic sprawdz w sieci, on sam to znajdzie
+        # (...) wystarczy, ze ma to w pierwszym prompcie, bo on
+        # mowi, ze nie szuka w sieci, a on moze szukac i on sam
+        # sobie tego nie wlacza — on ma to wlaczone".
+        #
+        # Ma racje i to jest ten sam blad, co w prompcie z v308:
+        # gadalismy do niego ustawieniem. Czlowiek, ktory ma pod
+        # reka wyszukiwarke, dostaje PYTANIE, a nie polecenie, zeby
+        # jej uzyl. Trzy zdania nizej robily z tego temat rozmowy —
+        # i w logach Kamil zaczynal od tlumaczenia sie, czy szuka,
+        # czy nie szuka, zamiast odpowiedziec.
         if blad:
-            return (
-                "\n\nKamilu — sprawdź w sieci, jak się to robi "
-                "poprawnie."
-            )
-        return "\n\nKamilu — sprawdź w sieci, co o tym wiadomo."
+            return "\n\nKamilu — jak się to robi poprawnie?"
+        return "\n\nKamilu — co o tym wiadomo?"
 
     if rola == "WOJTEK":
         return "\n\nWojtku — masz na to jakiś prostszy pomysł?"
