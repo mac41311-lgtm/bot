@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v320
+AEL-MINI AUTONOMOUS AGENT v321
 
 ARCHITEKTURA:
 
@@ -2217,7 +2217,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v320")
+    print("             AEL-MINI AUTONOMOUS AGENT v321")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5147,70 +5147,40 @@ _ostatnie_myslenie_tekst = ""
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
 _samo_myslenie_z_rzedu = {}
 
-# Po tylu z rzedu przestajemy probowac tego samego.
+# Ile razy z rzedu — sama liczba do logu. Od v321 nic z niej nie
+# wynika automatycznie: nie wylaczamy juz nikomu szukania.
 _SAMO_MYSLENIE_PROG = 3
 
 
 def _zanotuj_samo_myslenie(name):
     """
-    Rola oddala samo myslenie, bez odpowiedzi. Gdy powtarza sie to
-    uparcie, wylaczamy jej szukanie w sieci.
+    Rola oddala samo myslenie, bez odpowiedzi. Liczymy to i tyle.
 
-    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-11, 26 krokow).
-    Kamil — JEDYNA rola z wlaczonym search_enabled — oddal pusta
-    odpowiedz 24 razy. Wszystkie inne role: pojedyncze przypadki.
-    Uzytkownik zobaczyl na stronie, co sie dzieje naprawde: szary
-    tekst myslenia i "Stopped". Potem wpisal tam recznie "oki" i
-    dostal pelna, normalna odpowiedz.
+    v307 wylaczalo wtedy tej roli szukanie w sieci. Wtedy mialo to
+    sens: szary tekst szedl do kosza, wiec milczaca rola nie wnosila
+    nic. Od v315 ten tekst czytamy — i dziala.
 
-    Nie zgadujemy, dlaczego szukanie w sieci przeszkadza tej sesji.
-    Liczymy fakt: trzy razy z rzedu samo myslenie. Szukanie jest
-    dodatkiem — rola bez niego dalej odpowiada z wlasnej wiedzy i
-    mowi, czego nie potwierdzila. Milczaca rola nie wnosi nic.
+    v321 to wylaczanie usuwa, bo ZOBACZYLISMY, co robi. Bieg
+    2026-09-12 12:40, krok 5, Kamil wprost:
+
+        "Tomek i Wojtek zlecaja mi weryfikacje zrodlowa (Twilio
+         trial, Vapi, Retell, polski STT/TTS). Mam wylaczona
+         wyszukiwarke. Bez sieci tego nie zweryfikuje — nie z
+         pamieci, bo to jest dokladnie to, czego Bartek zabronil."
+
+    Czyli zabralismy jedynej osobie od faktow to, po co ja pytamy, i
+    zostala jej pamiec. Uzytkownik nazwal to po imieniu: "Researcher
+    klamie". To nie on klamal — to my odcielismy mu zrodlo.
+
+    Licznik zostaje: mowi w logu, jak czesto generacja urywa sie
+    przed odpowiedzia. Nic poza tym juz z nim nie robimy.
 
     Nigdy nie rzuca.
     """
 
     try:
-        ile = _samo_myslenie_z_rzedu.get(name, 0) + 1
-        _samo_myslenie_z_rzedu[name] = ile
-
-        if ile < _SAMO_MYSLENIE_PROG:
-            return
-
-        sesja = sessions.get(name)
-
-        if sesja is None or not getattr(sesja, "search_enabled", False):
-            return
-
-        sesja.search_enabled = False
-        _samo_myslenie_z_rzedu[name] = 0
-
-        # v308: do tej pory wiedzial o tym tylko log. Rola dalej
-        # miala w swoim pierwszym zdaniu, ze szuka w sieci, a zespol
-        # dalej prosil ja "sprawdz w sieci" — o czyms, czego juz nie
-        # ma. Mowimy wiec o tym raz, zwyklym zdaniem, tym samym
-        # kanalem co inne rzeczy zauwazone przez Pythona. To fakt,
-        # nie polecenie: nikomu nie mowimy, jak ma teraz pisac.
-        try:
-            _imie = _ROLE_SPEAKERS.get(name, (name,))[0]
-        except Exception:
-            _imie = name
-
-        _pending_team_warnings.append(
-            _imie + " odpowiadał samym myśleniem, bez treści, "
-            + str(_SAMO_MYSLENIE_PROG) + " tury z rzędu, więc "
-            "wyłączyłem mu wyszukiwanie w sieci — od teraz pisze "
-            "bez wyszukiwarki."
-        )
-
-        log(
-            "DEEPSEEK",
-            name + ": " + str(_SAMO_MYSLENIE_PROG) + " razy z rzedu "
-            "samo myslenie bez odpowiedzi, a jako jedyny ma wlaczone "
-            "szukanie w sieci — wylaczam je w tej sesji. Odpowiada "
-            "dalej z wlasnej wiedzy i sam powie, czego nie "
-            "potwierdzil. Milczaca rola nie wnosi nic."
+        _samo_myslenie_z_rzedu[name] = (
+            _samo_myslenie_z_rzedu.get(name, 0) + 1
         )
 
     except Exception:
@@ -6059,87 +6029,21 @@ def deepseek(name, message):
                             # Log 2026-09-11 20:57: 4294 znaki
                             # myslenia, pusto, ponowienie tez pusto
                             # — a licznik zobaczyl z tego jedno.
-                            _szukalo = getattr(
-                                session, "search_enabled", False
-                            )
-
+                            # v321: nie ma juz trzeciej proby "bez
+                            # szukania" — nie wylaczamy go wcale,
+                            # wiec nie ma czego sprawdzac. Szary
+                            # tekst nizej i tak ratuje ten krok.
                             if _ostatnie_samo_myslenie:
                                 _zanotuj_samo_myslenie(name)
 
-                            if _szukalo and not getattr(
-                                session, "search_enabled", False
-                            ):
-
-                                # Wlasnie zmienil sie warunek, w
-                                # ktorym ta rola odpowiada. Nie
-                                # czekamy z tym do nastepnego kroku
-                                # — pytamy jeszcze raz od razu, tak
-                                # jak czlowiek, ktory cos przestawil
-                                # i sprawdza, czy pomoglo.
-                                log(
-                                    "DEEPSEEK",
-                                    name + ": pytam jeszcze raz, "
-                                    "juz bez szukania w sieci."
-                                )
-
-                                # v318: skoro dopytujemy, to bez
-                                # myslenia — tak samo jak wyzej.
-                                _bylo_myslenie = (
-                                    session.thinking_enabled
-                                )
-
-                                try:
-
-                                    if _bez_myslenia:
-                                        session.thinking_enabled = (
-                                            False
-                                        )
-
-                                    trzeci_text, trzeci_status = (
-                                        _deepseek_send_experimental(
-                                            name, session, _dopytanie
-                                        )
-                                    )
-
-                                finally:
-                                    session.thinking_enabled = (
-                                        _bylo_myslenie
-                                    )
-
-                                if trzeci_text and trzeci_text.strip():
-
-                                    text = trzeci_text
-
-                                    _zanotuj_odpowiedz_z_trescia(name)
-
-                                    log(
-                                        "DEEPSEEK",
-                                        name + ": bez szukania w "
-                                        "sieci odpowiedzial — "
-                                        + str(len(text))
-                                        + " znakow."
-                                    )
-
-                                else:
-
-                                    log(
-                                        "DEEPSEEK",
-                                        name + ": bez szukania w "
-                                        "sieci tez pusto (status="
-                                        + str(trzeci_status)
-                                        + ") — to nie bylo tym."
-                                    )
-
-                            else:
-
-                                log(
-                                    "DEEPSEEK",
-                                    name + ": ponowienie po pustej "
-                                    "odpowiedzi TEŻ puste (status="
-                                    + str(retry_status) + ") — "
-                                    "zostaje pusty tekst, wywołujący "
-                                    "musi to obsłużyć."
-                                )
+                            log(
+                                "DEEPSEEK",
+                                name + ": ponowienie po pustej "
+                                "odpowiedzi TEŻ puste (status="
+                                + str(retry_status) + ") — "
+                                "zostaje pusty tekst, wywołujący "
+                                "musi to obsłużyć."
+                            )
 
                     except Exception as retry_error:
 
@@ -17507,9 +17411,15 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 zapisz_zdarzenie(
                     "wynik",
                     nazwa=str(name),
+                    # v321: chrome_tabs oddaje GOLA LISTE kart, bez
+                    # pola "ok" — a my zapisywalismy to jako blad.
+                    # W logu 2026-09-12 jedyne "nieudane" wywolanie
+                    # calego biegu bylo wlasnie takie: lista czterech
+                    # kart z Twilio. Awarie zglaszaja sie slownikiem
+                    # z ok=False; wszystko inne sie udalo.
                     ok=bool(
-                        result.get("ok")
-                        if isinstance(result, dict) else False
+                        result.get("ok", True)
+                        if isinstance(result, dict) else True
                     ),
                     wynik=result
                 )
@@ -24507,7 +24417,32 @@ def consult_team(
             (_co_sie_stalo + "\n") if _co_sie_stalo else "",
             _only_if_new(role_name, "tool_hint", tool_hint)
             if not _bez_maszynowni else "",
-            _only_if_new(role_name, "python_zauwazyl", python_zauwazyl),
+            # v321: ten kanal tez jest maszynownia.
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 12:40,
+            # krok 2). Kamil dostal tu:
+            #
+            #   "Zajrzalem do przegladarki (...) Otwarte jest teraz
+            #    to: Account home | One Console | Twilio —
+            #    https://1console.twilio.com/account/AC18e2... Gemini
+            #    widzi dokladnie te same karty."
+            #
+            # I zrobil to, co zrobilby czlowiek: sprobowal to
+            # otworzyc. Odpisal: "Nie mam dostepu do
+            # 1console.twilio.com (...) Fetch sie nie udal". Cala
+            # tura na nasz wlasny ekran.
+            #
+            # Uzytkownik: "mu piszemy znajdz w internecie, jeszcze do
+            # tego termux — to on mysli, ze musi szukac w telefonie,
+            # a on fizycznie nie ma do niego dostepu". Dokladnie to.
+            # v270 wyprowadzilo ten kanal z tool_hint, zeby docieral
+            # do wszystkich — ale tresc w nim to dalej karty Chrome,
+            # procesy i narzedzia telefonu.
+            ""
+            if _bez_maszynowni
+            else _only_if_new(
+                role_name, "python_zauwazyl", python_zauwazyl
+            ),
             # v230: co użytkownik powiedział w trakcie tego celu.
             # Przez _only_if_new, więc mówimy to raz — ale plik żyje
             # do końca celu, więc nowe zdanie użytkownika dotrze
