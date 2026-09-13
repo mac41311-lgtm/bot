@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v327
+AEL-MINI AUTONOMOUS AGENT v328
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v327")
+    print("             AEL-MINI AUTONOMOUS AGENT v328")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4956,6 +4956,12 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # Pierwszy kawalek tresci, ktory realnie doszedl do odpowiedzi.
     pierwsza_tresc = [""]
 
+    # Czy wzielismy juz "content" z samego obiektu response (v328).
+    wzieto_naglowek = [False]
+
+    # Czy serwer szukal w sieci przy tej odpowiedzi (v328).
+    szukanie_serwera = [None]
+
     for line in response.iter_lines():
 
         if not line:
@@ -5012,6 +5018,60 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                 val = data["v"]
 
                 if isinstance(val, dict) and "response" in val:
+
+                    # v328: TU GINELA PIERWSZA LITERA KAMILA.
+                    #
+                    # Zapis strumienia z v327 pokazal to wprost
+                    # (bieg 2026-09-13 09:08, krok 1):
+                    #
+                    #   {"v":{"response":{... "thinking_enabled":false,
+                    #     "status":"WIP", "content":"W",
+                    #     "thinking_content":null ...}}}
+                    #   {"p":"response/content","o":"APPEND","v":"oj"}
+                    #   {"v":"t"}
+                    #
+                    # Pierwszy kawalek odpowiedzi — "W" — przychodzi
+                    # W SAMYM OBIEKCIE response, w polu "content".
+                    # Dopiero reszta leci latkami na
+                    # "response/content". My patrzylismy wylacznie na
+                    # "fragments", wiec przy WYLACZONYM mysleniu
+                    # (Kamil) fragmentow nie ma wcale i to pierwsze
+                    # "W" po prostu przepadalo. Stad "ojtku:" zamiast
+                    # "Wojtku:" — przez pieciu biegow z rzedu.
+                    #
+                    # Gdy myslenie jest wlaczone, glowa odpowiedzi
+                    # jedzie fragmentami i nic nie ginelo — dlatego
+                    # tracil to tylko on.
+                    #
+                    # Bierzemy to pole RAZ: pozniej ten sam obiekt
+                    # wraca z narosnieta trescia i doklejenie go
+                    # drugi raz zdublowaloby odpowiedz.
+                    if not wzieto_naglowek[0]:
+
+                        _n = val["response"].get("content")
+
+                        if isinstance(_n, str) and _n:
+                            wzieto_naglowek[0] = True
+                            content += _n
+
+                    # v328: serwer mowi w tym samym obiekcie, czy
+                    # szukanie w sieci NAPRAWDE bylo wlaczone przy tej
+                    # odpowiedzi. Dotad to pole wyrzucalismy.
+                    #
+                    # Bieg 2026-09-13 09:08: prosilismy o szukanie
+                    # (session.search_enabled = True), a w odpowiedzi
+                    # stalo "search_enabled": false. Kamil pisal
+                    # wtedy do zespolu "nie mam dostepu do sieci,
+                    # wiec nie sprawdze URL-a", a Tomek odpowiadal
+                    # "Kamil wkleil twardy fakt — zmyslilem". Nikt
+                    # nie wiedzial, ktora wersja jest prawdziwa, bo
+                    # jedyne miejsce, gdzie to stalo napisane, szlo
+                    # do kosza.
+                    if "search_enabled" in val["response"]:
+                        szukanie_serwera[0] = bool(
+                            val["response"].get("search_enabled")
+                        )
+
                     fragments = val["response"].get(
                         "fragments", []
                     )
@@ -5220,6 +5280,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         poczatek_strumienia
     )
     globals()["_pierwsza_tresc"] = pierwsza_tresc[0]
+    globals()["_szukanie_serwera"] = szukanie_serwera[0]
     globals()["_ostatnie_pominiete"] = pominiete[0]
     globals()["_ostatni_pominiety_blad"] = pierwszy_blad[0]
 
@@ -5272,6 +5333,13 @@ _poczatek_strumienia = ""
 
 # Pierwszy kawalek tresci, ktory doszedl do odpowiedzi (v327).
 _pierwsza_tresc = ""
+
+# Czy serwer szukal w sieci przy ostatniej odpowiedzi (v328).
+_szukanie_serwera = None
+
+# Role, ktorym juz raz powiedzielismy, ze prosilismy o szukanie, a
+# serwer go nie wlaczyl — zeby nie powtarzac tego co krok.
+_powiedziane_o_szukaniu = set()
 
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
@@ -6297,6 +6365,33 @@ def deepseek(name, message):
                 else:
                     _speak(name, text)
 
+                # v328: prosilismy o szukanie w sieci, a serwer go
+                # nie wlaczyl. Mowimy to raz — zespol przestanie
+                # prosic o zrodla kogos, kto ich nie ma jak zdobyc,
+                # i przestanie sie spierac, czy je podal.
+                if (
+                    getattr(session, "search_enabled", False)
+                    and _szukanie_serwera is False
+                    and name not in _powiedziane_o_szukaniu
+                ):
+
+                    _powiedziane_o_szukaniu.add(name)
+
+                    _imie_r = _ROLE_SPEAKERS.get(name, (name,))[0]
+
+                    log(
+                        "DEEPSEEK",
+                        name + ": prosilismy o szukanie w sieci, ale "
+                        "serwer odpowiedzial z search_enabled=false "
+                        "— ta odpowiedz powstala bez sieci."
+                    )
+
+                    _pending_team_warnings.append(
+                        _imie_r + " odpowiada bez wyszukiwarki — "
+                        "prosiliśmy o nią, ale DeepSeek jej przy tej "
+                        "rozmowie nie włączył."
+                    )
+
                 # v320: druga polowa rozmowy. Zdarzenie "prompt"
                 # (v313) mowilo, CO wyslalismy; teraz obok stoi to,
                 # CO wrocilo i JAK.
@@ -6320,6 +6415,7 @@ def deepseek(name, message):
                     pominiety_blad=str(_ostatni_pominiety_blad or ""),
                     poczatek_strumienia=str(_poczatek_strumienia or ""),
                     pierwsza_tresc=str(_pierwsza_tresc or ""),
+                    szukanie_serwera=_szukanie_serwera,
                     z_myslenia=bool(_wzielismy_myslenie),
                     konto=_account_of(name),
                     tresc=str(text or "")
