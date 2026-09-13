@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v338
+AEL-MINI AUTONOMOUS AGENT v339
 
 ARCHITEKTURA:
 
@@ -2286,7 +2286,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v338")
+    print("             AEL-MINI AUTONOMOUS AGENT v339")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -25026,29 +25026,6 @@ def _extract_answer_for_critic(text, fallback_limit=400):
     return short(" ".join(text.split()), fallback_limit)
 
 
-def _bez_blokow_kodu(tekst):
-    """
-    Proza bez ogrodzonych blokow ```...``` (v338).
-
-    Uzywane na streszczeniu Oli: to, po co do niej idziemy, to jedno
-    zdanie o tym, co sie stalo. Kod, ktory ewentualnie przepisala,
-    zespol i tak dostaje od autora.
-
-    Gdy po wycieciu nie zostaje nic sensownego, oddajemy tekst w
-    calosci — lepiej za duzo niz pustka.
-    """
-
-    t = str(tekst or "")
-
-    if "```" not in t:
-        return t
-
-    bez = re.sub(r"```[a-zA-Z0-9_+-]*\n.*?```", "", t, flags=re.DOTALL)
-    bez = re.sub(r"\n{3,}", "\n\n", bez).strip()
-
-    return bez if len(bez) >= 40 else t
-
-
 def _split_ola_translation_by_role(text):
 
     text = str(text or "")
@@ -25293,31 +25270,46 @@ def consult_team(
     # DLA MARKA:/DLA BARTKA:" przeniesiony do BROWSER_PROMPT, bo to
     # rzecz, którą Python PARSUJE (_split_ola_translation_by_role) —
     # a więc musi ją znać od początku, nie dowiadywać się co krok.
-    human_report = deepseek(
-        "BROWSER",
+    # v339: gdy nie ma czego streszczac, nie piszemy do niej.
+    #
+    # Uzytkownik: "odpowiedzi moga byc ile chca, raczej skupiamy sie
+    # na tym, co wpisujemy, nie na ucinaniu tego, co DeepSeek
+    # wysyla". Wiec patrzymy na WEJSCIE.
+    #
+    # ZMIERZONE (bieg 2026-09-13 12:44). Krok 1: wyslalismy do Oli
+    # 36 BAJTOW — "Ostatni krok skonczyl sie tak: START" — i nic
+    # wiecej. To nie jest material do streszczenia, to jedno slowo
+    # stanu. Dostala je i napisala 5404 znaki wlasnego planu
+    # technicznego z komendami do Termuksa. Nie jej wina: nie bylo
+    # czego streszczac, wiec odpowiedziala na jedyna rzecz, jaka
+    # miala pod reka — na cel.
+    #
+    # Ta sama zasada, co przy Wojtku w v335: nie pisze sie do kogos
+    # po to, zeby napisac. Gdy zostaje sam wiersz stanu, zespol i
+    # tak dostaje go w calosci (report_body wraca wtedy do
+    # raw_report_material) — jest krotki i czytelny bez tlumaczenia.
+    _jest_co_streszczac = len(
+        [
+            l for l in str(raw_report_material or "").splitlines()
+            if l.strip()
+        ]
+    ) > 1
+
+    if _jest_co_streszczac:
+
         # v335: sam material. "Streść to:" bylo poleceniem obok
         # tozsamosci, ktora juz mowi, co Ola robi.
-        raw_report_material
-    )
+        human_report = deepseek("BROWSER", raw_report_material)
 
-    # v338: streszczenie nie zawiera kodu.
-    #
-    # ZMIERZONE (bieg 2026-09-13 12:44, v337). Od kiedy Ola nie ma
-    # promtu, w KAZDYM z trzynastu krokow oddala blok ```...```, a
-    # jej odpowiedzi urosly z ~400 znakow do 1671-13 946. W kroku 1
-    # zamiast streszczenia wyniku napisala wlasny plan techniczny z
-    # komendami do Termuksa.
-    #
-    # To jest koszt v337 i placi go caly zespol: jej odpowiedz idzie
-    # dalej jako CZYTELNY RAPORT, wiec kazdy dostawal drugi raz ten
-    # sam kod, ktory ma juz u Bartka i Tomka, zamiast jednego zdania
-    # o tym, co sie stalo.
-    #
-    # Nie mowimy jej o tym ani slowa — bierzemy to, po co do niej
-    # poszlismy. Streszczenie to proza; blok kodu w streszczeniu nie
-    # jest tlumaczeniem, tylko przepisaniem czegos, co i tak idzie
-    # wlasnym kanalem.
-    human_report = _bez_blokow_kodu(human_report)
+    else:
+
+        human_report = ""
+
+        log(
+            "DEEPSEEK",
+            "BROWSER pominięta — z ostatniego kroku został sam "
+            "wiersz stanu, nie ma czego streszczać."
+        )
 
     # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
     # zostawiamy zespołu bez niczego — wracamy do surowego zlepku.
