@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v330
+AEL-MINI AUTONOMOUS AGENT v331
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v330")
+    print("             AEL-MINI AUTONOMOUS AGENT v331")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -17061,6 +17061,70 @@ _NO_SUCH_FILE_RE = re.compile(
 _INTERACTIVE_SCRIPT_RE = re.compile(
     r"^\s*read\s+(-[a-zA-Z]+\s+)*", re.MULTILINE
 )
+
+
+def _czego_brakuje_do_uruchomienia(sciezka, kod):
+    """
+    Ktorych importow z tego pliku nie ma w tym Pythonie (v331).
+
+    Czytamy importy skladniowo (ast), a obecnosc sprawdzamy JEDNYM
+    poleceniem w tym samym interpreterze, ktory to potem uruchomi —
+    wiec odpowiedz dotyczy tego telefonu, nie naszych wyobrazen.
+
+    Zwraca liste nazw albo []. Nigdy nie rzuca: to jest uwaga obok
+    roboty, nie sama robota.
+    """
+
+    try:
+
+        if str(sciezka).lower()[-3:] != ".py":
+            return []
+
+        drzewo = ast.parse(str(kod or ""))
+
+    except Exception:
+        return []
+
+    nazwy = []
+
+    for wezel in ast.walk(drzewo):
+
+        if isinstance(wezel, ast.Import):
+            for a in wezel.names:
+                nazwy.append(a.name.split(".")[0])
+
+        elif isinstance(wezel, ast.ImportFrom):
+            if wezel.level == 0 and wezel.module:
+                nazwy.append(wezel.module.split(".")[0])
+
+    nazwy = sorted(set(n for n in nazwy if n))
+
+    if not nazwy:
+        return []
+
+    try:
+
+        wynik = execute_shell(
+            "python -c "
+            + shlex.quote(
+                "import importlib.util as u\n"
+                "for n in " + repr(nazwy) + ":\n"
+                "    print(n) if u.find_spec(n) is None else None\n"
+            ),
+            timeout=20
+        )
+
+    except Exception:
+        return []
+
+    if not isinstance(wynik, dict):
+        return []
+
+    return [
+        l.strip()
+        for l in str(wynik.get("stdout") or "").splitlines()
+        if l.strip() in nazwy
+    ]
 
 
 def _detect_interactive_script(text):
@@ -31969,6 +32033,43 @@ Zwróć tylko JSON.
                         _pending_team_warnings.append(
                             "W zapisanym przed chwilą "
                             + str(target_path) + ": " + _kruche
+                        )
+
+                    # v331: czego temu plikowi brakuje, zanim
+                    # ktokolwiek go uruchomi.
+                    #
+                    # Uzytkownik pokazal, jak wyglada dobra
+                    # odpowiedz: DeepSeek podal cala gre w pygame i
+                    # OD RAZU napisal "do uruchomienia potrzebujesz
+                    # biblioteki pygame: pip install pygame". A
+                    # potem, zapytany o Termux, wymienil cala liste
+                    # (sdl2, sdl2-image, clang...). Sam z siebie.
+                    #
+                    # Nasz zespol dowiaduje sie tego inaczej: zapisuje
+                    # plik, uruchamia, dostaje ModuleNotFoundError i
+                    # traci na to krok. A my mamy ten plik na dysku i
+                    # jedno polecenie wystarczy, zeby sprawdzic, ktore
+                    # importy sa do wziecia, a ktorych nie ma.
+                    #
+                    # Mowimy sam fakt. Co z nim zrobia, to ich sprawa.
+                    _brakuje = _czego_brakuje_do_uruchomienia(
+                        target_path,
+                        engineer_code
+                    )
+
+                    if _brakuje:
+
+                        log(
+                            "MAIN",
+                            target_path.name + ": brakujące moduły — "
+                            + ", ".join(_brakuje)
+                        )
+
+                        _pending_team_warnings.append(
+                            "W zapisanym przed chwilą "
+                            + target_path.name + " są importy, "
+                            "których ten Python nie ma: "
+                            + ", ".join(_brakuje) + "."
                         )
 
                     log(
