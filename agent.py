@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v325
+AEL-MINI AUTONOMOUS AGENT v326
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v325")
+    print("             AEL-MINI AUTONOMOUS AGENT v326")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13784,6 +13784,12 @@ _DLUGA_ROBOTA_RE = re.compile(
 # za odpowiedz ostateczna.
 DRUGIE_SPOJRZENIE = 20
 
+# Komenda, ktora szuka procesow PO TRESCI linii polecen — i przez to
+# potrafi trafic w powloke, ktora sama ja uruchomila (v326).
+_PKILL_PO_TRESCI_RE = re.compile(
+    r"\b(?:pkill|pgrep)\b[^\n|;&]*\s-\w*f"
+)
+
 PODGLAD_OD_SEKUND = int(
     os.environ.get(
         "PODGLAD_OD_SEKUND",
@@ -14067,11 +14073,53 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         mode="w+", suffix=".err", delete=False, encoding="utf-8"
     )
 
+    # v326: skrypt, ktory zabija sam siebie.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12, krok 24).
+    # Komenda zaczynala sie tak:
+    #
+    #     echo '=== KILL OLD ==='
+    #     pkill -9 -f 'uvicorn' 2>/dev/null || true
+    #     ...
+    #     nohup "$PY" -m uvicorn main:app --port 8765 ...
+    #
+    # Wynik: returncode -9, stdout uciety zaraz po "=== KILL OLD
+    # ===", 9.6 sekundy i po kroku. Bo my odpalamy komendy przez
+    # `bash -c "<cala tresc>"` — wiec CALA tresc skryptu jest w
+    # linii polecen powloki, razem ze slowem "uvicorn". `pkill -f
+    # uvicorn` znalazl wiec i uvicorna, i wlasna powloke.
+    #
+    # Zespol nie mial jak tego zobaczyc: dostal samo "-9".
+    #
+    # Nie ruszamy tresci komendy. Zmieniamy sposob uruchomienia: gdy
+    # w srodku jest pkill/pgrep -f, zapisujemy skrypt do pliku i
+    # odpalamy `bash plik.sh`. Wtedy w linii polecen stoi sama
+    # sciezka do pliku i wzorzec nie ma jak trafic w nas samych.
+    _plik_skryptu = None
+
+    if _PKILL_PO_TRESCI_RE.search(str(command or "")):
+
+        try:
+            _sk = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False, encoding="utf-8"
+            )
+            _sk.write(str(command))
+            _sk.close()
+            _plik_skryptu = _sk.name
+
+        except Exception:
+            _plik_skryptu = None
+
     try:
         proces = subprocess.Popen(
-            command,
-            shell=True,
-            executable=_SHELL_EXECUTABLE,
+            (
+                [_SHELL_EXECUTABLE, _plik_skryptu]
+                if _plik_skryptu else command
+            ),
+            shell=not _plik_skryptu,
+            executable=(
+                None if _plik_skryptu else _SHELL_EXECUTABLE
+            ),
             stdout=wy,
             stderr=bl,
             cwd=str(HOME),
@@ -14374,6 +14422,12 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             try:
                 uchwyt.close()
                 os.unlink(uchwyt.name)
+            except Exception:
+                pass
+
+        if _plik_skryptu:
+            try:
+                os.unlink(_plik_skryptu)
             except Exception:
                 pass
 
@@ -14888,9 +14942,23 @@ def termux_run_background(
 
         import subprocess
 
+        # v326: w tle ma chodzic TA SAMA powloka, co na wierzchu.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12, krok 9).
+        # Skrypt zaczynal sie od `set -o pipefail` i dostal:
+        #
+        #   /data/data/com.termux/files/usr/bin/sh: 1:
+        #   set: Illegal option -o pipefail
+        #
+        # Bez `executable=` Popen bierze /bin/sh — w Termuksie to
+        # dash, ktory `pipefail` nie zna. Na wierzchu ten sam skrypt
+        # chodzi, bo tam podajemy bash jawnie. Ta sama komenda raz
+        # dziala, raz nie, zaleznie od tego, czy poszla w tlo —
+        # i nikt nie ma jak zgadnac dlaczego.
         proc = subprocess.Popen(
             command,
             shell=True,
+            executable=_SHELL_EXECUTABLE,
             cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=open(
