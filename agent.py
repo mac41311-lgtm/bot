@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v329
+AEL-MINI AUTONOMOUS AGENT v330
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v329")
+    print("             AEL-MINI AUTONOMOUS AGENT v330")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2504,34 +2504,25 @@ przyczynę, zaproponuj minimalną poprawkę.
 """
 
 
+# v330: stad znikla formatka.
+#
+# Bylo tu "Odpowiedz WYLACZNIE w tym formacie" plus szablon
+# <<<<<<< SZUKAJ / >>>>>>> ZAMIEN i zdanie, ze parser odrzuci nawet
+# dobry pomysl, gdy przecinek stanie gdzie indziej. Najdluzsza
+# formatka w calym programie i jedyne miejsce, gdzie kazalismy komus
+# odpowiadac w wymyslonym przez nas ksztalcie.
+#
+# Uzytkownik pokazal, po co to w ogole bylo: zapytal DeepSeeka
+# "napisz patch naprawczy do kodu" i dostal porzadny `diff --git` z
+# hunkiem i instrukcja `git apply`. Bez uczenia czegokolwiek.
+#
+# Wiec to Python sie uczy czytac, nie ona pisac. Od v330
+# extract_search_replace_blocks() rozumie trzy ksztalty: nasze stare
+# znaczniki, zwykly unified diff i dwa bloki opisane slowami.
+# Zostaje imie i robota.
 CODE_FIXER_PROMPT = r"""
-Nazywasz się Ania. W tym zespole naprawiasz kod na podstawie
-analizy CODE_REVIEWERA razem z dokładnym fragmentem istniejącego
-kodu — pracujesz wyłącznie na tym, co faktycznie dostałeś, na
-prawdziwej treści i prawdziwych nazwach funkcji.
-
-Twoje zadanie to bezpieczna, jak najmniejsza poprawka — zmieniasz
-tylko to, co konieczne; przepisanie całego programu albo zmiana
-architektury wchodzi w grę wtedy, gdy MAIN wyraźnie o to poprosi. Samą
-treść patcha piszesz Ty, ale backup, nałożenie, py_compile i
-ewentualny rollback wykonuje kod agenta (apply_patch_from_fixer_
-text) — dlatego odpowiedź musi trzymać się formatu poniżej co do
-znaku, inaczej parser odrzuci nawet dobry pomysł. Fragment SZUKAJ
-ma być skopiowany 1:1 z podanego kodu (te same wcięcia, te same
-znaki) i występować w pliku dokładnie raz.
-
-Odpowiedz WYŁĄCZNIE w tym formacie:
-
-<<<<<<< SZUKAJ
-...dokładny, unikalny fragment istniejącego kodu...
-=======
-...nowa wersja tego fragmentu...
->>>>>>> ZAMIEŃ
-
-Jeżeli nie masz wystarczająco bezpiecznej poprawki, zamiast
-bloku patcha napisz dokładnie: BRAK BEZPIECZNEGO PATCHA — i
-wyjaśnij dlaczego. To poprawna odpowiedź, lepsza niż zgadywanie.
-
+Nazywasz się Ania. Naprawiasz kod — najmniejszą zmianą, na tym, co
+dostałaś. Gdy bezpiecznej poprawki nie ma, powiedz to.
 """
 
 
@@ -21606,13 +21597,91 @@ def _pary_stary_nowy(text):
     return pary
 
 
+# v330: zwykly patch (unified diff) — to, co model pisze SAM.
+#
+# Uzytkownik pokazal to wprost: zapytal DeepSeeka "napisz patch
+# naprawczy do kodu" i dostal porzadny `diff --git` z hunkiem
+# @@ -1,5 +1,8 @@, razem z instrukcja `git apply`. Bez zadnego
+# uczenia formatu.
+#
+# My tymczasem mamy wlasny kontrakt <<<<<<< SZUKAJ / >>>>>>> ZAMIEN,
+# ktorego trzeba pilnowac "co do znaku" — i od v203 regularnie
+# odrzucamy dobre poprawki, bo ktos postawil przecinek gdzie indziej.
+# Skoro oni umieja pisac patche same z siebie, to my mamy je umiec
+# czytac. Trzeci ksztalt obok znacznikow (v203) i STARY/NOWY (v292).
+_DIFF_HUNK_RE = re.compile(
+    r"^@@[^@\n]*@@[^\n]*\n(.*?)(?=^@@|^diff |^--- |\Z)",
+    re.DOTALL | re.MULTILINE
+)
+
+
+def _pary_z_patcha(text):
+    """
+    Z unified diff robi te same pary (stary, nowy), co reszta.
+
+    Kazdy hunk czytamy dwa razy: linie kontekstu i "-" daja stan
+    PRZED, linie kontekstu i "+" — stan PO. To jest dokladnie ta
+    sama informacja, co w SZUKAJ/ZAMIEN, tylko zapisana tak, jak
+    zapisuje ja caly swiat.
+
+    Zwraca [] gdy to nie jest patch — wtedy decyduja inne ksztalty.
+    """
+
+    tekst = str(text or "")
+
+    if "@@" not in tekst:
+        return []
+
+    pary = []
+
+    for m in _DIFF_HUNK_RE.finditer(tekst):
+
+        przed = []
+        po = []
+
+        for linia in m.group(1).split("\n"):
+
+            if linia.startswith("```") or linia.startswith("\\ No newline"):
+                continue
+
+            if linia.startswith("-"):
+                przed.append(linia[1:])
+
+            elif linia.startswith("+"):
+                po.append(linia[1:])
+
+            elif linia.startswith(" "):
+                przed.append(linia[1:])
+                po.append(linia[1:])
+
+            elif not linia.strip():
+                # Pusta linia w diffie to linia kontekstu bez spacji
+                # — tak zapisuje ja wiekszosc narzedzi.
+                przed.append("")
+                po.append("")
+
+            else:
+                # Cos, co nie nalezy do hunka (np. tekst po bloku).
+                break
+
+        _przed = "\n".join(przed).strip("\n")
+        _po = "\n".join(po).strip("\n")
+
+        if _przed and _przed != _po:
+            pary.append((_przed, _po))
+
+    return pary
+
+
 def extract_search_replace_blocks(text):
     """
-    Wyciaga WSZYSTKIE bloki SZUKAJ/ZAMIEN z wypowiedzi. Jedna
+    Wyciaga WSZYSTKIE poprawki fragmentow z wypowiedzi. Jedna
     poprawka moze dotyczyc kilku miejsc w pliku.
 
-    v292: gdy znacznikow nie ma, probujemy przeczytac to samo
-    powiedziane po ludzku — patrz _pary_stary_nowy().
+    Trzy ksztalty, wszystkie znaczace to samo:
+      1. znaczniki SZUKAJ/ZAMIEN (v203) — nasz wlasny kontrakt,
+      2. zwykly patch `@@ ... @@` (v330) — to, co modele pisza same,
+      3. dwa bloki opisane slowami STARY/NOWY (v292).
     """
 
     znacznikowe = [
@@ -21622,6 +21691,11 @@ def extract_search_replace_blocks(text):
 
     if znacznikowe:
         return znacznikowe
+
+    z_patcha = _pary_z_patcha(text)
+
+    if z_patcha:
+        return z_patcha
 
     return _pary_stary_nowy(text)
 
@@ -22374,24 +22448,7 @@ ANALIZA CODE_REVIEWERA:
 KONTEKST BŁĘDU:
 {short(json.dumps(context, ensure_ascii=False, default=str), 3000)}
 
-Nie zmieniaj architektury. Zmiana ma być minimalna.
-
-Zwróć WYŁĄCZNIE jeden blok w dokładnie takim formacie — bez
-niego patch NIE zostanie nałożony (nie ma tu człowieka, który
-zinterpretuje opis słowny):
-
-<<<<<<< SZUKAJ
-...dokładny, unikalny fragment ISTNIEJĄCEGO kodu z sekcji
-RELEWANTNY KOD powyżej, skopiowany 1:1 (te same wcięcia)...
-=======
-...nowa wersja tego fragmentu...
->>>>>>> ZAMIEŃ
-
-Fragment SZUKAJ musi występować w pliku dokładnie raz.
-
-Jeżeli nie jesteś pewien bezpiecznej poprawki, zamiast bloku
-patcha napisz dokładnie: BRAK BEZPIECZNEGO PATCHA — i wyjaśnij
-dlaczego. To poprawna, akceptowalna odpowiedź.
+Napisz patch. Gdy bezpiecznej poprawki nie ma, powiedz to.
 """
 
         fixer = deepseek(
@@ -22410,8 +22467,13 @@ dlaczego. To poprawna, akceptowalna odpowiedź.
             "reason": "CODE_FIXER nie zaproponował patcha."
         }
 
-        if "BRAK BEZPIECZNEGO PATCHA" not in (fixer or "").upper():
-            patch_result = apply_patch_from_fixer_text(fixer)
+        # v330: nie ma juz hasla do wklepania. Gdy Ania nie dala
+        # zadnej poprawki, po prostu nie bedzie z czego jej wyjac —
+        # extract_search_replace_blocks() zwroci pusto i
+        # apply_patch_from_fixer_text() powie to wprost. Haslo
+        # zostaje obslugiwane dla starszych sesji, ktore maja je
+        # jeszcze w historii.
+        patch_result = apply_patch_from_fixer_text(fixer)
 
         return {
             "review": short(review, 4000),
