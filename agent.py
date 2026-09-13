@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v333
+AEL-MINI AUTONOMOUS AGENT v334
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v333")
+    print("             AEL-MINI AUTONOMOUS AGENT v334")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12290,6 +12290,40 @@ _ZMIENNA_HOME_RE = re.compile(
 )
 
 
+def _tresc_napisana_dla(p):
+    """
+    Tresc, ktora zespol napisal DLA TEGO PLIKU — i skad ja mamy.
+
+    Zwraca (tresc albo None, _kod_autora_dla(p)).
+
+    v293: kolejnosc jest cala tresc tej zmiany. Najpierw to, co
+    autor powiedzial TERAZ; potem to, co ten sam autor powiedzial o
+    TYM pliku wczesniej; a dopiero na koncu przepisana wersja
+    MAIN-a. MAIN nigdy nie pisze kodu — jesli kod jest w jego
+    zadaniu, to jest CZYJAS kopia, i nie ma powodu przedkladac kopii
+    nad oryginal.
+
+    v281: MAIN potrafi przepisac kod do zadania bez ogrodzenia z
+    backtickow, samym heredokiem — a to jest tresc tego pliku
+    powiedziana wprost.
+
+    v334: wyjete z termux_write_file do osobnej funkcji, bo pyta o
+    to juz drugie miejsce. "nano plik.py" to to samo pytanie
+    zadane innymi slowami: ten plik ma miec te tresc.
+    """
+
+    z_pamieci = _kod_autora_dla(p)
+
+    kod = (
+        extract_code_block(_kod_bartka_teraz or "", p)
+        or (z_pamieci[0] if z_pamieci else None)
+        or extract_code_block(_tresc_zadania_teraz or "", p)
+        or _kod_z_heredoca(_tresc_zadania_teraz, p)
+    )
+
+    return kod, z_pamieci
+
+
 def _resolve_home_relative_path(path):
 
     tekst = str(path or ".")
@@ -12468,17 +12502,7 @@ def termux_write_file(path, content, append=False):
             # koncu przepisana wersja MAIN-a. MAIN nigdy nie pisze
             # kodu — jesli kod jest w jego zadaniu, to jest CZYJAS
             # kopia, i nie ma powodu przedkladac kopii nad oryginal.
-            _z_pamieci = _kod_autora_dla(p)
-
-            _kod = (
-                extract_code_block(_kod_bartka_teraz or "", p)
-                or (_z_pamieci[0] if _z_pamieci else None)
-                or extract_code_block(_tresc_zadania_teraz or "", p)
-                # v281: MAIN potrafi przepisac kod do zadania bez
-                # ogrodzenia z backtickow, samym heredokiem — a to
-                # jest tresc tego pliku powiedziana wprost.
-                or _kod_z_heredoca(_tresc_zadania_teraz, p)
-            )
+            _kod, _z_pamieci = _tresc_napisana_dla(p)
 
             _blokada = (
                 _code_target_rejection(str(p), _kod) if _kod else None
@@ -14780,23 +14804,76 @@ def termux_run(command):
 
             _nazwa = _dla_czlowieka.group(1)
 
-            log(
-                "TERMUX",
-                "`" + _nazwa + "` czeka na klawisz, a tu nie ma "
-                "klawiatury — nie uruchamiam tego."
-            )
+            # v334: nie odmawiamy — robimy to, co autor powiedzial.
+            _mysl = _co_autor_mial_na_mysli(command_str, _nazwa)
 
-            return {
-                "ok": False,
-                "error": (
-                    "`" + _nazwa + "` otwiera się na pełnym ekranie i "
-                    "czeka, aż ktoś naciśnie klawisz. Ten proces nie "
-                    "ma terminala ani klawiatury, więc taka komenda "
-                    "stoi do końca limitu i nic nie wypisuje."
-                ),
-                "command": command_str,
-                "czeka_na_czlowieka": _nazwa
-            }
+            if _mysl and _mysl[0] == "zapisz":
+
+                _sciezka, _tresc = _mysl[1], _mysl[2]
+
+                try:
+                    _sciezka.parent.mkdir(parents=True, exist_ok=True)
+                    _sciezka.write_text(_tresc, encoding="utf-8")
+                    _track_project_path(_sciezka)
+
+                except Exception as _e:
+                    return {
+                        "ok": False,
+                        "error": str(_e),
+                        "command": command_str,
+                        "path": str(_sciezka)
+                    }
+
+                log(
+                    "TERMUX",
+                    "`" + _nazwa + " " + _sciezka.name + "` — plik "
+                    "zapisany treścią z narady ("
+                    + str(len(_tresc)) + " znaków)."
+                )
+
+                return {
+                    "ok": True,
+                    "command": command_str,
+                    "path": str(_sciezka),
+                    "bytes": len(_tresc.encode("utf-8")),
+                    "stdout": (
+                        str(_sciezka) + " ma teraz treść z narady, "
+                        + str(len(_tresc.splitlines())) + " linii."
+                    ),
+                    "stderr": "",
+                    "returncode": 0
+                }
+
+            if _mysl and _mysl[0] == "powloka":
+
+                log(
+                    "TERMUX",
+                    "`" + _nazwa + "` czeka na klawisz — robię to "
+                    "samo tak: " + _mysl[1]
+                )
+
+                command_str = _mysl[1]
+
+            else:
+
+                log(
+                    "TERMUX",
+                    "`" + _nazwa + "` czeka na klawisz, a tu nie ma "
+                    "klawiatury."
+                )
+
+                return {
+                    "ok": False,
+                    "error": (
+                        "`" + _nazwa + "` otwiera się na pełnym "
+                        "ekranie i czeka na klawisz, a ten proces nie "
+                        "ma terminala. Treści tego pliku nikt jeszcze "
+                        "nie napisał, więc nie ma czego w nim "
+                        "położyć."
+                    ),
+                    "command": command_str,
+                    "czeka_na_czlowieka": _nazwa
+                }
 
         result = execute_shell(command_str)
 
@@ -17117,6 +17194,95 @@ _POLECENIE_DLA_CZLOWIEKA_RE = re.compile(
     r"(\s|$)",
     re.MULTILINE
 )
+
+
+# v334: co ta komenda ZNACZY, gdy nie ma klawiatury.
+#
+# Uzytkownik: "nie mozemy go ograniczac, musimy nauczyc go czytac,
+# zapisywac komendy, wykonywac co powie — bez jakichs
+# skomplikowanych promtow".
+#
+# v332 stawialo tu sciane: "nie uruchamiam tego". To bylo
+# ograniczanie. A czlowiek, ktory czyta "nano kalkulator.py, wklej
+# kod, Ctrl+O", nie odmawia — on wie, co autor mial na mysli: ten
+# plik ma miec te tresc. Tak samo "less log.txt" znaczy "pokaz mi
+# ten plik", a "top" — "co teraz chodzi".
+#
+# Wiec zamiast odmawiac, robimy to, co autor powiedzial, w postaci,
+# ktora tu dziala. Bez pytania go o cokolwiek i bez zdania w
+# promcie.
+_EDYTORY = ("nano", "pico", "vi", "vim", "emacs", "joe", "mcedit")
+
+# Argument komendy: pomijamy przelaczniki ("nano -w plik").
+_ARGUMENT_KOMENDY_RE = re.compile(
+    r"^\s*[a-z]+((?:\s+-{1,2}[^\s]+)*)\s+([^\s;&|<>]+)"
+)
+
+
+def _co_autor_mial_na_mysli(command_str, nazwa):
+    """
+    Komenda na pelen ekran przelozona na to, co tu naprawde zrobi
+    to samo. Zwraca:
+
+      ("zapisz", Path, tresc)  — plik ma miec te tresc,
+      ("powloka", komenda)     — uruchom to zamiast tamtego,
+      None                     — nie wiadomo, co autor mial na mysli.
+    """
+
+    linia = str(command_str or "").strip().splitlines()[0] \
+        if str(command_str or "").strip() else ""
+
+    m = _ARGUMENT_KOMENDY_RE.match(linia)
+
+    argument = m.group(2) if m else ""
+
+    if nazwa in _EDYTORY:
+
+        if not argument:
+            return None
+
+        try:
+            sciezka = _resolve_home_relative_path(argument)
+        except Exception:
+            return None
+
+        tresc, _ = _tresc_napisana_dla(sciezka)
+
+        if tresc:
+            return ("zapisz", sciezka, tresc)
+
+        # Tresci nikt nie napisal. Ale plik moze juz istniec —
+        # wtedy "otworz go" znaczy po prostu "pokaz mi go".
+        try:
+            if sciezka.is_file():
+                return ("powloka", "cat " + shlex.quote(str(sciezka)))
+        except Exception:
+            pass
+
+        return None
+
+    if nazwa in ("less", "more"):
+
+        if not argument:
+            return None
+
+        return ("powloka", "cat " + shlex.quote(argument))
+
+    if nazwa in ("top", "htop"):
+        # Jedna migawka zamiast odswiezanego ekranu.
+        return ("powloka", "top -b -n 1 2>/dev/null || ps -A")
+
+    if nazwa == "man":
+
+        if not argument:
+            return None
+
+        return (
+            "powloka",
+            "PAGER=cat MANPAGER=cat man " + shlex.quote(argument)
+        )
+
+    return None
 
 
 def _czego_brakuje_do_uruchomienia(sciezka, kod):
