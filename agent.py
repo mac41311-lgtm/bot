@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v340
+AEL-MINI AUTONOMOUS AGENT v341
 
 ARCHITEKTURA:
 
@@ -2286,7 +2286,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v340")
+    print("             AEL-MINI AUTONOMOUS AGENT v341")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3636,6 +3636,50 @@ def _current_topic(last_result, critic_streak):
         )
 
     return ""
+
+
+def _co_powiedzial_uzytkownik():
+    """
+    Zdania, ktore uzytkownik napisal w tym celu — do przekazania
+    zespolowi (v341).
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13 14:13). APK
+    powstal, ale zainstalowac go musial czlowiek — Android nie da
+    zrobic tego zadnym poleceniem. Uzytkownik zainstalowal i
+    NAPISAL O TYM, dwa razy. Python odpowiedzial mu w logu
+    "Zapamietuje to, co powiedziales — bedzie widoczne dla zespolu
+    do konca tego celu"...
+
+    ...i nic takiego sie nie stalo. USER_SAID_FILE byl czytany
+    DOKLADNIE W JEDNYM miejscu w calym programie: po to, zeby
+    wyciagnac z niego numery telefonow. Zdania uzytkownika nie szly
+    do nikogo. Zespol przez kolejne kroki dalej sprawdzal, czemu
+    apki nie ma.
+
+    Uzytkownik: "zainstalowalem, napisalem o tym".
+    """
+
+    try:
+
+        if not USER_SAID_FILE.exists():
+            return ""
+
+        linie = USER_SAID_FILE.read_text(
+            encoding="utf-8"
+        ).splitlines()
+
+    except Exception:
+        return ""
+
+    zdania = [
+        l.strip() for l in linie
+        if l.strip() and not l.startswith(_CEL_ZDAN_PREFIX)
+    ]
+
+    if not zdania:
+        return ""
+
+    return "\n\n".join(zdania)
 
 
 def _przypnij_zdania_uzytkownika_do_celu(goal):
@@ -25754,6 +25798,22 @@ def consult_team(
 
         pieces = [_core_context_for(role_name)]
 
+        # v341: to, co napisal uzytkownik, idzie do wszystkich.
+        # Przez _only_if_new, wiec kazdy dostaje to raz — ale
+        # dostaje. Patrz _co_powiedzial_uzytkownik(): dotad te
+        # zdania lezaly w pliku, z ktorego czytalismy wylacznie
+        # numery telefonow.
+        _od_uzytkownika = _co_powiedzial_uzytkownik()
+
+        if _od_uzytkownika:
+            pieces.append(
+                _only_if_new(
+                    role_name,
+                    "od_uzytkownika",
+                    "\nUżytkownik:\n" + _od_uzytkownika + "\n"
+                )
+            )
+
         # v211: stan ekranu idzie przez _only_if_new — dokladnie tak
         # jak stan faktyczny w v208. Dzieki temu MOZEMY dac go tez
         # Markowi (bez tego dwa razy blokowal plan, bo nie mial jak
@@ -27093,7 +27153,21 @@ tym kroku dopytać jedną osobę:
         "prompcie systemowym.\n"
     )
 
-    prompt = f"""{_main_topic_block}
+    # v341: MAIN tez musi wiedziec, co powiedzial uzytkownik —
+    # to on decyduje, czy jeszcze raz kazac sprawdzac instalacje.
+    # Patrz _co_powiedzial_uzytkownik().
+    _od_uzytkownika_dla_maina = _co_powiedzial_uzytkownik()
+
+    _uzytkownik_block = (
+        _only_if_new(
+            "MAIN",
+            "od_uzytkownika",
+            "\nUżytkownik:\n" + _od_uzytkownika_dla_maina + "\n"
+        )
+        if _od_uzytkownika_dla_maina else ""
+    )
+
+    prompt = f"""{_main_topic_block}{_uzytkownik_block}
 Co się właśnie stało:
 {_facts}
 
@@ -27791,9 +27865,31 @@ def _zapamietaj_co_powiedzial_uzytkownik(tekst):
 
     tekst = " ".join(str(tekst or "").split())
 
+    slowa = tekst.split()
+
+    # v341: dlugosc nie rozstrzyga o tym, czy to klucz.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13 14:13, krok 8).
+    # Uzytkownik odpowiedzial na prosbe o recznu instalacje APK —
+    # 544 znaki normalnej prozy o tym, co zrobil na telefonie. Prog
+    # "dluzsze niz 300 znakow to pewnie sekret" wyrzucil to w
+    # calosci: zespol nigdy sie nie dowiedzial, ze apka JEST
+    # zainstalowana, i przez kolejne kroki dalej szukal, czemu jej
+    # nie ma. Uzytkownik: "zainstalowalem, napisalem o tym".
+    #
+    # Dwa kroki pozniej wpisal 76 znakow i to samo zdanie
+    # zapamietalismy bez problemu — a roznica byla wylacznie w
+    # dlugosci.
+    #
+    # Klucz poznaje sie po tym, CZYM JEST, nie po tym, ile go jest:
+    # to jeden dlugi ciag bez spacji. Proza ma slowa i odstepy,
+    # choćby jej bylo pol strony. Wzorzec _WYGLADA_NA_SEKRET_RE
+    # zostaje i dalej pilnuje tego naprawde.
+    najdluzsze = max((len(w) for w in slowa), default=0)
+
     if (
-        len(tekst.split()) < 3
-        or len(tekst) > 300
+        len(slowa) < 3
+        or najdluzsze >= 24
         or _WYGLADA_NA_SEKRET_RE.search(tekst)
     ):
         return False
@@ -30200,6 +30296,37 @@ _PROSBA_O_PRZELACZENIE_RE = re.compile(
     re.IGNORECASE
 )
 
+# v341: prosba, ktorej nie zalatwi zadne przelaczenie ekranu.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13 14:13, kroki 2 i
+# 6). MAIN napisal do uzytkownika:
+#
+#     === INSTRUKCJA DLA UZYTKOWNIKA (widzisz dialog systemowy
+#         'Ze wzgledow bezpieczenstwa...') ===
+#     5. Dotknij 'Zainstaluj'. (...) Android moze dodatkowo zapytac
+#        o skanowanie przez Play Protect — wybierz 'Zainstaluj mimo
+#        to'.
+#
+# A Python odpowiedzial na to wlasnym zdaniem w logu: "Prosba do
+# uzytkownika sprowadza sie do wyciagniecia Termux na wierzch —
+# robie to sam, bez zatrzymywania biegu", wystawil Termux i poszedl
+# dalej. Zespol dostal "EKRAN_PRZELACZONY (udany)".
+#
+# Nikt nigdy nie zostal zapytany i nikt nie poczekal. Uzytkownik:
+# "z instalacja byl problem, bo ja musialem potwierdzic — on tego
+# nie widzial, nie poczekal".
+#
+# Instalacja, zgoda, uprawnienie i Play Protect to palec czlowieka
+# na jego wlasnym telefonie. Wyciagniecie aplikacji na wierzch nie
+# zalatwia z tego niczego.
+_POTRZEBNY_PALEC_RE = re.compile(
+    r"zainstaluj|instalacj|odinstaluj|zezw[oó]l|zezwalaj|"
+    r"uprawnie[nń]|zgod[ęe]\s|play\s*protect|"
+    r"nieznan\w*\s+[źz]r[óo]d|zaufaj|instaluj\s+mimo|"
+    r"install\s+anyway|potwierd[źz]",
+    re.IGNORECASE
+)
+
 _PAKIET_W_TEKSCIE_RE = re.compile(
     r"\b(?:[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,}"
     r"|(?:com|org|net|io|dev|app|eu|pl|me)\.[a-z0-9_]+)\b"
@@ -30301,6 +30428,12 @@ def _sam_wyciagnij_na_wierzch(decision):
     # Gdy w tej samej prosbie chodzi tez o klucz/konto/logowanie,
     # przelaczenie ekranu niczego nie zalatwia — to robota czlowieka.
     if _WEB_CREDENTIAL_REQUEST_RE.search(tekst):
+        return None
+
+    # v341: tak samo, gdy potrzebny jest palec na ekranie —
+    # instalacja, zgoda, uprawnienie, Play Protect. Patrz
+    # _POTRZEBNY_PALEC_RE.
+    if _POTRZEBNY_PALEC_RE.search(tekst):
         return None
 
     pakiet = _pakiet_do_wyciagniecia(tekst)
