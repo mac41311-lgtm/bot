@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v332
+AEL-MINI AUTONOMOUS AGENT v333
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v332")
+    print("             AEL-MINI AUTONOMOUS AGENT v333")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -23998,6 +23998,23 @@ _VOCATIVE_TO_ROLE = {
     "BARTEK": "ENGINEER",
     "WOJTKU": "WOJTEK", "WOJTKA": "WOJTEK", "WOJTEK": "WOJTEK",
     "OLU": "BROWSER", "OLI": "BROWSER", "OLA": "BROWSER",
+
+    # v333: do MAIN-a tez mozna napisac po imieniu.
+    #
+    # Uzytkownik pokazal, jak to wychodzi naturalnie. Poprosil
+    # DeepSeeka: "nazywasz sie Kamil, jak piszesz kod to najpierw
+    # napisz do osoby decyzyjnej Main i kod" — i dostal list:
+    #
+    #     **Do:** Main (osoba decyzyjna)
+    #     **Main,**
+    #     zglaszam propozycje prostego programu (...)
+    #     **Main**, czekam na Twoja decyzje:
+    #     akceptuje / chce zmiany / odrzucam
+    #
+    # Dla nas "Main," nie bylo zawolaniem, bo MAIN-a w ogole nie bylo
+    # na tej liscie. Skutek: caly list, razem z checklista decyzji,
+    # szedl do KAZDEGO kolegi jako wypowiedz do wszystkich.
+    "MAIN": "MAIN", "MAINOWI": "MAIN", "MAINA": "MAIN",
 }
 
 _WOLACZ = {
@@ -24232,6 +24249,13 @@ def _collect_role_messages(speaker_role, text):
     for adresat, tresc in _zawolania(text):
 
         if adresat == speaker_role:
+            continue
+
+        # v333: MAIN czyta kazda wypowiedz w calosci, wiec nie ma po
+        # co dawac mu jej drugi raz osobno — a skrzynki i tak nie ma.
+        # Jego imie jest na liscie po to, zeby KOLEDZY nie dostawali
+        # listu, ktory nie byl do nich.
+        if adresat == "MAIN":
             continue
 
         if len(tresc) < 15:
