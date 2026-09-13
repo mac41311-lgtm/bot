@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v341
+AEL-MINI AUTONOMOUS AGENT v342
 
 ARCHITEKTURA:
 
@@ -1265,6 +1265,12 @@ def ustaw_krok(numer):
     except (TypeError, ValueError):
         return
 
+    # v342: log z terminala nalezy do kroku, w ktorym padl. Autor
+    # dostaje go raz, przy najblizszej swojej turze — patrz
+    # _log_dla_autora().
+    if _biezacy_krok != poprzedni:
+        del _uruchomienia_kroku[:]
+
     zapisz_zdarzenie("krok")
 
     if (
@@ -2286,7 +2292,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v341")
+    print("             AEL-MINI AUTONOMOUS AGENT v342")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3817,12 +3823,24 @@ def _prompt_hash(system_prompt):
     ).hexdigest()
 
 
-def _save_session_state(name, session, prompt_hash=None, prompt_text=None):
+def _save_session_state(name, session, prompt_hash=None, prompt_text=None,
+                        fakty=None):
 
     data = {
         "chat_session_id": session.chat_session_id,
         "parent_message_id": session.parent_message_id
     }
+
+    # v342: jakie fakty o maszynie ta sesja juz slyszala — zeby przy
+    # wznowieniu nie mowic jej tego samego drugi raz, a zmienione
+    # powiedziec. Patrz _pierwsza_wiadomosc().
+    if fakty is None:
+        _stare = read_json(session_state_file(name), {})
+        if isinstance(_stare, dict):
+            fakty = _stare.get("fakty")
+
+    if fakty:
+        data["fakty"] = fakty
 
     if prompt_hash is None or prompt_text is None:
         # Zachowaj już zapisane hash/tekst, jeśli wołający ich nie
@@ -4007,6 +4025,31 @@ def start_session(name, system_prompt):
 
             # v337: pustego promtu nie ma po co wysylac ani
             # aktualizowac. Osiem rol nie ma go juz wcale.
+            #
+            # v342: ale fakty o maszynie moga sie zmienic miedzy
+            # uruchomieniami (inne adb, doinstalowane termux-*) —
+            # wtedy mowimy je jeszcze raz, tak jak mowi sie komus,
+            # ze w warsztacie doszlo narzedzie.
+            _teraz_fakty = _pierwsza_wiadomosc()
+
+            if _teraz_fakty and _teraz_fakty != saved.get("fakty"):
+
+                try:
+                    session.send_message(_teraz_fakty)
+
+                    _save_session_state(
+                        name, session, fakty=_teraz_fakty
+                    )
+
+                    log(
+                        "DEEPSEEK",
+                        name + ": fakty o telefonie się zmieniły — "
+                        "powiedziałem je jeszcze raz."
+                    )
+
+                except Exception as _e:
+                    log("DEEPSEEK", name + ": " + str(_e))
+
             if not str(system_prompt or "").strip():
 
                 _save_session_state(
@@ -4050,19 +4093,24 @@ def start_session(name, system_prompt):
 
         else:
 
-            # v337: rola, ktora nie ma promtu, zaczyna rozmowe od
-            # pierwszej prawdziwej wiadomosci — tak, jak czlowiek,
-            # ktoremu ktos po prostu pisze.
-            if str(system_prompt or "").strip():
-                session.send_message(
-                    system_prompt
-                )
+            # v342: pierwsza wiadomosc to fakty o tej maszynie,
+            # zmierzone przez Pythona — patrz _pierwsza_wiadomosc().
+            # Gdy rola ma jeszcze wlasny ksztalt JSON-a (MAIN, Ela),
+            # idzie on razem z nimi, w tej samej wiadomosci.
+            _powitanie = (
+                _pierwsza_wiadomosc()
+                + str(system_prompt or "")
+            ).strip()
+
+            if _powitanie:
+                session.send_message(_powitanie)
 
             _save_session_state(
                 name,
                 session,
                 prompt_hash=_prompt_hash(system_prompt),
-                prompt_text=system_prompt
+                prompt_text=system_prompt,
+                fakty=_pierwsza_wiadomosc()
             )
 
             log(
@@ -13887,6 +13935,130 @@ def _co_lezy_w_home():
         return set()
 
 
+# v342: co wypisalo to, co napisala dana osoba.
+#
+# Uzytkownik: "powinnismy dawac mu bledy itp, powinien program go
+# obslugiwac tak, jak ja Ciebie teraz obsluguje — wyslal, co, logi
+# itp.".
+#
+# On wkleja mi log po biegu i dlatego wiem, co naprawic. Role nie
+# dostawaly niczego takiego. ZMIERZONE (bieg 2026-09-13 14:13):
+# Bartek — czlowiek, ktory pisze komendy i kod — byl pytany DWA RAZY
+# na jedenascie krokow i w ZADNEJ z tych wiadomosci nie bylo ani
+# jednego stdout, stderr czy kodu wyjscia z tego, co napisal.
+# Dostawal 46 906 i 15 397 znakow cudzych wypowiedzi i ani slowa o
+# tym, co jego skrypt wypisal.
+#
+# Surowy wynik szedl wylacznie do Oli (na streszczenie) i do MAIN-a.
+# Autor — nigdy.
+#
+# Tu zbieramy kazde uruchomienie: komende, co wypisala i z jakim
+# kodem wyjscia. Kto to napisal, rozstrzygamy pozniej — po pliku
+# albo po tresci, patrz _log_dla_autora().
+_uruchomienia_kroku = []
+
+
+def _zapisz_uruchomienie(nazwa, args, result):
+    """Co sie uruchomilo i co z tego wyszlo. Nigdy nie rzuca."""
+
+    try:
+
+        if not isinstance(result, dict):
+            return
+
+        komenda = str(
+            result.get("command")
+            or (args or {}).get("command")
+            or (args or {}).get("path")
+            or ""
+        )
+
+        if not komenda:
+            return
+
+        _uruchomienia_kroku.append({
+            "narzedzie": str(nazwa),
+            "komenda": komenda,
+            "stdout": str(result.get("stdout") or ""),
+            "stderr": str(result.get("stderr") or ""),
+            "blad": str(result.get("error") or ""),
+            "kod": result.get("returncode"),
+        })
+
+        del _uruchomienia_kroku[:-40]
+
+    except Exception:
+        pass
+
+
+def _log_dla_autora(rola):
+    """
+    Wszystko, co wypisalo to, co TA osoba napisala — w calosci.
+
+    Dopasowanie po tym, co naprawde widac: plik, ktorego tresc
+    pochodzi od niej (notatnik autorow z v340), albo komenda, ktora
+    stoi doslownie w jej wypowiedzi.
+
+    Niczego nie skracamy — to jest jego wlasny log, tak jak
+    uzytkownik wkleja mi caly plik, a nie pierwsze piec linijek.
+    """
+
+    if not _uruchomienia_kroku:
+        return ""
+
+    # Pliki, ktorych tresc napisala ta osoba.
+    moje_pliki = set()
+    moje_teksty = []
+
+    for wpis in _kod_autorow:
+
+        if wpis.get("rola") != str(rola):
+            continue
+
+        moje_teksty.append(str(wpis.get("tekst") or ""))
+
+    for tekst in moje_teksty:
+        for m in _CODE_TARGET_FILENAME_RE.finditer(tekst):
+            nazwa = str(m.group(0)).strip().strip("`'\"").split("/")[-1]
+            if nazwa:
+                moje_pliki.add(nazwa)
+
+    kawalki = []
+
+    for u in _uruchomienia_kroku:
+
+        komenda = u["komenda"]
+
+        czyje = any(n and n in komenda for n in moje_pliki)
+
+        if not czyje:
+            czyje = any(
+                komenda.strip() and komenda.strip() in t
+                for t in moje_teksty
+            )
+
+        if not czyje:
+            continue
+
+        wyjscie = "\n".join(
+            x for x in (u["stdout"], u["stderr"], u["blad"]) if x.strip()
+        ).strip()
+
+        kawalki.append(
+            "$ " + komenda.strip()
+            + ("\n" + wyjscie if wyjscie else "\n(nic nie wypisało)")
+            + (
+                "\nkod wyjścia: " + str(u["kod"])
+                if u["kod"] not in (0, None) else ""
+            )
+        )
+
+    if not kawalki:
+        return ""
+
+    return "\n\n".join(kawalki)
+
+
 def _zglos_to_co_przybylo(przed):
     """
     Zglasza do sprzatniecia katalogi/pliki, ktore wlasnie POJAWILY SIE
@@ -18490,6 +18662,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         _bylo + 1,
                         _stary_wynik if _bylo >= 2 else result
                     )
+
+                # v342: zapamietujemy, co sie uruchomilo i co
+                # wypisalo — zeby autor tego dostal z powrotem.
+                # Patrz _zapisz_uruchomienie() i _log_dla_autora().
+                _zapisz_uruchomienie(name, args, result)
 
                 log(
                     "GEMINI",
@@ -25798,6 +25975,19 @@ def consult_team(
 
         pieces = [_core_context_for(role_name)]
 
+        # v342: co wypisalo to, co TA osoba napisala — jej wlasny
+        # log, w calosci. Patrz _log_dla_autora().
+        _moj_log = _log_dla_autora(role_name)
+
+        if _moj_log:
+            pieces.append(
+                _only_if_new(
+                    role_name,
+                    "moj_log",
+                    "\n" + _moj_log + "\n"
+                )
+            )
+
         # v341: to, co napisal uzytkownik, idzie do wszystkich.
         # Przez _only_if_new, wiec kazdy dostaje to raz — ale
         # dostaje. Patrz _co_powiedzial_uzytkownik(): dotad te
@@ -28049,6 +28239,26 @@ def _brakujace_komendy():
         pass
 
     return []
+
+
+def _pierwsza_wiadomosc():
+    """
+    Pierwsza wiadomosc w kazdej rozmowie: co to za maszyna. Tyle.
+
+    Uzytkownik, doslownie: "Pierwszy promt: Termux API, ADB
+    DEBUGOWANIE, Android".
+
+    On wie, jakie Termux ma komendy, zna Termux:API i adb — nie
+    trzeba mu ich wymieniac ani tlumaczyc, jak ich uzywac. Trzeba mu
+    tylko powiedziec, GDZIE jest. Reszta to jego robota.
+
+    Bledy, logi i to, co wypisala komenda, nie naleza tutaj — to nie
+    jest rzecz do zapowiedzenia w prompcie, tylko do DOWIEZIENIA w
+    rozmowie, tak jak uzytkownik wkleja mi log po biegu. Patrz
+    _zglos_to_co_przybylo() i raport z narzedzi.
+    """
+
+    return "Termux API, ADB DEBUGOWANIE, Android"
 
 
 def _narzedzia_telefonu_block():
