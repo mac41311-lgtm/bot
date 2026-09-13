@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v344
+AEL-MINI AUTONOMOUS AGENT v345
 
 ARCHITEKTURA:
 
@@ -2292,7 +2292,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v344")
+    print("             AEL-MINI AUTONOMOUS AGENT v345")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16179,10 +16179,7 @@ def ask_deepseek_hint(question):
 
     answer = deepseek(
         "CODE_FIXER",
-        "Gemini (wykonawca) utknął W TRAKCIE wykonywania zadania "
-        "i prosi o krótką podpowiedź — NIE pełny patch w formacie "
-        "SZUKAJ/ZAMIEŃ, po prostu odpowiedz krótko i konkretnie na "
-        "poniższe pytanie, żeby mógł kontynuować:\n\n"
+        "Zadanie stanęło w połowie. Pytanie:\n\n"
         + question
     )
 
@@ -18005,7 +18002,7 @@ def gemini_execute_task(task_id, task, success_condition=''):
         return {
             "ok": False,
             "status": "GEMINI_DISABLED",
-            "error": "Gemini jest obecnie wyłączony."
+            "error": "Nie ma czym tego wykonać — wykonawca wyłączony."
         }
 
     key_name, client = get_gemini_client()
@@ -18014,7 +18011,7 @@ def gemini_execute_task(task_id, task, success_condition=''):
         return {
             "ok": False,
             "status": "NO_GEMINI_CLIENT",
-            "error": "Brak aktywnego klienta Gemini."
+            "error": "Nie ma czym tego wykonać."
         }
 
     # ========================================================
@@ -18395,7 +18392,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 
                 if not text:
                     text = (
-                        "Gemini zakończył interakcję "
+                        "Zadanie skończyło się "
                         "bez raportu."
                     )
 
@@ -18423,8 +18420,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # raportu, a nie zamiast niego.
                 if tool_calls == 0:
                     collected_warnings.append(
-                        "gemini [brak_wywolan_narzedzi]: Gemini "
-                        "zakończył to zadanie NIE WYWOŁUJĄC ANI "
+                        "Zadanie skończyło się NIE WYWOŁUJĄC ANI "
                         "JEDNEGO narzędzia — nic nie dotknęło "
                         "telefonu, dysku ani przeglądarki. Cokolwiek "
                         "raport poniżej mówi o wykonanych "
@@ -18741,9 +18737,8 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "za kazdym razem z tym samym wynikiem. To "
                         "znaczy, ze COS SIE JESZCZE NIE WYDARZYLO "
                         "(strona nie odpowiedziala, element nie "
-                        "pojawil sie) — a nie, ze Gemini zle "
-                        "wykonuje polecenie. Nie kazcie mu probowac "
-                        "jeszcze raz tego samego. Ostatni wynik: "
+                        "pojawil sie) — a nie, ze polecenie jest "
+                        "zle wykonywane. Ostatni wynik: "
                         + short(json.dumps(result, ensure_ascii=False,
                                            default=str), 300)
                     )
@@ -18921,9 +18916,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "arguments": args,
                         "tool_result": result,
                         "message": (
-                            "Narzędzie zakończyło się błędem. "
-                            "Gemini nie wykonuje samodzielnej naprawy. "
-                            "MAIN / DeepSeek musi przygotować następny TASK lub PATCH."
+                            "Narzędzie zakończyło się błędem."
                             + benign_exit_hint
                         ),
                         "interaction_id": interaction_id,
@@ -18987,7 +18980,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     "status": "NO_INTERACTION_ID",
                     "key": key_name,
                     "error": (
-                        "Gemini nie zwrócił "
+                        "Nie wróciło "
                         "interaction_id."
                     ),
                     "tool_calls": tool_calls,
@@ -19034,7 +19027,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             "status": "TOOL_LIMIT",
             "key": key_name,
             "error": (
-                "Gemini osiągnął limit narzędzi."
+                "Limit wywołań narzędzi wyczerpany."
             ),
             "tool_calls": tool_calls,
             "interaction_id": interaction_id,
@@ -19437,7 +19430,7 @@ def _success_condition_already_satisfied_message(task_text, success_condition):
     return (
         "Wszystkie pliki wymienione w warunku sukcesu JUŻ ISTNIEJĄ "
         "i nie są puste W TEJ CHWILI (sprawdzone bezpośrednio na "
-        "dysku, bez angażowania Gemini): " + evidence + ". Ten "
+        "dysku): " + evidence + ". Ten "
         "punkt jest już faktycznie spełniony — zaproponuj NASTĘPNY, "
         "faktycznie jeszcze niezrobiony krok zamiast tworzenia "
         "taska tylko po to, żeby ponownie to potwierdzić."
@@ -19488,7 +19481,7 @@ _CHECKLIST_STATUS_LABELS = {
         "narzędzia realnie zadziałały, choć z dysku nie da się tego "
         "sprawdzić"
     ),
-    "ZADEKLAROWANY_BEZ_DOWODU": "zadeklarowany przez Gemini, BEZ dowodu",
+    "ZADEKLAROWANY_BEZ_DOWODU": "zgłoszony, ale BEZ dowodu",
     "BLAD": "zakończony błędem",
     "W_TOKU": "w toku"
 }
@@ -19794,7 +19787,7 @@ def _checklist_summary_block(skip_task=None):
 
     if unverified:
         _stan.append(
-            str(unverified) + " tylko z deklaracji Gemini"
+            str(unverified) + " tylko ze zgłoszenia, bez dowodu"
         )
 
     if failed_items:
@@ -20080,10 +20073,7 @@ def run_next_task():
                     "pozostałych narzędziach) i funkcją run(...) "
                     "zwracającą słownik. Python wczytuje taki plik "
                     "sam, raz na krok, bez restartu — od tej chwili "
-                    "Gemini ma go na liście narzędzi jak każde inne. "
-                    "Kod pisze Bartek, ścieżkę do zapisu podaje MAIN "
-                    "w \"write_engineer_code_to\", a Gemini je potem "
-                    "po prostu uruchamia."
+                    "jest na liście narzędzi jak każde inne."
                 )
 
     elif result.get("ok"):
@@ -20822,7 +20812,7 @@ def _uruchom_jako_usluge(path, command, powod):
 
     zapisz_zdarzenie(
         "narzedzie",
-        nazwa="termux_run_background (Python, bez Gemini)"
+        nazwa="termux_run_background (Python)"
     )
 
     if not isinstance(tlo, dict) or not tlo.get("ok"):
@@ -20845,7 +20835,7 @@ def _uruchom_jako_usluge(path, command, powod):
             "report": raport,
             "tool_calls": 1,
             "tool_trace": [{
-                "tool": "termux_run_background (Python, bez Gemini)",
+                "tool": "termux_run_background (Python)",
                 "ok": False,
                 "evidence": short(str((tlo or {}).get("error")), 200),
             }],
@@ -20916,7 +20906,7 @@ def _uruchom_jako_usluge(path, command, powod):
         "report": raport,
         "tool_calls": 1,
         "tool_trace": [{
-            "tool": "termux_run_background (Python, bez Gemini)",
+            "tool": "termux_run_background (Python)",
             "ok": bool(zyje),
             "evidence": short(wyjscie or stan, 400),
         }],
@@ -21033,7 +21023,7 @@ def _run_script_directly(path, task_text):
 
     raport = (
         "Python uruchomił " + path.name + " bezpośrednio przez "
-        "Termux (bez Gemini).\n"
+        "Termux.\n"
         + naglowek + "\n"
         + ("WYJŚCIE:\n" + short(stdout, 3000) + "\n" if stdout else "")
         + ("BŁĘDY:\n" + short(stderr, 2000) + "\n" if stderr else "")
@@ -21050,7 +21040,7 @@ def _run_script_directly(path, task_text):
 
     zapisz_zdarzenie(
         "narzedzie",
-        nazwa="termux_run (Python, bez Gemini)"
+        nazwa="termux_run (Python)"
     )
 
     warnings = []
@@ -21090,7 +21080,7 @@ def _run_script_directly(path, task_text):
         "report": raport,
         "tool_calls": 1,
         "tool_trace": [{
-            "tool": "termux_run (Python, bez Gemini)",
+            "tool": "termux_run (Python)",
             "ok": ok,
             "evidence": short(stdout or stderr, 400),
         }],
@@ -24280,7 +24270,7 @@ def _condense_last_result_for_team(last_result, limit=2500):
         parts.append(
             "wklejona wartość jest też ZAPISANA W PLIKU "
             + str(value_file)
-            + " — w TASKu dla Gemini podawaj tę ŚCIEŻKĘ (np. "
+            + " — w zadaniu podawaj tę ŚCIEŻKĘ (np. "
             "`KEY=$(cat " + str(value_file) + ")`), nie samą wartość"
         )
 
@@ -24305,7 +24295,9 @@ def _condense_last_result_for_team(last_result, limit=2500):
     report = last_result.get("report")
 
     if report:
-        parts.append("raport Gemini: " + short(str(report), 1200))
+        # v345: bez podpisu wykonawcy — to jest po prostu to, co
+        # wrocilo z wykonania.
+        parts.append(short(str(report), 1200))
 
     tool_calls = last_result.get("tool_calls")
 
@@ -24419,8 +24411,7 @@ def _condense_last_result_for_team(last_result, limit=2500):
         rendered = "; ".join(pieces)
 
         parts.append(
-            "co Gemini FAKTYCZNIE wywołało (zapis Pythona, nie jego "
-            "własna proza) — wywołań: "
+            "wywołań narzędzi: "
             + str(len(tool_trace))
             + ", nieudanych: " + str(failed) + " -> "
             + short(rendered, 1800)
@@ -25540,8 +25531,7 @@ def consult_team(
         if tool_warnings:
             tool_hint += (
                 "\n\nPrzy okazji zauważyłem w narzędziach to "
-                "(sprawdzone w kodzie, niezależnie od raportu "
-                "Gemini):\n"
+                "(sprawdzone w kodzie, niezależnie od raportu):\n"
                 + "\n".join(
                     "- " + str(w) for w in tool_warnings[:8]
                 )
@@ -27874,10 +27864,7 @@ def protect_main_failed(decision, goal):
 
     return {
         "type": "TASK",
-        "reason": (
-            "Operację może wykonać Gemini "
-            "za pomocą Termux/Android/Shell."
-        ),
+        "reason": "Da się to zrobić w Termux/Android/Shell.",
         "task": (
             "Wykonaj cały cel użytkownika. "
             "Użyj Termux, Android i Shell w razie potrzeby. "
@@ -28662,9 +28649,8 @@ def _python_written_files_lines(already_listed):
             pass
 
         lines.append(
-            "- " + str(p) + ": ISTNIEJE (" + str(size) + " B) — "
-            "zapisał go SAM PYTHON (gotowy kod od Bartka), bez "
-            "udziału Gemini i bez niczyjego kopiowania"
+            "- " + str(p) + ": ISTNIEJE (" + str(size) + " B), "
+            "z gotowym kodem od Bartka"
             + (". Treść: " + preview if preview else "")
         )
 
@@ -30415,10 +30401,8 @@ def _decision_returns_delegated_choice(decision, goal):
     return (
         "Ten TASK prosi użytkownika, żeby wybrał jedną z opcji — a "
         "on w celu napisał wprost, żeby wymyślić to samemu. Oddaje "
-        "mu więc z powrotem robotę, którą zlecił. Gemini i tak nie "
-        "ma jak zapytać człowieka i poczekać na odpowiedź, więc taki "
-        "krok kończy się zerem wywołań narzędzi i cel nie rusza się "
-        "z miejsca. Wybierz jedną wersję sam i KAŻ JĄ WYKONAĆ."
+        "mu więc z powrotem robotę, którą zlecił. Taki krok kończy "
+        "się zerem wywołań narzędzi i cel nie rusza się z miejsca."
     )
 
 
@@ -31165,7 +31149,7 @@ def _co_widac_w_chrome_teraz():
         "Otwarte jest teraz to:\n"
         + "\n".join(linie)
         + "\nJesli ktoras z tych stron ma to, czego szukamy, jest "
-        "tam do wziecia — Gemini widzi dokladnie te same karty."
+        "tam do wziecia — te same karty widac z wykonania."
     )
 
 
@@ -31416,9 +31400,9 @@ def _handle_need_user_login(decision):
             "zrobiona, albo (c) coś innego. Przeczytaj treść i sam "
             "oceń, co faktycznie oznacza, zanim uznasz czynność za "
             "zakończoną. Jeśli to wartość — użyj jej BEZPOŚREDNIO w "
-            "następnym kroku, np. każąc Gemini zapisać ją do "
-            "właściwego pliku, zamiast zakładać że użytkownik już to "
-            "gdzieś zapisał sam."
+            "następnym kroku, np. każąc zapisać ją do właściwego "
+            "pliku, zamiast zakładać, że użytkownik już to gdzieś "
+            "zapisał sam."
         )
 
         # Zaobserwowany realny bug (log 2026-08-27, cel: Auth Token
@@ -31485,9 +31469,9 @@ def _handle_need_user_login(decision):
             value_file_note = (
                 "\n\nWARTOŚĆ JEST ZAPISANA W PLIKU: "
                 + str(USER_PROVIDED_VALUE_FILE)
-                + "\nGemini NIE widzi treści tej rozmowy — jeżeli "
-                "kolejny krok ma jej użyć (np. w nagłówku "
-                "Authorization), TASK ma kazać ODCZYTAĆ ją z TEGO "
+                + "\nTreści tej rozmowy nie widać z drugiej strony "
+                "— jeżeli kolejny krok ma jej użyć (np. w nagłówku "
+                "Authorization), zadanie ma kazać ODCZYTAĆ ją z TEGO "
                 "pliku (np. `KEY=$(cat "
                 + str(USER_PROVIDED_VALUE_FILE)
                 + ")`), zamiast wklejać samą wartość w treść "
@@ -31626,7 +31610,7 @@ def run_agent(goal):
                 "status":
                     "GEMINI_QUOTA_EXHAUSTED",
                 "message":
-                    "Gemini API wyczerpał limit. "
+                    "Limit wykonawcy wyczerpany. "
                     "Poczekaj na reset (zwykle 24h) "
                     "lub dodaj nowy klucz API do "
                     + str(GEMINI_KEYS_DIR)
@@ -31738,7 +31722,7 @@ def run_agent(goal):
                     and result.get("status") == "TOOL_LIMIT"
                 ):
                     last_result["hint"] = (
-                        "Gemini wyczerpał limit wywołań narzędzi "
+                        "Wyczerpany limit wywołań narzędzi "
                         "(" + str(result.get("tool_calls", "?")) + "). "
                         "TASK był za duży lub za szeroki. "
                         "Podziel go na DWIE mniejsze operacje "
@@ -32387,10 +32371,8 @@ Zwróć tylko JSON.
                     _pending_team_warnings.append(
                         "W zadaniu jest gotowy kod, ale nigdzie "
                         "nie pada nazwa pliku, do którego ma trafić "
-                        "— więc nie mam go gdzie położyć i Gemini "
-                        "musiałoby go przepisywać ręcznie. "
-                        "Wystarczy, że ktoś powie, jak ten plik ma "
-                        "się nazywać."
+                        "— więc nie mam go gdzie położyć. Wystarczy, "
+                        "że ktoś powie, jak ten plik ma się nazywać."
                     )
 
             # v325: MAIN wskazal plik, o ktorym Bartek w tym kroku
@@ -33006,7 +32988,7 @@ Zwróć tylko JSON.
                         + str(target_path)
                         + " ("
                         + str(len(engineer_code))
-                        + " znaków, bez zużycia Gemini)."
+                        + " znaków)."
                     )
 
                     log_event(
