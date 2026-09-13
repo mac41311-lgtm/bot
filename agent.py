@@ -6167,7 +6167,7 @@ def deepseek(name, message):
                             "DEEPSEEK",
                             name + ": myslenie przyszlo, odpowiedzi "
                             "nie — dopytuję w tej samej rozmowie, "
-                            "bez myślenia i bez szukania: "
+                            "bez myślenia: "
                             + _dopytanie
                         )
 
@@ -6184,14 +6184,38 @@ def deepseek(name, message):
 
                     try:
 
+                        # v328: dopytanie gasi MYSLENIE — i tylko
+                        # myslenie.
+                        #
+                        # W v318 gasilo takze szukanie w sieci i to
+                        # byl blad, ktory kosztowal najwiecej. Bieg
+                        # 2026-09-13 09:08, kroki 1-6: pierwsza
+                        # proba wracala samym mysleniem, wiec
+                        # odpowiedz, ktora zespol dostawal, byla ZA
+                        # KAZDYM RAZEM odpowiedzia na dopytanie —
+                        # czyli powstala BEZ SIECI. Naglowek
+                        # strumienia mowil to wprost:
+                        #
+                        #   kroki 1-6: thinking=false search=false
+                        #   kroki 7-9: thinking=true  search=true
+                        #
+                        # A Kamil pisal wtedy do zespolu "nie mam
+                        # dostepu do sieci, wiec nie sprawdze URL-a",
+                        # Tomek odpowiadal "zmyslilem", i szla o to
+                        # klotnia przez dwa kroki. Uzytkownik
+                        # sprawdzil to sam: ten sam link wklejony
+                        # recznie do DeepSeeka zostal otwarty i
+                        # opisany. "Wiec da sie — my go blokujemy".
+                        #
+                        # Blokowalismy. Rozumowanie juz bylo i nie ma
+                        # go powtarzac; wyniki wyszukiwania tez juz
+                        # sa w tej rozmowie i maja zostac.
                         _bylo_myslenie = session.thinking_enabled
-                        _bylo_szukanie = session.search_enabled
 
                         try:
 
                             if _bez_myslenia:
                                 session.thinking_enabled = False
-                                session.search_enabled = False
 
                             retry_text, retry_status = (
                                 _deepseek_send_experimental(
@@ -6201,7 +6225,6 @@ def deepseek(name, message):
 
                         finally:
                             session.thinking_enabled = _bylo_myslenie
-                            session.search_enabled = _bylo_szukanie
 
                         if retry_text and retry_text.strip():
 
