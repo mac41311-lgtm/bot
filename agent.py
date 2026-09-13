@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v337
+AEL-MINI AUTONOMOUS AGENT v338
 
 ARCHITEKTURA:
 
@@ -2048,6 +2048,63 @@ _AGENT_DIR_PROTECTED_SECOND_LEVEL_NAMES = {
 }
 
 
+# v338: gdzie Python naprawde polozyl plik, ktory sam zapisal.
+# {nazwa pliku: pelna sciezka}
+#
+# W tym samym biegu (2026-09-13 12:44, krok 3) plik poszedl pod
+# "termux:~/va_final.sh", a Gemini szukalo go pod "~/va_final.sh".
+# Bash odpowiedzial "No such file or directory" i przez OSIEMNASCIE
+# wywolan narzedzi wykonawca szukal pliku, ktory Python zapisal
+# trzydziesci sekund wczesniej i doskonale wiedzial, gdzie on jest.
+# Dwa razy pytal przy tym Ani, a Ania odpisala "uzyj heredoc, nie
+# zadnego wrappera termux_write_file" i "base64 omija kazdy filtr
+# podmieniajacy wzorce tekstowe" — czyli zespol zaczal obchodzic
+# wlasny program. A Gemini mialo tylko uruchamiac.
+#
+# Sciezke naprawilismy wyzej (_ZNAK_ZACHETY_RE), ale zasada zostaje:
+# gdy Python cos wie, mowi to od razu, zamiast pozwalac szukac.
+_gdzie_zapisalismy = {}
+
+
+def _zapamietaj_gdzie(path):
+    """Nazwa pliku -> gdzie on naprawde lezy. Nigdy nie rzuca."""
+
+    try:
+        p = Path(str(path))
+        _gdzie_zapisalismy[p.name] = str(p)
+    except Exception:
+        pass
+
+
+def _gdzie_to_jest(tekst):
+    """
+    Plik, ktorego wlasnie nie znaleziono, a ktory MY zapisalismy
+    gdzie indziej. Zwraca (nazwa, prawdziwa sciezka) albo None.
+    """
+
+    t = str(tekst or "")
+
+    if "No such file or directory" not in t:
+        return None
+
+    for linia in t.splitlines():
+
+        if "No such file or directory" not in linia:
+            continue
+
+        for kawalek in re.split(r"[\s:'\"]+", linia):
+
+            szukany = kawalek.rstrip(":")
+            nazwa = szukany.split("/")[-1]
+
+            gdzie = _gdzie_zapisalismy.get(nazwa)
+
+            if gdzie and gdzie != szukany:
+                return (nazwa, gdzie)
+
+    return None
+
+
 def _track_project_path(path):
     """
     Zapisuje top-level katalog/plik pod $HOME (albo, dla ścieżek
@@ -2229,7 +2286,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v337")
+    print("             AEL-MINI AUTONOMOUS AGENT v338")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12166,6 +12223,7 @@ def termux_mkdir(path):
         p = _resolve_home_relative_path(path)
         p.mkdir(parents=True, exist_ok=True)
         _track_project_path(p)
+        _zapamietaj_gdzie(p)
         return {
             "ok": True,
             "path": str(p)
@@ -12208,6 +12266,29 @@ _ZMIENNA_HOME_RE = re.compile(
 )
 
 
+# v338: znak zachety powloki wklejony w sciezke.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13 12:44). MAIN podal
+# sciezke zapisu jako "termux:~/va_final.sh" — a "termux:~" to nie
+# katalog, tylko poczatek znaku zachety, ktory widac na ekranie
+# Termuksa. Wzielismy to doslownie i zalozylismy katalog o nazwie
+# "termux:~". Plik wyladowal w
+#
+#     /data/data/com.termux/files/home/termux:~/va_final.sh
+#
+# a `bash ~/va_final.sh` odpowiedzialo "No such file or directory".
+# W kroku 1 tego samego biegu to samo stalo sie z
+# "termux:~/voiceassist/" i "termux:~/assistant/server.py".
+#
+# Tylda nie rozwija sie w srodku slowa, a dwukropek nie jest
+# separatorem katalogow — wiec bash zrobil z tego nazwe pliku.
+# Czlowiek czyta to inaczej: widzi znak zachety i czyta sciezke od
+# tyldy. Tak samo czytamy to my.
+_ZNAK_ZACHETY_RE = re.compile(
+    r"^(?:[\w.@-]*:)?~?\s*[$#]\s+|^[\w.@-]+:(?=~)"
+)
+
+
 def _tresc_napisana_dla(p):
     """
     Tresc, ktora zespol napisal DLA TEGO PLIKU — i skad ja mamy.
@@ -12244,7 +12325,14 @@ def _tresc_napisana_dla(p):
 
 def _resolve_home_relative_path(path):
 
-    tekst = str(path or ".")
+    tekst = str(path or ".").strip()
+
+    # v338: zanim cokolwiek innego — zdejmujemy znak zachety powloki,
+    # gdy ktos wkleil go razem ze sciezka. Patrz _ZNAK_ZACHETY_RE.
+    _bez_zachety = _ZNAK_ZACHETY_RE.sub("", tekst, count=1).strip()
+
+    if _bez_zachety:
+        tekst = _bez_zachety
 
     # Najpierw zwykle rozwiniecie zmiennych — "$HOME/x", "${HOME}/x".
     try:
@@ -12432,6 +12520,7 @@ def termux_write_file(path, content, append=False):
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_text(_kod, encoding="utf-8")
                     _track_project_path(p)
+                    _zapamietaj_gdzie(p)
 
                 except Exception as _e:
                     return {
@@ -12559,6 +12648,7 @@ def termux_write_file(path, content, append=False):
             new_size = len(data.encode("utf-8"))
 
         _track_project_path(p)
+        _zapamietaj_gdzie(p)
 
         result = {
             "ok": True,
@@ -13698,6 +13788,7 @@ def _zglos_to_co_przybylo(przed):
 
         try:
             _track_project_path(HOME / nazwa)
+            _zapamietaj_gdzie(HOME / nazwa)
         except Exception:
             pass
 
@@ -14733,6 +14824,7 @@ def termux_run(command):
                     _sciezka.parent.mkdir(parents=True, exist_ok=True)
                     _sciezka.write_text(_tresc, encoding="utf-8")
                     _track_project_path(_sciezka)
+                    _zapamietaj_gdzie(_sciezka)
 
                 except Exception as _e:
                     return {
@@ -14794,6 +14886,30 @@ def termux_run(command):
                 }
 
         result = execute_shell(command_str)
+
+        # v338: "No such file or directory" na pliku, ktory sam
+        # zapisalem — mowie od razu, gdzie on lezy. Patrz
+        # _gdzie_to_jest(): bez tego wykonawca szuka go po calym
+        # dysku i pyta kolegow, jak obejsc nasz zapis.
+        if isinstance(result, dict):
+
+            _zgubiony = _gdzie_to_jest(
+                str(result.get("stdout") or "")
+                + "\n"
+                + str(result.get("stderr") or "")
+            )
+
+            if _zgubiony:
+
+                result["gdzie_ten_plik_jest"] = (
+                    _zgubiony[0] + " zapisałem tutaj: " + _zgubiony[1]
+                )
+
+                log(
+                    "TERMUX",
+                    _zgubiony[0] + " szukane nie tam, gdzie leży — "
+                    "jest w " + _zgubiony[1] + "."
+                )
 
         # v324: "termux-am" bez gniazda Termuksa nie uruchomi niczego.
         #
@@ -15719,6 +15835,7 @@ def termux_patch_file(path, search, replace):
             pass
 
     _track_project_path(target)
+    _zapamietaj_gdzie(target)
 
     return {
         "ok": True,
@@ -19891,9 +20008,32 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
 
     # 1. NAZWA NAD BLOKIEM — najmocniejszy sygnal, bo autor sam
     #    powiedzial, co to jest.
+    # v338: okno nad blokiem KONCZY SIE tam, gdzie konczy sie
+    # poprzedni blok.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13 12:44, krok 3).
+    # Bartek napisal dwa bloki ```bash```: caly skrypt (18 677
+    # znakow) i na samym koncu trzy linijki sprawdzenia (143 znaki).
+    # Skrypt konczyl sie tak:
+    #
+    #     chmod +x ~/va_final.sh
+    #     bash ~/va_final.sh 2>&1 | tee ~/va_final.log
+    #
+    # Czyli nazwa "va_final.sh" stala szescdziesiat znakow nad
+    # DRUGIM blokiem — ale W SRODKU PIERWSZEGO, tam gdzie plik jest
+    # URUCHAMIANY, a nie nazywany. Wygralo wiec sprawdzenie i Python
+    # zapisal do ~/va_final.sh 142 znaki `ls`/`tail` zamiast skryptu.
+    #
+    # Autor nazywa plik w PROZIE nad blokiem ("## Kod:
+    # `kalkulator.py`"). To, co napisal w poprzednim bloku, jest
+    # jego kodem, nie naglowkiem nastepnego.
+    koniec_poprzedniego = 0
+
     for m in bloki:
 
-        nad = text[max(0, m.start() - 400):m.start()]
+        nad = text[max(koniec_poprzedniego, m.start() - 400):m.start()]
+
+        koniec_poprzedniego = m.end()
 
         if nazwa in nad:
 
@@ -24886,6 +25026,29 @@ def _extract_answer_for_critic(text, fallback_limit=400):
     return short(" ".join(text.split()), fallback_limit)
 
 
+def _bez_blokow_kodu(tekst):
+    """
+    Proza bez ogrodzonych blokow ```...``` (v338).
+
+    Uzywane na streszczeniu Oli: to, po co do niej idziemy, to jedno
+    zdanie o tym, co sie stalo. Kod, ktory ewentualnie przepisala,
+    zespol i tak dostaje od autora.
+
+    Gdy po wycieciu nie zostaje nic sensownego, oddajemy tekst w
+    calosci — lepiej za duzo niz pustka.
+    """
+
+    t = str(tekst or "")
+
+    if "```" not in t:
+        return t
+
+    bez = re.sub(r"```[a-zA-Z0-9_+-]*\n.*?```", "", t, flags=re.DOTALL)
+    bez = re.sub(r"\n{3,}", "\n\n", bez).strip()
+
+    return bez if len(bez) >= 40 else t
+
+
 def _split_ola_translation_by_role(text):
 
     text = str(text or "")
@@ -25136,6 +25299,25 @@ def consult_team(
         # tozsamosci, ktora juz mowi, co Ola robi.
         raw_report_material
     )
+
+    # v338: streszczenie nie zawiera kodu.
+    #
+    # ZMIERZONE (bieg 2026-09-13 12:44, v337). Od kiedy Ola nie ma
+    # promtu, w KAZDYM z trzynastu krokow oddala blok ```...```, a
+    # jej odpowiedzi urosly z ~400 znakow do 1671-13 946. W kroku 1
+    # zamiast streszczenia wyniku napisala wlasny plan techniczny z
+    # komendami do Termuksa.
+    #
+    # To jest koszt v337 i placi go caly zespol: jej odpowiedz idzie
+    # dalej jako CZYTELNY RAPORT, wiec kazdy dostawal drugi raz ten
+    # sam kod, ktory ma juz u Bartka i Tomka, zamiast jednego zdania
+    # o tym, co sie stalo.
+    #
+    # Nie mowimy jej o tym ani slowa — bierzemy to, po co do niej
+    # poszlismy. Streszczenie to proza; blok kodu w streszczeniu nie
+    # jest tlumaczeniem, tylko przepisaniem czegos, co i tak idzie
+    # wlasnym kanalem.
+    human_report = _bez_blokow_kodu(human_report)
 
     # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
     # zostawiamy zespołu bez niczego — wracamy do surowego zlepku.
@@ -32144,6 +32326,7 @@ Zwróć tylko JSON.
                     )
 
                     _track_project_path(target_path)
+                    _zapamietaj_gdzie(target_path)
 
                     # v190: to samo, co za chwilę wypiszemy w
                     # terminalu, MUSI dotrzeć też do zespołu
