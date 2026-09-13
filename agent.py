@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v334
+AEL-MINI AUTONOMOUS AGENT v335
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v334")
+    print("             AEL-MINI AUTONOMOUS AGENT v335")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2376,23 +2376,17 @@ def init_deepseek():
 # PROMPTY
 # ============================================================
 
-MAIN_PROMPT = r"""
-Jesteś MAIN — mózg agenta. Podejmujesz decyzje na podstawie celu,
-stanu i zespołu: Tomek/PLANNER planuje, Kamil/RESEARCHER sprawdza
-fakty w sieci, Marek/CRITIC ocenia krytycznie, Ola/BROWSER streszcza
-po ludzku, Bartek/ENGINEER pisze kod, Wojtek patrzy na cel jak zwykły
-człowiek i podrzuca świeży kierunek — gdy zespół od kilku kroków
-kręci się w kółko, masz prawo pójść jego drogą. Gemini wykonuje Twoje
-polecenia w Termux/Android/Chrome.
+MAIN_PROMPT = """
+Jesteś MAIN. Decydujesz, co dalej. Gemini wykonuje.
 
-Zwróć WYŁĄCZNIE JSON, jeden z:
+Odpowiadasz samym JSON-em, jednym z:
 
 {
   "type": "TASK",
   "reason": "...",
   "task": "...",
   "success_condition": "...",
-  "write_engineer_code_to": "ścieżka pliku, gdy ENGINEER dał gotowy kod w ```...```"
+  "write_engineer_code_to": "ścieżka pliku albo puste"
 }
 
 {
@@ -2409,40 +2403,19 @@ Zwróć WYŁĄCZNIE JSON, jeden z:
   "type": "NEED_USER_LOGIN",
   "reason": "...",
   "url": "pełny adres http(s) albo puste",
-  "instructions": "co dokładnie użytkownik ma zrobić"
+  "instructions": "..."
 }
 
 {
   "type": "ASK",
   "ask_role": "jedna z: PLANNER, ENGINEER, RESEARCHER, CRITIC, BROWSER",
-  "ask_question": "konkretne pytanie"
+  "ask_question": "..."
 }
-
-Dwie rzeczy o polu "task", raz na początku:
-
-Trafia ONO WPROST do Gemini, które czyta je jak wiadomość od
-człowieka. Pisz je więc swoimi słowami, jakbyś prosił kogoś o
-przysługę — z notatek zespołu i nagłówków Bartka wyciągnij samo
-sedno.
-
-Jeżeli Bartek podał gotowy kod w bloku ```...```, a zadanie polega na
-zapisaniu go do pliku — podaj ścieżkę w "write_engineer_code_to" i
-niech "task" dotyczy samego uruchomienia tego pliku. Kod Python
-zapisze sam, w całości, więc Gemini nie musi go przepisywać.
 """
 
 
 PLANNER_PROMPT = """
-Nazywasz się Tomek. Planujesz — jeden konkretny następny krok
-(max 3 kroki naprzód) do realizacji celu w Termux/Android/Chrome.
-Twoja robota kończy się na propozycji, a wykonuje ją Gemini: samo
-klika po ekranie telefonu, wpisuje komendy w Termuksie, otwiera
-aplikacje i czyta wynik. Piszesz więc krok dla niego.
-
-Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — Bartek pisze kod i komendy, Marek ocenia plan,
-Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
-("Kamilu: ...").
+Nazywasz się Tomek. Planujesz następny krok, a wykonuje go Gemini.
 """
 
 
@@ -2471,36 +2444,17 @@ Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
 # robota.
 RESEARCHER_PROMPT = """
 Nazywasz się Kamil. Sprawdzasz fakty.
-
-Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
-Marek ocenia plan, Wojtek patrzy na cel po ludzku ("Tomku: ...").
 """
 
 
 CRITIC_PROMPT = """
-Nazywasz się Marek. Oceniasz plan Tomka — błędy, ryzyka, brakujące
-dowody — opierając się na tym, co faktycznie widać w stanie i w
-checkliście. Gdy plan jest w porządku, powiedz to krótko i puść go
-dalej. Gdy coś jest naprawdę nie tak, powiedz wprost co i dlaczego —
-to zatrzymuje zespół, więc waż to spokojnie.
-
-Gdy Twoje zastrzeżenie jest w istocie pytaniem do Tomka albo Bartka,
-zapytaj ich wprost.
-
-Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
-Kamil sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
-("Tomku: ...").
+Nazywasz się Marek. Oceniasz plan Tomka.
 """
 
 
 
-CODE_REVIEWER_PROMPT = r"""
-Nazywasz się Piotr. Analizujesz kod, a poprawia go Ania (CODE_FIXER)
-na podstawie Twojej analizy. Pracuj na rzeczywistym pliku, tym, który
-faktycznie dostałeś: znajdź dokładne miejsce problemu i jego
-przyczynę, zaproponuj minimalną poprawkę.
+CODE_REVIEWER_PROMPT = """
+Nazywasz się Piotr. Analizujesz kod, a poprawia go Ania.
 """
 
 
@@ -2520,68 +2474,25 @@ przyczynę, zaproponuj minimalną poprawkę.
 # extract_search_replace_blocks() rozumie trzy ksztalty: nasze stare
 # znaczniki, zwykly unified diff i dwa bloki opisane slowami.
 # Zostaje imie i robota.
-CODE_FIXER_PROMPT = r"""
-Nazywasz się Ania. Naprawiasz kod — najmniejszą zmianą, na tym, co
-dostałaś. Gdy bezpiecznej poprawki nie ma, powiedz to.
+CODE_FIXER_PROMPT = """
+Nazywasz się Ania. Naprawiasz kod.
 """
 
 
 BROWSER_PROMPT = """
-Nazywasz się Ola. Przerabiasz surowe dane — wyniki narzędzi, raporty
-Gemini, wypowiedzi zespołu — na normalny, ludzki język, jak ktoś
-opowiadający koledze co się stało (1-3 zdania). Krótko, bez żargonu i
-nazw narzędzi, chyba że naprawdę potrzebne do sensu. Zostajesz przy
-samych faktach: ocenianie należy do Marka, decyzje do MAIN-a, a
-wykonanie do Gemini. Gdy dostaniesz stan Chrome, oceń dodatkowo, czy
-karty mają sens względem celu.
-
-Jeśli coś w materiale ma znaczenie tylko dla jednej osoby z zespołu,
-dopisz to na końcu, zaczynając linię jej imieniem — "Tomku: ...",
-"Kamilu: ...", "Marku: ...", "Bartku: ..." — wtedy, gdy naprawdę
-jest taka rzecz. Wojtek zajmuje się samym celem, więc szczegóły
-techniczne zostaw poza tymi liniami.
+Nazywasz się Ola. Przerabiasz surowe dane na normalny, ludzki język.
 """
 
 
 ENGINEER_PROMPT = """
-Nazywasz się Bartek. Jesteś specjalistą technicznym zespołu — piszesz
-kod i polecenia realizujące plan Tomka, w Termux/Android/Chrome
-(gra, aplikacja, skrypt, automatyzacja — cokolwiek wymaga cel).
-Gotowy kod/skrypt podawaj w bloku ```...``` — MAIN może go zapisać
-do pliku bezpośrednio, bez zużycia Gemini na przepisywanie.
-
-Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — Tomek planuje krok, Marek ocenia plan, Kamil
-sprawdza fakty w sieci, Wojtek patrzy na cel po ludzku
-("Kamilu: ...").
+Nazywasz się Bartek. Piszesz kod i komendy.
 """
 
 
 PROGRESS_ESTIMATOR_PROMPT = """
-Nazywasz się Ela. Ktoś pyta Cię, ile z celu jest już naprawdę
-zrobione, a Ty patrzysz na to trzeźwo i mówisz liczbę.
+Nazywasz się Ela. Mówisz, ile z celu jest naprawdę zrobione.
 
-Materiał, który dostajesz, jest trzech rodzajów i wart jest różnie:
-
-Relacje Gemini o własnej pracy — pisane przez wykonawcę o sobie
-samym, więc bywają optymistyczne.
-
-To, co Python sprawdził albo zobaczył sam: punkty potwierdzone
-dowodem (plik leży na dysku, tekst faktycznie był na ekranie) oraz
-lista wywołań narzędzi, które naprawdę się wykonały i zwróciły
-wynik. To jest twardy grunt — udane wywołanie znaczy, że coś się
-naprawdę wydarzyło, nawet jeśli nic po sobie nie zostawiło na dysku. Wiele celów tak właśnie wygląda: rozmowa, kliknięcie,
-wysłana wiadomość nie zostawiają pliku, a jednak się wydarzyły.
-
-Stan ekranu teraz. Telefon żyje własnym życiem między krokami —
-aplikacje się zamykają, ekran gaśnie — więc zniknięcie czegoś
-przejściowego (otwarty kalkulator, okno dialera) nie cofa postępu.
-Na ekranie szukasz tego, co ma zostać widoczne do końca.
-
-Zapisany plik to jeszcze nie działający cel. Powtarzające się błędy
-bez ruchu do przodu też coś mówią.
-
-Odpowiadasz samym JSON-em, bez niczego wokół:
+Odpowiadasz samym JSON-em:
 {
   "percent": <liczba całkowita 0-100>,
   "summary": "dwa zdania po polsku, dlaczego tyle"
@@ -2590,15 +2501,7 @@ Odpowiadasz samym JSON-em, bez niczego wokół:
 
 
 WOJTEK_PROMPT = """
-Nazywasz się Wojtek. Pomysłowy znajomy, do którego ktoś przychodzi z
-zadaniem — dostajesz TYLKO cel, bez szczegółów technicznych. Zaproponuj
-gotowe rozwiązania (apka/usługa/strona, jeśli istnieje), inne
-podejścia, albo pytania, które warto sobie zadać. Kod i komendy
-zostaw Bartkowi. Krótko, zwykłym tekstem, bez sztywnych sekcji.
-
-Gdy chcesz coś powiedzieć komuś z zespołu wprost, zacznij linię
-jego imieniem — Tomek planuje krok, Bartek pisze kod i komendy,
-Marek ocenia plan, Kamil sprawdza fakty w sieci ("Kamilu: ...").
+Nazywasz się Wojtek. Dostajesz sam cel i mówisz, jak Ty byś to zrobił.
 """
 
 
@@ -3541,19 +3444,10 @@ _ostatnie_pytanie = {}
 
 # Krotkie zaczepki na sytuacje, ktora sie nie zmienila. Czlowiek nie
 # powtarza calego pytania po raz dwudziesty — mowi imie i patrzy.
-_KROTKIE_ZACZEPKI = {
-    "PLANNER": ["\n\nTomku?", "\n\nTomku — co dalej?",
-                "\n\nTomku, Twoja kolej."],
-    "CRITIC": ["\n\nMarku?", "\n\nMarku — jak to widzisz?",
-               "\n\nMarku, co Ty na to?"],
-    "ENGINEER": ["\n\nBartku?", "\n\nBartku — da się?",
-                 "\n\nBartku, Twoja działka."],
-    # v311: nie ma tu juz "sprawdzisz w sieci?" — patrz _pytanie_do().
-    "RESEARCHER": ["\n\nKamilu?", "\n\nKamilu — co znalazłeś?",
-                   "\n\nKamilu, masz coś?"],
-    "WOJTEK": ["\n\nWojtku?", "\n\nWojtku — masz pomysł?",
-               "\n\nWojtku, a Ty jak byś to zrobił?"],
-}
+# v335: pusto. Rotujace zaczepki ("Tomku, Twoja kolej.") byly
+# najczystszym szablonem, jaki tu mielismy — trzy zdania na role,
+# wybierane po numerze kroku.
+_KROTKIE_ZACZEPKI = {}
 
 
 def _pytanie_do(rola, last_result, critic_objection=False):
@@ -3592,76 +3486,33 @@ def _pytanie_do(rola, last_result, critic_objection=False):
 
 
 def _pytanie_pelne(rola, last_result, critic_objection=False):
-    """Pytanie wynikajace z samej sytuacji, bez pamieci o powtorkach."""
+    """
+    Nic. Od v335 nie dopisujemy do niczyjej wiadomosci wlasnego
+    pytania.
 
-    blad = (
-        isinstance(last_result, dict)
-        and (
-            last_result.get("ok") is False
-            or last_result.get("status") in (
-                "GEMINI_TOOL_ERROR", "TOOL_LIMIT", "FAILED"
-            )
-        )
-    )
+    Uzytkownik wkleil, co realnie szlo do Kamila (bieg 2026-09-13
+    11:57). Wojtek napisal do niego wprost, swoimi slowami:
 
-    if rola == "PLANNER":
-        if critic_objection:
-            return (
-                "\n\nTomku — Marek ma do tego zastrzeżenie (wyżej). "
-                "Co z nim robimy?"
-            )
-        if blad:
-            return (
-                "\n\nTomku — co robimy zamiast tego, co się właśnie "
-                "wywaliło? Jeden krok."
-            )
-        return "\n\nTomku — jaki jest następny krok? Tylko jeden."
+        Kamilu: sprawdz aktualne ograniczenia Android call audio
+        injection, polityke Google Play i czy Vapi/Retell/Twilio
+        Media Streams dzialaja w Polsce oraz jakie sa koszty.
 
-    if rola == "CRITIC":
-        return (
-            "\n\nMarku — co sądzisz o tym kroku? Jeśli coś jest nie "
-            "tak, powiedz co konkretnie."
-        )
+    a my dokleilismy pod tym swoje: "Kamilu — co o tym wiadomo?".
+    Czyli obok prawdziwego pytania kolegi postawilismy wlasne, o
+    niczym. Uzytkownik: "mialo byc bez szablonow itp a tu nadal sa
+    (...) usun wszystkie promty".
 
-    if rola == "ENGINEER":
-        if blad:
-            return (
-                "\n\nBartku — naprawisz to? Jeśli da się prościej "
-                "niż dotąd, powiedz jak."
-            )
-        return (
-            "\n\nBartku — da się to zrobić? Jeśli tak, pokaż jak; "
-            "jeśli prościej inaczej, powiedz."
-        )
+    To samo dotyczylo pozostalych: "Tomku — jaki jest nastepny
+    krok? Tylko jeden.", "Marku — co sadzisz o tym kroku?", "Bartku
+    — da sie?" i rotujacych zaczepek ("Tomku, Twoja kolej.").
+    Kazde z nich bylo zdaniem, ktorego nikt z zespolu nie napisal.
 
-    if rola == "RESEARCHER":
-        # Pytamy go tak, jak pyta sie kogos, kto ma pod reka
-        # wyszukiwarke — o swiat, nie o nasza maszynownie. Stare
-        # "czego nam tu brakuje?" bylo pytaniem o NAS i tak wlasnie
-        # odpowiadal: bilansem naszych brakow zamiast sprawdzonego
-        # faktu.
-        #
-        # v311: i nie mowimy mu juz "sprawdz W SIECI". Uzytkownik:
-        # "nie trzeba mu mowic sprawdz w sieci, on sam to znajdzie
-        # (...) wystarczy, ze ma to w pierwszym prompcie, bo on
-        # mowi, ze nie szuka w sieci, a on moze szukac i on sam
-        # sobie tego nie wlacza — on ma to wlaczone".
-        #
-        # Ma racje i to jest ten sam blad, co w prompcie z v308:
-        # gadalismy do niego ustawieniem. Czlowiek, ktory ma pod
-        # reka wyszukiwarke, dostaje PYTANIE, a nie polecenie, zeby
-        # jej uzyl. Trzy zdania nizej robily z tego temat rozmowy —
-        # i w logach Kamil zaczynal od tlumaczenia sie, czy szuka,
-        # czy nie szuka, zamiast odpowiedziec.
-        if blad:
-            return "\n\nKamilu — jak się to robi poprawnie?"
-        return "\n\nKamilu — co o tym wiadomo?"
-
-    if rola == "WOJTEK":
-        return "\n\nWojtku — masz na to jakiś prostszy pomysł?"
+    Zostaje to, co ludzie naprawde do siebie mowia, i stan rzeczy.
+    Funkcja zostaje, bo wola ja kilka miejsc — i zostaje po to, zeby
+    bylo widac, ze tu SWIADOMIE nie ma nic.
+    """
 
     return ""
-
 
 def _current_topic(last_result, critic_streak):
     """
@@ -3824,12 +3675,10 @@ def _goal_briefing_for(name):
 
     _goal_briefed.add(name)
 
-    return (
-        "CEL, nad którym pracujemy:\n"
-        + _current_goal_text
-        + "\n\n(Mówię to raz, na początku — dalej rozmawiamy "
-        "normalnie i nie będę tego powtarzać.)\n\n"
-    )
+    # v335: sam cel, jego slowami. "CEL, nad ktorym pracujemy:" i
+    # "(Mowie to raz, na poczatku...)" to byly nasze zdania o naszej
+    # rozmowie — czyli dokladnie ten szablon, ktorego nie chcemy.
+    return _current_goal_text + "\n\n"
 
 
 def _load_session_state(name):
@@ -24695,20 +24544,13 @@ def _role_inbox_block(role_name):
     # Zostaje sama tresc: kto co do kogo powiedzial.
     for nadawca, tresc in gotowe:
 
+        # v335: sam podpis i tresc, jak w kazdej rozmowie. Gdy
+        # tresc siedzi juz w wypowiedzi kolegi obok, nie mamy nic
+        # do dodania i nie dodajemy nic.
         if tresc is None:
-            lines.append(
-                nadawca + " napisał to wprost do Ciebie — masz to "
-                "w jego wypowiedzi."
-            )
+            continue
 
-        else:
-            # "Tomek i Marek MÓWIĄ", nie "mówi" — to jedno slowo,
-            # ale bez niego zdanie brzmi jak z automatu.
-            lines.append(
-                nadawca
-                + (" mówią" if " i " in nadawca else " mówi")
-                + " do Ciebie: " + tresc
-            )
+        lines.append(nadawca + ":\n" + tresc)
 
     # v312: ilu kolegow realnie zwrocilo sie do niego w tym kroku.
     # Gdy zrobilo to kilka osob, nasze wlasne pytanie na koncu
@@ -25221,7 +25063,9 @@ def consult_team(
     # a więc musi ją znać od początku, nie dowiadywać się co krok.
     human_report = deepseek(
         "BROWSER",
-        "Streść to:\n\n" + raw_report_material
+        # v335: sam material. "Streść to:" bylo poleceniem obok
+        # tozsamosci, ktora juz mowi, co Ola robi.
+        raw_report_material
     )
 
     # Jeśli tłumaczenie się nie powiodło (pusta odpowiedź), nie
@@ -25803,7 +25647,10 @@ def consult_team(
             # dostarcza teraz _goal_briefing_for() przy pierwszej
             # wiadomosci do roli, a stary tekst Wojtka nadal wklejal
             # go po raz drugi. Zostaje samo pytanie.
-            wojtek_context = "Podziel się swoimi pomysłami."
+            # v335: sam cel. Wyzej i tak doklejamy jego tresc, a
+            # "Podziel sie swoimi pomyslami" to bylo nasze zdanie o
+            # tym, jak ma odpowiedziec.
+            wojtek_context = ""
 
         else:
 
@@ -25829,12 +25676,11 @@ def consult_team(
 
                 answer_block = ""
 
-            wojtek_context = (
-                answer_block
-                + "Wracam do Ciebie w tej samej sprawie — masz jakieś "
-                "nowe pomysły, czy chcesz rozwinąć któryś z tych, o "
-                "których już mówiłeś?"
-            )
+            # v335: albo mamy dla niego cos prawdziwego (odpowiedz
+            # Kamila na to, o co pytal), albo nic. "Masz jakies nowe
+            # pomysly?" bylo zaczepka bez tresci — a czlowiek, ktory
+            # nie ma nic do powiedzenia, nie pisze.
+            wojtek_context = answer_block
 
         # v221: Wojtek jako jedyny nie przechodzi przez _team_context
         # (dostaje sam cel, bez technicznego tła — patrz komentarz
@@ -25842,10 +25688,23 @@ def consult_team(
         # tutaj. Bez tego byłby jedyną osobą, do której można napisać,
         # a która nigdy tego nie przeczyta — czyli dokładnie ten sam
         # brak kanału, który naprawiamy.
-        results["WOJTEK"] = deepseek(
-            "WOJTEK",
-            _role_inbox_block("WOJTEK") + wojtek_context
+        _do_wojtka = _role_inbox_block("WOJTEK") + wojtek_context
+
+        # v335: skoro zniknela zaczepka bez tresci, moze sie zdarzyc,
+        # ze nie mamy do niego nic. Wtedy do niego nie piszemy — tak
+        # samo, jak nie pisze sie do kogos po to, zeby napisac.
+        #
+        # Cel jest tresc: doklada go deepseek() przy pierwszej
+        # wiadomosci do tej roli (_goal_briefing_for), wiec dopoki
+        # Wojtek go nie dostal, mamy po co pisac.
+        consult_wojtek = bool(
+            _do_wojtka.strip()
+            or (_current_goal_text and "WOJTEK" not in _goal_briefed)
         )
+
+    if consult_wojtek:
+
+        results["WOJTEK"] = deepseek("WOJTEK", _do_wojtka)
 
         _role_response_cache["WOJTEK"] = results["WOJTEK"]
         _collect_role_messages("WOJTEK", results["WOJTEK"])
@@ -25895,7 +25754,7 @@ def consult_team(
             # im nie tlumaczy, co maja z nia zrobic. Kamil dostaje
             # teraz to samo.
             _od_kolegi(
-                "\nWojtek podrzucił:\n",
+                "\nWojtek:\n",
                 results.get("WOJTEK", ""), "RESEARCHER",
                 "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
             )
@@ -26013,7 +25872,7 @@ def consult_team(
                 _only_if_new(
                     "PLANNER", "od_kamila",
                     _od_kolegi(
-                        "\nKamil ustalił:\n",
+                        "\nKamil:\n",
                         results.get("RESEARCHER", ""), "PLANNER",
                         "Kamil (RESEARCHER)", LIMIT_BEZPIECZENSTWA, "RESEARCHER"
                     )
@@ -26021,7 +25880,7 @@ def consult_team(
                 + _only_if_new(
                     "PLANNER", "od_wojtka",
                     _od_kolegi(
-                        "\nWojtek podrzucił:\n",
+                        "\nWojtek:\n",
                         results.get("WOJTEK", ""), "PLANNER",
                         "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
                     )
@@ -26148,7 +26007,7 @@ def consult_team(
                 + _only_if_new(
                     "ENGINEER", "od_kamila",
                     _od_kolegi(
-                        "\nKamil ustalił:\n",
+                        "\nKamil:\n",
                         results.get("RESEARCHER", ""), "ENGINEER",
                         "Kamil (RESEARCHER)", LIMIT_BEZPIECZENSTWA, "RESEARCHER"
                     )
@@ -26156,7 +26015,7 @@ def consult_team(
                 + _only_if_new(
                     "ENGINEER", "od_wojtka",
                     _od_kolegi(
-                        "\nWojtek podrzucił:\n",
+                        "\nWojtek:\n",
                         results.get("WOJTEK", ""), "ENGINEER",
                         "Wojtek", LIMIT_BEZPIECZENSTWA, "WOJTEK"
                     )
@@ -26857,7 +26716,7 @@ tym kroku dopytać jedną osobę:
         ("Marek ocenia:", team.get("critic", "")),
         ("Marek zgłosił zastrzeżenie i dostał odpowiedź:", _exchange),
         ("Ola streszcza:", team.get("browser", "")),
-        ("Wojtek podrzucił:", team.get("wojtek", "")),
+        ("Wojtek:", team.get("wojtek", "")),
     ):
 
         if str(_tekst or "").strip():
