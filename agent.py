@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v331
+AEL-MINI AUTONOMOUS AGENT v332
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v331")
+    print("             AEL-MINI AUTONOMOUS AGENT v332")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14765,6 +14765,39 @@ def termux_run(command):
 
             return bg
 
+        # v332: polecenie, ktore otwiera sie na pelnym ekranie i
+        # czeka na klawisz — w procesie bez terminala wisi do konca
+        # limitu i nie wypisuje nic.
+        #
+        # Uzytkownik pokazal, ze DeepSeek podaje to zupelnie
+        # naturalnie: "nano kalkulator.py  # wklej kod, zapisz
+        # Ctrl+O, wyjdz Ctrl+X". To jest dobra instrukcja DLA
+        # CZLOWIEKA i zla dla nas — a my mamy tresc tej komendy przed
+        # uruchomieniem, wiec nie musimy tracic na nia calego kroku.
+        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(command_str)
+
+        if _dla_czlowieka:
+
+            _nazwa = _dla_czlowieka.group(1)
+
+            log(
+                "TERMUX",
+                "`" + _nazwa + "` czeka na klawisz, a tu nie ma "
+                "klawiatury — nie uruchamiam tego."
+            )
+
+            return {
+                "ok": False,
+                "error": (
+                    "`" + _nazwa + "` otwiera się na pełnym ekranie i "
+                    "czeka, aż ktoś naciśnie klawisz. Ten proces nie "
+                    "ma terminala ani klawiatury, więc taka komenda "
+                    "stoi do końca limitu i nic nie wypisuje."
+                ),
+                "command": command_str,
+                "czeka_na_czlowieka": _nazwa
+            }
+
         result = execute_shell(command_str)
 
         # v324: "termux-am" bez gniazda Termuksa nie uruchomi niczego.
@@ -17058,8 +17091,31 @@ _NO_SUCH_FILE_RE = re.compile(
 # miejscu, gdzie nikogo nie ma. Wylapujemy to ZANIM skrypt ruszy i
 # mowimy wprost, ktora droga dane od czlowieka faktycznie dochodza
 # (NEED_USER_LOGIN -> plik user_provided_value.txt).
+# v332: `input()` czeka na czlowieka dokladnie tak samo jak `read`.
+#
+# Uzytkownik pokazal, co DeepSeek daje zapytany "zrob prosty
+# program": kalkulator zbudowany w calosci na input() — petla
+# "Wybierz operacje (+, -, *, /, q)", pobierz_liczbe() z input() w
+# srodku, i instrukcja "nano kalkulator.py, wklej kod".
+#
+# Taki plik zapisalibysmy 1:1 (sprawdzone: wybor bloku, skladnia i
+# wszyscy straznicy przepuszczaja go bez zarzutu), a potem Gemini
+# uruchomiloby go i CZEKALO do timeoutu, bo przy klawiaturze nikogo
+# nie ma. Wzorzec lapal tylko powlokowe `read`.
 _INTERACTIVE_SCRIPT_RE = re.compile(
-    r"^\s*read\s+(-[a-zA-Z]+\s+)*", re.MULTILINE
+    r"^\s*read\s+(-[a-zA-Z]+\s+)*"
+    r"|(?<![\w.])input\s*\(",
+    re.MULTILINE
+)
+
+
+# Polecenia, ktore z natury otwieraja sie na pelnym ekranie i czekaja,
+# az czlowiek nacisnie klawisz. W procesie bez terminala wisza do
+# konca limitu i nie wypisuja nic (v332).
+_POLECENIE_DLA_CZLOWIEKA_RE = re.compile(
+    r"^\s*(nano|pico|vim?|emacs|joe|mcedit|less|more|top|htop|man)"
+    r"(\s|$)",
+    re.MULTILINE
 )
 
 
@@ -17134,26 +17190,26 @@ def _detect_interactive_script(text):
     Zwraca opis problemu albo "" gdy skrypt jest samodzielny.
     """
 
-    body = str(text or "")
+    # Linie komentarza odpadaja: "# input() w komentarzu" to nie
+    # jest czekanie na czlowieka, tylko zdanie o czekaniu (v332).
+    body = "\n".join(
+        l for l in str(text or "").split("\n")
+        if not l.lstrip().startswith("#")
+    )
 
-    if not _INTERACTIVE_SCRIPT_RE.search(body):
+    _co = _INTERACTIVE_SCRIPT_RE.search(body)
+
+    if not _co:
         return ""
 
+    # v332: sam fakt. Co z nim zrobia — ich sprawa.
+    _czym = "input()" if "input" in _co.group(0) else "read"
+
     return (
-        "Ten skrypt PYTA CZLOWIEKA o dane (`read` w tresci), a "
-        "uruchamia go Gemini — proces BEZ KLAWIATURY I BEZ "
-        "TERMINALA. Nikt tam nic nie wpisze: `read` dostanie od razu "
-        "koniec wejscia, zmienne zostana puste i skrypt polegnie na "
-        "wlasnej walidacji (\"wszystkie pola sa wymagane\") albo "
-        "pojdzie dalej z pustymi wartosciami. To NIE jest blad "
-        "skladni ani srodowiska — to skrypt zaprojektowany dla "
-        "czlowieka siedzacego przy terminalu.\n\n"
-        "Dane od uzytkownika dochodza TYLKO jedna droga: MAIN zwraca "
-        "NEED_USER_LOGIN, uzytkownik podaje wartosc, Python zapisuje "
-        "ja do pliku, a skrypt CZYTA JA Z PLIKU albo ze zmiennej "
-        "srodowiskowej — bez zadnego `read`. Przerobcie skrypt tak, "
-        "zeby bral wartosci z pliku/zmiennych, i dopiero wtedy go "
-        "uruchamiajcie."
+        "Ten skrypt czeka, az ktos cos wpisze (" + _czym + " w "
+        "tresci). Uruchamia go proces bez klawiatury i bez "
+        "terminala, wiec wejscie konczy sie od razu: wartosci beda "
+        "puste albo skrypt stanie do konca limitu."
     )
 
 
