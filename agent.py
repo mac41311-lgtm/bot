@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v339
+AEL-MINI AUTONOMOUS AGENT v340
 
 ARCHITEKTURA:
 
@@ -2286,7 +2286,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v339")
+    print("             AEL-MINI AUTONOMOUS AGENT v340")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2618,7 +2618,12 @@ _kod_z_drugiej_reki = ""
 _kod_autorow = []
 
 # Ile ostatnich wypowiedzi autorow trzymamy.
-_PAMIEC_AUTOROW = 8
+#
+# v340: bylo 8, gdy do notatnika trafiali tylko Bartek i Ania.
+# ZMIERZONE (bieg 2026-09-13 12:44): kod pisali WSZYSCY — Marek 33
+# bloki, Tomek 38, Ola 41, Wojtek 34, Kamil 17, Piotr 7, a Bartek
+# 11. Skoro pamietamy teraz kazdego, notatnik musi byc glebszy.
+_PAMIEC_AUTOROW = 24
 
 
 def _zapamietaj_kod_autora(rola, tekst):
@@ -2645,14 +2650,78 @@ def _zapamietaj_kod_autora(rola, tekst):
         pass
 
 
-def _kod_autora_dla(sciezka):
+# v340: czyj kod ma trafic do pliku — przeczytane ze zdania.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13 12:44, krok 3).
+# MAIN napisal w zadaniu:
+#
+#     (2) Zapisz skrypt Marka jako `~/va_final.sh` (dokladnie ten z
+#         ostatniej odpowiedzi, z bind-mountem proot i poprawionym
+#         JAVA_HOME).
+#
+# Powiedzial wprost, CZYJ skrypt. My tego nie czytalismy w ogole —
+# lancuch zapisu zawsze zaczynal od Bartka. A Marka nawet nie bylo w
+# notatniku, bo trafiali do niego tylko Bartek i Ania.
+#
+# Uzytkownik: "mają swobodę, co wpisują do siebie — to mamy uczyć
+# się odczytywać i na tych danych operować".
+#
+# Tak wlasnie oni pisza. W tym samym biegu, w zwyklych zdaniach:
+#   "Bez powtarzania teorii, ktora juz masz od Tomka"
+#   "Budujesz apke jak Tomek opisal"
+#   "to juz poprawka do kodu — do Ani"
+#   "jeden realny bug, o ktorym mowil Piotr"
+#
+# Dopelniacz stoi tu obok slowa, ktore mowi, ze chodzi o TRESC
+# PLIKU ("skrypt", "kod", "wersja", "plik", "patch"). Samo imie w
+# zdaniu nie wystarcza — "jak Tomek opisal" to nie jest polecenie,
+# czyj plik zapisac.
+_CZYJ_KOD_IMIE = {
+    "TOMKA": "PLANNER", "TOMKOWI": "PLANNER",
+    "KAMILA": "RESEARCHER", "KAMILOWI": "RESEARCHER",
+    "MARKA": "CRITIC", "MARKOWI": "CRITIC",
+    "BARTKA": "ENGINEER", "BARTKOWI": "ENGINEER",
+    "WOJTKA": "WOJTEK", "WOJTKOWI": "WOJTEK",
+    "OLI": "BROWSER",
+    "ANI": "CODE_FIXER", "ANIA": "CODE_FIXER",
+    "PIOTRA": "CODE_REVIEWER", "PIOTROWI": "CODE_REVIEWER",
+    "ELI": "PROGRESS_ESTIMATOR",
+}
+
+_CZYJ_KOD_RE = re.compile(
+    r"(?:skrypt|kod|wersj\w*|plik|patch|poprawk\w*|blok)\w*\s+"
+    r"(?:od\s+)?("
+    + "|".join(sorted(_CZYJ_KOD_IMIE, key=len, reverse=True))
+    + r")(?![\w])",
+    re.IGNORECASE
+)
+
+
+def _czyj_kod(tekst):
     """
-    Kod TEGO pliku, napisany przez autora — Bartka albo Anie —
-    niekoniecznie w tym kroku. Zwraca (kod, rola, krok) albo None.
+    Kogo autor tego zdania wskazal jako autora pliku. Zwraca nazwe
+    roli albo "".
+    """
+
+    m = _CZYJ_KOD_RE.search(str(tekst or ""))
+
+    if not m:
+        return ""
+
+    return _CZYJ_KOD_IMIE.get(m.group(1).upper(), "")
+
+
+def _kod_autora_dla(sciezka, rola=None):
+    """
+    Kod TEGO pliku, napisany przez autora — niekoniecznie w tym
+    kroku. Zwraca (kod, rola, krok) albo None.
 
     Warunek jest ostry: wypowiedz musi WYMIENIAC nazwe tego pliku.
     Bez tego wzielibysmy blok z zupelnie innego pliku tylko dlatego,
     ze byl ostatni.
+
+    v340: gdy podano role, szukamy TYLKO u tej osoby — bo ktos
+    powiedzial wprost, czyj to ma byc kod ("zapisz skrypt Marka").
     """
 
     nazwa = Path(str(sciezka or "")).name
@@ -2661,6 +2730,9 @@ def _kod_autora_dla(sciezka):
         return None
 
     for wpis in reversed(_kod_autorow):
+
+        if rola and wpis["rola"] != str(rola):
+            continue
 
         if nazwa not in wpis["tekst"]:
             continue
@@ -12311,10 +12383,21 @@ def _tresc_napisana_dla(p):
     zadane innymi slowami: ten plik ma miec te tresc.
     """
 
-    z_pamieci = _kod_autora_dla(p)
+    # v340: gdy ktos powiedzial wprost, CZYJ to ma byc kod, to
+    # rozstrzyga — przed wszystkim innym. Patrz _czyj_kod():
+    # "Zapisz skrypt Marka jako ~/va_final.sh" (bieg 2026-09-13
+    # 12:44, krok 3). Dotad szedl tam kod Bartka.
+    wskazany = _czyj_kod(_tresc_zadania_teraz)
+
+    u_wskazanego = (
+        _kod_autora_dla(p, wskazany) if wskazany else None
+    )
+
+    z_pamieci = u_wskazanego or _kod_autora_dla(p)
 
     kod = (
-        extract_code_block(_kod_bartka_teraz or "", p)
+        (u_wskazanego[0] if u_wskazanego else None)
+        or extract_code_block(_kod_bartka_teraz or "", p)
         or (z_pamieci[0] if z_pamieci else None)
         or extract_code_block(_tresc_zadania_teraz or "", p)
         or _kod_z_heredoca(_tresc_zadania_teraz, p)
@@ -26600,7 +26683,17 @@ def consult_team(
     # _kod_autorow. Kod Bartka nie ma znikac tylko dlatego, ze w
     # nastepnej naradzie rozmawiali inni.
     if consult_engineer:
-        _zapamietaj_kod_autora("ENGINEER", results.get("ENGINEER", ""))
+        # v340: notatnik autorow to juz nie "Bartek i Ania".
+        #
+        # ZMIERZONE (bieg 2026-09-13 12:44): bloki kodu napisali
+        # wszyscy — Ola 41, Tomek 38, Wojtek 34, Marek 33, Kamil 17,
+        # Piotr 7, Bartek 11, Ania 8. A MAIN poprosil o zapis
+        # "skryptu Marka", ktorego w notatniku nie bylo w ogole.
+        #
+        # Nie mowimy nikomu, zeby pisal albo nie pisal kodu —
+        # czytamy to, co napisali.
+        for _kto, _co in results.items():
+            _zapamietaj_kod_autora(_kto, _co)
 
     if consult_engineer:
         # Bartek wlasnie widzial stan pliku — powod do wolania go
