@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v343
+AEL-MINI AUTONOMOUS AGENT v344
 
 ARCHITEKTURA:
 
@@ -2292,7 +2292,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v343")
+    print("             AEL-MINI AUTONOMOUS AGENT v344")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3193,9 +3193,15 @@ def _bez_maszynowni_dla(rola):
 
 # "[NIEAKTUALNE — X nie byl pytany w tym kroku, ponizej jego
 # ostatnia znana odpowiedz]" — dopisek Pythona, nie tresc autora.
+# v344: znacznik nie mowi juz, jak dziala program — jest zwyklym
+# podpisem z czasem ("Bartek, wcześniej:"). Ale odcisk liczymy dalej
+# BEZ niego, bo inaczej wraca blad z v-tej samej notatki nizej:
+# ten sam plan szedl drugi raz tylko dlatego, ze doklejalismy do
+# niego podpis.
 _ZNACZNIK_NIEAKTUALNE_RE = re.compile(
-    r"\[NIEAKTUALNE[^\]]*\]\s*",
-    re.IGNORECASE
+    r"\[NIEAKTUALNE[^\]]*\]\s*"
+    r"|^[A-ZŁŚŻŹĆÓĘĄŃ][a-ząćęłńóśźż]+,\s*wcześniej:\s*",
+    re.IGNORECASE | re.MULTILINE
 )
 
 
@@ -25821,7 +25827,7 @@ def consult_team(
     # _main_decision_for_team. Bez tego zespół proponuje w próżnię:
     # nie wie, czy jego plan został użyty, zmieniony, czy odrzucony.
     main_decision_block = (
-        "\nPo ostatniej naradzie MAIN zdecydował tak:\n"
+        "\nMAIN:\n"
         + _main_decision_for_team
         + "\n"
     ) if _main_decision_for_team else ""
@@ -26375,8 +26381,7 @@ def consult_team(
         )
 
         results["WOJTEK"] = (
-            "[NIEAKTUALNE — WOJTEK nie był pytany w tym kroku, "
-            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            "Wojtek, wcześniej:\n"
             + _role_response_cache.get(
                 "WOJTEK",
                 "(WOJTEK nie był jeszcze konsultowany.)"
@@ -26454,8 +26459,7 @@ def consult_team(
         )
 
         results["RESEARCHER"] = (
-            "[NIEAKTUALNE — RESEARCHER nie był pytany w tym "
-            "kroku, poniżej jego ostatnia znana odpowiedź]\n\n"
+            "Kamil, wcześniej:\n"
             + _role_response_cache.get(
                 "RESEARCHER",
                 "(RESEARCHER nie był jeszcze konsultowany.)"
@@ -26510,8 +26514,7 @@ def consult_team(
         )
 
         results["PLANNER"] = (
-            "[NIEAKTUALNE — Tomek nie był pytany w tym kroku, "
-            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            "Tomek, wcześniej:\n"
             + _role_response_cache.get(
                 "PLANNER", "(Tomek nie zabierał jeszcze głosu.)"
             )
@@ -26578,8 +26581,7 @@ def consult_team(
         )
 
         results["BROWSER"] = (
-            "[NIEAKTUALNE — BROWSER nie był pytany w tym kroku, "
-            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            "Ola, wcześniej:\n"
             + _role_response_cache.get(
                 "BROWSER",
                 "(BROWSER nie był jeszcze konsultowany.)"
@@ -26640,8 +26642,7 @@ def consult_team(
         )
 
         results["ENGINEER"] = (
-            "[NIEAKTUALNE — Bartek nie był pytany w tym kroku, "
-            "poniżej jego ostatnia znana odpowiedź]\n\n"
+            "Bartek, wcześniej:\n"
             + _role_response_cache.get(
                 "ENGINEER", "(Bartek nie zabierał jeszcze głosu.)"
             )
@@ -27175,10 +27176,13 @@ def main_decide(
             '  właśnie się do niego odniósł, ich odpowiedzi masz w tym\n'
             '  kroku. Decydujesz jeszcze raz, już z tym, co powiedzieli.'
         ),
-        "COMPLETED": (
-            'Gemini wykonał blok i napisał raport. Cały cel bywa gotowy\n'
-            '  później niż pojedynczy blok — przeczytaj raport i oceń sam.'
-        ),
+        # v344: bylo tu "Gemini wykonal blok i napisal raport. Caly
+        # cel bywa gotowy pozniej niz pojedynczy blok — przeczytaj
+        # raport i ocen sam". Dwa zdania o tym, JAK DZIALA PROGRAM,
+        # plus polecenie. Raport i tak jest ponizej.
+        #
+        # Uzytkownik: "nie piszemy systemu, jak dziala — maja
+        # wiedziec: napisz kod, a drugi znajdz w internecie".
     }
 
     _current_status = (
@@ -27422,13 +27426,11 @@ tym kroku dopytać jedną osobę:
     # ("Poprzednia odpowiedz nie byla poprawnym JSON") niesie
     # format ze soba. Kod reaguje na to, co sie stalo, zamiast
     # przypominac na zapas.
-    _format_block = _only_if_new(
-        "MAIN",
-        "format",
-        "\nZdecyduj i odpowiedz samym JSON-em — formaty "
-        "(TASK/DONE/FAILED/NEED_USER_LOGIN/ASK) masz w swoim "
-        "prompcie systemowym.\n"
-    )
+    # v344: bylo tu zdanie o tym, ze ma odpowiedziec JSON-em i ze
+    # formaty "masz w swoim prompcie systemowym". Ksztalt dostal w
+    # pierwszej wiadomosci; promptu systemowego nie ma od v337, a
+    # sciezka naprawcza po zlym JSON-ie i tak niesie format ze soba.
+    _format_block = ""
 
     # v341: MAIN tez musi wiedziec, co powiedzial uzytkownik —
     # to on decyduje, czy jeszcze raz kazac sprawdzac instalacje.
@@ -28737,7 +28739,17 @@ _team_file_pytania = []
 # NIE MA zadnego sprawdzenia typu if [ -n $BEAT_NUM ]", oceniajac
 # plik, ktorego srodka nigdy nie widzial. Typowy skrypt miesci sie
 # w calosci ponizej tego progu.
-_FILE_ANSWER_MAX = 3000
+# v344: kto prosi o plik, dostaje plik.
+#
+# Uzytkownik: "jak ktos potrzebuje kodu i to napisze, to mu sie to
+# wysyla lub chce zobaczyc efekt, bo oni nie maja fizycznie dostepu
+# do telefonu".
+#
+# Bylo 3000 znakow — czyli skrypt na 18 676 znakow, o ktory ktos
+# poprosil WPROST, wracal ucieta polowa. Od v343 kod nie jedzie juz
+# w wypowiedziach, wiec to jest teraz JEDYNA droga, zeby go
+# zobaczyc. Musi dowozic calosc.
+_FILE_ANSWER_MAX = 60000
 
 
 def _file_answer_body(p):
@@ -28769,11 +28781,9 @@ def _file_answer_body(p):
             + tresc
         )
 
+    # v344: sam fakt, bez rady, co z nim zrobic.
     return (
-        "JEST (" + str(size) + " B). Pokazuję początek i koniec — "
-        "ŚRODEK ZOSTAŁ POMINIĘTY, więc nie twierdź, że czegoś w tym "
-        "pliku nie ma; jeśli szukasz konkretnej linii, poproś o "
-        "grep po niej:\n"
+        "JEST (" + str(size) + " B). Środek pominięty:\n"
         + _head_tail_preview(
             tresc, _FILE_ANSWER_MAX // 2, _FILE_ANSWER_MAX // 2
         )
@@ -29496,8 +29506,10 @@ def _team_file_answers_block(role_name):
         return ""
 
     return (
-        "Uruchomiłem to, o co pytaliście — macie już wynik:\n"
-        + "\n".join(moje)
+        # v344: bez zdania o tym, kto to uruchomil. Ponizej jest
+        # wynik — tak samo, jak uzytkownik wkleja mi log i nie
+        # dopisuje, skad go ma.
+        "\n".join(moje)
     )
 
 
@@ -30780,10 +30792,7 @@ def _sam_wyciagnij_na_wierzch(decision):
     return {
         "status": "EKRAN_PRZELACZONY",
         "ok": True,
-        "message": (
-            "Na wierzchu jest teraz " + etykieta
-            + " — przełączyłem ekran sam."
-        )
+        "message": "Na wierzchu: " + etykieta + "."
     }
 
 
