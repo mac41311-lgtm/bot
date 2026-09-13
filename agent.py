@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v328
+AEL-MINI AUTONOMOUS AGENT v329
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v328")
+    print("             AEL-MINI AUTONOMOUS AGENT v329")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28030,6 +28030,72 @@ _READONLY_MAX_PER_STEP = 4
 # zostalo, zeby nikt nie wyciagnal wniosku z polowy danych.
 _READONLY_OUTPUT_MAX = 4000
 
+# Od ilu linii wynik przestaje byc odpowiedzia, a staje sie zrzutem.
+_ZRZUT_OD_LINII = 60
+
+
+def _zwiezle_wyliczenie(out):
+    """
+    Dluga LISTA (np. `find . -type f`) opowiedziana tak, jak
+    opowiedzialby ja czlowiek: ile tego jest i gdzie leży — zamiast
+    pierwszych kilku tysiecy znakow w kolejnosci alfabetycznej.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13, krok 5). Tomek
+    zapytal `find . -type f`. W domu bylo 16 088 plikow, wiec
+    dostal 10 132 znaki — i wszystkie z nich to byly linie w rodzaju
+
+        ./.android/cache/sdkbin-1_d2b9d222-addons_list-5_xml
+        ./.android/cache/sdkinf-1_d2b9d222-addons_list-5_xml
+
+    czyli cache Android SDK, alfabetycznie od poczatku. Z calego
+    projektu nie zobaczyl ani jednego pliku. Ciecie pokazywalo 3%
+    listy i to akurat te 3%, ktore nic nie znaczylo.
+
+    Wyliczenie obejmuje CALOSC: nic sie nie chowa, zmienia sie tylko
+    sposob opowiedzenia. Zwraca None, gdy to nie jest dluga lista —
+    wtedy zostaje zwykla droga.
+    """
+
+    linie = [l for l in str(out or "").splitlines() if l.strip()]
+
+    if len(linie) < _ZRZUT_OD_LINII:
+        return None
+
+    gdzie = {}
+
+    for l in linie:
+
+        _l = l.strip()
+
+        if _l.startswith("./"):
+            _l = _l[2:]
+
+        czesci = _l.split("/")
+
+        klucz = czesci[0] if len(czesci) > 1 else "(tu, bez katalogu)"
+
+        gdzie[klucz] = gdzie.get(klucz, 0) + 1
+
+    naj = sorted(gdzie.items(), key=lambda x: -x[1])
+
+    tekst = [str(len(linie)) + " pozycji. Gdzie one są:"]
+
+    for nazwa, ile in naj[:15]:
+        tekst.append("  " + nazwa + ": " + str(ile))
+
+    if len(naj) > 15:
+        tekst.append(
+            "  (i jeszcze " + str(len(naj) - 15) + " innych miejsc)"
+        )
+
+    tekst.append("Pierwsze z brzegu:")
+
+    for l in linie[:8]:
+        tekst.append("  " + l.strip())
+
+    return "\n".join(tekst)
+
+
 
 def _is_readonly_command(command):
     """
@@ -28228,6 +28294,30 @@ def _answer_readonly_requests(pary):
             err = str(wynik.get("stderr", "") or "").strip()
 
             if out:
+
+                # v329: gdy to jest dluga lista, opowiadamy ja
+                # calosciowo zamiast pokazywac jej pierwsze 3%.
+                _wyliczenie = (
+                    _zwiezle_wyliczenie(out)
+                    if len(out) > _READONLY_OUTPUT_MAX else None
+                )
+
+                if _wyliczenie:
+
+                    odpowiedzi.append((
+                        rola,
+                        "- `" + command + "` wypisało "
+                        + _wyliczenie
+                    ))
+
+                    log(
+                        "TERMUX",
+                        "`" + short(command, 60) + "` dalo "
+                        + str(len(out)) + " znakow listy — podaje to "
+                        "jako wyliczenie, nie jako zrzut."
+                    )
+
+                    continue
 
                 pokazane = short(out, _READONLY_OUTPUT_MAX)
 
