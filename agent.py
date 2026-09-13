@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v336
+AEL-MINI AUTONOMOUS AGENT v337
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v336")
+    print("             AEL-MINI AUTONOMOUS AGENT v337")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2376,47 +2376,10 @@ def init_deepseek():
 # PROMPTY
 # ============================================================
 
-MAIN_PROMPT = """
-Jesteś MAIN. Decydujesz, co dalej. Gemini wykonuje.
-
-Odpowiadasz samym JSON-em, jednym z:
-
-{
-  "type": "TASK",
-  "reason": "...",
-  "task": "...",
-  "success_condition": "...",
-  "write_engineer_code_to": "ścieżka pliku albo puste"
-}
-
-{
-  "type": "DONE",
-  "reason": "..."
-}
-
-{
-  "type": "FAILED",
-  "reason": "..."
-}
-
-{
-  "type": "NEED_USER_LOGIN",
-  "reason": "...",
-  "url": "pełny adres http(s) albo puste",
-  "instructions": "..."
-}
-
-{
-  "type": "ASK",
-  "ask_role": "jedna z: PLANNER, ENGINEER, RESEARCHER, CRITIC, BROWSER",
-  "ask_question": "..."
-}
-"""
+MAIN_PROMPT = """{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER",\n  "ask_question": ""\n}"""
 
 
-PLANNER_PROMPT = """
-Nazywasz się Tomek. Planujesz następny krok, a wykonuje go Gemini.
-"""
+PLANNER_PROMPT = ""
 
 
 # v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil ma
@@ -2442,20 +2405,14 @@ Nazywasz się Tomek. Planujesz następny krok, a wykonuje go Gemini.
 # zrobic w sytuacji, ktora jeszcze nie nastapila — czyli dokladnie
 # ten szablon, ktorego pozbywamy sie od v191. Zostaje imie i
 # robota.
-RESEARCHER_PROMPT = """
-Nazywasz się Kamil. Sprawdzasz fakty.
-"""
+RESEARCHER_PROMPT = ""
 
 
-CRITIC_PROMPT = """
-Nazywasz się Marek. Oceniasz plan Tomka.
-"""
+CRITIC_PROMPT = ""
 
 
 
-CODE_REVIEWER_PROMPT = """
-Nazywasz się Piotr. Analizujesz kod, a poprawia go Ania.
-"""
+CODE_REVIEWER_PROMPT = ""
 
 
 # v330: stad znikla formatka.
@@ -2474,35 +2431,19 @@ Nazywasz się Piotr. Analizujesz kod, a poprawia go Ania.
 # extract_search_replace_blocks() rozumie trzy ksztalty: nasze stare
 # znaczniki, zwykly unified diff i dwa bloki opisane slowami.
 # Zostaje imie i robota.
-CODE_FIXER_PROMPT = """
-Nazywasz się Ania. Naprawiasz kod.
-"""
+CODE_FIXER_PROMPT = ""
 
 
-BROWSER_PROMPT = """
-Nazywasz się Ola. Przerabiasz surowe dane na normalny, ludzki język.
-"""
+BROWSER_PROMPT = ""
 
 
-ENGINEER_PROMPT = """
-Nazywasz się Bartek. Piszesz kod i komendy.
-"""
+ENGINEER_PROMPT = ""
 
 
-PROGRESS_ESTIMATOR_PROMPT = """
-Nazywasz się Ela. Mówisz, ile z celu jest naprawdę zrobione.
-
-Odpowiadasz samym JSON-em:
-{
-  "percent": <liczba całkowita 0-100>,
-  "summary": "dwa zdania po polsku, dlaczego tyle"
-}
-"""
+PROGRESS_ESTIMATOR_PROMPT = """{\n  "percent": 0,\n  "summary": ""\n}"""
 
 
-WOJTEK_PROMPT = """
-Nazywasz się Wojtek. Dostajesz sam cel i mówisz, jak Ty byś to zrobił.
-"""
+WOJTEK_PROMPT = ""
 
 
 # ============================================================
@@ -3835,6 +3776,28 @@ def start_session(name, system_prompt):
 
         saved = _load_session_state(name)
 
+        # v337: rola, ktorej prompt zniknal, a ktora ma zapisana
+        # rozmowe sprzed tej zmiany, nadal ma tamten prompt w swojej
+        # historii — i bedzie go mial do konca swiata, bo wznowienie
+        # niczego z historii nie usuwa.
+        #
+        # Powiedzenie jej "poprzednie instrukcje juz nie obowiazuja"
+        # byloby dopisaniem kolejnego zdania od nas, czyli dokladnie
+        # tym, czego sie pozbywamy. Wiec zamiast mowic — zaczynamy
+        # rozmowe od nowa. Jednorazowy koszt przy przejsciu na
+        # wersje bez promtow.
+        if (
+            saved
+            and str(saved.get("prompt_text") or "").strip()
+            and not str(system_prompt or "").strip()
+        ):
+            log(
+                "DEEPSEEK",
+                name + ": poprzednia rozmowa zaczynala sie od "
+                "promptu, ktorego juz nie ma — zaczynam nowa."
+            )
+            saved = None
+
         if saved:
 
             # Wznawiamy — nadpisujemy ID świeżo utworzonej (i teraz
@@ -3869,7 +3832,20 @@ def start_session(name, system_prompt):
             # powtórkę.
             current_hash = _prompt_hash(system_prompt)
 
-            if saved.get("prompt_hash") != current_hash:
+            # v337: pustego promtu nie ma po co wysylac ani
+            # aktualizowac. Osiem rol nie ma go juz wcale.
+            if not str(system_prompt or "").strip():
+
+                _save_session_state(
+                    name,
+                    session,
+                    prompt_hash=current_hash,
+                    prompt_text=system_prompt
+                )
+
+                log("DEEPSEEK", f"Sesja {name}: OK (wznowiona)")
+
+            elif saved.get("prompt_hash") != current_hash:
 
                 session.send_message(
                     _build_prompt_update_message(
@@ -3901,10 +3877,13 @@ def start_session(name, system_prompt):
 
         else:
 
-            # Jednorazowa instrukcja roli — tylko dla NOWEJ sesji.
-            session.send_message(
-                system_prompt
-            )
+            # v337: rola, ktora nie ma promtu, zaczyna rozmowe od
+            # pierwszej prawdziwej wiadomosci — tak, jak czlowiek,
+            # ktoremu ktos po prostu pisze.
+            if str(system_prompt or "").strip():
+                session.send_message(
+                    system_prompt
+                )
 
             _save_session_state(
                 name,
