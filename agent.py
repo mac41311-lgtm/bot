@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v335
+AEL-MINI AUTONOMOUS AGENT v336
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v335")
+    print("             AEL-MINI AUTONOMOUS AGENT v336")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5190,6 +5190,74 @@ _samo_myslenie_z_rzedu = {}
 _SAMO_MYSLENIE_PROG = 3
 
 
+# v336: czym to jest napisane.
+#
+# ZMIERZONE NA WSZYSTKICH WGRANYCH LOGACH. Kamil odpowiedzial po
+# chinsku dwa razy — i oba razy byla to odpowiedz na nasze
+# "Podaj wynik.":
+#
+#   bieg 2026-09-13 11:57, krok 1: 1487 znakow, 36% CJK
+#   bieg 2026-09-13 11:57, krok 2: 2430 znakow, 33% CJK
+#
+# W pozostalych biegach (2026-09-10, 2026-09-11) CJK: 0%.
+#
+# Powod widac z samego ksztaltu tej wymiany. DeepSeek przemyslal
+# pytanie i przeszukal siec — rozumowanie poszlo po chinsku, bo tak
+# on mysli. Potem dostal od nas dwanascie znakow: "Podaj wynik.".
+# W takiej turze nie ma prawie zadnego jezyka, wiec odpowiedz
+# wychodzi w jezyku rozumowania.
+#
+# Uzytkownik robil to samo recznie i dostawal polski — bo u niego
+# cala rozmowa byla po polsku i nie bylo tam chinskiego rozumowania
+# na 4605 znakow tuz przed.
+_CJK = ("\u4e00", "\u9fff")
+
+
+def _udzial_cjk(tekst):
+    """Jaka czesc tego tekstu to znaki chinskie/japonskie (0.0-1.0)."""
+
+    t = str(tekst or "")
+
+    if not t:
+        return 0.0
+
+    ile = sum(1 for z in t if _CJK[0] <= z <= _CJK[1])
+
+    return ile / len(t)
+
+
+def _o_co_pytal_kolega(wiadomosc, rola):
+    """
+    Zdanie, ktore kolega napisal WPROST do tej roli — jej wlasnymi
+    slowami, prosto z tej rozmowy.
+
+    Uzywamy go zamiast naszego "Podaj wynik." (v336). To nie jest
+    nowe zdanie dopisane do rozmowy: to jest powtorzenie tego, o co
+    ten czlowiek zostal zapytany kilka linijek wyzej. Krotkie, wiec
+    nie kaze mu szukac od zera (o to chodzilo w v316), i po polsku,
+    wiec odpowiedz wraca w jezyku rozmowy, a nie rozumowania.
+
+    Zwraca "" gdy nikt nie zwrocil sie do niej po imieniu.
+    """
+
+    try:
+        zawolania = _zawolania(wiadomosc)
+    except Exception:
+        return ""
+
+    for adresat, tresc in zawolania:
+
+        if adresat != str(rola):
+            continue
+
+        pierwsza = str(tresc or "").strip().splitlines()
+
+        if pierwsza and len(pierwsza[0].strip()) >= 15:
+            return pierwsza[0].strip()
+
+    return ""
+
+
 def _zanotuj_samo_myslenie(name):
     """
     Rola oddala samo myslenie, bez odpowiedzi. Liczymy to i tyle.
@@ -5983,7 +6051,15 @@ def deepseek(name, message):
 
                     if _ostatnie_samo_myslenie:
 
-                        _dopytanie = "Podaj wynik."
+                        # v336: pytamy slowami kolegi, nie
+                        # naszymi. Patrz _o_co_pytal_kolega() —
+                        # dwanascie znakow "Podaj wynik." po 4605
+                        # znakach chinskiego rozumowania wracalo
+                        # po chinsku.
+                        _dopytanie = (
+                            _o_co_pytal_kolega(message, name)
+                            or "Podaj wynik."
+                        )
 
                         # v318: i to dopytanie idzie BEZ MYSLENIA.
                         #
@@ -6070,11 +6146,25 @@ def deepseek(name, message):
 
                             text = retry_text
 
+                            # v336: w jakim pismie to wrocilo.
+                            # Bez tego "Kamil odpowiedzial po
+                            # chinsku" trzeba bylo wypatrzec okiem
+                            # w przebiegu.
+                            _obce = _udzial_cjk(text)
+
                             log(
                                 "DEEPSEEK",
                                 name + ": ponowienie po pustej "
                                 "odpowiedzi zwróciło "
                                 + str(len(text)) + " znaków."
+                                + (
+                                    " UWAGA: "
+                                    + str(int(_obce * 100))
+                                    + "% tej odpowiedzi to znaki CJK "
+                                    "— wróciła w języku rozumowania, "
+                                    "nie rozmowy."
+                                    if _obce > 0.05 else ""
+                                )
                             )
 
                         else:
