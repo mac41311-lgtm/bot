@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v326
+AEL-MINI AUTONOMOUS AGENT v327
 
 ARCHITEKTURA:
 
@@ -2229,7 +2229,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v326")
+    print("             AEL-MINI AUTONOMOUS AGENT v327")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4953,6 +4953,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # czytniku i trzeba zobaczyc, ktora.
     poczatek_strumienia = []
 
+    # Pierwszy kawalek tresci, ktory realnie doszedl do odpowiedzi.
+    pierwsza_tresc = [""]
+
     for line in response.iter_lines():
 
         if not line:
@@ -4975,8 +4978,8 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             if not raw_data:
                 continue
 
-            if len(poczatek_strumienia) < 3:
-                poczatek_strumienia.append(raw_data[:150])
+            if len(poczatek_strumienia) < 5:
+                poczatek_strumienia.append(raw_data[:400])
 
             data = json.loads(raw_data)
             content = ""
@@ -5127,6 +5130,14 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                         content = val
 
             if content:
+
+                # v327: skad wzielismy PIERWSZY kawalek tresci i co
+                # dokladnie w nim bylo. Pierwsza litera odpowiedzi
+                # Kamila ginie od czterech biegow, a wszystkie inne
+                # tropy sa juz wykluczone. To jest ostatni.
+                if not full_text and not pierwsza_tresc[0]:
+                    pierwsza_tresc[0] = repr(content[:60])
+
                 full_text += content
 
         except json.JSONDecodeError:
@@ -5208,6 +5219,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     globals()["_poczatek_strumienia"] = " || ".join(
         poczatek_strumienia
     )
+    globals()["_pierwsza_tresc"] = pierwsza_tresc[0]
     globals()["_ostatnie_pominiete"] = pominiete[0]
     globals()["_ostatni_pominiety_blad"] = pierwszy_blad[0]
 
@@ -5255,8 +5267,11 @@ _MYSLENIE_TO_NIE_MYSLENIE = 3
 _ostatnie_pominiete = 0
 _ostatni_pominiety_blad = ""
 
-# Pierwsze trzy kawalki ostatniego strumienia, doslownie (v325).
+# Pierwsze kawalki ostatniego strumienia, doslownie (v325/v327).
 _poczatek_strumienia = ""
+
+# Pierwszy kawalek tresci, ktory doszedl do odpowiedzi (v327).
+_pierwsza_tresc = ""
 
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
@@ -6304,6 +6319,7 @@ def deepseek(name, message):
                     pominiete=int(_ostatnie_pominiete or 0),
                     pominiety_blad=str(_ostatni_pominiety_blad or ""),
                     poczatek_strumienia=str(_poczatek_strumienia or ""),
+                    pierwsza_tresc=str(_pierwsza_tresc or ""),
                     z_myslenia=bool(_wzielismy_myslenie),
                     konto=_account_of(name),
                     tresc=str(text or "")
@@ -12672,6 +12688,35 @@ def termux_write_file(path, content, append=False):
 _SESSION_STARTED_AT = time.time()
 
 
+def _kto_pisze_do_logu(sciezka):
+    """
+    Czy do tego pliku wciaz pisze jakas nasza robota w tle (v327).
+
+    Zwraca zdanie faktu albo pusty napis. Nigdy nie rzuca.
+    """
+
+    try:
+        _dane = _logi_w_tle.get(str(sciezka))
+
+        if not _dane:
+            return ""
+
+        _pid, _od = _dane
+        _proc = _procesy_w_tle.get(_pid)
+
+        if _proc is None or _proc.poll() is not None:
+            return ""
+
+        return (
+            "Plik jest pusty, ale proces " + str(_pid)
+            + " wciąż chodzi — "
+            + str(int(time.time() - _od)) + " s od uruchomienia."
+        )
+
+    except Exception:
+        return ""
+
+
 def termux_read_file(path, max_bytes=20000):
     try:
         p = _resolve_home_relative_path(path)
@@ -12701,6 +12746,24 @@ def termux_read_file(path, max_bytes=20000):
             ),
             "truncated": truncated
         }
+
+        # v327: pusty log roboty w tle to nie znaczy "stoi".
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-13, krok 4).
+        # `pip install --dry-run piper-tts` poszlo w tlo, Gemini
+        # przeczytalo log po trzech sekundach, zobaczylo pusty plik
+        # i ubilo proces (termux_stop_process). Potem uruchomilo to
+        # samo jeszcze raz i ubilo drugi raz. Dwa podejscia do kosza,
+        # a pip po prostu buforuje wyjscie i nie zdazyl nic wypisac.
+        #
+        # My wiemy, czy ten proces zyje — trzymamy go w
+        # _procesy_w_tle. Wiec to mowimy. Sam fakt.
+        if not result["content"].strip():
+
+            _zyje = _kto_pisze_do_logu(p)
+
+            if _zyje:
+                result["proces_zyje"] = _zyje
 
         # ZAOBSERWOWANY REALNY PROBLEM (log 2026-08-28, cel "zadzwoń
         # do Beaty", KROK 12): Gemini odczytało ~/agent/.env
@@ -13783,6 +13846,24 @@ _DLUGA_ROBOTA_RE = re.compile(
 # sklepu trwa; czlowiek tez by nie uznal pustej listy po sekundzie
 # za odpowiedz ostateczna.
 DRUGIE_SPOJRZENIE = 20
+
+# Narzedzia, ktorych calym zadaniem jest powiedziec, JAK JEST TERAZ.
+# Powtorzone pytanie o stan to nie marnotrawstwo — to jedyny sposob,
+# zeby zobaczyc zmiane (v327).
+# Ktory proces w tle pisze do ktorego pliku: {sciezka: (pid, start)}.
+_logi_w_tle = {}
+
+_NARZEDZIA_PATRZACE = {
+    "termux_check_process",
+    "termux_read_file",
+    "termux_ls",
+    "termux_check_apk",
+    "android_state",
+    "android_screenshot",
+    "android_list_packages",
+    "chrome_tabs",
+    "chrome_state",
+}
 
 # Komenda, ktora szuka procesow PO TRESCI linii polecen — i przez to
 # potrafi trafic w powloke, ktora sama ja uruchomila (v326).
@@ -14975,6 +15056,14 @@ def termux_run_background(
         # _poczekaj_na_komende_w_tle(). Sam pid tego nie da: os.kill(pid, 0)
         # mowi tylko "zyje/nie zyje", nigdy "skonczyl sie bledem".
         _procesy_w_tle[proc.pid] = proc
+
+        # v327: zeby dalo sie odpowiedziec na pytanie "log jest
+        # pusty, czy to juz koniec?" — patrz _kto_pisze_do_logu().
+        _logi_w_tle[str(log)] = (proc.pid, time.time())
+
+        if len(_logi_w_tle) > 64:
+            for _stary_log in list(_logi_w_tle)[:32]:
+                _logi_w_tle.pop(_stary_log, None)
 
         if len(_procesy_w_tle) > 64:
             for _stary in [
@@ -17776,6 +17865,29 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     _klucz_wywolania, (0, None)
                 ) if _klucz_wywolania else (0, None)
 
+                # v327: narzedzia, ktore PATRZA, jak jest TERAZ,
+                # nie moga dostawac odpowiedzi z pamieci.
+                #
+                # To jest moj wlasny blad z v317. Bieg 2026-09-13,
+                # krok 4:
+                #
+                #   termux_check_process: to samo wywolanie po raz 3
+                #   — oddaje zapamietany wynik
+                #   -> {"running": true, "pid": 5789}
+                #   termux_stop_process pid 5789
+                #
+                # Gemini pytalo "czy to jeszcze chodzi?", dostalo
+                # odpowiedz sprzed dwoch minut, uznalo ze nic sie nie
+                # dzieje i UBILO proces. Potem uruchomilo to samo od
+                # nowa i ubilo drugi raz. Dwa podejscia do kosza.
+                #
+                # Pytanie o stan jest wlasnie po to, zeby zadac je
+                # ponownie. Powtorka ma sens tylko przy narzedziach,
+                # ktore COS ROBIA — nie przy tych, ktore patrza.
+                if name in _NARZEDZIA_PATRZACE:
+                    _klucz_wywolania = None
+                    _bylo, _stary_wynik = 0, None
+
                 if _klucz_wywolania and _bylo >= 2:
 
                     log(
@@ -19276,6 +19388,18 @@ def run_next_task():
         "GEMINI",
         "Task zakończony: " + str(status)
     )
+
+    # v327: kopia na telefon takze TU, nie tylko przy zmianie kroku.
+    #
+    # Kopiowanie z v323 dzieje sie na POCZATKU nowego kroku, wiec w
+    # pliku, ktory uzytkownik wyciaga z telefonu, ostatniego kroku
+    # nigdy nie ma. Log z 2026-09-13 urywa sie dokladnie tak: na
+    # srodku kroku 4, bez podsumowania. Robota wlasnie sie skonczyla
+    # — to najlepszy moment, zeby zapis byl kompletny.
+    try:
+        skopiuj_przebieg_na_telefon()
+    except Exception:
+        pass
 
     # ── Diagnostyka kroku ────────────────────────────────────
     # Czytelne podsumowanie w terminalu — operator widzi od razu
