@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v342
+AEL-MINI AUTONOMOUS AGENT v343
 
 ARCHITEKTURA:
 
@@ -2292,7 +2292,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v342")
+    print("             AEL-MINI AUTONOMOUS AGENT v343")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21603,6 +21603,81 @@ def _task_carries_engineer_code(task_text, engineer_full):
 LIMIT_BEZPIECZENSTWA = 30000
 
 
+def _kod_ktory_juz_lezy(tekst):
+    """
+    Blok kodu, ktorego tresc LEZY JUZ NA DYSKU, zastapiony jedna
+    linia: co to za plik i ile ma (v343).
+
+    Uzytkownik: "kodu nie musimy mu zwracac (...) porozdzielaj to
+    madrze, nie kazdy na kupe, jak dobra ekipa zarzadzajaca, ale bez
+    promtow (...) oni nie wykonuja, tylko pisza, jak moze to czlowiek
+    zrobic — czyli czlowiek to w naszym wypadku program, ktory to
+    wykonuje".
+
+    ZMIERZONE (bieg 2026-09-13 14:13): bloki kodu to 44% tego, co
+    dostaje MAIN, 64% tego, co dostaje Bartek, 38-40% u Tomka i
+    Marka. Ten sam skrypt jechal jako tekst do kazdego z osobna —
+    18 677 znakow razy siedmiu odbiorcow.
+
+    To nie jest skracanie wypowiedzi. Ten kod ISTNIEJE: Python
+    polozyl go na dysku, bo od tego tu jest. Kto chce go przeczytac,
+    ma termux_read_file. Kto chce go poprawic, pisze patch — i to
+    jest naturalne wlasnie dlatego, ze nie ma przed soba calosci do
+    przepisania.
+
+    Zamieniamy TYLKO wtedy, gdy tresc bloku faktycznie zgadza sie z
+    tym, co lezy na dysku. Przy najmniejszej roznicy zostawiamy blok
+    w calosci — inaczej zgubilibysmy czyjas prace.
+    """
+
+    t = str(tekst or "")
+
+    if "```" not in t or not _gdzie_zapisalismy:
+        return t
+
+    # Czytamy raz to, co sami zapisalismy.
+    na_dysku = {}
+
+    for nazwa, sciezka in _gdzie_zapisalismy.items():
+
+        try:
+            tresc = Path(sciezka).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except Exception:
+            continue
+
+        klucz = " ".join(tresc.split())
+
+        if len(klucz) >= 200:
+            na_dysku[klucz] = (nazwa, len(tresc))
+
+    if not na_dysku:
+        return t
+
+    def _zamien(m):
+
+        kod = _wyrownaj_blok(m.group(2))
+        klucz = " ".join(kod.split())
+
+        wpis = na_dysku.get(klucz)
+
+        if not wpis:
+            return m.group(0)
+
+        return (
+            "[" + wpis[0] + " — " + str(wpis[1])
+            + " znaków, na dysku]"
+        )
+
+    return re.sub(
+        r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
+        _zamien,
+        t,
+        flags=re.DOTALL
+    )
+
+
 def _role_output_for_team(role_label, text, limit, role_key=None):
     """
     v190 — ta sama klasa błędu, co "Beata": Python WIE, ale nie mówi,
@@ -21626,6 +21701,11 @@ def _role_output_for_team(role_label, text, limit, role_key=None):
     """
 
     if str(text or "").strip():
+
+        # v343: kod, ktory juz lezy na dysku, jedzie dalej jako
+        # jedna linia — patrz _kod_ktory_juz_lezy(). Autor ma go u
+        # siebie, a reszta ma go na dysku.
+        text = _kod_ktory_juz_lezy(text)
 
         out = short(text, limit)
 
@@ -26975,6 +27055,13 @@ def consult_team(
         "engineer_full": (
             results.get("ENGINEER", "") if consult_engineer else ""
         ),
+        # v343: surowe wypowiedzi WSZYSTKICH z tej narady — bo
+        # poprawke fragmentu pisze ten, kto akurat czyta kod, a od
+        # v340 wiemy, ze to najczesciej Marek albo Tomek (33 i 38
+        # blokow w biegu 2026-09-13 12:44, przy 11 Bartka). Do
+        # prompta MAIN-a to nie idzie; sluzy Pythonowi do nalozenia
+        # patcha.
+        "kod_full": dict(results),
         "critic":    _role_output_for_team(
             "Marek (CRITIC)", results.get("CRITIC", ""),
             LIMIT_BEZPIECZENSTWA, "CRITIC"
@@ -32355,13 +32442,52 @@ Zwróć tylko JSON.
             if write_target:
 
                 # v203: zanim czegokolwiek zazadamy — sprawdz, czy
-                # Bartek przyslal POPRAWKE FRAGMENTU (SZUKAJ/ZAMIEŃ).
-                # Wtedy nie potrzebujemy calego pliku od nowa: nakladamy
-                # sama zmiane, z backupem i weryfikacja skladni.
-                _patch_wynik = apply_engineer_patch_to_project_file(
-                    write_target,
-                    team.get("engineer_full", "")
-                )
+                # ktos przyslal POPRAWKE FRAGMENTU (SZUKAJ/ZAMIEŃ,
+                # diff, STARY/NOWY). Wtedy nie potrzebujemy calego
+                # pliku od nowa: nakladamy sama zmiane, z backupem i
+                # weryfikacja skladni.
+                #
+                # v343: patcha szukamy u KAZDEGO, nie tylko u Bartka.
+                # Gdy ktos powiedzial, czyja to poprawka ("patch
+                # Piotra"), zaczynamy od niego — patrz _czyj_kod().
+                _autorzy_patcha = []
+
+                _wskazany_patch = _czyj_kod(task_text)
+
+                if _wskazany_patch:
+                    _autorzy_patcha.append(_wskazany_patch)
+
+                _autorzy_patcha.append("ENGINEER")
+
+                for _kto in team.get("kod_full", {}):
+                    if _kto not in _autorzy_patcha:
+                        _autorzy_patcha.append(_kto)
+
+                _patch_wynik = {"applied": False, "reason": ""}
+
+                for _kto in _autorzy_patcha:
+
+                    _tekst_kogos = (
+                        team.get("engineer_full", "")
+                        if _kto == "ENGINEER"
+                        else team.get("kod_full", {}).get(_kto, "")
+                    )
+
+                    if not str(_tekst_kogos or "").strip():
+                        continue
+
+                    _proba = apply_engineer_patch_to_project_file(
+                        write_target,
+                        _tekst_kogos
+                    )
+
+                    if _proba.get("applied"):
+                        _proba["autor"] = _kto
+                        _patch_wynik = _proba
+                        break
+
+                    if _proba.get("reason") and not _patch_wynik.get("reason"):
+                        _patch_wynik = _proba
 
                 if _patch_wynik.get("applied"):
 
@@ -32379,7 +32505,10 @@ Zwróć tylko JSON.
                     )
 
                     _pending_team_warnings.append(
-                        "Bartek podał "
+                        _ROLE_DISPLAY_NAME.get(
+                            _patch_wynik.get("autor"), "Ktoś"
+                        )
+                        + " podał "
                         "poprawkę przez SZUKAJ/ZAMIEŃ i Python naniósł "
                         "ją na " + _patch_wynik["path"] + " ("
                         + str(_patch_wynik["size_before"]) + " B -> "
@@ -32389,8 +32518,12 @@ Zwróć tylko JSON.
                         "Nikt nie musi przepisywać całości."
                     )
 
-                elif extract_search_replace_blocks(
-                    team.get("engineer_full", "")
+                elif any(
+                    extract_search_replace_blocks(_t)
+                    for _t in (
+                        [team.get("engineer_full", "")]
+                        + list(team.get("kod_full", {}).values())
+                    )
                 ):
 
                     # Blok byl, ale sie nie nalozyl — to jest FAKT,
@@ -32403,7 +32536,7 @@ Zwróć tylko JSON.
                     )
 
                     _pending_team_warnings.append(
-                        "Bartek podał "
+                        "Ktoś podał "
                         "poprawkę SZUKAJ/ZAMIEŃ dla " + str(write_target)
                         + ", ale NIE dało się jej nanieść — "
                         + str(_patch_wynik.get("reason"))
