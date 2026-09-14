@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v351
+AEL-MINI AUTONOMOUS AGENT v352
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v351")
+    print("             AEL-MINI AUTONOMOUS AGENT v352")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2490,10 +2490,30 @@ def init_deepseek():
 # PROMPTY
 # ============================================================
 
-MAIN_PROMPT = """{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER",\n  "ask_question": ""\n}"""
+# v352: tozsamosc DOLOZONA przed kontraktem — ksztalty JSON-a
+# ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
+# oddac decyzje; bez nich kazdy krok konczylby sie
+# MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
+MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER",\n  "ask_question": ""\n}"""
 
 
-PLANNER_PROMPT = ""
+# v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
+#
+# To nie jest powrot do promtow. Przed v337 stalo tu dokladnie to
+# samo, tylko krocej ("Nazywasz sie Kamil. Sprawdzasz fakty."), a
+# usuniecie tego zabralo dwie rzeczy naraz: Ola przestala streszczac
+# (7210 z 13 006 znakow szlo dalej surowo), a wolanie sie po imieniu
+# spadlo z 2,5 na odpowiedz do 0,07.
+#
+# Zdanie mowi, KIM ktos jest i CZYM sie zajmuje. Nie mowi, jak ma
+# pisac, w jakim formacie ani jak dziala program. Wzmianki o innych
+# osobach sa tylko tam, gdzie wynikaja z samej roboty: Marek ocenia
+# plany Tomka, a Piotr szuka przyczyny bledu, ktory naprawia Ania.
+# O Gemini nie ma tu ani slowa — i nie ma go miec.
+PLANNER_PROMPT = (
+    "Jesteś Tomkiem. Pomagasz zespołowi znaleźć sensowny "
+    "następny krok."
+)
 
 
 # v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil ma
@@ -2519,14 +2539,23 @@ PLANNER_PROMPT = ""
 # zrobic w sytuacji, ktora jeszcze nie nastapila — czyli dokladnie
 # ten szablon, ktorego pozbywamy sie od v191. Zostaje imie i
 # robota.
-RESEARCHER_PROMPT = ""
+RESEARCHER_PROMPT = (
+    "Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych "
+    "informacji."
+)
 
 
-CRITIC_PROMPT = ""
+CRITIC_PROMPT = (
+    "Jesteś Markiem. Oceniasz pomysły i plany Tomka, szukając "
+    "ich słabych punktów."
+)
 
 
 
-CODE_REVIEWER_PROMPT = ""
+CODE_REVIEWER_PROMPT = (
+    "Jesteś Piotrem. Analizujesz błędy i szukasz ich "
+    "rzeczywistej przyczyny, a poprawia je Ania."
+)
 
 
 # v330: stad znikla formatka.
@@ -2545,19 +2574,32 @@ CODE_REVIEWER_PROMPT = ""
 # extract_search_replace_blocks() rozumie trzy ksztalty: nasze stare
 # znaczniki, zwykly unified diff i dwa bloki opisane slowami.
 # Zostaje imie i robota.
-CODE_FIXER_PROMPT = ""
+CODE_FIXER_PROMPT = (
+    "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa."
+)
 
 
-BROWSER_PROMPT = ""
+BROWSER_PROMPT = (
+    "Jesteś Olą. Pomagasz uporządkować to, co się wydarzyło, "
+    "i wyjaśniasz to po ludzku."
+)
 
 
-ENGINEER_PROMPT = ""
+ENGINEER_PROMPT = (
+    "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
+    "i rozwiązaniami technicznymi."
+)
 
 
-PROGRESS_ESTIMATOR_PROMPT = """{\n  "percent": 0,\n  "summary": ""\n}"""
+# v352: tak samo jak u MAIN-a — kontrakt zostaje, tozsamosc
+# staje przed nim.
+PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, ile celu zostało rzeczywiście wykonane.\n\n{\n  "percent": 0,\n  "summary": ""\n}"""
 
 
-WOJTEK_PROMPT = ""
+WOJTEK_PROMPT = (
+    "Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik "
+    "i zwracasz uwagę na praktyczny sens."
+)
 
 
 # ============================================================
@@ -4127,15 +4169,35 @@ def start_session(name, system_prompt):
         # tym, czego sie pozbywamy. Wiec zamiast mowic — zaczynamy
         # rozmowe od nowa. Jednorazowy koszt przy przejsciu na
         # wersje bez promtow.
-        if (
-            saved
-            and str(saved.get("prompt_text") or "").strip()
-            and not str(system_prompt or "").strip()
-        ):
+        # v352: ta sama zasada w druga strone.
+        #
+        # Osiem rol ma na dysku rozmowe zaczeta BEZ promptu (pole
+        # "prompt_text" zapisane jako puste). Gdyby tozsamosc doszla
+        # do takiej rozmowy zwykla sciezka aktualizacji, pierwsze,
+        # co by przeczytaly, brzmialoby "AKTUALIZACJA INSTRUKCJI
+        # ROLI (zastepuje poprzednia wersje...)" — czyli nasze
+        # zdanie o naszej mechanice, wklejone w srodek rozmowy.
+        # A kotwica roli ma stac na POCZATKU rozmowy, nie w jej
+        # polowie.
+        #
+        # Wiec tak samo jak w v337: zamiast tlumaczyc, zaczynamy od
+        # nowa. Jednorazowy koszt przy przejsciu, dokladnie jeden
+        # raz na role.
+        #
+        # MAIN i Ela tego nie dotyczy — ich rozmowy nigdy nie byly
+        # bez promptu (maja kontrakt JSON), wiec ida normalna
+        # sciezka aktualizacji i nie traca historii.
+        _prompt_byl_zapisany = bool(saved) and "prompt_text" in saved
+        _stary_pusty = not str(
+            (saved or {}).get("prompt_text") or ""
+        ).strip()
+        _nowy_pusty = not str(system_prompt or "").strip()
+
+        if saved and _prompt_byl_zapisany and _stary_pusty != _nowy_pusty:
             log(
                 "DEEPSEEK",
-                name + ": poprzednia rozmowa zaczynala sie od "
-                "promptu, ktorego juz nie ma — zaczynam nowa."
+                name + ": poprzednia rozmowa zaczynala sie inaczej "
+                "niz ta — zaczynam nowa."
             )
             saved = None
 

@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v351
+JAK TO DZIALA — AEL-MINI v352
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 

@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v351
+KTO CO DOSTAJE I KIEDY — AEL-MINI v352
 wyciagniete z agent.py, nie z pamieci
 =========================================================================
 
@@ -32,8 +32,41 @@ nowa — zamiast slyszec od nas "poprzednie instrukcje nie
 obowiazuja".
 
 
-CZESC 1. RAZ, PRZY PIERWSZEJ WIADOMOSCI W DANYM CELU
+CZESC 1. RAZ, NA POCZATKU
 -------------------------------------------------------------------------
+
+Kotwica roli (v352) — jedno zdanie, pierwsza wiadomosc rozmowy na
+DeepSeeku, nigdy wiecej:
+
+  Tomek   Jesteś Tomkiem. Pomagasz zespołowi znaleźć sensowny
+          następny krok.
+  Kamil   Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych
+          informacji.
+  Marek   Jesteś Markiem. Oceniasz pomysły i plany Tomka, szukając
+          ich słabych punktów.
+  Bartek  Jesteś Bartkiem. Zajmujesz się kodem, skryptami
+          i rozwiązaniami technicznymi.
+  Ola     Jesteś Olą. Pomagasz uporządkować to, co się wydarzyło,
+          i wyjaśniasz to po ludzku.
+  Wojtek  Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik
+          i zwracasz uwagę na praktyczny sens.
+  Piotr   Jesteś Piotrem. Analizujesz błędy i szukasz ich
+          rzeczywistej przyczyny, a poprawia je Ania.
+  Ania    Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa.
+  MAIN    Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co
+          najlepiej zrobić dalej.          + ksztalty JSON-a
+  Ela     Jesteś Elą. Oceniasz, ile celu zostało rzeczywiście
+          wykonane.                        + ksztalt JSON-a
+
+Nikt nie dostaje ani slowa o tym, jak ma pisac, w jakim formacie,
+ani jak dziala program. O Gemini nie wie nikt.
+
+O kims innym wie tylko ten, komu to wynika z samej roboty: Marek
+ocenia plany Tomka, Piotr szuka przyczyny bledu, ktory naprawia
+Ania. Reszta poznaje sie z rozmowy.
+
+Fakty o maszynie — "Termux API, ADB DEBUGOWANIE, Android". Raz, i
+jeszcze raz tylko wtedy, gdy sie zmienia.
 
 Cel — Twoimi slowami, bez ramki, bez naszego komentarza. Doklejany
 do pierwszej wiadomosci do tej roli w tym celu i nigdy wiecej.
