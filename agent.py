@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v345
+AEL-MINI AUTONOMOUS AGENT v346
 
 ARCHITEKTURA:
 
@@ -2292,7 +2292,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v345")
+    print("             AEL-MINI AUTONOMOUS AGENT v346")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -27180,13 +27180,26 @@ def main_decide(
         if isinstance(last_result, dict) else None
     )
 
-    _statuses_to_explain = []
+    # v346: bierzemy TYLKO to, co naprawde jest w slowniku.
+    #
+    # BLAD, KTORY SAM ZROBILEM (v344, bieg 2026-09-13 20:29). Wycialem
+    # stad wpis "COMPLETED" — bo byl opowiescia o tym, jak dziala
+    # program ("Gemini wykonal blok i napisal raport (...) przeczytaj
+    # raport i ocen sam") — ale ponizej zostala linia, ktora ten
+    # klucz DOPISUJE do listy bezwarunkowo, a potem go indeksuje.
+    # KeyError: 'COMPLETED'.
+    #
+    # Program przewrocil sie w kroku 1, zaraz po wypowiedzi Marka:
+    # Wojtek, Kamil, Tomek i Marek napisali 65 813 znakow, MAIN nie
+    # dostal nic, zadne narzedzie sie nie uruchomilo. Caly bieg
+    # zmarnowany.
+    _statuses_to_explain = [
+        s for s in (_current_status, "COMPLETED")
+        if s in _status_explanations
+    ]
 
-    if _current_status in _status_explanations:
-        _statuses_to_explain.append(_current_status)
-
-    if "COMPLETED" not in _statuses_to_explain:
-        _statuses_to_explain.append("COMPLETED")
+    # bez powtorki, gdy status to wlasnie COMPLETED
+    _statuses_to_explain = list(dict.fromkeys(_statuses_to_explain))
 
     status_interpretation_block = "\n\n".join(
         _status_explanations[s] for s in _statuses_to_explain
