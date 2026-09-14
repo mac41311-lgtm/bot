@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v349
+AEL-MINI AUTONOMOUS AGENT v350
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v349")
+    print("             AEL-MINI AUTONOMOUS AGENT v350")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3340,6 +3340,28 @@ def _juz_to_czytal(rola, tresc):
     return igla in stog
 
 
+# v350: klucze, ktore opisuja ZDARZENIE, a nie stan.
+#
+# Uzytkownik (punkt 7): "filtrowanie ma zapobiegac spamowi, ale nie
+# moze powodowac utraty przyczyn i skutkow. (...) DLACZEGO cos
+# zrobiono -> CO zrobiono -> JAKI BYL WYNIK -> CO NIE ZADZIALALO ->
+# DLACZEGO -> CO ZMIENIONO -> CZY POPRAWKA ZADZIALALA".
+#
+# ZMIERZONE NA KODZIE: ten sam fakt Pythona ("JAVA_HOME wskazuje na
+# katalog, ktorego nie ma") wyslany w kroku 3 i znowu w kroku 7
+# wracal za drugim razem jako PUSTY STRING. Zespol nie dowiadywal
+# sie, ze to samo wystapilo ponownie — a to jest najwazniejsza
+# informacja w calym lancuchu naprawy.
+#
+# Stan (checklista, dysk, ekran) moze sie powtarzac bez slowa: gdy
+# sie nie zmienil, nie ma o czym mowic. Ale ZDARZENIE, ktore
+# wystapilo drugi raz, jest NOWYM zdarzeniem.
+_KLUCZE_ZDARZEN = ("python_zauwazyl", "tool_hint", "moj_log")
+
+# {(rola, klucz, odcisk): [pierwszy krok, ile razy]}
+_powtorzone_zdarzenia = {}
+
+
 def _only_if_new(role, key, block):
     """
     Zwraca blok tylko wtedy, gdy dla TEJ roli rozni sie od tego, co
@@ -3369,6 +3391,7 @@ def _only_if_new(role, key, block):
     odcisk = _bez_znacznika_nieaktualne(block)
 
     if _role_seen_blocks.get(slot) == odcisk:
+
         # v278: powtorke tez notujemy — to liczba, ktora mowi, ile
         # bramka _only_if_new realnie oszczedza.
         zapisz_zdarzenie(
@@ -3378,9 +3401,31 @@ def _only_if_new(role, key, block):
             znaki=len(block),
             poczatek=_poczatek_bloku(block)
         )
+
+        # v350: gdy to ZDARZENIE, a nie stan — mowimy, ze wystapilo
+        # znowu. Jedno zdanie zamiast calej sciany, ale nie cisza.
+        if str(key) in _KLUCZE_ZDARZEN:
+
+            _pamiec = _powtorzone_zdarzenia.setdefault(
+                (str(role), str(key), odcisk),
+                [_biezacy_krok, 1]
+            )
+            _pamiec[1] += 1
+
+            return (
+                "\nTo samo, co w kroku " + str(_pamiec[0])
+                + " — po raz " + str(_pamiec[1]) + ".\n"
+            )
+
         return ""
 
     _role_seen_blocks[slot] = odcisk
+
+    if str(key) in _KLUCZE_ZDARZEN:
+        _powtorzone_zdarzenia.setdefault(
+            (str(role), str(key), odcisk),
+            [_biezacy_krok, 1]
+        )
 
     # v296: zapamietujemy, co ta osoba NAPRAWDE dostala w tym kroku —
     # patrz _juz_dostal i _role_inbox_block(). Bez tego ta sama
@@ -24124,6 +24169,97 @@ _critic_verdict_for_engineer = None
 # niego oczekuje.
 _main_decision_for_team = None
 
+
+# v350: o kogo MAIN prosi w swojej decyzji.
+#
+# Uzytkownik: "MAIN sugeruje / decyduje -> Python sprawdza, czy jest
+# powod -> wywoluje wlasciwa role. Dzieki temu MAIN nie musi znac
+# calej mechaniki programu".
+#
+# Dokladnie tak to tu dziala. MAIN pisze zwyklym zdaniem — "trzeba
+# to sprawdzic w sieci", "potrzebny plan", "niech Bartek to napisze"
+# — a Python to CZYTA, tak samo jak czyta "zapisz skrypt Marka"
+# (v340). Zadnego nowego pola w JSON-ie, zadnej formatki.
+#
+# To jest prosba, nie rozkaz: Python i tak sprawdza, czy jest powod
+# (patrz consult_team). Gdy MAIN poprosi o kod, a Bartek wlasnie w
+# tym kroku mowil — nie wolamy go drugi raz.
+_POTRZEBA_ROLI = (
+    ("RESEARCHER", (
+        "research", "sprawdz", "sprawdź", "zweryfik", "w sieci",
+        "poszuka", "dowiedz", "fakt", "ile kosztuje", "czy istnieje",
+    )),
+    ("PLANNER", (
+        "plan", "kolejnos", "kolejnoś", "rozpisa", "krok po kroku",
+        "co dalej",
+    )),
+    ("ENGINEER", (
+        "kod", "skrypt", "napisa", "zaimplement", "komend",
+    )),
+    ("CODE_REVIEWER", (
+        "analiz", "przyczyn", "dlaczego to nie", "co jest nie tak",
+        "zobacz w kod", "przejrzy",
+    )),
+    ("CODE_FIXER", (
+        "popraw", "napraw", "patch", "fix",
+    )),
+    ("CRITIC", (
+        "ocen", "krytyk", "zastrzez", "zastrzeż", "czy to ma sens",
+        "ryzyk",
+    )),
+    ("BROWSER", (
+        "uporzadk", "uporządk", "stresz", "podsumuj",
+    )),
+    ("WOJTEK", (
+        "inne podejscie", "inne podejście", "po ludzku", "pomysl",
+        "pomysł", "prosciej", "prościej",
+    )),
+    ("PROGRESS_ESTIMATOR", (
+        "postep", "postęp", "jak daleko", "ile procent",
+        "jest zrobione", "zostalo do", "zostało do",
+    )),
+)
+
+
+def _o_kogo_prosi_main(tekst):
+    """
+    Kogo MAIN wolalby uslyszec — przeczytane z jego zwyklego zdania.
+
+    Zwraca zbior nazw rol. Pusty, gdy nie prosi o nikogo.
+
+    Najpierw imiona (to najmocniejszy sygnal — powiedzial wprost, o
+    kogo chodzi), potem slowa o potrzebie. Samo slowo "kod" w zdaniu
+    o czyms innym nie wystarczy: musi stac przy prosbie, a to
+    sprawdzamy tak, ze bierzemy tylko zdania, w ktorych MAIN mowi o
+    tym, czego POTRZEBA.
+    """
+
+    t = str(tekst or "")
+
+    if not t.strip():
+        return set()
+
+    kto = set()
+
+    # 1. po imieniu — "niech Bartek to napisze", "Piotr, zobacz"
+    for imie, rola in _CZYJ_KOD_IMIE.items():
+        if re.search(r"(?<![\w])" + imie + r"(?![\w])", t, re.IGNORECASE):
+            kto.add(rola)
+
+    for m in _ADDRESS_RE.finditer(t):
+        rola = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
+        if rola and rola != "MAIN":
+            kto.add(rola)
+
+    # 2. po tym, czego potrzeba
+    maly = t.lower()
+
+    for rola, slowa in _POTRZEBA_ROLI:
+        if any(w in maly for w in slowa):
+            kto.add(rola)
+
+    return kto
+
 # ============================================================
 # MAIN PRZESTAJE BYC BOGIEM (v214)
 # ============================================================
@@ -26333,16 +26469,36 @@ def consult_team(
     # TEMPIE, nie w skladzie zespolu ani w dlugosci wypowiedzi.
     # Limit rozwiazuje sie CZEKANIEM (patrz _odstep_z_budzetu), nie
     # odbieraniem komus glosu.
+    # v350: koniec z zegarkiem.
+    #
+    # Bylo tu "(step % 3 == 1)" — czyli Kamil, Ola i Wojtek odzywali
+    # sie co trzeci krok DLATEGO, ZE BYL TRZECI KROK. Uzytkownik:
+    # "jezeli Kamil jest uruchamiany dlatego, ze jest trzeci krok, to
+    # system nie jest naprawde sterowany potrzeba".
+    #
+    # ZMIERZONE na Twoich logach: srednio 7,2 roli na krok, w
+    # najnowszych biegach 5,2. Kazda z nich pisala, bo przyszla jej
+    # kolej.
+    #
+    # Teraz odzywaja sie, gdy JEST POWOD: ktos ich zawolal, pyta ich
+    # Marek, wlasnie cos sie wysypalo, albo MAIN poprosil o to w
+    # swojej decyzji (_o_kogo_prosi_main). Python sprawdza powod;
+    # MAIN nie musi znac mechaniki.
+    _prosi_main = _o_kogo_prosi_main(_main_decision_for_team)
+
     consult_researcher = (
-        (step % 3 == 1)
-        or fresh_tool_error
+        fresh_tool_error
         or "RESEARCHER" in _zawolani
         or _pyta_marek == "RESEARCHER"
+        or "RESEARCHER" in _prosi_main
     )
 
     consult_browser = (
         goal_needs_chrome
-        and ((step % 3 == 1) or "BROWSER" in _zawolani)
+        and (
+            "BROWSER" in _zawolani
+            or "BROWSER" in _prosi_main
+        )
     )
 
     # WOJTEK to jedyna rola, która NIE dostaje core_context (bez
@@ -26353,9 +26509,9 @@ def consult_team(
     # jak RESEARCHER (oszczędzanie limitu/sesji) — to rola
     # dodatkowa/inspiracyjna, nie krytyczna dla decyzji MAIN.
     consult_wojtek = (
-        (step % 3 == 1)
-        or fresh_tool_error
+        fresh_tool_error
         or "WOJTEK" in _zawolani
+        or "WOJTEK" in _prosi_main
     )
 
     # Pytanie Marka to tez zawolanie — inaczej Tomek wchodzil w
@@ -26367,6 +26523,7 @@ def consult_team(
     consult_planner = (
         "PLANNER" in _zawolani
         or _pyta_marek == "PLANNER"
+        or "PLANNER" in _prosi_main
         or not _ktos_zawolany
     )
 
@@ -26391,6 +26548,7 @@ def consult_team(
         "ENGINEER" in _zawolani
         or _pyta_marek == "ENGINEER"
         or _main_chcial_kod
+        or "ENGINEER" in _prosi_main
         or _brak_kodu_bartka
         # v276: na dysku wyladowal kod przepisany przez MAIN-a.
         # Autor ma go zobaczyc — dostanie AKTUALNY STAN PLIKU i sam
@@ -26409,6 +26567,7 @@ def consult_team(
         consult_planner
         or consult_engineer
         or "CRITIC" in _zawolani
+        or "CRITIC" in _prosi_main
     )
 
     if consult_wojtek:
@@ -31973,7 +32132,15 @@ def run_agent(goal):
         # przerywa głównej pętli — to czysto informacyjne.
         # ------------------------------------------------------
 
-        if step % 5 == 0:
+        # v350: zegarek zostaje (to pasek postepu dla uzytkownika,
+        # nie budzenie roli do rozmowy), ale MAIN moze poprosic o to
+        # takze poza kolejka — patrz _o_kogo_prosi_main().
+        if (
+            step % 5 == 0
+            or "PROGRESS_ESTIMATOR" in _o_kogo_prosi_main(
+                _main_decision_for_team
+            )
+        ):
 
             try:
                 progress = estimate_progress(
