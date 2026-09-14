@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v349
+JAK TO DZIALA — AEL-MINI v351
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -123,6 +123,8 @@ CZYTA, co napisali:
     STARY/NOWY
   - czyta, CZYJ ma byc kod ("zapisz skrypt Marka")
   - czyta zawolania po imieniu i rozdziela akapity do adresatow
+    (a gdy dla kogos nie zostaloby nic — daje mu calosc; v351)
+  - czyta z decyzji MAIN-a, o kogo prosi, i wola te osobe
   - czyta heredoc (cat > plik << EOF) jako tresc pliku
   - czyta "nano plik.py" jako "ten plik ma miec te tresc"
   - zdejmuje znak zachety ze sciezki ("termux:~/x" to "~/x")
@@ -136,6 +138,8 @@ ROBI:
   - odmawia tylko wtedy, gdy potrzebny jest Twoj palec
 
 PILNUJE:
+  - kto sie odzywa: tylko z powodu (zawolanie, pytanie Marka,
+    prosba MAIN-a, swieza awaria) — zadnego zegarka (v350/v351)
   - nie wysyla nikomu dwa razy tego samego
   - nie wysyla kodu, ktory juz lezy na dysku (jedna linia zamiast)
   - nie wysyla MAIN-owi kodu wcale (on decyduje, nie pisze)

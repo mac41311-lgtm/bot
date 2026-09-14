@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v350
+AEL-MINI AUTONOMOUS AGENT v351
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v350")
+    print("             AEL-MINI AUTONOMOUS AGENT v351")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3251,7 +3251,11 @@ def _bez_maszynowni_dla(rola):
 # niego podpis.
 _ZNACZNIK_NIEAKTUALNE_RE = re.compile(
     r"\[NIEAKTUALNE[^\]]*\]\s*"
-    r"|^[A-ZŁŚŻŹĆÓĘĄŃ][a-ząćęłńóśźż]+,\s*wcześniej:\s*",
+    # v351: podpis moze teraz niesc numer kroku
+    # ("Bartek, wcześniej (krok 3):") — odcisk liczymy dalej BEZ
+    # niego, inaczej sama zmiana numeru robilaby z tej samej
+    # wypowiedzi "nowy blok".
+    r"|^[A-ZŁŚŻŹĆÓĘĄŃ][a-ząćęłńóśźż]+,\s*wcześniej[^:\n]{0,20}:\s*",
     re.IGNORECASE | re.MULTILINE
 )
 
@@ -3897,6 +3901,7 @@ def _set_current_goal(goal):
     _reset_powody_zakonczenia()
     _role_inbox.clear()
     _role_response_cache.clear()
+    _role_response_step.clear()
     _wyciagniecia_na_wierzch.clear()
 
     # v291: to, co Python zauwazyl przy POPRZEDNIM celu, nie ma
@@ -5713,6 +5718,33 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
 )
+
+
+# v351: co znaczy "wlasnie sie wysypalo".
+#
+# Do v350 bylo to DOKLADNIE jedno: status == "GEMINI_TOOL_ERROR".
+# To jedyny powod, ktory budzi Kamila i Wojtka, gdy nikt ich nie
+# zawolal — wiec po kazdym innym niepowodzeniu sklad zespolu
+# wygladal identycznie jak po kroku, w ktorym nic sie nie stalo.
+#
+# ZMIERZONE na Twoich logach (12 biegow): GEMINI_TOOL_ERROR 47x,
+# ale obok tego TOOL_LIMIT 13x, MAIN_JSON_ERROR 13x,
+# ENGINEER_CODE_* ~15x, FAILED 3x, BRAK_KODU_DO_ZAPISU 2x. Zaden
+# nie budzil nikogo. Symulacja bramek: TOOL_LIMIT dawal
+# ['CRITIC', 'PLANNER'] — czyli moment, w ktorym zadanie okazalo
+# sie za duze i naprawde przydaloby sie inne podejscie, byl dla
+# Kamila i Wojtka nie do odroznienia od spokojnego kroku.
+_STATUSY_KLOPOTU = tuple(sorted(set(
+    _STATUSY_KROKU_BEZ_WYKONANIA
+    + (
+        "GEMINI_TOOL_ERROR",
+        "TOOL_LIMIT",
+        "MAIN_JSON_ERROR",
+        "FAILED",
+        "BRAK_KODU_DO_ZAPISU",
+        "DONE_REJECTED_VERIFICATION_FAILED",
+    )
+)))
 
 
 def _domkniety_json(text):
@@ -24120,6 +24152,18 @@ def print_progress_bar(step, percent, summary):
 # krokach, w których nie są odpytywane (patrz consult_team()).
 _role_response_cache = {}
 
+
+# v351: z ktorego kroku pochodzi ta zapamietana wypowiedz.
+#
+# Gdy rola milczy, MAIN dostaje jej ostatnia znana odpowiedz z
+# podpisem "Wojtek, wcześniej:". Przy dziesieciu krokach "wcześniej"
+# znaczy zarowno "sprzed minuty", jak i "sprzed osmiu krokow, o
+# zupelnie innym problemie" — a MAIN nie ma jak tego odroznic i
+# czyta stara opinie jak biezaca. W v350 nauczylismy Pythona mowic
+# "To samo, co w kroku 3 — po raz 2." (_KLUCZE_ZDARZEN); tutaj tego
+# brakowalo.
+_role_response_step = {}
+
 # Realna odpowiedź (z web_search RESEARCHERA) czekająca na to, żeby
 # przekazać ją Wojtkowi przy JEGO następnej turze — patrz consult_team().
 # Na wyraźną prośbę użytkownika: Wojtek ma dostawać PRAWDZIWE,
@@ -25209,6 +25253,25 @@ def _dla_tej_roli(tekst, rola):
 
     czesci = [c for c in ([ogolne] + moje) if c]
 
+    # v351: cisza jest gorsza niz nadmiar.
+    #
+    # Gdy ktos ZACZYNA wypowiedz od zawolania ("Tomku, twoj plan
+    # zaklada..."), czesc ogolna jest pusta — a wszyscy niewymienieni
+    # z imienia dostawali stad "", czyli NIC. _od_kolegi slusznie nie
+    # pisze wtedy naglowka, wiec taka wypowiedz po prostu dla nich
+    # nie istniala.
+    #
+    # ZMIERZONE na 728 odpowiedziach rol z Twoich logow: 411 zawiera
+    # zawolanie po imieniu, 218 z nich ZACZYNA sie od zawolania, a w
+    # 439 z 2059 par "autor -> kolega" (21%) kolega dostawal pustke —
+    # srednio 2255 znakow znikalo mu z oczu.
+    #
+    # Ciecie po adresacie ma kierowac wypowiedz tam, gdzie powinna
+    # wpasc, a nie sprawiac, ze nie wpada nigdzie. Gdy dla kogos nie
+    # zostalo nic, dostaje calosc — tak, jak przy braku zawolan.
+    if not czesci:
+        return tekst
+
     return "\n\n".join(czesci)
 
 
@@ -25716,6 +25779,23 @@ def _split_ola_translation_by_role(text):
             )
 
     return general, callouts
+
+
+def _podpis_starej_wypowiedzi(imie, rola):
+    """
+    "Wojtek, wcześniej:" albo "Wojtek, wcześniej (krok 3):".
+
+    Numer kroku dopisujemy tylko wtedy, gdy go znamy — patrz
+    _role_response_step.
+    """
+
+    krok = _role_response_step.get(rola)
+
+    return (
+        str(imie) + ", wcześniej"
+        + (" (krok %d)" % krok if krok else "")
+        + ":\n"
+    )
 
 
 def consult_team(
@@ -26449,9 +26529,17 @@ def consult_team(
 
     _pyta_marek = (_critic_question or {}).get("role")
 
+    # v351: patrz _STATUSY_KLOPOTU. Bylo tu == "GEMINI_TOOL_ERROR",
+    # czyli jeden status na kilkanascie, jakie realnie padaly.
+    # BRAK_KODU_DO_ZAPISU siedzi w tekscie wyniku, nie w polu
+    # "status" (patrz _brak_kodu_bartka nizej), wiec sprawdzamy oba
+    # miejsca — tak samo, jak robi to Bartek.
     fresh_tool_error = (
         isinstance(last_result, dict)
-        and last_result.get("status") == "GEMINI_TOOL_ERROR"
+        and (
+            last_result.get("status") in _STATUSY_KLOPOTU
+            or "BRAK_KODU_DO_ZAPISU" in str(last_result)
+        )
     )
 
     goal_needs_android = _goal_mentions_android(goal)
@@ -26493,12 +26581,21 @@ def consult_team(
         or "RESEARCHER" in _prosi_main
     )
 
+    # v351: goal_needs_chrome byl MNOZNIKIEM, nie skladnikiem.
+    #
+    # Przy celu bez przegladarki ("napisz APK") Ola nie mogla zostac
+    # wywolana NAWET wtedy, gdy MAIN wprost prosil o uporzadkowanie —
+    # a _POTRZEBA_ROLI ma dla niej slowa "uporzadk / stresz /
+    # podsumuj", ktore w takim biegu nigdy nie mialy prawa zadzialac.
+    # Jedyna furtka zostawalo zawolanie w trakcie kroku
+    # (_zawolany_teraz nizej), a zawolan jest u Ciebie 0,07 na
+    # odpowiedz.
+    #
+    # Porzadkowanie tekstu to nie jest czynnosc przegladarkowa.
+    # Chrome decyduje tylko o tym, czy Ola odzywa sie SAMA.
     consult_browser = (
-        goal_needs_chrome
-        and (
-            "BROWSER" in _zawolani
-            or "BROWSER" in _prosi_main
-        )
+        (goal_needs_chrome and "BROWSER" in _zawolani)
+        or "BROWSER" in _prosi_main
     )
 
     # WOJTEK to jedyna rola, która NIE dostaje core_context (bez
@@ -26508,10 +26605,30 @@ def consult_team(
     # więc dostaje WYŁĄCZNIE sam opis celu. Pytany tak samo rzadko
     # jak RESEARCHER (oszczędzanie limitu/sesji) — to rola
     # dodatkowa/inspiracyjna, nie krytyczna dla decyzji MAIN.
+    # v351: Wojtek nie mial JAK sie odezwac.
+    #
+    # Siatka bezpieczenstwa "jesli jeszcze nie slyszal celu, napisz
+    # do niego" lezala WEWNATRZ "if consult_wojtek:" nizej — czyli
+    # mogla ta bramke tylko zawezic, nigdy otworzyc. Do tego Wojtek
+    # jest PIERWSZY w kolejnosci mowiacych, wiec _zawolany_teraz()
+    # (czyta skrzynke zapelniana w trakcie kroku) dla niego z
+    # definicji jest puste.
+    #
+    # Symulacja kroku 1: _main_decision_for_team is None, _zawolani
+    # puste, brak bledu -> ['CRITIC', 'PLANNER']. Przed v350 robil to
+    # za nas zegarek (step % 3 == 1). Start celu — jedyny moment, po
+    # co Wojtek w ogole jest — byl dla niego cichy.
+    #
+    # Warunek wraca tu, do samej bramki. Raz na cel.
+    _wojtek_nie_zna_celu = bool(
+        _current_goal_text and "WOJTEK" not in _goal_briefed
+    )
+
     consult_wojtek = (
         fresh_tool_error
         or "WOJTEK" in _zawolani
         or "WOJTEK" in _prosi_main
+        or _wojtek_nie_zna_celu
     )
 
     # Pytanie Marka to tez zawolanie — inaczej Tomek wchodzil w
@@ -26647,6 +26764,22 @@ def consult_team(
         # brak kanału, który naprawiamy.
         _do_wojtka = _role_inbox_block("WOJTEK") + wojtek_context
 
+        # v351: "cos sie wlasnie wysypalo" bylo dla Wojtka martwym
+        # powodem od v335.
+        #
+        # fresh_tool_error otwieral mu bramke wyzej, ale zawezenie
+        # tuz ponizej i tak ja zamykalo: gdy nikt do niego nie pisal
+        # i Kamil nie mial dla niego odpowiedzi, _do_wojtka bylo
+        # puste. Czyli po awarii Wojtek milczal tak samo jak zawsze.
+        #
+        # Nie dostaje technicznego tla (zadnych nazw narzedzi, ani
+        # Termuxa, ani Androida — to jego cala rola), wiec dostaje
+        # sam fakt, po ludzku. Dokladnie to, o co prosiles: "moga
+        # dostawac komunikat, ze cos nie dziala".
+        if fresh_tool_error and not _do_wojtka.strip():
+
+            _do_wojtka = "Ostatnia próba się nie udała."
+
         # v335: skoro zniknela zaczepka bez tresci, moze sie zdarzyc,
         # ze nie mamy do niego nic. Wtedy do niego nie piszemy — tak
         # samo, jak nie pisze sie do kogos po to, zeby napisac.
@@ -26656,7 +26789,7 @@ def consult_team(
         # Wojtek go nie dostal, mamy po co pisac.
         consult_wojtek = bool(
             _do_wojtka.strip()
-            or (_current_goal_text and "WOJTEK" not in _goal_briefed)
+            or _wojtek_nie_zna_celu
         )
 
     if consult_wojtek:
@@ -26664,6 +26797,7 @@ def consult_team(
         results["WOJTEK"] = deepseek("WOJTEK", _do_wojtka)
 
         _role_response_cache["WOJTEK"] = results["WOJTEK"]
+        _role_response_step["WOJTEK"] = step
         _collect_role_messages("WOJTEK", results["WOJTEK"])
 
     else:
@@ -26676,7 +26810,7 @@ def consult_team(
         )
 
         results["WOJTEK"] = (
-            "Wojtek, wcześniej:\n"
+            _podpis_starej_wypowiedzi("Wojtek", "WOJTEK")
             + _role_response_cache.get(
                 "WOJTEK",
                 "(WOJTEK nie był jeszcze konsultowany.)"
@@ -26739,6 +26873,7 @@ def consult_team(
         )
 
         _role_response_cache["RESEARCHER"] = results["RESEARCHER"]
+        _role_response_step["RESEARCHER"] = step
         _collect_role_messages("RESEARCHER", results["RESEARCHER"])
 
         if wojtek_extra:
@@ -26774,7 +26909,7 @@ def consult_team(
         )
 
         results["RESEARCHER"] = (
-            "Kamil, wcześniej:\n"
+            _podpis_starej_wypowiedzi("Kamil", "RESEARCHER")
             + _role_response_cache.get(
                 "RESEARCHER",
                 "(RESEARCHER nie był jeszcze konsultowany.)"
@@ -26829,7 +26964,7 @@ def consult_team(
         )
 
         results["PLANNER"] = (
-            "Tomek, wcześniej:\n"
+            _podpis_starej_wypowiedzi("Tomek", "PLANNER")
             + _role_response_cache.get(
                 "PLANNER", "(Tomek nie zabierał jeszcze głosu.)"
             )
@@ -26872,6 +27007,7 @@ def consult_team(
         )
 
         _role_response_cache["PLANNER"] = results["PLANNER"]
+        _role_response_step["PLANNER"] = step
         _collect_role_messages("PLANNER", results["PLANNER"])
 
     consult_browser = consult_browser or _zawolany_teraz("BROWSER")
@@ -26884,6 +27020,7 @@ def consult_team(
         )
 
         _role_response_cache["BROWSER"] = results["BROWSER"]
+        _role_response_step["BROWSER"] = step
         _collect_role_messages("BROWSER", results["BROWSER"])
 
     else:
@@ -26896,7 +27033,7 @@ def consult_team(
         )
 
         results["BROWSER"] = (
-            "Ola, wcześniej:\n"
+            _podpis_starej_wypowiedzi("Ola", "BROWSER")
             + _role_response_cache.get(
                 "BROWSER",
                 "(BROWSER nie był jeszcze konsultowany.)"
@@ -26957,7 +27094,7 @@ def consult_team(
         )
 
         results["ENGINEER"] = (
-            "Bartek, wcześniej:\n"
+            _podpis_starej_wypowiedzi("Bartek", "ENGINEER")
             + _role_response_cache.get(
                 "ENGINEER", "(Bartek nie zabierał jeszcze głosu.)"
             )
@@ -27011,6 +27148,7 @@ def consult_team(
         )
 
         _role_response_cache["ENGINEER"] = results["ENGINEER"]
+        _role_response_step["ENGINEER"] = step
         _collect_role_messages("ENGINEER", results["ENGINEER"])
 
     # Odpowiedź na poprzednie pytanie Marka + przechwycenie
@@ -27116,6 +27254,7 @@ def consult_team(
         )
 
         _role_response_cache["CRITIC"] = results["CRITIC"]
+        _role_response_step["CRITIC"] = step
 
     # Werdykt Marka czeka na Tomka do NASTĘPNEGO kroku. Przekazujemy
     # go tylko wtedy, gdy faktycznie jest zastrzeżeniem (OSTRZEŻENIE/
@@ -32314,13 +32453,23 @@ albo:
         # _main_decision_for_team. Zapisujemy typ decyzji i jej
         # uzasadnienie (nie całe zadanie), bo to właśnie "dlaczego"
         # było tym, czego zespół nigdy nie widział.
+        # v351: 700 -> 1200.
+        #
+        # ZMIERZONE na 67 prawdziwych decyzjach MAIN-a z Twoich
+        # logow: "reason" ma mediane 395 znakow, srednia 467,
+        # najdluzszy 871 — ale 9 z 59 przekraczalo 690 i konczylo
+        # sie w polowie slowa ("Marek sluszn", "zanim Bartek").
+        # Zespol dostawal wtedy uzasadnienie urwane dokladnie tam,
+        # gdzie MAIN mowil, o kogo mu chodzi, a _o_kogo_prosi_main
+        # czytalo ten sam ogryzek. 1200 miesci kazde uzasadnienie,
+        # jakie u Ciebie padlo, z zapasem.
         globals()["_main_decision_for_team"] = short(
             dtype
             + (
                 " — " + str(decision.get("reason") or "").strip()
                 if decision.get("reason") else ""
             ),
-            700
+            1200
         )
 
         # v214: jesli Marek ma ZYWE zastrzezenie, a MAIN mimo to

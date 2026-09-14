@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v349
+KTO CO DOSTAJE I KIEDY — AEL-MINI v351
 wyciagniete z agent.py, nie z pamieci
 =========================================================================
 
@@ -56,14 +56,29 @@ CZESC 2. KOLEJNOSC W KROKU
 Kamil PRZED Tomkiem celowo: jego ustalenia maja wplynac na plan z
 TEGO kroku, nie z nastepnego.
 
-Kto sie NIE odzywa w danym kroku:
-  - Wojtek     — gdy nie mamy dla niego nic prawdziwego
-  - Ola        — gdy z poprzedniego kroku zostal sam wiersz stanu
-  - Kamil      — gdy nikt nie pyta o fakty i nikt go nie zawolal
-  - Bartek     — gdy nikt nie prosil o kod i nikt go nie zawolal
-  - Marek      — gdy nie ma czego oceniac
-Jego ostatnia wypowiedz idzie wtedy dalej pod podpisem
-"Bartek, wcześniej:".
+KIEDY KTO SIE ODZYWA (v351)
+
+Nie ma zadnego zegarka. Nikt nie mowi dlatego, ze minal kolejny
+krok. Powody sa cztery i kazdy jest konkretny:
+
+  1. ktos zawolal te osobe po imieniu
+  2. Marek zadal jej pytanie
+  3. MAIN poprosil o nia w swojej decyzji
+  4. wlasnie cos sie wysypalo
+
+Poza tym:
+  - Wojtek slyszy cel RAZ, na starcie — po to jest.
+  - Ola porzadkuje, gdy ktos ja o to poprosi; sama z siebie
+    odzywa sie tylko przy celu z przegladarka.
+  - Tomek i Marek mowia, gdy nikt inny nie mial powodu — zeby
+    krok nie zostal bez zadnego glosu.
+
+Spokojny krok to dzis dwie osoby (Tomek + Marek). Po awarii
+dochodza Kamil i Wojtek. Gdy nie kompiluje sie kod — jeszcze Bartek.
+
+Kto sie nie odzywa, tego ostatnia wypowiedz idzie dalej pod podpisem
+"Bartek, wcześniej (krok 3):" — z numerem kroku, zeby MAIN nie
+pomylil starej opinii z biezaca.
 
 
 CZESC 3. CO DOSTAJE KAZDY (wspolny rdzen)
@@ -84,6 +99,10 @@ dostaje drugi raz.
   moj log                co wypisalo to, co TA osoba napisala
   skrzynka               co koledzy napisali do niej po imieniu
   stan Chrome            gdy cel dotyczy przegladarki
+
+Co kolega napisal do kogos po imieniu, dostaje tamten. Reszta
+zespolu dostaje wspolny wstep. Gdy dla kogos nie zostaloby NIC —
+dostaje calosc; cisza jest gorsza niz nadmiar.
   stan ekranu Androida   gdy cel dotyczy telefonu
 
 MOJ LOG — wyglada tak i nie jest skracany:
