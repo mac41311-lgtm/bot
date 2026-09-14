@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v346
+AEL-MINI AUTONOMOUS AGENT v347
 
 ARCHITEKTURA:
 
@@ -2292,7 +2292,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v346")
+    print("             AEL-MINI AUTONOMOUS AGENT v347")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21599,6 +21599,64 @@ def _task_carries_engineer_code(task_text, engineer_full):
 LIMIT_BEZPIECZENSTWA = 30000
 
 
+def _kod_na_jedna_linie(tekst):
+    """
+    Kazdy blok ```...``` zwiniety do jednej linii (v347).
+
+    Uzytkownik, patrzac na to, co dostaje MAIN: "nie da sie tego
+    lepiej poukladac, co do Maina wysylamy? Musimy tylko wysylac —
+    przeciez pliki sie zapisuja automatycznie?".
+
+    Ma racje i to jest inna sprawa niz _kod_ktory_juz_lezy(). Tamto
+    zwija kod, ktory JUZ lezy na dysku. A tu chodzi o kod, ktorego
+    jeszcze nie ma nigdzie — cztery osoby napisaly wlasny wariant
+    tego samego serwera i wszystkie cztery poszly do MAIN-a.
+
+    ZMIERZONE (bieg 2026-09-14 18:33, krok 1): w jednej wiadomosci do
+    MAIN-a bylo 52 bloki kodu — 21 429 znakow, 45% calej wiadomosci.
+    Czterdziesci z nich to byly rozne warianty tego samego.
+
+    MAIN nie pisze kodu i nigdy nie pisal. On decyduje, co dalej. Do
+    tego potrzebuje wiedziec, ZE ktos dal kod i do jakiego pliku — a
+    nie czytac go czterokrotnie. Sam kod idzie tam, gdzie zawsze
+    szedl: na dysk, przez Pythona, z surowej wypowiedzi autora
+    (engineer_full / kod_full zostaja nietkniete).
+    """
+
+    t = str(tekst or "")
+
+    if "```" not in t:
+        return t
+
+    def _zwin(m):
+
+        jezyk = (m.group(1) or "").strip()
+        kod = _wyrownaj_blok(m.group(2))
+
+        if not kod.strip():
+            return m.group(0)
+
+        # Gdy autor nazwal plik tuz nad blokiem, mowimy KTORY to
+        # plik — to jest ta jedna rzecz, ktorej MAIN faktycznie
+        # potrzebuje do decyzji.
+        nad = t[max(0, m.start() - 200):m.start()]
+        nazwa = ""
+
+        for f in _CODE_TARGET_FILENAME_RE.finditer(nad):
+            nazwa = str(f.group(0)).strip().strip("`'\"").split("/")[-1]
+
+        opis = nazwa or jezyk or "kod"
+
+        return "[" + opis + " — " + str(len(kod)) + " znaków]"
+
+    return re.sub(
+        r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
+        _zwin,
+        t,
+        flags=re.DOTALL
+    )
+
+
 def _kod_ktory_juz_lezy(tekst):
     """
     Blok kodu, ktorego tresc LEZY JUZ NA DYSKU, zastapiony jedna
@@ -27389,14 +27447,24 @@ tym kroku dopytać jedną osobę:
     # Kamil, Ola i Wojtek sa juz wyciete dla MAIN-a przy skladaniu
     # team (patrz _dla_zespolu, rola="MAIN") — tam, gdzie widac cala
     # wypowiedz, a nie jej pierwsze 2000 znakow.
+    # v347: do MAIN-a kod idzie jako jedna linia. On decyduje, a nie
+    # pisze — patrz _kod_na_jedna_linie(). Pliki i tak zapisuje
+    # Python, z surowej wypowiedzi autora.
     for _wstep, _tekst in (
-        ("Tomek zaplanował tak:", team.get("planner", "")),
-        ("Bartek na to:", team.get("engineer", "")),
-        ("Kamil sprawdził:", team.get("researcher", "")),
-        ("Marek ocenia:", team.get("critic", "")),
-        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:", _exchange),
-        ("Ola streszcza:", team.get("browser", "")),
-        ("Wojtek:", team.get("wojtek", "")),
+        ("Tomek zaplanował tak:",
+         _kod_na_jedna_linie(team.get("planner", ""))),
+        ("Bartek na to:",
+         _kod_na_jedna_linie(team.get("engineer", ""))),
+        ("Kamil sprawdził:",
+         _kod_na_jedna_linie(team.get("researcher", ""))),
+        ("Marek ocenia:",
+         _kod_na_jedna_linie(team.get("critic", ""))),
+        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:",
+         _kod_na_jedna_linie(_exchange)),
+        ("Ola streszcza:",
+         _kod_na_jedna_linie(team.get("browser", ""))),
+        ("Wojtek:",
+         _kod_na_jedna_linie(team.get("wojtek", ""))),
     ):
 
         if str(_tekst or "").strip():
