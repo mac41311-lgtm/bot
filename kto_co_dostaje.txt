@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v348
+KTO CO DOSTAJE I KIEDY — AEL-MINI v349
 wyciagniete z agent.py, nie z pamieci
 =========================================================================
 
@@ -137,13 +137,16 @@ MAREK (CRITIC)
   + "Tomek proponuje:" — plan do oceny
   + tresc pliku, o ktory chodzi
 
-PIOTR (CODE_REVIEWER) i ANIA (CODE_FIXER)
-  wolani osobno, gdy jest kod do przejrzenia albo naprawy
-  dostaja plik i pytanie, nic wiecej
-  Ania, gdy zadanie stanelo: "Zadanie stanęło w połowie. Pytanie:"
-
-ELA (PROGRESS_ESTIMATOR)
-  material o postepie, oddaje sam JSON z procentem
+PIOTR (CODE_REVIEWER), ANIA (CODE_FIXER), ELA (PROGRESS_ESTIMATOR)
+  wolani poza kolejka — gdy cos sie wydarzy, nie co krok
+  od v349 dostaja to samo, co reszta zespolu:
+    + "Użytkownik:" — to, co napisales
+    + swoj wlasny log z terminala
+  Piotr: caly plik z dysku albo narzedzie + co zwrocilo + kod
+         (bez formatki do wypelnienia — v349)
+  Ania:  plik i opis problemu; jej patch naklada Python
+  Ela:   material o postepie, oddaje sam JSON z procentem
+  szczegoly: jak_to_dziala.txt, czesc 4
 
 MAIN
   + "Nowe na dysku w tym kroku:" — lista z rozmiarami (v348)

@@ -1,0 +1,293 @@
+JAK TO DZIALA — AEL-MINI v349
+wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
+=========================================================================
+
+
+W JEDNYM ZDANIU
+-------------------------------------------------------------------------
+
+Dziewiec osob rozmawia o Twoim celu i pisze, JAK cos zrobic.
+Python jest rekami: bierze to, co napisali, i robi to naprawde.
+Gemini jest wzrokiem i palcem na ekranie telefonu.
+Nikt z tych dziewieciu nie ma dostepu do telefonu.
+
+
+=========================================================================
+CZESC 1. TRZY WARSTWY
+=========================================================================
+
+    TY
+     |  cel, i pozniej odpowiedzi, gdy program o cos poprosi
+     v
+    DZIEWIEC OSOB (DeepSeek, kazda wlasna rozmowa)
+     |  pisza, jak cos zrobic — nie wykonuja niczego
+     v
+    PYTHON (agent.py)                    <-- RECE
+     |  czyta, co napisali; zapisuje pliki; naklada patche;
+     |  uruchamia komendy; czyta wyniki; rozdziela to dalej
+     v
+    GEMINI                               <-- WZROK I PALEC
+     |  wywoluje narzedzia: 42 sztuki
+     v
+    TERMUX + ANDROID + CHROME            <-- TELEFON
+
+
+=========================================================================
+CZESC 2. KTO JEST KIM
+=========================================================================
+
+  Ola      streszcza to, co sie stalo, po ludzku
+  Wojtek   patrzy na cel jak zwykly czlowiek, podrzuca kierunek
+  Kamil    sprawdza fakty (ma wlaczone szukanie w sieci)
+  Tomek    planuje nastepny krok
+  Bartek   pisze kod i komendy
+  Marek    ocenia plan Tomka
+  MAIN     decyduje, co robimy teraz
+  Piotr    patrzy w kod, ktory nie zadzialal
+  Ania     pisze poprawke do tego kodu
+  Ela      mowi, ile z celu jest naprawde zrobione
+
+Nikt z nich nie ma napisane, kim jest. Kazdy dostaje na starcie
+36 znakow: "Termux API, ADB DEBUGOWANIE, Android". Poznaja sie z
+rozmowy — po tym, kto co pisze i pod jakim podpisem.
+
+Wyjatek: MAIN i Ela dostaja dodatkowo sam ksztalt JSON-a, bo ich
+odpowiedz Python czyta maszynowo.
+
+
+=========================================================================
+CZESC 3. JAK WYGLADA JEDEN KROK
+=========================================================================
+
+  1  Ola      streszcza wynik poprzedniego kroku
+              (pomijana, gdy zostal sam wiersz stanu)
+  2  Wojtek   patrzy na cel
+              (pomijany, gdy nie mamy dla niego nic nowego)
+  3  Kamil    sprawdza fakty
+  4  Tomek    planuje — z ustaleniami Kamila z TEGO kroku
+  5  Ola      drugi raz, gdy jest co czytac
+  6  Bartek   kod i komendy
+  7  Marek    ocenia plan
+  8  MAIN     decyduje: TASK / DONE / FAILED / NEED_USER_LOGIN / ASK
+  9  PYTHON   zapisuje pliki z tego, co napisali
+ 10  GEMINI   wykonuje zadanie narzedziami
+ 11  PYTHON   czyta wyniki i rozdziela je z powrotem
+
+Kamil PRZED Tomkiem celowo — zeby jego ustalenia weszly do planu z
+tego samego kroku, a nie z nastepnego.
+
+
+=========================================================================
+CZESC 4. PIOTR, ANIA I ELA — POZA KOLEJKA
+=========================================================================
+
+Oni nie maja swojej tury i to jest celowe: nie wola sie recenzenta,
+gdy nie ma kodu, ani Eli, gdy nic sie nie zmienilo. Odzywaja sie,
+gdy cos sie WYDARZY.
+
+PIOTR — gdy kod nie zadzialal
+  wolany dwa razy w jednym celu na dwa sposoby:
+    a) plik uruchomil sie i wysypal  -> dostaje CALY plik z dysku
+       plus to, jak sie skonczylo
+    b) ta sama czynnosc zawiodla kilka razy -> dostaje narzedzie,
+       argumenty, co zwrocilo, i nazwane funkcje z kodu
+  maksymalnie 3 przeglady na cel
+  nie dostaje zadnej formatki do wypelnienia (v349)
+
+ANIA — gdy jest co poprawic
+  wolana w trzech sytuacjach:
+    a) Piotr skonczyl analize -> dostaje jego analize i plik
+    b) trzeba napisac patch   -> dostaje plik i opis problemu
+    c) zadanie stanelo w polowie -> "Zadanie stanęło w połowie.
+       Pytanie:" i pytanie
+  jej patch naklada PYTHON: backup, weryfikacja skladni, rollback
+  gdy nie przejdzie. Ona nie dotyka dysku.
+
+ELA — gdy liczymy postep
+  dostaje material o tym, co zrobione, i oddaje sam JSON:
+  {"percent": 0-100, "summary": "dwa zdania"}
+
+CO SIE ZMIENILO w v349: cala trojka dostaje teraz to samo, co
+reszta zespolu — zdania uzytkownika i swoj wlasny log z terminala.
+Wczesniej Ania poprawiala kod, ktory chwile wczesniej wywalil sie z
+konkretnym bledem, i tego bledu NIE MIALA.
+
+
+=========================================================================
+CZESC 5. CO ROBI PYTHON — TO SA RECE
+=========================================================================
+
+CZYTA, co napisali:
+  - wybiera blok kodu dla danego pliku (nazwa w prozie nad blokiem)
+  - czyta patche w trzech ksztaltach: SZUKAJ/ZAMIEN, unified diff,
+    STARY/NOWY
+  - czyta, CZYJ ma byc kod ("zapisz skrypt Marka")
+  - czyta zawolania po imieniu i rozdziela akapity do adresatow
+  - czyta heredoc (cat > plik << EOF) jako tresc pliku
+  - czyta "nano plik.py" jako "ten plik ma miec te tresc"
+  - zdejmuje znak zachety ze sciezki ("termux:~/x" to "~/x")
+
+ROBI:
+  - zapisuje pliki 1:1, bez niczyjego przepisywania
+  - naklada patche z backupem i weryfikacja skladni
+  - uruchamia komendy; dluga robote przenosi w tlo (do 30 minut)
+  - zamienia komendy, ktore czekaja na klawisz: "less" -> "cat",
+    "top" -> jedna migawka, "man" -> bez pagera
+  - odmawia tylko wtedy, gdy potrzebny jest Twoj palec
+
+PILNUJE:
+  - nie wysyla nikomu dwa razy tego samego
+  - nie wysyla kodu, ktory juz lezy na dysku (jedna linia zamiast)
+  - nie wysyla MAIN-owi kodu wcale (on decyduje, nie pisze)
+  - nie skraca niczyjej wypowiedzi miedzy rolami
+  - nie dzwoni dwa razy pod ten sam numer
+  - nie nadpisuje pliku, ktory zawiera cos innego niz kod
+
+MOWI:
+  - autorowi komendy: co ona wypisala, z kodem wyjscia
+  - MAIN-owi: co powstalo na dysku w tym kroku
+  - wszystkim: co napisales Ty
+  - Tobie: log na ekranie, w pliku, i kopia na telefon
+
+
+=========================================================================
+CZESC 6. CO ROBI GEMINI
+=========================================================================
+
+Gemini WYKONUJE i nic poza tym. Nie pisze kodu, nie poprawia,
+nie decyduje. Jest wzrokiem (widzi ekran) i palcem (klika).
+
+Dostaje od MAIN-a jedno zadanie napisane zwyklymi slowami i ma na
+nie 25 wywolan narzedzi. Gdy sie skoncza — zadanie bylo za duze i
+zespol dostaje o tym fakt.
+
+Zespol NIE WIE o jego istnieniu. W v345 wycielismy z wiadomosci
+wszystkie wzmianki — zostaly trzy, i wszystkie trzy sa w bledach
+adresowanych DO NIEGO, gdy sam zle wywola narzedzie.
+
+Ma do dyspozycji 42 narzedzia:
+
+  TERMUX (13)
+    termux_run                komenda, do 120 s
+    termux_run_background     dluga robota, do 30 min, z podgladem
+    termux_check_process      czy jeszcze chodzi
+    termux_stop_process       zatrzymaj
+    termux_processes          co chodzi
+    termux_read_file          przeczytaj plik
+    termux_write_file         zapisz plik
+    termux_patch_file         popraw fragment
+    termux_ls                 co w katalogu
+    termux_mkdir              zaloz katalog
+    termux_delete             skasuj
+    termux_file_exists        czy jest
+    termux_check_apk          czy APK poprawny
+    termux_start_second_session   druga sesja terminala
+
+  ANDROID (16)
+    android_state             co na ekranie (hierarchia widokow)
+    android_screenshot        zrzut ekranu
+    android_screenshot_ocr    zrzut + odczyt tekstu
+    android_click             klik w tekst
+    android_click_resource    klik w element po id
+    android_tap               klik we wspolrzedne
+    android_long_click        przytrzymaj
+    android_swipe             przesun
+    android_type              wpisz tekst
+    android_paste_text        wklej
+    android_press             przycisk systemowy
+    android_set_clipboard     ustaw schowek
+    android_launch_app        uruchom aplikacje
+    android_install_apk       zainstaluj
+    android_uninstall_app     odinstaluj
+    android_list_packages     jakie aplikacje sa
+    android_logcat            log systemu
+    android_assert_text_visible   czy tekst jest na ekranie
+    android_run_in_new_window     uruchom w nowym oknie
+
+  CHROME (5)
+    chrome_open               otworz adres
+    chrome_tabs               jakie karty
+    chrome_inspect            co na stronie
+    chrome_click              klik
+    chrome_type               wpisz
+    chrome_execute_js         wykonaj JS
+
+  POZOSTALE
+    shell                     komenda w powloce
+    ask_deepseek              zapytaj Anie, gdy stanie w polowie
+
+
+=========================================================================
+CZESC 7. CO ROBI TERMUX
+=========================================================================
+
+Termux to zwykly terminal Linuksa na Androidzie — i to w nim
+mieszka caly ten program. agent.py chodzi wlasnie tam.
+
+W nim dzieje sie wszystko, co fizyczne:
+  - pliki, ktore pisze zespol, laduja w katalogu domowym Termuksa
+    (/data/data/com.termux/files/home)
+  - komendy wykonuja sie w jego powloce
+  - kompilacja APK, python, git, ffmpeg — wszystko tutaj
+  - dluga robota chodzi w tle i pisze do pliku logu
+
+Termux:API to dodatek, ktory daje terminalowi dostep do telefonu:
+dzwonienie, mikrofon, TTS, schowek, kontakty, bateria, czujniki.
+Komendy nazywaja sie termux-*. Program sprawdza na starcie, ktore z
+nich naprawde sa zainstalowane, i mowi to zespolowi jako fakt.
+
+ADB to druga droga do telefonu — przez nia idzie wszystko, co
+dotyczy EKRANU: klikanie, czytanie hierarchii widokow, instalacja
+APK, logcat, Chrome. Debugowanie bezprzewodowe musi byc wlaczone.
+
+Podzial jest prosty:
+    Termux  -> to, co da sie zrobic komenda
+    ADB     -> to, co trzeba zobaczyc albo kliknac
+
+
+=========================================================================
+CZESC 8. LICZBY, KTORE RZADZA
+=========================================================================
+
+  25        wywolan narzedzi na jedno zadanie Gemini
+  120 s     limit zwyklej komendy
+  1800 s    limit dlugiej roboty w tle (30 minut)
+  3         te same decyzje pod rzad = koniec
+  2         to samo wywolanie narzedzia = bierzemy stary wynik
+  3         przeglady kodu Piotra na jeden cel
+  2         rundy wymiany Marek <-> Tomek
+  5         co ile krokow idzie podsumowanie komunikacji
+  20        co ile krokow drugie spojrzenie na cel
+  30 000    siatka bezpieczenstwa na wypowiedz miedzy rolami
+  60 000    ile pliku dostaje ten, kto o niego poprosi
+  90        wiadomosc na godzine na konto DeepSeek (10 zostaje dla Ciebie)
+
+
+=========================================================================
+CZESC 9. KIEDY PROGRAM SIE ZATRZYMUJE I PYTA CIEBIE
+=========================================================================
+
+  - potrzebny Twoj palec: instalacja APK, zgoda, uprawnienie,
+    Play Protect, nieznane zrodla — tego nie zrobi zadna komenda
+  - potrzebne haslo, klucz albo zalogowanie na stronie
+  - zespol utknal: Marek blokuje plan kilka razy z rzedu z tego
+    samego powodu
+
+To, co odpiszesz, idzie do wszystkich rol i do MAIN-a pod podpisem
+"Użytkownik:" — i zostaje z nimi do konca celu.
+
+
+=========================================================================
+CZESC 10. CZEGO W TYM PROGRAMIE NIE MA
+=========================================================================
+
+  - promtow: osiem z dziesieciu rol ma 0 znakow
+  - zdan o tym, kim ktos jest i co ma robic
+  - zdan o tym, jak dziala system
+  - formatek do wypelnienia i zakazow
+  - naszych pytan doklejanych na koncu wiadomosci
+  - slowa "Gemini" w tym, co czyta zespol
+
+Zamiast tego: Python czyta to, co napisali, i robi z tego rzeczy.
+
+=========================================================================

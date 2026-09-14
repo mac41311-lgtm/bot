@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v348
+AEL-MINI AUTONOMOUS AGENT v349
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v348")
+    print("             AEL-MINI AUTONOMOUS AGENT v349")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3699,6 +3699,49 @@ def _current_topic(last_result, critic_streak):
         )
 
     return ""
+
+
+def _wspolne_dla_wolanego(rola):
+    """
+    To, co ma kazdy z zespolu — takze ten, kogo wolamy poza kolejka
+    (v349).
+
+    Piotr, Ania i Ela stoja poza glownym obiegiem: nie maja swojej
+    tury w kroku, bo nie ma sensu wolac recenzenta, gdy nie ma kodu,
+    ani Eli, gdy nic sie nie zmienilo. To jest w porzadku i tak
+    zostaje.
+
+    Ale przez to omijal ich CALY wspolny kanal: nie wiedzieli, co
+    powiedzial uzytkownik, i nie widzieli, co wypisalo to, co sami
+    napisali. Ania poprawiala kod, ktory chwile wczesniej wywalil sie
+    z konkretnym bledem w terminalu — i tego bledu nie miala.
+
+    Wolani poza kolejka dostaja wiec to samo, co reszta: zdania
+    uzytkownika i swoj wlasny log. Przez _only_if_new, wiec kazdy
+    raz.
+    """
+
+    kawalki = []
+
+    uzytkownik = _co_powiedzial_uzytkownik()
+
+    if uzytkownik:
+        kawalki.append(
+            _only_if_new(
+                rola,
+                "od_uzytkownika",
+                "\nUżytkownik:\n" + uzytkownik + "\n"
+            )
+        )
+
+    moj_log = _log_dla_autora(rola)
+
+    if moj_log:
+        kawalki.append(
+            _only_if_new(rola, "moj_log", "\n" + moj_log + "\n")
+        )
+
+    return "".join(k for k in kawalki if k)
 
 
 def _co_powiedzial_uzytkownik():
@@ -16230,7 +16273,8 @@ def ask_deepseek_hint(question):
 
     answer = deepseek(
         "CODE_FIXER",
-        "Zadanie stanęło w połowie. Pytanie:\n\n"
+        _wspolne_dla_wolanego("CODE_FIXER")
+        + "\nZadanie stanęło w połowie. Pytanie:\n\n"
         + question
     )
 
@@ -22638,7 +22682,8 @@ def review_and_fix_project_file(path, run_result):
 
     analiza = deepseek(
         "CODE_REVIEWER",
-        "Ten plik nie zadziałał. Oto on w całości, odczytany z dysku "
+        _wspolne_dla_wolanego("CODE_REVIEWER")
+        + "Ten plik nie zadziałał. Oto on w całości, odczytany z dysku "
         "przed chwilą — " + str(target) + ":\n\n"
         + tresc
         + "\n\nA tak to się skończyło przy uruchomieniu:\n"
@@ -22654,7 +22699,8 @@ def review_and_fix_project_file(path, run_result):
 
     poprawka = deepseek(
         "CODE_FIXER",
-        "Piotr przeanalizował " + str(target) + " i mówi tak:\n\n"
+        _wspolne_dla_wolanego("CODE_FIXER")
+        + "Piotr przeanalizował " + str(target) + " i mówi tak:\n\n"
         + short(analiza, 3000)
         + "\n\nA tak wygląda ten plik TERAZ, odczytany z dysku "
         "(kopiuj fragment SZUKAJ dokładnie stąd):\n\n"
@@ -23230,40 +23276,32 @@ def review_code(context=None):
             16000
         )
 
+        # v349: Piotr dostaje fakty i kod, bez formatki.
+        #
+        # Bylo tu "Zwroc: PLIK / PROBLEM / DOKLADNE MIEJSCE / PRZYCZYNA
+        # / PROPONOWANA ZMIANA / RYZYKO / TEST" plus "Nie wykonuj
+        # zmian" — czyli formularz do wypelnienia i zakaz. Dokladnie
+        # to, czego pozbylismy sie wszedzie indziej; przetrwalo
+        # tylko dlatego, ze Piotr stoi poza glownym obiegiem.
+        #
+        # Zmian i tak nie wykonuje — nie ma czym. Poprawke nanosi
+        # Python z tego, co napisze Ania.
         reviewer_message = f"""
-MAIN zgłosił problem z kodem (ta sama czynność zawiodła
-{context.get('attempt_count', '?')} razy z rzędu).
+Ta sama czynność zawiodła {context.get('attempt_count', '?')} razy
+z rzędu.
 
-TASK ID: {context.get('task_id', '')}
-NARZĘDZIE: {tool}
-ARGUMENTY: {short(json.dumps(context.get('arguments', {}), ensure_ascii=False, default=str), 1500)}
-WYNIK NARZĘDZIA: {short(json.dumps(context.get('tool_result', {}), ensure_ascii=False, default=str), 3000)}
-INTERACTION ID: {context.get('interaction_id', '')}
+Narzędzie: {tool}
+Argumenty: {short(json.dumps(context.get('arguments', {}), ensure_ascii=False, default=str), 1500)}
+Co zwróciło: {short(json.dumps(context.get('tool_result', {}), ensure_ascii=False, default=str), 3000)}
 
-PLIK:
-{Path(__file__)}
+Plik: {Path(__file__)}
 
-RELEWANTNY KOD (rzeczywiste, nazwane funkcje — nie przypadkowa
-końcówka pliku):
 {joined_context}
-
-Przeanalizuj rzeczywisty kod.
-
-Nie wykonuj zmian.
-
-Zwróć:
-PLIK
-PROBLEM
-DOKŁADNE MIEJSCE (nazwa funkcji)
-PRZYCZYNA
-PROPONOWANA ZMIANA
-RYZYKO
-TEST
 """
 
         review = deepseek(
             "CODE_REVIEWER",
-            reviewer_message
+            _wspolne_dla_wolanego("CODE_REVIEWER") + reviewer_message
         )
 
         append_memory(
@@ -23286,7 +23324,7 @@ Napisz patch. Gdy bezpiecznej poprawki nie ma, powiedz to.
 
         fixer = deepseek(
             "CODE_FIXER",
-            fixer_message
+            _wspolne_dla_wolanego("CODE_FIXER") + fixer_message
         )
 
         append_memory(
@@ -23986,13 +24024,12 @@ własne relacje:
 {_human_task_summary_lines(summaries)}
 {checklist_block}{narzedzia_block}
 {device_state_block}
-Ile z tego celu jest naprawdę zrobione? Odpowiedz samym JSON-em,
-w formacie ze swojego prompta.
+Ile z tego celu jest naprawdę zrobione?
 """
 
     raw = deepseek(
         "PROGRESS_ESTIMATOR",
-        prompt
+        _wspolne_dla_wolanego("PROGRESS_ESTIMATOR") + prompt
     )
 
     parsed = parse_json(raw)
