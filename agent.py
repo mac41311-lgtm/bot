@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v352
+AEL-MINI AUTONOMOUS AGENT v353
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v352")
+    print("             AEL-MINI AUTONOMOUS AGENT v353")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4247,6 +4247,10 @@ def start_session(name, system_prompt):
             if _teraz_fakty and _teraz_fakty != saved.get("fakty"):
 
                 try:
+                    # v353: kazda wiadomosc do DeepSeeka przechodzi
+                    # przez limiter — patrz komentarz przy trzecim
+                    # send_message w tej funkcji.
+                    _deepseek_pace(name)
                     session.send_message(_teraz_fakty)
 
                     _save_session_state(
@@ -4274,6 +4278,8 @@ def start_session(name, system_prompt):
                 log("DEEPSEEK", f"Sesja {name}: OK (wznowiona)")
 
             elif saved.get("prompt_hash") != current_hash:
+
+                _deepseek_pace(name)
 
                 session.send_message(
                     _build_prompt_update_message(
@@ -4315,6 +4321,20 @@ def start_session(name, system_prompt):
             ).strip()
 
             if _powitanie:
+
+                # v353: powitanie tez jest wiadomoscia do DeepSeeka.
+                #
+                # Do tej pory start_session() omijal _deepseek_pace,
+                # wiec ani nie czekal, ani nie dopisywal sie do okna
+                # godzinowego. W Twoim biegu z 14.09 konto 1 dostalo
+                # szesc wiadomosci (powitania MAIN-a, Kamila, Marka,
+                # Eli i Wojtka plus jedna prawdziwa), a podsumowanie
+                # pokazalo "1 wiadomosci w ostatniej godzinie z 90".
+                # Dziesiec wiadomosci na bieg bylo dla limitera
+                # niewidzialnych — dokladnie ten rodzaj slepoty,
+                # ktory konczy sie "Messages too frequent".
+                _deepseek_pace(name)
+
                 session.send_message(_powitanie)
 
             _save_session_state(
@@ -4383,67 +4403,35 @@ def start_session(name, system_prompt):
 
 
 def init_team():
+    """
+    v353: nie zakladamy rozmow na zapas.
 
-    # 7 sesji — 5 oryginalnych + CODE_REVIEWER + CODE_FIXER
-    # + 1 nowa: ENGINEER (specjalista TECHNICZNY od budowy
-    # dowolnego projektu, jaki poprosi użytkownik).
+    Bylo tu dziesiec wywolan start_session() pod rzad. Kazde wysyla
+    powitanie i CZEKA, az DeepSeek napisze cala odpowiedz — w Twoim
+    biegu z 14.09 po ~62 s na role, czyli ponad 10 minut startu na
+    tekst, ktorego nikt nigdy nie czyta (wynik send_message nie byl
+    nawet przypisywany).
 
-    start_session(
-        "MAIN",
-        MAIN_PROMPT
-    )
+    ZMIERZONE na 15 biegach: Piotr i Ania odzywaja sie w 1 z 15,
+    Ela w 10 z 15. Zakladanie im rozmowy przy kazdym uruchomieniu to
+    czysta strata — i dziesiec nowych czatow w dziesiec minut, po
+    ktorych jeden potrafil wrocic z "invalid message id".
 
-    start_session(
-        "PLANNER",
-        PLANNER_PROMPT
-    )
+    Sesja powstaje teraz przy PIERWSZYM prawdziwym wywolaniu roli —
+    ta sciezka od dawna istnieje w deepseek() ("Sesja X niedostepna
+    — proba restartu") i zaklada rozmowe z kotwica roli z v352 na
+    samym poczatku, dokladnie tak samo, jak robilo to init_team().
 
-    start_session(
-        "RESEARCHER",
-        RESEARCHER_PROMPT
-    )
-
-    start_session(
-        "CRITIC",
-        CRITIC_PROMPT
-    )
-
-    start_session(
-        "BROWSER",
-        BROWSER_PROMPT
-    )
-
-    start_session(
-        "CODE_REVIEWER",
-        CODE_REVIEWER_PROMPT
-    )
-
-    start_session(
-        "CODE_FIXER",
-        CODE_FIXER_PROMPT
-    )
-
-    start_session(
-        "ENGINEER",
-        ENGINEER_PROMPT
-    )
-
-    start_session(
-        "PROGRESS_ESTIMATOR",
-        PROGRESS_ESTIMATOR_PROMPT
-    )
-
-    start_session(
-        "WOJTEK",
-        WOJTEK_PROMPT
-    )
+    Tokena nie sprawdzamy: to wersja przegladarkowa, nie API — nie
+    da sie tego zrobic inaczej, niz wysylajac wiadomosc. Gdy sesja
+    nie wstanie, wyjdzie to przy pierwszym uzyciu roli i obsluguje
+    to juz restart sesji w deepseek().
+    """
 
     log(
         "DEEPSEEK",
-        "Aktywne sesje: "
-        + ", ".join(
-            sessions.keys()
-        )
+        "Sesje zespołu powstaną wtedy, gdy dana rola będzie "
+        "pierwszy raz potrzebna."
     )
 
 
@@ -6183,7 +6171,9 @@ def deepseek(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
 
-    Sesja jest tworzona raz w init_team() i kontynuowana przez
+    Sesja jest tworzona RAZ, przy pierwszej wiadomości do tej roli
+    w tym uruchomieniu (v353 — wcześniej robiło to init_team() dla
+    wszystkich dziesięciu na starcie), i kontynuowana przez
     cały czas życia procesu — DeepSeek widzi pełną historię
     rozmowy z daną rolą, co oznacza, że MAIN, PLANNER itd.
     "pamiętają" kontekst poprzednich kroków bez powtarzania go
@@ -6212,20 +6202,15 @@ def deepseek(name, message):
     # Tresc idzie do pliku zdarzen (.jsonl), zeby dalo sie ja
     # przeczytac slowo w slowo; w terminalu zostaje jedna linia,
     # zeby nie zasypac ekranu promptami.
-    _tresc_wyslana = str(message or "")
-
-    zapisz_zdarzenie(
-        "prompt",
-        rola=str(name),
-        znaki=len(_tresc_wyslana),
-        tresc=_tresc_wyslana
-    )
-
-    log(
-        "WYSYŁKA",
-        str(name) + " ← " + _po_ludzku_rozmiar(len(_tresc_wyslana))
-        + ": " + _poczatek_bloku(_tresc_wyslana, 70)
-    )
+    # v353: log i .jsonl powstaja TUZ PRZED wyslaniem, z tej samej
+    # zmiennej, ktora idzie do DeepSeeka — patrz nizej.
+    #
+    # Bylo tu logowanie samego "message", a wysylalismy
+    # _goal_briefing_for() + _length_notice_for() + message. W Twoim
+    # biegu z 14.09 dalo to linie "[WYSYŁKA] WOJTEK <- 0 B", mimo ze
+    # Wojtek dostal caly cel. Gorzej: pole "tresc" w .jsonl mialo
+    # ten sam brak, wiec kazdy pomiar "co rola dostala" robiony na
+    # tych plikach byl zanizony.
 
     # v320: od tej chwili liczymy, ile ta rola kazala na siebie
     # czekac. Do tej pory dalo sie to policzyc tylko recznie, z
@@ -6242,10 +6227,13 @@ def deepseek(name, message):
 
         if session is None:
 
+            # v353: to jest teraz NORMALNA sciezka pierwszego
+            # uzycia roli, a nie awaria — init_team() nie zaklada
+            # juz rozmow na zapas.
             log(
                 "DEEPSEEK",
-                f"Sesja {name} niedostępna — "
-                "próba restartu."
+                f"{name}: pierwsza wiadomość w tym uruchomieniu — "
+                "zakładam rozmowę."
             )
 
             # Pobierz prompt dla tej roli i zrestartuj.
@@ -6308,12 +6296,37 @@ def deepseek(name, message):
                 # dowiaduje sie o tym jako PIERWSZA — patrz
                 # _length_notice_for(). Do tej pory mowilismy o
                 # urwaniu wszystkim OPROCZ autora.
-                text, status = _deepseek_send_experimental(
-                    name,
-                    session,
+                # v353: JEDNA zmienna — ta sama do logu, do .jsonl
+                # i do wyslania. Skladamy ja tutaj, a nie przed
+                # petla, bo przy ponownej probie tresc bywa inna:
+                # _goal_briefing_for() oddaje cel tylko raz, a po
+                # restarcie zerwanej rozmowy cel wraca (patrz
+                # _goal_briefed.discard). Log ma pokazywac to, co
+                # naprawde poszlo w TEJ probie.
+                _tresc_wyslana = (
                     _goal_briefing_for(name)
                     + _length_notice_for(name)
                     + message
+                )
+
+                zapisz_zdarzenie(
+                    "prompt",
+                    rola=str(name),
+                    znaki=len(_tresc_wyslana),
+                    tresc=_tresc_wyslana
+                )
+
+                log(
+                    "WYSYŁKA",
+                    str(name) + " ← "
+                    + _po_ludzku_rozmiar(len(_tresc_wyslana))
+                    + ": " + _poczatek_bloku(_tresc_wyslana, 70)
+                )
+
+                text, status = _deepseek_send_experimental(
+                    name,
+                    session,
+                    _tresc_wyslana
                 )
 
                 # Eksperyment z v75 (przechwycenie statusu, który
@@ -34058,28 +34071,33 @@ Zwróć tylko JSON.
 
 def maybe_restart_team_sessions_for_new_goal():
     """
-    Pyta, czy wyczyścić trwały stan 9 sesji DeepSeek zespołu PRZED
-    ich załadowaniem (init_team()) — samo czyszczenie plików stanu,
-    BEZ wołania init_team() (to robi main(), RAZ, zaraz po tej
-    funkcji, niezależnie od odpowiedzi — dzięki temu sesje są
-    ładowane dokładnie raz, nigdy dwa razy pod rząd: wznów, a potem
-    ewentualnie wyczyść-i-wznów-ponownie).
+    Pyta, czy wyczyścić trwały stan sesji DeepSeek zespołu — samo
+    czyszczenie plików stanu, bez zakładania czegokolwiek.
 
-    Od v113 pytana JAWNIE, na samym starcie programu, PRZED
-    init_deepseek()/init_team() — a nie automatycznie tylko wtedy,
-    gdy typed cel różni się od zapisanego. Wcześniej (v31-v112):
-    init_team() ładowało 9 sesji ZE STARĄ historią bez pytania, a
-    dopiero PO wpisaniu nowego, innego celu ta funkcja kasowała je
-    i ładowała drugi raz — dwa pełne rundy inicjalizacji DeepSeek za
-    każdym razem, gdy cel się zmieniał. Teraz to jedno, jawne
-    pytanie na starcie, niezależne od tego, jaki cel użytkownik
-    poda później.
+    v353: sesje nie są już ładowane na starcie (patrz init_team()),
+    tylko przy pierwszym rzeczywistym wywołaniu roli. Ta funkcja
+    kasuje zapisany stan, więc rola, która się odezwie, założy
+    rozmowę od zera zamiast wznawiać starą.
+
+    Od v113 pytana JAWNIE, na samym starcie programu, a nie
+    automatycznie tylko wtedy, gdy wpisany cel różni się od
+    zapisanego. Jedno pytanie na starcie, niezależne od tego, jaki
+    cel użytkownik poda później.
     """
 
+    # v353: pytanie mowilo o 9 rolach i wymienialo 9 (bez Wojtka),
+    # a petla nizej kasowala wszystkie z _ROLE_ACCOUNT, czyli 10.
+    # W pytaniu o operacje nieodwracalna to jest nieprawda:
+    # zgadzasz sie na dziewiec, znika dziesiec.
+    #
+    # Lista bierze sie teraz z tego samego miejsca, co kasowanie,
+    # wiec nie ma jak sie rozjechac.
+    _role_do_resetu = list(_ROLE_ACCOUNT)
+
     if not _confirm_destructive_action(
-        "RESET 9 SESJI DEEPSEEK (MAIN, PLANNER, RESEARCHER, "
-        "CRITIC, BROWSER, CODE_REVIEWER, CODE_FIXER, "
-        "ENGINEER, PROGRESS_ESTIMATOR) — zespół zacznie od zera, "
+        "RESET " + str(len(_role_do_resetu)) + " SESJI DEEPSEEK ("
+        + ", ".join(_role_do_resetu)
+        + ") — zespół zacznie od zera, "
         "bez pamięci poprzedniej rozmowy (świeży system_prompt dla "
         "każdej roli)"
     ):
@@ -34090,7 +34108,7 @@ def maybe_restart_team_sessions_for_new_goal():
         )
         return
 
-    for name in _ROLE_ACCOUNT:
+    for name in _role_do_resetu:
         _clear_session_state(name)
 
     # Nowy, niepowiązany cel nie powinien dziedziczyć "już otwarte w
@@ -34101,8 +34119,9 @@ def maybe_restart_team_sessions_for_new_goal():
 
     log(
         "DEEPSEEK",
-        "Wyczyszczono stan 9 sesji zespołu — załadują się od zera "
-        "(bez kontekstu poprzedniej rozmowy)."
+        "Wyczyszczono stan " + str(len(_role_do_resetu))
+        + " sesji zespołu — założą się od zera "
+        "(bez kontekstu poprzedniej rozmowy), gdy będą potrzebne."
     )
 
 
@@ -34741,14 +34760,12 @@ def main():
         sys.exit(1)
 
     # ----------------------------------------------------------
-    # Sprzątanie/reset — PRZED załadowaniem sesji zespołu (v113),
-    # zamiast (jak wcześniej, v31-v112) automatycznie tylko wtedy,
-    # gdy wpisany cel różni się od zapisanego. Jedno jawne pytanie
-    # na starcie, niezależnie od tego, jaki cel zapadnie później —
-    # dzięki temu init_team() poniżej ładuje sesje dokładnie RAZ
-    # (świeże, jeśli zresetowano stan powyżej, wznowione w
-    # przeciwnym razie), zamiast wznawiać stare i ewentualnie zaraz
-    # potem kasować je i wznawiać drugi raz.
+    # Sprzątanie/reset — jedno jawne pytanie na starcie (v113),
+    # niezależnie od tego, jaki cel zapadnie później.
+    #
+    # v353: sesji nie ładujemy tu w ogóle. Rola zakłada rozmowę,
+    # gdy pierwszy raz ma coś powiedzieć — więc wyczyszczenie stanu
+    # powyżej po prostu znaczy, że założy ją od zera.
     # ----------------------------------------------------------
 
     maybe_clear_previous_session_data()
