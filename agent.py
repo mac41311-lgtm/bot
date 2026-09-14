@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v347
+AEL-MINI AUTONOMOUS AGENT v348
 
 ARCHITEKTURA:
 
@@ -1270,6 +1270,7 @@ def ustaw_krok(numer):
     # _log_dla_autora().
     if _biezacy_krok != poprzedni:
         del _uruchomienia_kroku[:]
+        del _przybylo_w_kroku[:]
 
     zapisz_zdarzenie("krok")
 
@@ -2072,14 +2073,64 @@ _AGENT_DIR_PROTECTED_SECOND_LEVEL_NAMES = {
 _gdzie_zapisalismy = {}
 
 
+# v348: co przybylo na dysku W TYM KROKU.
+#
+# Uzytkownik: "zapisujmy te pliki, co tworza komendy itp., a Main je
+# porzadkuje i daje do uruchomienia".
+#
+# Sledzimy je od dawna (_track_project_path + _zglos_to_co_przybylo),
+# ale wylacznie po to, zeby na koncu celu zaproponowac sprzatanie.
+# MAIN nigdy sie nie dowiadywal, ze cos powstalo — a to on decyduje,
+# co uruchomic. W biegu 2026-09-14 18:33 zespol napisal echo.py i
+# echo_test.py, i MAIN musial to wyczytac z cudzej prozy.
+_przybylo_w_kroku = []
+
+
 def _zapamietaj_gdzie(path):
     """Nazwa pliku -> gdzie on naprawde lezy. Nigdy nie rzuca."""
 
     try:
         p = Path(str(path))
         _gdzie_zapisalismy[p.name] = str(p)
+
+        if str(p) not in _przybylo_w_kroku:
+            _przybylo_w_kroku.append(str(p))
+
     except Exception:
         pass
+
+
+def _co_przybylo_blok():
+    """
+    Jedna linia: co pojawilo sie na dysku w tym kroku i ile ma.
+    Pusty string, gdy nic nie przybylo.
+    """
+
+    pozycje = []
+
+    for sciezka in _przybylo_w_kroku:
+
+        try:
+            p = Path(sciezka)
+
+            if not p.exists():
+                continue
+
+            if p.is_dir():
+                pozycje.append(str(p) + "/")
+                continue
+
+            pozycje.append(str(p) + " (" + str(p.stat().st_size) + " B)")
+
+        except Exception:
+            continue
+
+    if not pozycje:
+        return ""
+
+    return "\nNowe na dysku w tym kroku:\n" + "\n".join(
+        "- " + x for x in pozycje
+    ) + "\n"
 
 
 def _gdzie_to_jest(tekst):
@@ -2292,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v347")
+    print("             AEL-MINI AUTONOMOUS AGENT v348")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -26495,7 +26546,27 @@ def consult_team(
         _collect_role_messages("RESEARCHER", results["RESEARCHER"])
 
         if wojtek_extra:
-            _wojtek_pending_answer = short(results["RESEARCHER"], 400)
+
+            # v348: Wojtek dostaje to, co Kamil napisal DO NIEGO — w
+            # calosci, nie pierwsze 400 znakow.
+            #
+            # Uzytkownik, pokazujac urwana w polowie odpowiedz:
+            # "tu cos skroconego, mamy rozmawiac, nie skracamy
+            # rozmowy. Chce, zeby odpowiednie rzeczy trafialy do
+            # odpowiednich rol — wtedy wszystko sie skroci".
+            #
+            # Dokladnie tak. short(..., 400) bylo ciecien na slepo:
+            # bralo pierwsze 400 znakow, czyli zwykle wstep i polowe
+            # pierwszego zdania. A Kamil odpowiada Wojtkowi po
+            # imieniu — wiec wystarczy wziac JEGO akapit i oddac go
+            # caly.
+            _dla_wojtka = _dla_tej_roli(
+                results["RESEARCHER"], "WOJTEK"
+            ).strip()
+
+            _wojtek_pending_answer = (
+                _dla_wojtka or results["RESEARCHER"]
+            )
 
     else:
 
@@ -27517,7 +27588,12 @@ tym kroku dopytać jedną osobę:
         if _od_uzytkownika_dla_maina else ""
     )
 
-    prompt = f"""{_main_topic_block}{_uzytkownik_block}
+    # v348: co powstalo na dysku w tym kroku — zeby MAIN mial to
+    # przed oczami, gdy decyduje, co uruchomic. Patrz
+    # _co_przybylo_blok().
+    _nowe_pliki = _only_if_new("MAIN", "przybylo", _co_przybylo_blok())
+
+    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}
 Co się właśnie stało:
 {_facts}
 
