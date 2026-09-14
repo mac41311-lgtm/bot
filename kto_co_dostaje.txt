@@ -1,0 +1,198 @@
+KTO CO DOSTAJE I KIEDY — AEL-MINI v348
+wyciagniete z agent.py, nie z pamieci
+=========================================================================
+
+
+CZESC 0. RAZ, NA STARCIE SESJI
+-------------------------------------------------------------------------
+
+Kazda rola, przy zakladaniu swojej rozmowy z DeepSeekiem, dostaje
+JEDNA wiadomosc:
+
+    Termux API, ADB DEBUGOWANIE, Android
+
+36 znakow. Tyle. Nikt nie dostaje ani zdania o tym, kim jest, co ma
+robic, jak pisac ani jak dziala program.
+
+Wyjatek dotyczy dwoch rol, ktorych odpowiedz Python PARSUJE
+maszynowo — do tych 36 znakow dolaczony jest sam ksztalt JSON-a:
+
+    MAIN   + 374 znaki   {"type": "TASK"|"DONE"|"FAILED"|
+                          "NEED_USER_LOGIN"|"ASK", ...}
+    Ela    +  35 znakow  {"percent": 0, "summary": ""}
+
+Promty pozostalych osmiu rol maja 0 znakow:
+Tomek, Kamil, Marek, Bartek, Ola, Wojtek, Piotr, Ania.
+
+Przy wznowieniu sesji te 36 znakow idzie ponownie tylko wtedy, gdy
+fakty o maszynie sie zmienily (inne adb, doinstalowane termux-*).
+
+Rola, ktora ma w historii prompt sprzed v337, zaczyna rozmowe od
+nowa — zamiast slyszec od nas "poprzednie instrukcje nie
+obowiazuja".
+
+
+CZESC 1. RAZ, PRZY PIERWSZEJ WIADOMOSCI W DANYM CELU
+-------------------------------------------------------------------------
+
+Cel — Twoimi slowami, bez ramki, bez naszego komentarza. Doklejany
+do pierwszej wiadomosci do tej roli w tym celu i nigdy wiecej.
+Nowy cel czysci te pamiec.
+
+
+CZESC 2. KOLEJNOSC W KROKU
+-------------------------------------------------------------------------
+
+    1. Ola (BROWSER)      — streszcza wynik poprzedniego kroku
+    2. Wojtek             — patrzy na cel po ludzku
+    3. Kamil (RESEARCHER) — sprawdza fakty
+    4. Tomek (PLANNER)    — planuje krok
+    5. Ola (BROWSER)      — drugi raz, gdy jest co czytac
+    6. Bartek (ENGINEER)  — kod i komendy
+    7. Marek (CRITIC)     — ocenia plan
+    8. MAIN               — decyduje
+    9. Gemini             — wykonuje
+
+Kamil PRZED Tomkiem celowo: jego ustalenia maja wplynac na plan z
+TEGO kroku, nie z nastepnego.
+
+Kto sie NIE odzywa w danym kroku:
+  - Wojtek     — gdy nie mamy dla niego nic prawdziwego
+  - Ola        — gdy z poprzedniego kroku zostal sam wiersz stanu
+  - Kamil      — gdy nikt nie pyta o fakty i nikt go nie zawolal
+  - Bartek     — gdy nikt nie prosil o kod i nikt go nie zawolal
+  - Marek      — gdy nie ma czego oceniac
+Jego ostatnia wypowiedz idzie wtedy dalej pod podpisem
+"Bartek, wcześniej:".
+
+
+CZESC 3. CO DOSTAJE KAZDY (wspolny rdzen)
+-------------------------------------------------------------------------
+
+Kazdy blok idzie przez filtr powtorek: kto juz to widzial, nie
+dostaje drugi raz.
+
+  temat                  czym sie teraz zajmujemy
+  delegacja              gdy ktos przekazal komus robote
+  pliki                  stan dysku wobec celu
+  checklista             punkty celu i co z nich potwierdzone
+  decyzja MAIN-a         "MAIN:" + jego ostatnia decyzja
+  uwagi z narzedzi       co Python zauwazyl w wynikach
+  Python zauwazyl        fakty ustalone przez sam kod
+  Uzytkownik:            to, co napisales — w calosci
+  komendy termux-*       spis tego, co jest na telefonie
+  moj log                co wypisalo to, co TA osoba napisala
+  skrzynka               co koledzy napisali do niej po imieniu
+  stan Chrome            gdy cel dotyczy przegladarki
+  stan ekranu Androida   gdy cel dotyczy telefonu
+
+MOJ LOG — wyglada tak i nie jest skracany:
+
+    $ bash ~/build_apk.sh 2>&1 | tee ~/build.log
+    ### 3/6 Budowanie APK przez Gradle
+    ERROR: JAVA_HOME is set to an invalid directory: (...)
+    kod wyjścia: 1
+
+Dopasowanie po tym, co widac: plik, ktorego tresc pochodzi od tej
+osoby, albo komenda stojaca doslownie w jej wypowiedzi. Cudzego
+loga nikt nie dostaje.
+
+
+CZESC 4. CO DOSTAJE KTO — OSOBNO
+-------------------------------------------------------------------------
+
+OLA (BROWSER)
+  surowy material z poprzedniego kroku i nic wiecej
+  NIE dostaje: zadnego polecenia, co ma z nim zrobic
+  pomijana, gdy z kroku zostal sam wiersz stanu
+
+WOJTEK
+  pierwsza tura:  sam cel
+  kolejne:        odpowiedz Kamila na to, o co Wojtek pytal —
+                  CALY jego akapit, nie 400 znakow (v348)
+  NIE dostaje: stanu dysku, maszynowni, wynikow narzedzi
+  gdy nie mamy nic prawdziwego — nie piszemy do niego wcale
+
+KAMIL (RESEARCHER)
+  rdzen BEZ maszynowni: bez "Python zauwazyl", bez surowych
+  zrzutow narzedzi, bez odpowiedzi na pytania o pliki
+  + wypowiedz Wojtka, gdy Wojtek go o cos pytal
+  + linia od Oli, gdy napisala cos wprost do niego
+
+TOMEK (PLANNER)
+  pelny rdzen
+  + "Kamil:" — jego czesc wypowiedzi Kamila
+  + "Wojtek:" — jego czesc wypowiedzi Wojtka
+  + zarzut Marka do poprzedniego planu
+
+BARTEK (ENGINEER)
+  pelny rdzen
+  + "Tomek proponuje:" — plan, w calosci, niecienty
+  + "Kamil:" i "Wojtek:" — ich czesci
+  + tresc pliku, o ktory chodzi
+  + swoj log z terminala (czesc 3)
+
+MAREK (CRITIC)
+  pelny rdzen
+  + "Tomek proponuje:" — plan do oceny
+  + tresc pliku, o ktory chodzi
+
+PIOTR (CODE_REVIEWER) i ANIA (CODE_FIXER)
+  wolani osobno, gdy jest kod do przejrzenia albo naprawy
+  dostaja plik i pytanie, nic wiecej
+  Ania, gdy zadanie stanelo: "Zadanie stanęło w połowie. Pytanie:"
+
+ELA (PROGRESS_ESTIMATOR)
+  material o postepie, oddaje sam JSON z procentem
+
+MAIN
+  + "Nowe na dysku w tym kroku:" — lista z rozmiarami (v348)
+  + "Użytkownik:" — to, co napisales
+  + co sie stalo w poprzednim kroku
+  + wypowiedzi wszystkich, pod imionami
+  + stan Chrome i ekranu, gdy cel tego dotyczy
+  KOD widzi jako jedna linie (v347):
+      [echo.py — 1247 znaków]
+      [build.gradle — 202 znaków]
+  bo decyduje, a nie pisze. Zmierzone: 47 537 -> 26 634 znaki.
+
+
+CZESC 5. CZEGO NIE DOSTAJE NIKT
+-------------------------------------------------------------------------
+
+  - zdan o tym, kim jest i co ma robic
+  - zdan o tym, jak dziala program
+  - slowa "Gemini" (zostaly 3 wzmianki, wszystkie w bledach DO
+    NIEGO, gdy sam zle wywola narzedzie)
+  - naszych pytan na koncu wiadomosci
+  - podpowiedzi, jak pisac ani w jakim formacie
+  - kodu, ktory juz lezy na dysku — zamiast niego:
+      [va_final.sh — 18676 znaków, na dysku]
+
+
+CZESC 6. CZEGO NIE TNIEMY
+-------------------------------------------------------------------------
+
+Zadna wypowiedz roli nie idzie do innej roli przez short().
+Przejscia maja siatke bezpieczenstwa na 30 000 znakow; gdy kiedys
+do niej dojdzie, odbiorca dostaje to powiedziane wprost.
+
+Kto poprosi o plik, dostaje go w calosci — do 60 000 znakow.
+
+Cudza wypowiedz jest CIETA WEDLUG ADRESATA, nie wedlug dlugosci:
+akapit "Kamilu: ..." idzie do Kamila caly, a do Bartka nie idzie
+wcale.
+
+
+CZESC 7. CO WRACA DO CIEBIE
+-------------------------------------------------------------------------
+
+  - log na ekranie i w pliku przebiegu
+  - kopia na telefon po kazdym kroku i przy zamknieciu (Ctrl+C)
+  - podsumowanie komunikacji co 5 krokow
+  - pytanie, gdy potrzebny jest Twoj palec: instalacja, zgoda,
+    uprawnienie, Play Protect (v341) — wtedy program CZEKA
+  - to, co odpiszesz, idzie do wszystkich rol i do MAIN-a
+    pod podpisem "Użytkownik:" (v341)
+
+=========================================================================
