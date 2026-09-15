@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v353
+AEL-MINI AUTONOMOUS AGENT v354
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v353")
+    print("             AEL-MINI AUTONOMOUS AGENT v354")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6274,9 +6274,6 @@ def deepseek(name, message):
 
             try:
 
-                _deepseek_pace(name)
-                _activate_account_for_role(name)
-
                 # DIAGNOSTYKA z v70-72 (jednorazowy dir(response) +
                 # test "content" przed "text") juz rozstrzygnela
                 # sprawe rozumowania: potwierdzone czytaniem realnego
@@ -6308,6 +6305,60 @@ def deepseek(name, message):
                     + _length_notice_for(name)
                     + message
                 )
+
+                # v354: pustej wiadomosci nie wysylamy.
+                #
+                # ZMIERZONE, bieg 2026-09-15 20:03: cztery razy
+                # (kroki 5, 6, 9, 10) poszlo do Kamila 0 B. DeepSeek
+                # odrzuca to z biz_code 6 "missing prompt or ref
+                # file", my restartujemy sesje — i cztery razy
+                # nic z tego nie wynikalo.
+                #
+                # Skad zero: Kamil dostaje najmniej ze wszystkich
+                # (bez maszynowni, plikow, Androida i Chrome). Gdy
+                # filtr powtorek odetnie wszystkie jego bloki jako
+                # "juz to widzial", z _team_context wychodzi pusty
+                # string. Przed v353 nie bylo tego widac w logu, bo
+                # logowalismy samo "message".
+                #
+                # TO NIE JEST ten sam przypadek, co pusta ODPOWIEDZ
+                # DeepSeeka. Tamto zyje nizej, w tej samej funkcji:
+                # gdy przyszlo samo myslenie, dopytujemy w tej samej
+                # rozmowie ("Podaj wynik." / _o_co_pytal_kolega) bez
+                # myslenia. Ten mechanizm zostaje nietkniety — tu
+                # chodzi WYLACZNIE o to, zeby nie wysylac pustego
+                # pytania.
+                #
+                # Praca roli sie przez to nie konczy: idzie dalej jej
+                # ostatnia znana wypowiedz, tak samo jak wtedy, gdy
+                # rola nie jest w tym kroku pytana. W nastepnym kroku
+                # bedzie pytana normalnie.
+                if not _tresc_wyslana.strip():
+
+                    log(
+                        "DEEPSEEK",
+                        _ROLE_DISPLAY_NAME.get(name, str(name))
+                        + ": nie mam dla niego nic nowego w tym "
+                        "kroku — nie wysyłam pustej wiadomości. "
+                        "Idzie ostatnia znana odpowiedź."
+                    )
+
+                    return (
+                        _podpis_starej_wypowiedzi(
+                            _ROLE_DISPLAY_NAME.get(name, str(name)),
+                            name
+                        )
+                        + _role_response_cache.get(
+                            name, "(nie był jeszcze pytany.)"
+                        )
+                    )
+
+                # v354: limiter dopiero TU — juz po guardzie wyzej.
+                # Gdyby stal wczesniej, wiadomosc, ktorej nie
+                # wysylamy, i tak zajmowalaby miejsce w oknie
+                # godzinowym i kazala czekac 45 s.
+                _deepseek_pace(name)
+                _activate_account_for_role(name)
 
                 zapisz_zdarzenie(
                     "prompt",
@@ -15232,9 +15283,162 @@ def _to_dluga_robota(command):
     )
 
 
+# ============================================================
+# v354: termux_run PRZESTAJE BYC FURTKA DO PISANIA KODU
+# ============================================================
+#
+# ZMIERZONE, bieg 2026-09-15 20:03. Na 19 wywolan narzedzi
+# 17 to termux_run, a SIEDEM z nich zapisywalo plik heredokiem
+# (`cat > ~/parse_test.sh << 'EOF'`). Kontrola autorstwa stoi
+# wylacznie w termux_write_file, wiec te siedem jej nie dotknelo.
+#
+# Widac to w logu co do minuty. Krok 3:
+#
+#   [GEMINI] narzedzie #1: termux_write_file
+#   [GEMINI] Nie zapisalem parse_test.sh — nie mam jeszcze kodu
+#            Bartka do tego pliku.
+#
+# Blokada zadzialala. Krok 4, chwile pozniej:
+#
+#   [GEMINI] narzedzie #1: termux_run
+#     command: "cat > ~/parse_test.sh << 'EOF_P1' #!/usr/bin/env
+#               bash ..."
+#
+# Ten sam plik, ta sama tresc, inna droga. I nie skonczylo sie na
+# zapisie: Gemini uruchomil skrypt, zobaczyl szesc FAIL-i, SAM
+# poprawil regex (dopisal jutro|piatek|maja|pojutrze|tydzien|...)
+# i uruchomil ponownie. Czyli napisal kod, przetestowal go i
+# zdebugowal — cala prace Bartka.
+#
+# Zamykamy tylko te droge. Zwykly termux_run zostaje bez zmian:
+# przekierowania do logow (`cmd > plik.log`), `sed -i` na
+# istniejacym pliku, kopiowanie (`cat a.sh > b.sh`) — nic z tego
+# tu nie wpada. Lapiemy wylacznie `cat >`, `cat >>`, `tee`,
+# `tee -a` celujace w PLIK Z KODEM.
+
+_KOD_SUFIKSY = (".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash")
+
+# `cat > plik`, `cat >> plik` — bez argumentow miedzy, zeby
+# `cat a.sh > b.sh` (kopiowanie) tu nie wpadlo.
+_CAT_DO_PLIKU_RE = re.compile(
+    r"(?:^|[;&|]|\n)\s*cat\s*>>?\s*(?P<plik>[^\s<>|;&]+)"
+)
+
+# `... | tee plik`, `... | tee -a plik`, `tee > plik`
+_TEE_DO_PLIKU_RE = re.compile(
+    r"(?:^|[;&|]|\n)\s*tee\s+(?:-a\s+)?>?\s*(?P<plik>[^\s<>|;&-][^\s<>|;&]*)"
+)
+
+
+def _pliki_pisane_komenda(command_str):
+    """
+    Sciezki, ktore ta komenda ZAPISUJE przez cat/tee.
+
+    Zwraca [(sciezka, tresc heredoca albo None), ...].
+    """
+
+    tekst = str(command_str or "")
+    out = []
+
+    for rx in (_CAT_DO_PLIKU_RE, _TEE_DO_PLIKU_RE):
+        for m in rx.finditer(tekst):
+            sciezka = m.group("plik").strip().strip("'\"")
+            if not sciezka or sciezka.startswith("/dev/"):
+                continue
+            out.append((sciezka, _tresc_z_heredoc(tekst, sciezka)))
+
+    return out
+
+
+def _to_samo_co_do_znaku(a, b):
+    """Ta sama tresc, z pominieciem bialych znakow."""
+
+    return "".join(str(a or "").split()) == "".join(str(b or "").split())
+
+
+def _gemini_pisze_kod(command_str):
+    """
+    Czy ta komenda tworzy plik z KODEM, ktorego nie napisal autor.
+
+    Zwraca (sciezka, powod) albo None. Ta sama zasada, co w
+    termux_write_file: blokujemy pisanie PROGRAMOW, nie pisanie
+    w ogole — plik z danymi (`cat > limits.md << EOF`) przechodzi
+    normalnie.
+    """
+
+    for sciezka, tresc in _pliki_pisane_komenda(command_str):
+
+        p = _resolve_home_relative_path(sciezka)
+
+        _kod_po_nazwie = p.suffix.lower() in _KOD_SUFIKSY
+        _kod_po_shebangu = str(tresc or "").lstrip().startswith("#!")
+
+        if not (_kod_po_nazwie or _kod_po_shebangu):
+            continue
+
+        # custom_tools/ to sankcjonowana sciezka rozszerzania agenta
+        # — dokladnie ten sam wyjatek, co w termux_write_file.
+        try:
+            if CUSTOM_TOOLS_DIR.resolve() in p.resolve().parents:
+                continue
+        except Exception:
+            pass
+
+        _kod_autora, _ = _tresc_napisana_dla(p)
+
+        if _kod_autora and _to_samo_co_do_znaku(tresc, _kod_autora):
+            # Gemini przepisuje kod autora 1:1 — to nie jest pisanie,
+            # to przepisywanie. Ale i tak nie ma po co: Python poklada
+            # ten plik sam, bez literowek. Przepuszczamy.
+            continue
+
+        return (
+            str(p),
+            "nie mam jeszcze kodu Bartka do tego pliku"
+            if not _kod_autora else
+            "to nie jest kod Bartka — tresc w komendzie jest inna"
+        )
+
+    return None
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
+
+        # v354: zapis kodu przez cat/tee przechodzi te sama kontrole
+        # autorstwa, co termux_write_file — patrz _gemini_pisze_kod().
+        # Reszta termux_run bez zmian: `sed -i`, przekierowania do
+        # logow, kopiowanie plikow i wszystko inne leci jak leciało.
+        _pisze_kod = _gemini_pisze_kod(command_str)
+
+        if _pisze_kod:
+
+            _sciezka, _powod = _pisze_kod
+
+            log(
+                "GEMINI",
+                "Nie uruchomilem tej komendy — tworzy "
+                + Path(_sciezka).name + " z kodem, a " + _powod + "."
+            )
+
+            return {
+                "ok": False,
+                "error": "BRAK_KODU_DO_ZAPISU",
+                "path": _sciezka,
+                "command": command_str,
+                "message": (
+                    "Tej komendy nie uruchomilem — zapisuje "
+                    + Path(_sciezka).name + " z kodem, a " + _powod
+                    + ". Kod do plikow pisze Bartek, a na dysk klade "
+                    "go ja, przez termux_write_file — 1:1, bez "
+                    "literowek. Ty ten plik uruchamiasz. Bartek "
+                    "odzywa sie, gdy ktos go zawola po imieniu albo "
+                    "gdy padnie ten wlasnie brak — napisz w "
+                    "raporcie, czego tu brakuje."
+                ),
+                "duration_s": 0.0
+            }
 
         # Otwieranie strony, ktora juz wisi w Chrome, tylko mnozy
         # karty — patrz _przelacz_na_karte(). Zamiast tego wyciagamy
