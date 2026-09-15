@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v354
+AEL-MINI AUTONOMOUS AGENT v355
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v354")
+    print("             AEL-MINI AUTONOMOUS AGENT v355")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28278,6 +28278,44 @@ def _handle_main_ask(
         ask_role + " ODPOWIEDŹ NA PYTANIE MAIN: "
         + short(str(answer), 300)
     )
+
+    # v355: odpowiedz na ASK to normalna wypowiedz tej roli.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-15 21:20, krok 1).
+    # Bartka nie bylo w zwyklej naradzie tego kroku. MAIN zapytal go
+    # przez ASK, Bartek odpowiedzial 9664 znakami z kompletnym
+    # blokiem ```python (9650 znakow kodu, sprawdzone: prawdziwa
+    # extract_code_block wyciaga go bez problemu). MAIN od razu
+    # zlecil TASK z write_engineer_code_to="~/assistant.py" — i
+    # dostal ENGINEER_CODE_MISSING.
+    #
+    # Bo odpowiedz szla WYLACZNIE do prompta MAIN-a, jako
+    # asked_followup. team zostawalo nietkniete, wiec
+    # team["engineer_full"] bylo puste. Rezerwa _kod_autora_dla()
+    # tez nie pomagala: _zapamietaj_kod_autora bylo wolane tylko w
+    # consult_team, a ta funkcja i tak wymaga, zeby wypowiedz
+    # WYMIENIALA nazwe pliku — a odpowiedz Bartka zaczynala sie od
+    # razu od bloku, bez ani jednego slowa nad nim.
+    #
+    # Efekt: MAIN pyta o kod, dostaje kod, mowi "zapisz", slyszy
+    # "nie mam kodu Bartka". Przeczytal to jako uciecie odpowiedzi,
+    # zapytal drugi i trzeci raz, po czym slusznie stwierdzil, ze
+    # powtarzanie nic nie da — WNIOSEK_ZE_SIE_NIE_DA, cztery kroki,
+    # zero dotkniec telefonu. To samo stalo za BRAK_KODU_DO_ZAPISU w
+    # biegu 20:03.
+    #
+    # team to ten sam obiekt, ktory trzyma run_agent (przekazywany
+    # przez referencje), wiec zapis widzi te wypowiedz od razu, w
+    # tym samym kroku.
+    if ask_role == "ENGINEER":
+        team["engineer_full"] = answer
+
+    if isinstance(team.get("kod_full"), dict):
+        team["kod_full"][ask_role] = answer
+
+    # ...i zeby przetrwala do nastepnych krokow, tak samo jak kazda
+    # inna wypowiedz z narady (patrz _zapamietaj_kod_autora).
+    _zapamietaj_kod_autora(ask_role, answer)
 
     raw = main_decide(
         goal,
