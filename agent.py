@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v359
+AEL-MINI AUTONOMOUS AGENT v360
 
 ARCHITEKTURA:
 
@@ -2455,7 +2455,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v359")
+    print("             AEL-MINI AUTONOMOUS AGENT v360")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15463,8 +15463,28 @@ _KOD_SUFIKSY = (".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash")
 
 # `cat > plik`, `cat >> plik` — bez argumentow miedzy, zeby
 # `cat a.sh > b.sh` (kopiowanie) tu nie wpadlo.
+# v360: heredoc MOZE stac przed przekierowaniem.
+#
+# Bash przyjmuje obie kolejnosci i znacza to samo:
+#     cat > plik << 'EOF'      <- te lapalismy od v354
+#     cat << 'EOF' > plik      <- tej NIE
+#
+# ZAOBSERWOWANE NAPRAWDE (bieg 2026-09-16 19:38). Gemini uzylo
+# drugiej postaci trzy razy — krok 7 dwa razy do
+# ~/setup_plan_and_env.sh i krok 9 do ~/backend/finalize_setup.sh —
+# i za kazdym razem polozylo na dysku wlasny kod, obok calego
+# mechanizmu autorstwa. Miedzy `cat` a `>` stal wtedy `<< 'EOF'`,
+# wiec `cat\s*>>?` sie nie zlapalo. Przez _PRZEKIEROWANIE_RE tez nie
+# przechodzi: `cat` nie jest w _WYPISUJE, bo od zawsze mial byc
+# obslugiwany wlasnie tutaj.
+#
+# Dopuszczamy wiec znacznik heredoca miedzy `cat` a `>`. Zwykly
+# odczyt (`cat plik`, `cat a | sed ...`) dalej tu nie wpada —
+# przekierowanie jest nadal wymagane.
 _CAT_DO_PLIKU_RE = re.compile(
-    r"(?:^|[;&|]|\n)\s*cat\s*>>?\s*(?P<plik>[^\s<>|;&]+)"
+    r"(?:^|[;&|]|\n)\s*cat\s*"
+    r"(?:<<-?\s*[\"']?[A-Za-z_]\w*[\"']?\s*)?"
+    r">>?\s*(?P<plik>[^\s<>|;&]+)"
 )
 
 # `... | tee plik`, `... | tee -a plik`, `tee > plik`
@@ -17445,7 +17465,32 @@ def _dispatch_tool_inner(
         # ====================================================
 
         if name == "shell":
-            return execute_shell(
+
+            # v360: "shell" i "termux_run" to dla Gemini DWIE NAZWY
+            # TEJ SAMEJ RZECZY — obie "wykonaj komende w Termuxie".
+            # Ale straznik autorstwa kodu (_gemini_pisze_kod,
+            # _gemini_zmienia_cudzy_kod) mieszka w termux_run(), a ta
+            # galaz szla prosto do execute_shell(). Wystarczylo wiec
+            # wybrac druga nazwe, zeby przejsc obok calej kontroli.
+            #
+            # ZAOBSERWOWANE NAPRAWDE (bieg 2026-09-16 19:38). Cztery
+            # wywolania "shell" w calym biegu, TRZY z nich to bylo
+            # "cat << 'EOF' > plik" z kodem w srodku:
+            #   krok 7, dwa razy -> ~/setup_plan_and_env.sh
+            #   krok 9          -> ~/backend/finalize_setup.sh
+            # Za kazdym razem po tym, jak przez termux_write_file
+            # (czyli legalnie, przez Pythona) trafila na dysk inna
+            # tresc, niz Gemini uwazal za sluszna. Przez termux_run
+            # ta sama komenda dostalaby BRAK_KODU_DO_ZAPISU.
+            #
+            # To dokladnie ten sam wniosek, co v262 nizej: "przez
+            # termux_run, nie przez gole execute_shell — to tam
+            # mieszkaja strazniki". Tamten skrot juz domknelismy,
+            # ten zostal. termux_run() to nadbudowa nad
+            # execute_shell(): dokłada kontrole autorstwa,
+            # przelaczanie kart Chrome, programy bez konca i raport
+            # z tego, co przybylo pod $HOME. Nic nie ubywa.
+            return termux_run(
                 args.get("command", "")
             )
 
@@ -34017,29 +34062,38 @@ Zwróć tylko JSON.
                 # found" itp.). Zaobserwowane naprawdę.
                 # --------------------------------------------------
 
+                # v360: DOMKNIECIE SYMETRII. Ta galaz tez siedzi w
+                # srodku "if write_target:", czyli TAM, GDZIE
+                # KONTRAKT ZAPISU JUZ ISTNIEJE. Obowiazuje wiec ta
+                # sama zasada, co gałaź wyzej (v359): gdy MAIN
+                # powiedzial "zapisz kod ENGINEER do TEGO pliku",
+                # odpowiedz autora jest trescia tego pliku. Python
+                # jest rekami, nie cenzorem — kladzie to, o co
+                # poproszono, i nie zabija calego kroku za zla
+                # koncowke nazwy.
+                #
+                # Zastrzezenie zostaje, tylko zmienia forme: bash
+                # NAPRAWDE wyplunie na Pythonie same bledy skladni.
+                # Dlatego mowimy o tym glosno w logu. Zespol zobaczy
+                # to od razu w nastepnym kroku — w prawdziwym
+                # "import: command not found" z uruchomienia — i
+                # sam poprawi nazwe albo tresc. To jest informacja
+                # dla rozmowy, a nie powod, zeby krok przepadl.
                 if _looks_like_python_script(
                     engineer_code,
                     target_path
                 ):
 
-                    last_result = {
-                        "status":
-                            "ENGINEER_CODE_LOOKS_LIKE_PYTHON_SCRIPT",
-                        "message": (
-                            "Kod od Bartka to Python, a plik "
-                            "docelowy ma końcówkę .sh ("
-                            + str(target_path) + ") — bash "
-                            "wypluje na tym same błędy składni, "
-                            "więc go tam nie położyłem. Wystarczy "
-                            "ta sama treść pod nazwą .py i "
-                            "uruchomienie przez python3. "
-                            "Jeżeli to miał być czysty Bash — "
-                            "poproś ENGINEER o kod bez składni "
-                            "Pythona."
-                        )
-                    }
-
-                    continue
+                    log(
+                        "MAIN",
+                        "Blok od Bartka wygląda jak Python, a "
+                        + target_path.name + " ma końcówkę .sh — "
+                        "ale MAIN poprosił o zapis właśnie tam, "
+                        "więc to jest treść tego pliku. Zapisuję. "
+                        "Uwaga przy uruchamianiu: bash wyłoży się "
+                        "na składni Pythona — ten plik należy "
+                        "puścić przez python3."
+                    )
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: gdy cel to .py, sprawdź NAPRAWDĘ,
