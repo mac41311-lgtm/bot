@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v358
+AEL-MINI AUTONOMOUS AGENT v359
 
 ARCHITEKTURA:
 
@@ -2455,7 +2455,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v358")
+    print("             AEL-MINI AUTONOMOUS AGENT v359")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -33971,41 +33971,43 @@ Zwróć tylko JSON.
 
                     else:
 
-                        # Bez pokazania, KTORY fragment o tym
-                        # zadecydowal, Bartek odsyla dokladnie ten
-                        # sam blok, a Tomek czyta to jako "kod nie
-                        # dotarl" (log 2026-09-06, trzy kroki z
-                        # rzedu). Cytujemy wiec konkretna linie.
-                        _trafienie = (
-                            _SHEBANG_POWLOKI_RE.search(engineer_code)
-                            or _SHELL_SCRIPT_MARKERS.search(
-                                engineer_code
-                            )
+                        # v359: jest KONTRAKT ZAPISU, wiec to jest
+                        # tresc pliku — nawet gdy wyglada jak
+                        # komendy.
+                        #
+                        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg
+                        # 2026-09-16 19:38, krok 2). MAIN zlecil
+                        # write_engineer_code_to = "~/backend",
+                        # Bartek oddal skrypt zaczynajacy sie od
+                        # "#!/data/data/com.termux/files/usr/bin/bash"
+                        # — czyli dokladnie to, o co go poproszono.
+                        # Dostal odmowe z cytatem z wlasnego
+                        # shebanga i krok skonczyl sie bez wykonania.
+                        #
+                        # Sam shebang nie jest dowodem, ze autor
+                        # chcial ten kod URUCHOMIC. Gdy MAIN
+                        # powiedzial "zapisz kod ENGINEER do TEGO
+                        # pliku", odpowiedz autora jest trescia tego
+                        # pliku — tak samo, gdy sa w niej `cd`,
+                        # `npm`, `python3` czy `bash`. Wykonaniem
+                        # zajmuje sie pozniej wykonawca, na juz
+                        # zapisanym i autoryzowanym pliku.
+                        #
+                        # Co ZOSTAJE nietkniete: rozpakowanie
+                        # heredoca wyzej. Gdy Bartek owinal tresc w
+                        # komende zapisujaca TEN plik, dalej
+                        # wyjmujemy ja ze srodka i zapisujemy sama
+                        # tresc — to byl prawdziwy powod, dla ktorego
+                        # ta kontrola powstala (build.gradle,
+                        # 2026-09-06).
+                        log(
+                            "MAIN",
+                            "Blok od Bartka wygląda jak komendy, ale "
+                            "MAIN poprosił o zapis do "
+                            + target_path.name
+                            + " — więc to jest treść tego pliku. "
+                            "Zapisuję."
                         )
-
-                        _cytat = (
-                            " Zadecydował o tym fragment: `"
-                            + short(
-                                _trafienie.group(0).strip(), 80
-                            )
-                            + "`."
-                            if _trafienie else ""
-                        )
-
-                        last_result = {
-                            "status":
-                                "ENGINEER_CODE_LOOKS_LIKE_SHELL_SCRIPT",
-                            "message": (
-                                "Blok od Bartka to komendy do "
-                                "wykonania, a nie treść pliku "
-                                + str(target_path) + " — zapisany "
-                                "dosłownie zepsułby ten plik, więc "
-                                "go nie zapisałem."
-                                + _cytat
-                            )
-                        }
-
-                        continue
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: lustrzane odbicie powyższego —
