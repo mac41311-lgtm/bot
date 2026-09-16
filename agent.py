@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v363
+AEL-MINI AUTONOMOUS AGENT v364
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v363")
+    print("             AEL-MINI AUTONOMOUS AGENT v364")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7788,11 +7788,48 @@ def android_summary(with_header=True):
             ):
                 continue
 
-            label = (
-                text
-                or desc
-                or resource
-            )
+            # v364: ETYKIETA MOWI, SKAD POCHODZI.
+            #
+            # Bylo: label = text or desc or resource. Trzy rozne
+            # rodzaje informacji wpadaly do jednego, anonimowego
+            # pola i od tego miejsca nie dalo sie ich odroznic:
+            #
+            #   text         — CO APLIKACJA WYSWIETLA na ekranie
+            #   content-desc — opis dla czytnika ekranu
+            #   resource-id  — NAZWA WIDGETU, czyli element UI
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16 21:13,
+            # kroki 9-11). Uzytkownik mial na telefonie otwarta swoja
+            # rozmowe o naprawie TEGO systemu. Zrzut drzewa
+            # dostepnosci wciagnal ja w calosci — 32 480 znakow w 13
+            # blokach, do Tomka, Bartka, Marka i MAIN-a. Wygladalo to
+            # w prompcie tak:
+            #
+            #   Najpierw popraw tylko MAIN + ASK. | click=false | ...
+            #   Uruchom istniejące testy. | click=false | ...
+            #   Pokaż diff i wynik testów. | click=false | ...
+            #
+            # Nie do odroznienia od nazwy kontrolki ani od czegokolwiek
+            # innego. MAIN odtworzyl te liste w kroku 11 jako plan do
+            # wykonania: "user ma gotowy plan: (1) najpierw popraw
+            # MAIN + ASK, uruchom testy, pokaz diff...".
+            #
+            # Niczego tu nie ukrywamy i niczego nie filtrujemy. Zespol
+            # widzi dokladnie tyle samo, co dotad — Chrome, Termux,
+            # gry, wlasnorecznie zainstalowany APK, ekrany bledow i
+            # aplikacje AI tak samo. Zmienia sie jedno: przy kazdej
+            # wartosci stoi, z ktorego atrybutu pochodzi.
+            #
+            # Wezel klikalny bez zadnej z tych trzech wartosci
+            # zostaje bez etykiety, dokladnie jak przedtem.
+            if text:
+                label = 'text="' + text + '"'
+            elif desc:
+                label = 'desc="' + desc + '"'
+            elif resource:
+                label = "id=" + resource
+            else:
+                label = ""
 
             lines.append(
                 f"{label} | "
