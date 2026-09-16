@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v356
+AEL-MINI AUTONOMOUS AGENT v357
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v356")
+    print("             AEL-MINI AUTONOMOUS AGENT v357")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -33500,19 +33500,60 @@ Zwróć tylko JSON.
 
                 if not engineer_code:
 
+                    # v357: "nie znaleziono bloku kodu" to byla
+                    # nieprawda, gdy Bartek w ogole nie byl pytany.
+                    #
+                    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg
+                    # 2026-09-16 16:32, krok 1). W naradzie byli
+                    # Wojtek, Tomek i Marek — Bartka nie bylo. MAIN
+                    # zapytal przez ASK TOMKA, po czym zlecil TASK z
+                    # write_engineer_code_to="bot.py". Dostal
+                    # "w jego ostatniej odpowiedzi nie znaleziono
+                    # bloku kodu" — czyli zdanie o odpowiedzi, ktorej
+                    # nie bylo.
+                    #
+                    # MAIN przeczytal to jak uciecie wypowiedzi
+                    # (tak samo, jak w biegu 21:20) i poszedl pytac
+                    # jeszcze raz, i jeszcze raz. A wystarczylo
+                    # powiedziec, jak jest: nikt go o to nie pytal.
+                    #
+                    # Rozroznienie jest w danych, ktore juz mamy:
+                    # team["engineer_full"] jest puste, gdy Bartek
+                    # nie byl w tej naradzie (patrz consult_team), a
+                    # niepuste, gdy mowil — tylko bez bloku kodu.
+                    _bartek_mowil = bool(
+                        str(team.get("engineer_full") or "").strip()
+                    )
+
                     last_result = {
                         "status":
                             "ENGINEER_CODE_MISSING",
                         "message": (
-                            "MAIN poprosił o zapisanie kodu "
-                            "ENGINEER do "
-                            + write_target
-                            + ", ale w jego ostatniej odpowiedzi "
-                            "nie znaleziono bloku kodu (```...```). "
-                            "Zapytaj ENGINEER "
-                            "ponownie o konkretny kod w bloku, albo "
-                            "utwórz zwykły TASK bez "
-                            "write_engineer_code_to."
+                            (
+                                "MAIN poprosił o zapisanie kodu "
+                                "ENGINEER do "
+                                + write_target
+                                + ", ale w jego ostatniej "
+                                "odpowiedzi nie znaleziono bloku "
+                                "kodu (```...```). Zapytaj ENGINEER "
+                                "ponownie o konkretny kod w bloku, "
+                                "albo utwórz zwykły TASK bez "
+                                "write_engineer_code_to."
+                            )
+                            if _bartek_mowil else
+                            (
+                                "MAIN poprosił o zapisanie kodu "
+                                "ENGINEER do "
+                                + write_target
+                                + ", ale Bartek nie był w tym kroku "
+                                "pytany — nie ma jego wypowiedzi, "
+                                "z której można by ten kod wziąć. "
+                                "To nie jest ucięta ani pusta "
+                                "odpowiedź: on się po prostu nie "
+                                "odzywał. Zawołaj go po imieniu "
+                                "albo utwórz zwykły TASK bez "
+                                "write_engineer_code_to."
+                            )
                         )
                     }
 
