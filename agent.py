@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v360
+AEL-MINI AUTONOMOUS AGENT v361
 
 ARCHITEKTURA:
 
@@ -67,6 +67,7 @@ import shutil
 import signal
 import hashlib
 import difflib
+import unicodedata
 import subprocess
 import tempfile
 import traceback
@@ -2455,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v360")
+    print("             AEL-MINI AUTONOMOUS AGENT v361")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5843,7 +5844,12 @@ def _zanotuj_odpowiedz_z_trescia(name):
 _TRUNCATION_MIN_LEN = 1500
 
 # Znaki, na ktorych wypowiedz moze sie normalnie skonczyc.
-_SENTENCE_END = ".!?\"')]}`”…»"
+#
+# v361: "。！？" (CJK). Kamil dwa razy oddal komplete odpowiedz po
+# chinsku, zakonczona "。" (U+3002) — czyli zwykla kropka, tylko nie
+# tej strony swiata. Uznalismy ja za urwana. Program ma byc
+# uniwersalny, wiec koniec zdania tez.
+_SENTENCE_END = ".!?\"')]}`”…»。！？"
 
 # Poczatki linii listy/tabeli — taka linia bez kropki na koncu to
 # normalne zakonczenie wyliczenia, nie urwanie.
@@ -5862,6 +5868,81 @@ _LIST_LINE_RE = re.compile(r"^\s*(?:[-*•+>|]|\d+[.)])\s")
 # 2437 -> 4845 -> 7307 znakow, w kazdym kroku, i wszystko to szlo do
 # calego zespolu jako opinia Marka.
 _ZDOBNIKI_NA_KONCU = "*_~ \t"
+
+# v361: TA SAMA SPRAWA, INNY ZNAK.
+#
+# Zmierzone na wszystkich zarchiwizowanych biegach: regula "brak
+# znaku konca zdania" dala 14 alarmow i 14 razy sie pomylila. Szesc
+# z nich to konczyl Bartek — "...to nie kod, to wrozenie. 🔧".
+# Kropka JEST, stoi przed emoji. Gwiazdki juz umielismy zdjac, emoji
+# nie.
+#
+# Ile kosztowal jeden taki alarm (bieg 2026-09-16, krok 2): probe
+# action='continue' -> 422 od DeepSeeka -> wylaczenie 'continue' do
+# konca biegu -> dopytanie zwykla wiadomoscia -> 5551 znakow
+# dociagnietych bez potrzeby. Do calego zespolu.
+#
+# Nie budujemy parsera zdan. Bierzemy kategorie Unicode, w ktorych
+# siedza emoji i znaczki ozdobne, i zdejmujemy je tak samo jak
+# gwiazdki:
+#   So — symbole "inne": emoji, ™, ©, ☑, strzalki ozdobne
+#   Sk — modyfikatory: odcienie skory w emoji
+#   Cf — znaki formatujace: ZWJ, czyli klej, ktorym skleja sie emoji
+#        zlozone ("👨\u200d💻")
+#   Mn — znaki laczace bez wlasnej szerokosci. Siedzi tu U+FE0F,
+#        selektor wariantu, ktory wisi na koncu "⚙️", "⚠️", "✔️",
+#        "❤️" — a wiec na wiekszosci emoji pisanych z klawiatury
+#        telefonu. Bez tej kategorii polowa emoji dalej wygladalaby
+#        na urwana. Mn nie moze zepsuc werdyktu w druga strone:
+#        zdjecie znaku laczacego odslania litere, ktora i tak nie
+#        jest koncem zdania.
+_KATEGORIE_ZDOBNIKOW = ("So", "Sk", "Cf", "Mn")
+
+
+def _bez_ozdob_na_koncu(tekst):
+    """Tekst bez koncowych ozdobnikow: gwiazdek, tyld i emoji."""
+
+    koniec = len(tekst)
+
+    while koniec:
+
+        znak = tekst[koniec - 1]
+
+        # Kropka konczy sprawe — dalej nie zagladamy.
+        if znak in _SENTENCE_END:
+            break
+
+        if znak in _ZDOBNIKI_NA_KONCU:
+            koniec -= 1
+            continue
+
+        try:
+            ozdoba = unicodedata.category(znak) in _KATEGORIE_ZDOBNIKOW
+        except Exception:
+            ozdoba = False
+
+        if not ozdoba:
+            break
+
+        koniec -= 1
+
+    return tekst[:koniec]
+
+
+# v361: podpis pod wypowiedzia.
+#
+# Szesc pozostalych falszywych alarmow to Marek konczacy "\n\n— Marek".
+# To skutek uboczny kotwic tozsamosci z v352 — role zaczely sie
+# podpisywac. Podpis nie jest urwanym zdaniem, jest podpisem.
+#
+# Waskie celowo: myslnik i najwyzej dwa slowa z wielkiej litery.
+# "— Marek ma rację i dlatego" sie tu NIE lapie (drugie slowo male),
+# wiec prawdziwe urwanie po myslniku dalej zostaje urwaniem.
+# Wariant "- Marek" obsluguje juz _LIST_LINE_RE.
+_PODPIS_RE = re.compile(
+    r"^\s*[—–]{1,2}\s*[A-ZĄĆĘŁŃÓŚŹŻ]\w*"
+    r"(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ]\w*)?\s*$"
+)
 
 
 # v299: statusy, ktore koncza krok BEZ dotkniecia telefonu. Kazdy z
@@ -5971,6 +6052,20 @@ def _deepseek_looks_truncated(text, status):
         # wypowiedz. Nie zgadujemy.
         return False, None
 
+    # v361: podpis pod wypowiedzia ("— Marek") to nie jest urwane
+    # zdanie. Zdejmujemy go i patrzymy na to, co bylo przed nim.
+    # Patrz _PODPIS_RE.
+    if _PODPIS_RE.match(stripped.split("\n")[-1]):
+
+        bez_podpisu = "\n".join(stripped.split("\n")[:-1]).rstrip()
+
+        if not bez_podpisu:
+            # Sam podpis i nic wiecej — nie ma czego uznawac za
+            # urwane.
+            return False, None
+
+        stripped = bez_podpisu
+
     ostatnia_linia = stripped.split("\n")[-1]
 
     if _LIST_LINE_RE.match(ostatnia_linia):
@@ -5979,7 +6074,8 @@ def _deepseek_looks_truncated(text, status):
 
     # Zdanie w pogrubieniu konczy sie tam, gdzie kropka — a nie tam,
     # gdzie zamykajace gwiazdki. Patrz _ZDOBNIKI_NA_KONCU.
-    bez_zdobnikow = stripped.rstrip(_ZDOBNIKI_NA_KONCU)
+    # v361: tak samo emoji na koncu — patrz _bez_ozdob_na_koncu().
+    bez_zdobnikow = _bez_ozdob_na_koncu(stripped)
 
     if bez_zdobnikow and bez_zdobnikow[-1] in _SENTENCE_END:
         return False, None
