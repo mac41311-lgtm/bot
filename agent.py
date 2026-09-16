@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v357
+AEL-MINI AUTONOMOUS AGENT v358
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v357")
+    print("             AEL-MINI AUTONOMOUS AGENT v358")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13083,16 +13083,43 @@ def termux_write_file(path, content, append=False):
             if _blokada:
                 _pending_team_warnings.append(_blokada[1])
 
+            # v358: powiedz TAKZE, czy Bartek byl w tym kroku.
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16 18:24,
+            # krok 1). W naradzie byli Wojtek, Tomek i Marek. Gemini
+            # zalozylo katalog, zapisalo trzy pliki z danymi, po czym
+            # siegnelo po app.py i uslyszalo "nie mam jeszcze kodu
+            # Bartka". Blokada zadzialala poprawnie, ale komunikat
+            # mowil tylko, KIEDY Bartek sie odzywa — nie mowil, ze w
+            # TYM kroku go nie bylo. MAIN nie wiedzial wiec, ze to on
+            # ma go zawolac, i krok skonczyl sie GEMINI_TOOL_ERROR.
+            #
+            # To samo rozroznienie, co w v357, tylko po stronie
+            # Gemini: _kod_bartka_teraz jest puste, gdy Bartka nie
+            # bylo w naradzie (patrz consult_team).
+            _bartek_byl_w_kroku = bool(
+                str(_kod_bartka_teraz or "").strip()
+            )
+
             return {
                 "ok": False,
                 "error": "BRAK_KODU_DO_ZAPISU",
                 "path": str(p),
+                "engineer_w_tym_kroku": _bartek_byl_w_kroku,
                 "message": (
                     "Nie zapisalem tego pliku — " + _powod + ". "
                     "Kod do plikow pisze Bartek, a ja go klade na "
-                    "dysk. Bartek odzywa sie, gdy ktos go zawola po "
-                    "imieniu albo gdy padnie ten wlasnie brak — "
-                    "napisz w raporcie, czego tu brakuje."
+                    "dysk."
+                    + (
+                        " Bartek NIE BYL w tym kroku pytany — nie ma "
+                        "jego wypowiedzi, z ktorej dalo by sie ten "
+                        "kod wziac. Zawolaj go po imieniu i dopiero "
+                        "potem zlec zapis."
+                        if not _bartek_byl_w_kroku else
+                        " Bartek mowil w tym kroku, ale nie o tym "
+                        "pliku — popros go o kod wlasnie do niego."
+                    )
+                    + " Napisz w raporcie, czego tu brakuje."
                 )
             }
 
@@ -15329,6 +15356,26 @@ _TEE_DO_PLIKU_RE = re.compile(
     r"(?:^|[;&|]|\n)\s*tee\s+(?:-a\s+)?>?\s*(?P<plik>[^\s<>|;&-][^\s<>|;&]*)"
 )
 
+# v358: `printf ... > plik`, `echo ... > plik`, `python -c ... > plik`.
+#
+# v354 zamykalo cat/tee, bo te dwa realnie padly w logach. Zostawilem
+# wtedy w komentarzu, ze `printf`/`echo`/`base64 -d` obejda ten guard,
+# i ze nie domykam tego bez dowodu. Uzytkownik wymienil te drogi
+# wprost jako niedozwolone — wiec domykamy je tak samo.
+#
+# Lapiemy PRZEKIEROWANIE do pliku, nie samo polecenie: interesuje nas
+# to, ze tresc laduje w pliku, a nie czym zostala wypisana. Dlatego
+# szukamy `> plik` / `>> plik` po czyms, co produkuje tekst.
+_WYPISUJE = (
+    "printf", "echo", "python", "python3", "base64", "xxd", "od",
+    "openssl", "perl", "ruby", "node",
+)
+
+_PRZEKIEROWANIE_RE = re.compile(
+    r"(?:^|[;&|]|\n)\s*(?P<prog>[\w./-]+)[^\n;&|]*?"
+    r"(?<![0-9])>>?\s*(?P<plik>[^\s<>|;&]+)"
+)
+
 
 def _pliki_pisane_komenda(command_str):
     """
@@ -15346,6 +15393,28 @@ def _pliki_pisane_komenda(command_str):
             if not sciezka or sciezka.startswith("/dev/"):
                 continue
             out.append((sciezka, _tresc_z_heredoc(tekst, sciezka)))
+
+    # v358: przekierowanie z czegos, co wypisuje tekst.
+    #
+    # `cmd > plik.log` (zwykly log z uruchomienia) nie wpada tutaj —
+    # liczy sie tylko wtedy, gdy plik jest plikiem z KODEM, a o tym
+    # rozstrzyga _gemini_pisze_kod() nizej. Tu zbieramy kandydatow.
+    for m in _PRZEKIEROWANIE_RE.finditer(tekst):
+
+        prog = m.group("prog").strip().split("/")[-1]
+
+        if prog not in _WYPISUJE:
+            continue
+
+        sciezka = m.group("plik").strip().strip("'\"")
+
+        if not sciezka or sciezka.startswith("/dev/"):
+            continue
+
+        # Tresci nie znamy (to nie heredoc) — None znaczy
+        # "nie wiem, co tam wchodzi", i wtedy o blokadzie decyduje
+        # sama nazwa pliku.
+        out.append((sciezka, None))
 
     return out
 
@@ -33811,6 +33880,47 @@ Zwróć tylko JSON.
                         }
 
                         continue
+
+                # v358: sciezka wskazujaca KATALOG, nie plik.
+                #
+                # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16
+                # 18:24, krok 2). MAIN podal
+                # write_engineer_code_to = "~/twilio_mvp/" — z
+                # ukosnikiem na koncu, czyli katalog, ktory Gemini
+                # zalozylo krok wczesniej. Probowalismy otworzyc go do
+                # zapisu i oddalismy zespolowi surowy wyjatek Pythona:
+                #
+                #   ENGINEER_CODE_WRITE_ERROR: [Errno 21] Is a
+                #   directory: '/data/.../home/twilio_mvp'
+                #
+                # Ola rozszyfrowala to poprawnie ("sciezka wskazala
+                # folder, nie plik"), ale krok juz przepadl, a ona
+                # sama w tej samej wiadomosci kazala uzytkownikowi
+                # wklepac plik recznie przez nano. Mowimy to wiec
+                # sami, zanim sprobujemy zapisac.
+                if str(write_target).rstrip().endswith(("/", "\\")) \
+                        or target_path.is_dir():
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_WRITE_ERROR",
+                        "error": (
+                            str(write_target)
+                            + " wskazuje katalog, nie plik"
+                        ),
+                        "path": write_target,
+                        "message": (
+                            str(write_target)
+                            + " to katalog, a nie plik — nie mam "
+                            "gdzie zapisać tej treści. Podaj, jak "
+                            "ma się nazywać plik w tym katalogu "
+                            "(np. "
+                            + str(write_target).rstrip("/\\")
+                            + "/app.py) i zlecę zapis jeszcze raz."
+                        )
+                    }
+
+                    continue
 
                 try:
                     target_path.parent.mkdir(
