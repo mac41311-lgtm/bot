@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v362
+AEL-MINI AUTONOMOUS AGENT v363
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v362")
+    print("             AEL-MINI AUTONOMOUS AGENT v363")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28682,6 +28682,43 @@ tym kroku dopytać jedną osobę:
             _glosy.append(_wstep + "\n" + str(_tekst).strip())
 
     team_block = "\n\n".join(_glosy)
+
+    # v363: PRZY ODPOWIEDZI NA ASK NARADA NIE IDZIE DRUGI RAZ.
+    #
+    # ASK to dwa wywolania main_decide() w JEDNYM kroku: pierwsze
+    # konczy sie pytaniem, drugie — po odpowiedzi — decyzja. Drugie
+    # wywolanie jest POTRZEBNE: bez niego nie ma decyzji (bieg
+    # 2026-09-16 21:13, krok 2 -> FAILED, kroki 3 i 5 -> TASK,
+    # wszystkie dopiero za drugim razem). Potrzebna jest ROZMOWA,
+    # nie ponowne wysylanie tego, co MAIN wlasnie dostal.
+    #
+    # ZMIERZONE, sekcja po sekcji, na tym biegu. W drugim promcie
+    # KAZDY glos narady byl bajt w bajt taki sam:
+    #
+    #   krok 2: Tomek 2092, Bartek 3325, Kamil 3287, Marek 5462,
+    #           Ola 72, Wojtek 2731                 = 16 969 zn.
+    #   krok 3: + wymiana Marek/Tomek 11 804        = 26 559 zn.
+    #   krok 5:                                     = 16 608 zn.
+    #
+    # Razem okolo 60 tysiecy znakow wyslanych po raz drugi do
+    # rozmowy, ktora ma je w poprzedniej wiadomosci. Sesja MAIN-a
+    # jest trwala — patrz docstring deepseek(): role "pamietaja"
+    # kontekst poprzednich krokow bez powtarzania go w kazdej
+    # wiadomosci. Ta sama zasada, co v284 dla ekranu i Chrome'a.
+    #
+    # Nie ma tu zadnego zgadywania: miedzy pierwszym a drugim
+    # wywolaniem nie ma narady ani wykonania narzedzia, wiec `team`
+    # to ten sam slownik. _handle_main_ask() zapisuje odpowiedz do
+    # team["engineer_full"] i team["kod_full"], a NIE do
+    # team["engineer"] — glosy sa wiec identyczne z definicji, co
+    # widac w logu.
+    #
+    # Odpowiedz, ktora MAIN wlasnie dostal, idzie nizej w ask_block
+    # — w calosci, razem z pytaniem. Reszta promptu (co sie stalo,
+    # wyjasnienie statusu, seria Marka, regula naprawy, kontrakt)
+    # zostaje bez zmian.
+    if asked_followup:
+        team_block = ""
 
     # v191: bez "CEL AGENTA" — MAIN dostał cel raz (patrz
     # _goal_briefing_for) i ma go w historii swojej rozmowy.
