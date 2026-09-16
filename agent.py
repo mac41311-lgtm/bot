@@ -1052,6 +1052,24 @@ ADB_CONNECT_FILE = AGENT_DIR / "adb_connect.txt"
 # patrz _track_project_path()/maybe_clear_generated_project_files().
 PROJECT_DIRS_FILE = AGENT_DIR / "project_dirs.json"
 
+# v358d: trwaly slad, ze KONKRETNY plik z kodem zostal autoryzowany.
+#
+# _gdzie_zapisalismy to pamiec jednego uruchomienia. Po restarcie
+# agenta kod Bartka, ktory realnie przeszedl kontrole autorstwa,
+# przestawal byc rozpoznawalny — i `sed -i` na nim lecialo w
+# blokade, mimo ze plik byl prawidlowy.
+#
+# Czego tu NIE MA i miec nie moze: reguly "plik istnieje w katalogu
+# projektu = autoryzowany". Istnienie pliku, jego rozszerzenie ani
+# to, ze ktos go kiedys uzywal, nie nadaje autoryzacji — bylaby to
+# furtka szersza niz dziura, ktora zamykamy.
+#
+# Autoryzacja jest wiazana z TRESCIA, nie z istnieniem: zapisujemy
+# sciezke kanoniczna i odcisk sha256 tego, co Python wlasnie polozyl.
+# Po restarcie plik jest autoryzowany tylko wtedy, gdy jego odcisk
+# nadal sie zgadza. Podmieniony plik traci autoryzacje sam z siebie.
+AUTORYZOWANY_KOD_FILE = AGENT_DIR / "autoryzowany_kod.json"
+
 # Rejestr punktów (TASK-ów) bieżącego celu z ich statusem —
 # ZWERYFIKOWANY (Python sam potwierdził dowód, nie tylko deklarację
 # Gemini), POTWIERDZONY_NARZEDZIAMI (narzędzia realnie zadziałały,
@@ -2084,6 +2102,100 @@ _gdzie_zapisalismy = {}
 # co uruchomic. W biegu 2026-09-14 18:33 zespol napisal echo.py i
 # echo_test.py, i MAIN musial to wyczytac z cudzej prozy.
 _przybylo_w_kroku = []
+
+
+def _odcisk_pliku(p):
+    """sha256 tresci pliku albo "" — nigdy nie rzuca."""
+
+    try:
+        return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _sciezka_kanoniczna(p):
+    """Jedna postac tej samej sciezki. Nigdy nie rzuca."""
+
+    try:
+        return str(Path(str(p)).expanduser().resolve())
+    except Exception:
+        return str(p)
+
+
+def _zapisz_autoryzacje_kodu(path, autor="ENGINEER"):
+    """
+    Trwaly slad: TEN plik, w TEJ tresci, przeszedl kontrole
+    autorstwa i zostal polozony przez Pythona.
+
+    Wolane wylacznie tam, gdzie Python realnie zapisuje kod zespolu
+    — nigdy "na wszelki wypadek" i nigdy dla pliku, ktory po prostu
+    lezy na dysku. Patrz AUTORYZOWANY_KOD_FILE.
+    """
+
+    try:
+        p = Path(str(path))
+
+        if p.suffix.lower() not in _KOD_SUFIKSY:
+            return
+
+        odcisk = _odcisk_pliku(p)
+
+        if not odcisk:
+            return
+
+        rejestr = read_json(AUTORYZOWANY_KOD_FILE, {}) or {}
+
+        rejestr[_sciezka_kanoniczna(p)] = {
+            "sha256": odcisk,
+            "bajtow": p.stat().st_size,
+            "autor": str(autor),
+            "kiedy": datetime.now().isoformat(timespec="seconds"),
+        }
+
+        write_json(AUTORYZOWANY_KOD_FILE, rejestr)
+
+    except Exception:
+        pass
+
+
+def _kod_jest_autoryzowany(path):
+    """
+    Czy ten plik z kodem ma dowod autoryzacji.
+
+    Dwa zrodla, w tej kolejnosci:
+      1. _gdzie_zapisalismy — to uruchomienie, bez czytania dysku.
+      2. AUTORYZOWANY_KOD_FILE — poprzednie uruchomienia, ale TYLKO
+         gdy tresc pliku nadal zgadza sie z odciskiem zapisanym w
+         chwili autoryzacji.
+
+    Samo istnienie pliku, jego polozenie ani rozszerzenie nie
+    wystarczaja i wystarczyc nie moga.
+    """
+
+    try:
+        p = Path(str(path))
+    except Exception:
+        return False
+
+    if _gdzie_zapisalismy.get(p.name) == str(p):
+        return True
+
+    if str(p) in _gdzie_zapisalismy.values():
+        return True
+
+    try:
+        wpis = (read_json(AUTORYZOWANY_KOD_FILE, {}) or {}).get(
+            _sciezka_kanoniczna(p)
+        )
+    except Exception:
+        wpis = None
+
+    if not isinstance(wpis, dict):
+        return False
+
+    zapisany = str(wpis.get("sha256") or "")
+
+    return bool(zapisany) and _odcisk_pliku(p) == zapisany
 
 
 def _zapamietaj_gdzie(path):
@@ -12997,6 +13109,10 @@ def termux_write_file(path, content, append=False):
                 try:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_text(_kod, encoding="utf-8")
+
+                    # v358d: trwaly slad autoryzacji — patrz
+                    # AUTORYZOWANY_KOD_FILE.
+                    _zapisz_autoryzacje_kodu(p)
                     _track_project_path(p)
                     _zapamietaj_gdzie(p)
 
@@ -15511,11 +15627,10 @@ def _gemini_zmienia_cudzy_kod(command_str):
         except Exception:
             pass
 
-        # 1. plik polozyl Python — przeszedl juz kontrole autorstwa
-        if str(p) in _gdzie_zapisalismy.values():
-            continue
-
-        if _gdzie_zapisalismy.get(p.name) == str(p):
+        # 1. plik polozyl Python — w tym uruchomieniu albo w
+        #    poprzednim, ale wtedy tylko gdy TRESC sie nie zmienila
+        #    (patrz _kod_jest_autoryzowany / AUTORYZOWANY_KOD_FILE)
+        if _kod_jest_autoryzowany(p):
             continue
 
         # 2. albo zespol napisal kod nazywajac ten plik
@@ -15526,8 +15641,9 @@ def _gemini_zmienia_cudzy_kod(command_str):
 
         return (
             str(p),
-            "tego pliku nie kladl tu nikt z zespolu i nie mam do "
-            "niego kodu Bartka"
+            "nie mam dowodu, ze ten plik zawiera autoryzowany kod "
+            "Bartka — albo nikt go tu nie kladl, albo jego tresc "
+            "zmienila sie po autoryzacji"
         )
 
     return None
@@ -34108,6 +34224,10 @@ Zwróć tylko JSON.
 
                     _track_project_path(target_path)
                     _zapamietaj_gdzie(target_path)
+
+                    # v358d: ten plik wlasnie dostal kod zespolu —
+                    # zapisujemy to tak, zeby przetrwalo restart.
+                    _zapisz_autoryzacje_kodu(target_path)
 
                     # v190: to samo, co za chwilę wypiszemy w
                     # terminalu, MUSI dotrzeć też do zespołu
