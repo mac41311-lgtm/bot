@@ -15419,6 +15419,120 @@ def _pliki_pisane_komenda(command_str):
     return out
 
 
+# v358c: `sed -i` na PLIKU Z KODEM.
+#
+# Uzytkownik, dwa razy i jednoznacznie:
+#   "sed jako zwykla diagnostyka/filtr -> moze dzialac"
+#   "sed -i zmieniajacy plik z kodem -> tylko dla wczesniej
+#    autoryzowanego kodu Bartka"
+#
+# v354 przepuszczalo `sed -i` bezwarunkowo, bo wtedy chodzilo o to,
+# zeby nie zablokowac Gemini poprawiania kodu W TRAKCIE wykonania —
+# i to zostaje. Zmienia sie jedno: musimy umiec powiedziec, ze ten
+# plik JEST kodem, ktory zespol autoryzowal.
+#
+# Czym to udowadniamy, bez zgadywania:
+#   1. _gdzie_zapisalismy — pliki, ktore polozyl Python. Plik z
+#      KODEM trafia tam wylacznie po przejsciu kontroli autorstwa w
+#      termux_write_file, wiec jego obecnosc na tej liscie JEST
+#      dowodem autoryzacji.
+#   2. _tresc_napisana_dla — zespol napisal kod nazywajac ten plik.
+#
+# Pliki, ktore nie sa kodem (dane, konfiguracja, logi, .env, .json),
+# nie wchodza tu w ogole — tak samo jak przy zapisie. Blokujemy
+# zmienianie PROGRAMOW, nie zmienianie czegokolwiek.
+_EDYTUJE_W_MIEJSCU = {
+    "sed": ("-i", "--in-place"),
+    "awk": ("-i",),
+    "gawk": ("-i",),
+    "perl": ("-i",),
+}
+
+
+def _pliki_edytowane_w_miejscu(command_str):
+    """
+    Pliki Z KODEM, ktore ta komenda zmienia w miejscu (sed -i itp.).
+
+    Sam skrypt sed-a (`'s/a/b/'`) tu nie wpada: bierzemy wylacznie
+    argumenty konczace sie rozszerzeniem kodu.
+    """
+
+    out = []
+
+    for czlon in re.split(r"[;&|]|\n", str(command_str or "")):
+
+        slowa = czlon.split()
+
+        if not slowa:
+            continue
+
+        program = slowa[0].split("/")[-1]
+        flagi = _EDYTUJE_W_MIEJSCU.get(program)
+
+        if not flagi:
+            continue
+
+        w_miejscu = any(
+            slowo == f or slowo.startswith(f + ".")
+            or slowo.startswith(f + "=")
+            for slowo in slowa[1:]
+            for f in flagi
+        )
+
+        if not w_miejscu:
+            continue
+
+        for slowo in slowa[1:]:
+
+            cel = slowo.strip("'\"")
+
+            if cel.startswith("-"):
+                continue
+
+            if Path(cel).suffix.lower() in _KOD_SUFIKSY:
+                out.append(cel)
+
+    return out
+
+
+def _gemini_zmienia_cudzy_kod(command_str):
+    """
+    Czy ta komenda zmienia w miejscu plik z kodem, ktorego nikt nie
+    autoryzowal. Zwraca (sciezka, powod) albo None.
+    """
+
+    for sciezka in _pliki_edytowane_w_miejscu(command_str):
+
+        p = _resolve_home_relative_path(sciezka)
+
+        try:
+            if CUSTOM_TOOLS_DIR.resolve() in p.resolve().parents:
+                continue
+        except Exception:
+            pass
+
+        # 1. plik polozyl Python — przeszedl juz kontrole autorstwa
+        if str(p) in _gdzie_zapisalismy.values():
+            continue
+
+        if _gdzie_zapisalismy.get(p.name) == str(p):
+            continue
+
+        # 2. albo zespol napisal kod nazywajac ten plik
+        _kod_autora, _ = _tresc_napisana_dla(p)
+
+        if _kod_autora:
+            continue
+
+        return (
+            str(p),
+            "tego pliku nie kladl tu nikt z zespolu i nie mam do "
+            "niego kodu Bartka"
+        )
+
+    return None
+
+
 def _to_samo_co_do_znaku(a, b):
     """Ta sama tresc, z pominieciem bialych znakow."""
 
@@ -15479,7 +15593,15 @@ def termux_run(command):
         # autorstwa, co termux_write_file — patrz _gemini_pisze_kod().
         # Reszta termux_run bez zmian: `sed -i`, przekierowania do
         # logow, kopiowanie plikow i wszystko inne leci jak leciało.
-        _pisze_kod = _gemini_pisze_kod(command_str)
+        # v358c: dwie osobne sprawy, jeden komunikat.
+        #   _gemini_pisze_kod        — TWORZY plik z kodem
+        #   _gemini_zmienia_cudzy_kod — zmienia w miejscu plik z
+        #                               kodem, ktorego nikt nie
+        #                               autoryzowal (sed -i itp.)
+        _pisze_kod = (
+            _gemini_pisze_kod(command_str)
+            or _gemini_zmienia_cudzy_kod(command_str)
+        )
 
         if _pisze_kod:
 
