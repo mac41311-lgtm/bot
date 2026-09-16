@@ -29876,6 +29876,51 @@ _READONLY_FILTERS = frozenset((
 
 _READONLY_COMMANDS = _READONLY_SOURCES | _READONLY_FILTERS
 
+# v358: czytajace polecenie, ktore jednak PISZE.
+#
+# _is_readonly_command puszcza potok, w ktorym kazdy czlon jest z
+# listy wyzej. Ale kilka z tych programow potrafi zapisac plik, gdy
+# poda im sie odpowiednia flage — i wtedy "pytanie zespolu" po cichu
+# zmienia dysk. Wystarczy, ze ktos napisze taka linie w backtickach:
+#
+#   cat plik.py | sed -i 's/a/b/' plik.py
+#   find ~ -name '*.py' -delete
+#   sort -o plik.py plik.py
+#
+# Nie padlo to ani razu: przejrzalem 24 logi i auto-wykonanie
+# uruchomilo wylacznie ls, cat, wc, tail, find i termux-*. Zamykamy
+# to zanim padnie, bo cena jednego takiego wykonania jest wysoka, a
+# koszt sprawdzenia zerowy.
+#
+# To NIE zawezenie rozmowy: role dalej moga pisac, co chca. Zmienia
+# sie tylko to, czego Python NIE uruchomi sam z siebie.
+_FLAGI_KTORE_PISZA = {
+    "sed": ("-i", "--in-place"),
+    "awk": ("-i", "--include"),
+    "gawk": ("-i", "--include"),
+    "sort": ("-o", "--output"),
+    "find": ("-delete", "-exec", "-execdir", "-ok", "-okdir",
+             "-fprint", "-fprint0", "-fprintf"),
+}
+
+
+def _czlon_pisze_po_dysku(program, slowa):
+    """Czy ten czlon potoku moze cos ZAPISAC, mimo ze jest na liscie."""
+
+    flagi = _FLAGI_KTORE_PISZA.get(program)
+
+    if not flagi:
+        return False
+
+    for slowo in slowa[1:]:
+        # "-i" i "-i.bak" to to samo; "--output=plik" tez.
+        for f in flagi:
+            if slowo == f or slowo.startswith(f + ".") or slowo.startswith(f + "="):
+                return True
+
+    return False
+
+
 # Zrodla, ktore maja sens BEZ argumentu (czytaja "domyslne miejsce").
 # Kazde inne musi wskazac, CO ma odczytac -- inaczej czyta stdin,
 # ktory u nas jest pusty (stdin=DEVNULL), i zwraca pustke. Zespol
@@ -30058,6 +30103,12 @@ def _is_readonly_command(command):
             return False
 
         if any(s in _UNSAFE_WORDS for s in slowa):
+            return False
+
+        # v358: patrz _FLAGI_KTORE_PISZA — `sed -i`, `find -delete`
+        # i spolka sa na liscie czytajacych, ale z ta flaga zmieniaja
+        # dysk.
+        if _czlon_pisze_po_dysku(program, slowa):
             return False
 
     return True
