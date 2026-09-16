@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v361
+AEL-MINI AUTONOMOUS AGENT v362
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v361")
+    print("             AEL-MINI AUTONOMOUS AGENT v362")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -30433,6 +30433,13 @@ def _zwiezle_wyliczenie(out):
 
 
 
+# v362: TA FUNKCJA NIE MA JUZ WYWOLUJACEGO.
+#
+# Byla filtrem dla _answer_readonly_requests(), czyli dla mechanizmu,
+# ktory uruchamial komendy wyciagniete z WYPOWIEDZI rol. Tamta
+# sciezka zostala usunieta — patrz komentarz w miejscu, gdzie
+# stala ta funkcja. Zbior dozwolonych zostawiam nietkniety: nie
+# usuwam wiecej, niz trzeba, zeby zamknac te jedna sciezke.
 def _is_readonly_command(command):
     """
     Czy to polecenie tylko CZYTA i mozna je bezpiecznie wykonac
@@ -30598,123 +30605,60 @@ def _gdzie_naprawde_lezy(command):
     return ""
 
 
-def _answer_readonly_requests(pary):
-    """
-    Wykonuje czytajace polecenia, ktore zespol sam napisal, i zwraca
-    gotowe odpowiedzi. Zero zadan do DeepSeeka, zero do Gemini.
-    """
-
-    odpowiedzi = []
-    zrobione = []
-
-    for rola, text in pary:
-
-        for command in _extract_commands_from_text(text):
-
-            if len(zrobione) >= _READONLY_MAX_PER_STEP:
-                break
-
-            if command in zrobione:
-                continue
-
-            if not _is_readonly_command(command):
-                continue
-
-            zrobione.append(command)
-
-            try:
-                wynik = execute_shell(command, timeout=15)
-            except Exception as e:
-                odpowiedzi.append((
-                    rola,
-                    "- `" + command + "` -> nie udalo sie uruchomic ("
-                    + str(e) + ")"
-                ))
-                continue
-
-            out = str(wynik.get("stdout", "") or "").strip()
-            err = str(wynik.get("stderr", "") or "").strip()
-
-            if out:
-
-                # v329: gdy to jest dluga lista, opowiadamy ja
-                # calosciowo zamiast pokazywac jej pierwsze 3%.
-                _wyliczenie = (
-                    _zwiezle_wyliczenie(out)
-                    if len(out) > _READONLY_OUTPUT_MAX else None
-                )
-
-                if _wyliczenie:
-
-                    odpowiedzi.append((
-                        rola,
-                        "- `" + command + "` wypisało "
-                        + _wyliczenie
-                    ))
-
-                    log(
-                        "TERMUX",
-                        "`" + short(command, 60) + "` dalo "
-                        + str(len(out)) + " znakow listy — podaje to "
-                        "jako wyliczenie, nie jako zrzut."
-                    )
-
-                    continue
-
-                pokazane = short(out, _READONLY_OUTPUT_MAX)
-
-                # v213: gdy tniemy, mowimy ILE zostalo. Bez tego
-                # zespol wyciaga wnioski z polowy danych — dokladnie
-                # jak w logu, gdzie z ucietej listy kontaktow
-                # wywnioskowal, ze numerow tam nie ma.
-                if len(out) > _READONLY_OUTPUT_MAX:
-                    pokazane += (
-                        "\n(Pokazałem pierwsze "
-                        + str(_READONLY_OUTPUT_MAX) + " z "
-                        + str(len(out)) + " znaków wyniku. Reszta "
-                        "ISTNIEJE — nie wyciągaj wniosku, że czegoś "
-                        "tam nie ma. Jeśli szukasz konkretu, zawęź "
-                        "polecenie (np. grep po tym, czego szukasz).)"
-                    )
-
-                odpowiedzi.append((
-                    rola,
-                    "- `" + command + "` wypisało:\n" + pokazane
-                ))
-            elif err:
-
-                tresc = (
-                    "- `" + command + "` nie zadziałało:\n"
-                    + short(err, 300)
-                )
-
-                # v223: "nie ma pliku" z NASZEJ sondy bywa nieprawdą o
-                # świecie, a prawdą tylko o katalogu, w którym ją
-                # uruchomiliśmy — patrz _gdzie_naprawde_lezy().
-                if any(
-                    m in err.lower() for m in _NIE_MA_PLIKU_MARKERY
-                ):
-                    gdzie = _gdzie_naprawde_lezy(command)
-
-                    if gdzie:
-                        tresc += "\n  " + gdzie
-
-                odpowiedzi.append((rola, tresc))
-            else:
-                odpowiedzi.append((
-                    rola,
-                    "- `" + command + "` wykonało się, ale nic nie "
-                    "wypisało (pusty wynik)."
-                ))
-
-            log(
-                "TERMUX",
-                "Zespol chcial wiedziec, co da `" + command
-                + "` — uruchomilem to sam (bez Gemini, bez MAIN-a)."
-            )
-
-    return odpowiedzi
-
+# v362: _answer_readonly_requests() USUNIETA.
+#
+# Wykonywala komendy wyciagniete z WYPOWIEDZI rol i wstawiala ich
+# wynik do nastepnego promptu. Lancuch byl taki:
+#
+#   wypowiedz roli
+#     -> _extract_commands_from_text()   regex po ``` i po `...`
+#     -> _is_readonly_command()          zamknieta allowlista
+#     -> execute_shell()                 URUCHOMIENIE
+#
+# Nie bylo w nim ani jednego sprawdzenia, CZY ktos o to wykonanie
+# prosil. Wystarczylo, ze tekst stal w backtickach.
+#
+# ZMIERZONE NA LOGACH. W biegu 2026-09-16 19:38 regex wyciagnal z
+# wypowiedzi 214 kandydatow; uruchomilo sie 26 — i tylko dlatego, ze
+# _READONLY_MAX_PER_STEP wynosi 4. To limit trzymal to w ryzach, nie
+# zadne rozpoznanie intencji. W calym archiwum: 331 uruchomien.
+#
+# Czym te "polecenia" byly naprawde:
+#
+#   Tomek:  "Bez niej `termux-toast`, `termux-battery-status` nie
+#            dzialaja"                         — tlumaczyl, czym jest
+#                                                Termux:API
+#   Tomek:  "**Fakty z tej sesji:** - `termux-battery-status`
+#            -> dziala"                        — cytowal wynik sprzed
+#                                                trzech krokow
+#   Tomek:  "1. Instalacja Termux:API + test"  — punkt planu
+#   Bartek: echo "=== VOICE BASELINE ==="      — JEDNA LINIA ze
+#                                                srodka skryptu,
+#                                                ktory pisal
+#
+# Ten ostatni jest najgorszy: parser tnie blok ``` linia po linii,
+# wiec skrypt Bartka poszedl do wykonania rozczlonkowany — bez
+# OUT=~/voice_baseline.txt i bez exec > >(tee "$OUT"), ktore staly
+# dwie linijki wyzej.
+#
+# Wzmianka nie jest zadaniem wykonania. Tekst agenta jest tekstem.
+# Wykonuje sie to, co wynika z decyzji MAIN-a i idzie przez
+# istniejacy przeplyw wykonawczy (TASK -> Gemini -> termux_run).
+#
+# CO ZOSTAJE NIETKNIETE: odczyt WSPOMNIANEJ SCIEZKI
+# (_TEAM_MENTIONED_PATH_RE w _policz_odpowiedzi_dla_zespolu). On nie
+# uruchamia powloki — otwiera plik i podaje jego tresc, do
+# _FILE_ANSWER_MAX znakow. W biegu 19:38 pokrywal 20 z 26 przypadkow,
+# w ktorych ten mechanizm sie odpalal. To on naprawil sprawe numeru
+# lezacego na dysku przez wiele krokow, ktorego zespol nie widzial.
+#
+# Bez wywolujacego zostaly przez to: _is_readonly_command(),
+# _READONLY_MAX_PER_STEP, _READONLY_OUTPUT_MAX, _zwiezle_wyliczenie(),
+# _gdzie_naprawde_lezy(), _sciezki_z_komendy(), _NIE_MA_PLIKU_MARKERY.
+# Zostaja na miejscu — nie usuwam wiecej, niz trzeba, zeby zamknac te
+# jedna sciezke. _extract_commands_from_text() ma nadal DRUGIEGO,
+# legalnego wywolujacego: sprawdza, czy TASK od MAIN-a zawiera realna
+# robote, czy sam tekst dla czlowieka. Tamten nic nie uruchamia.
 
 def _remember_team_file_questions(pary):
     """
@@ -30755,22 +30699,13 @@ def _policz_odpowiedzi_dla_zespolu(pary):
     ja przytoczy — tak jak w rozmowie.
     """
 
-    # v210: zanim policzymy pliki — po prostu wykonujemy czytajace
-    # polecenia, ktore zespol sam napisal. Patrz
-    # _answer_readonly_requests(). To jest ta "wiedza dosylana, kiedy
-    # jej chca", zamiast kazania im czekac caly obieg na `cat`.
+    # v362: TU BYLO URUCHAMIANIE KOMEND Z WYPOWIEDZI (v210).
+    #
+    # Zostaje wylacznie odczyt WSPOMNIANEJ SCIEZKI, nizej. Komenda,
+    # ktora rola napisala w zdaniu, jest od teraz tylko tekstem —
+    # patrz komentarz w miejscu usunietej
+    # _answer_readonly_requests().
     odpowiedzi = []
-
-    try:
-        odpowiedzi.extend(
-            _answer_readonly_requests(pary)
-        )
-    except Exception as _e:
-        log(
-            "TERMUX",
-            "Nie udalo sie odpowiedziec na pytania zespolu "
-            "komendami: " + str(_e)
-        )
 
     seen = []
     kto_pytal = {}
