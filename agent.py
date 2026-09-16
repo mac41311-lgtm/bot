@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v355
+AEL-MINI AUTONOMOUS AGENT v356
 
 ARCHITEKTURA:
 
@@ -2343,7 +2343,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v355")
+    print("             AEL-MINI AUTONOMOUS AGENT v356")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -20778,6 +20778,36 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
     # Autor nazywa plik w PROZIE nad blokiem ("## Kod:
     # `kalkulator.py`"). To, co napisal w poprzednim bloku, jest
     # jego kodem, nie naglowkiem nastepnego.
+    # v356: gdy nazwa pliku stoi nad KILKOMA blokami, pierwszy z
+    # brzegu to za malo.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16 16:32, kroki
+    # 2 i 3). Bartek napisal blok ```python``` na 1957 znakow (caly
+    # bot.py) i obok kilka drobnych ```bash```. Nazwa "bot.py" padla
+    # nad DWOMA z nich:
+    #
+    #   nad ```bash``` (126 znakow), mimochodem, w zdaniu o czym
+    #   innym:  "Dystrybucja kodu: 1 plik `bot.py` + `state.json`"
+    #
+    #   nad ```python``` (1957 znakow), jako prawdziwe nazwanie:
+    #   "Krok 2 — dopisz TelegramTransport do `bot.py`. Wklej to do
+    #   istniejacego `bot.py`"
+    #
+    # Wygralo pierwsze, bo bylo wczesniej. Do bot.py poszlo
+    # "export TG_TOKEN='123456:ABC-DEF...'" i krok umarl na
+    # ENGINEER_CODE_INVALID_PYTHON_SYNTAX. Dwa kroki z rzedu, a kod
+    # Bartka byl za kazdym razem w porzadku.
+    #
+    # Wzmianka mimochodem i nazwanie wygladaja tak samo. Ale plik ma
+    # rozszerzenie, a blok ma jezyk — i to rozstrzyga bez zgadywania,
+    # ktore zdanie bylo powaznie. Wiec: zbieramy WSZYSTKIE bloki z
+    # nazwa nad soba, a potem bierzemy ten, ktorego jezyk pasuje do
+    # rozszerzenia. Gdy zaden nie pasuje albo pasuje kilka —
+    # zostaje stara regula, czyli pierwszy.
+    _kropka = nazwa.lower().rfind(".")
+    _rozszerzenie_celu = nazwa.lower()[_kropka:] if _kropka >= 0 else ""
+
+    _z_nazwa = []
     koniec_poprzedniego = 0
 
     for m in bloki:
@@ -20791,7 +20821,34 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
             kod = _wyrownaj_blok(m.group(2))
 
             if kod.strip():
-                return kod
+                _z_nazwa.append((m, kod))
+
+    if _z_nazwa:
+
+        if _rozszerzenie_celu in _ROZSZERZENIA_ZAJETE:
+
+            _po_jezyku = []
+
+            for m, kod in _z_nazwa:
+
+                z_shebanga = _rozszerzenie_z_shebanga(kod)
+
+                if z_shebanga:
+                    if z_shebanga == _rozszerzenie_celu:
+                        _po_jezyku.append(kod)
+                    continue
+
+                znacznik = (m.group(1) or "").strip().lower()
+
+                if (znacznik in _ROZSZERZENIA_JEZYKA
+                        and _rozszerzenie_celu
+                        in _ROZSZERZENIA_JEZYKA[znacznik]):
+                    _po_jezyku.append(kod)
+
+            if len(_po_jezyku) == 1:
+                return _po_jezyku[0]
+
+        return _z_nazwa[0][1]
 
     # 2. JEZYK ZGODNY Z ROZSZERZENIEM.
     kropka = nazwa.lower().rfind(".")
@@ -20953,8 +21010,29 @@ def extract_code_block(text, sciezka=None):
     if not candidates:
         return None
 
+    # v356: wybrany blok bywa KOMENDA ZAPISU, nie trescia pliku.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16 16:32, krok 4).
+    # Najdluzszy blok Bartka mial 5431 znakow i zaczynal sie od
+    # "cat > ~/bot.py <<'PYEOF'". Wygral dlugoscia, po czym Python
+    # nie chcial sie na tym skompilowac — bo to nie jest Python,
+    # tylko powloka, ktora Pythona zapisuje.
+    #
+    # Tresc pliku lezy w tym bloku w calosci, miedzy znacznikami
+    # heredoc, i mamy do niej gotowa funkcje od v270
+    # (_tresc_z_heredoc). Sprawdzone na tamtej wypowiedzi: oddaje
+    # 5399 znakow, ktore ast.parse przyjmuje bez zastrzezen.
+    def _sama_tresc_pliku(kod):
+
+        if not sciezka or not kod:
+            return kod
+
+        z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        return _wyrownaj_blok(z_heredoca) if z_heredoca else kod
+
     if len(candidates) == 1:
-        return candidates[0]
+        return _sama_tresc_pliku(candidates[0])
 
     # v285: gdy wiemy, DO JAKIEGO pliku to leci, blok wybiera sie
     # sam — patrz _blok_dla_pliku(). Regula "shebang, potem
@@ -20964,7 +21042,7 @@ def extract_code_block(text, sciezka=None):
         trafiony = _blok_dla_pliku(text, sciezka, candidates)
 
         if trafiony is not None:
-            return trafiony
+            return _sama_tresc_pliku(trafiony)
 
     def _score(code):
         return (
@@ -20972,7 +21050,7 @@ def extract_code_block(text, sciezka=None):
             len(code),
         )
 
-    return max(candidates, key=_score)
+    return _sama_tresc_pliku(max(candidates, key=_score))
 
 
 # v191 — na wyraźną prośbę użytkownika (2026-09-03): "sprawdź, jak są
