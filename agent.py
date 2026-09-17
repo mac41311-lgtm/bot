@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v370
+AEL-MINI AUTONOMOUS AGENT v371
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v370")
+    print("             AEL-MINI AUTONOMOUS AGENT v371")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19893,6 +19893,53 @@ def _dowody_z_wykonania(tool_trace, warnings=None):
     return dowody
 
 
+def _odpowiedz_narzedzia(call, name, result):
+    """
+    Jedna odpowiedz na jedno wywolanie narzedzia, w formacie, ktorego
+    wykonawca oczekuje.
+
+    v371: KAZDE wywolanie MUSI dostac swoja odpowiedz. Protokol jest
+    parzysty — na kazde wywolanie przypada wynik. Gdy wyniku
+    zabraknie, kolejna tura leci z pusta lista i konczy sie
+    "Missing input.".
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 19:20, krok 5).
+    termux_check_process zwrocilo cztery razy z rzedu poprawne
+    {"ok": true, "running": true, "pid": 22824} — proces instalacji
+    faktycznie zyl. Straznik odpytywania slusznie to zauwazyl i
+    przerwal petle... ale PRZED dopisaniem wyniku. Ta runda miala
+    dokladnie jedno wywolanie, wiec do API poszlo input=[]:
+
+        19:49:42  przerywam: termux_check_process zwrocilo 4 razy...
+        19:49:44  BLAD EXECUTORA: 400 — {'message': 'Missing input.'}
+        19:49:44  Task zakonczony: GEMINI_EXECUTOR_ERROR
+
+    Caly krok przepadl. I co gorsza: starannie napisane ostrzezenie
+    ("to czekanie, nie praca") nigdy nie dotarlo do wykonawcy, bo
+    rozmowa juz nie zyla.
+
+    ZASADA: straznik moze zatrzymac WYKONYWANIE kolejnych narzedzi,
+    ale nie moze zabic ROZMOWY. Wykonawca ma dostac fakt i sam
+    zdecydowac, co dalej — tak samo jak przy kazdym innym wyniku.
+    """
+
+    return {
+        "type": "function_result",
+        "name": name,
+        "call_id": getattr(call, "id", None),
+        "result": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    default=str
+                )
+            }
+        ]
+    }
+
+
 def _short_tool_evidence(result):
     """
     Co to wywolanie NAPRAWDE powiedzialo.
@@ -20499,6 +20546,31 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             for call in function_calls:
 
                 if tool_calls >= GEMINI_MAX_TOOL_CALLS:
+
+                    # v371: to samo, co przy strazniku odpytywania —
+                    # wywolanie dostaje swoja odpowiedz, nawet gdy
+                    # nie mamy juz budzetu, zeby je wykonac. Bez tego
+                    # runda konczy sie pusta lista i "Missing input.".
+                    responses.append(
+                        _odpowiedz_narzedzia(
+                            call,
+                            getattr(call, "name", "") or "?",
+                            {
+                                "ok": False,
+                                "error": "TOOL_LIMIT",
+                                "limit_reached": True,
+                                "message": (
+                                    "Limit wywolan narzedzi na to "
+                                    "zadanie ("
+                                    + str(GEMINI_MAX_TOOL_CALLS)
+                                    + ") zostal wyczerpany, wiec tego "
+                                    "nie uruchomilem. Napisz raport z "
+                                    "tego, co juz wiesz."
+                                )
+                            }
+                        )
+                    )
+
                     break
 
                 tool_calls += 1
@@ -20779,6 +20851,29 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                                            default=str), 300)
                     )
 
+                    # v371: wynik TEGO wywolania idzie do wykonawcy
+                    # razem z informacja od straznika — dopiero potem
+                    # przerywamy. Patrz _odpowiedz_narzedzia().
+                    if isinstance(result, dict):
+
+                        result = dict(result)
+                        result["polling_guard"] = True
+                        result["uwaga"] = (
+                            "To samo wywolanie z tymi samymi "
+                            "argumentami dalo ten sam wynik "
+                            + str(_identical_streak) + " raz z rzedu. "
+                            "Nie przerywam Ci pracy — mowie tylko, ze "
+                            "to jest czekanie, a nie postep, i ze "
+                            "reszta limitu narzedzi na tym kroku "
+                            "zostaje nietknieta. Sam zdecyduj, czy "
+                            "czekasz dalej, zagladasz gdzie indziej, "
+                            "czy idziesz inna droga."
+                        )
+
+                    responses.append(
+                        _odpowiedz_narzedzia(call, name, result)
+                    )
+
                     break
 
                 if isinstance(result, dict):
@@ -21028,6 +21123,51 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             # ------------------------------------------------
             # KONTYNUACJA TEJ SAMEJ INTERAKCJI
             # ------------------------------------------------
+
+            # v371: pas bezpieczenstwa. Gdyby kiedykolwiek doszlo
+            # do rundy bez ani jednej odpowiedzi, nie wysylamy do
+            # wykonawcy pustej listy — to konczy sie bledem 400
+            # "Missing input." i zabija caly krok. Zamiast tego
+            # konczymy ture tym, co juz mamy.
+            if not responses:
+
+                log(
+                    "GEMINI",
+                    "Runda bez ani jednej odpowiedzi narzedzia — "
+                    "koncze ture tym, co juz zebralem, zamiast "
+                    "wysylac pusta wiadomosc."
+                )
+
+                collected_warnings.append(
+                    "gemini [pusta_runda]: zadne wywolanie narzedzia "
+                    "w tej rundzie nie zwrocilo odpowiedzi. Raport "
+                    "powstal z tego, co bylo wczesniej."
+                )
+
+                # Nie "break" — wyjscie z petli while trafia na
+                # return TOOL_LIMIT, a to bylaby nieprawda. Konczymy
+                # tym, czym sie faktycznie skonczylo: wykonywanie
+                # dobieglo konca, dowody sa ponizej.
+                return {
+                    "ok": True,
+                    "status": "TASK_EXECUTION_FINISHED",
+                    "key": key_name,
+                    "report": (
+                        "Wykonywanie skonczylo sie bez raportu — "
+                        "ostatnia runda nie przyniosla odpowiedzi "
+                        "narzedzia. Co udalo sie zrobic, widac w "
+                        "sladzie narzedzi i w dowodach."
+                    ),
+                    "tool_calls": tool_calls,
+                    "interaction_id": interaction_id,
+                    "tool_warnings": collected_warnings,
+                    "tool_trace": collected_tool_trace,
+                    "confirmed_texts": collected_confirmed_texts,
+                    "dowody": _dowody_z_wykonania(
+                        collected_tool_trace,
+                        collected_warnings
+                    )
+                }
 
             interaction = client.interactions.create(
                 model=GEMINI_MODEL,
