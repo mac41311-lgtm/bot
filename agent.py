@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v369
+AEL-MINI AUTONOMOUS AGENT v370
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v369")
+    print("             AEL-MINI AUTONOMOUS AGENT v370")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -32984,6 +32984,170 @@ _CZYNNOSC_CZLOWIEKA_RE = re.compile(
 )
 
 
+# ============================================================
+# CZYNNOSC, KTORA MOZE WYKONAC TYLKO CZLOWIEK (v370)
+# ============================================================
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 17:39, krok 8).
+# W zadaniu staly obok siebie:
+#
+#   2. Wklej: cd ~/audio_chain_poc && python3 run_local.py --dry-run
+#   3. POWIEDZ COS GLOSNO do telefonu przez ok. 6 sekund
+#
+# v369 domknelo pierwsza polowe: komenda idzie do wykonania. Ale
+# _granica_tekstu_dla_czlowieka nie widziala punktu 3 jako tekstu
+# dla czlowieka — _TASK_IS_USER_QUESTION_RE i
+# _TEKST_DLA_UZYTKOWNIKA_RE mowia o PYTANIU i o PRZEKAZANIU
+# komunikatu, a nie o czynnosci fizycznej. Akapit jechal wiec razem
+# z komenda.
+#
+# SAMO SLOWO NIE WYSTARCZA i to jest tu najwazniejsze. "powiedz"
+# pada w kodzie (print("powiedz cos")), w cytacie, w raporcie i w
+# relacji ("skrypt poprosil, zeby powiedzial"). Zadne z tych zdan
+# nie jest polecenieniem dla czlowieka.
+#
+# Pytamy wiec o FORME, nie o obecnosc slowa. Czynnoscia czlowieka
+# jest zdanie, ktore:
+#   1. zaczyna linie (ewentualnie po numerze punktu, myslniku,
+#      gwiazdce albo pogrubieniu),
+#   2. zaczyna sie czasownikiem w trybie rozkazujacym z katalogu,
+#   3. nie stoi w bloku kodu ani w cudzyslowie.
+#
+# Tryb rozkazujacy na poczatku linii to jest ta forma, ktorej
+# czlowiek uzywa, wydajac polecenie. "skrypt poprosil, zeby
+# powiedzial" ma ten czasownik w srodku zdania i w innej formie —
+# nie lapie sie.
+
+# Czasowniki, ktorych wykonawca nie zrobi za czlowieka. Rdzenie w
+# trybie rozkazujacym; koncowki dopisuje wzorzec nizej.
+_CZASOWNIKI_CZLOWIEKA = (
+    # glos i sluch
+    "powiedz", "mow", "mów", "wypowiedz", "nagraj", "odsluchaj",
+    "odsłuchaj", "posluchaj", "posłuchaj", "przeczytaj",
+    # dotyk i ekran
+    "kliknij", "nacisnij", "naciśnij", "przytrzymaj", "dotknij",
+    "stuknij", "wybierz", "zaznacz", "przesun", "przesuń",
+    "przewin", "przewiń",
+    # wprowadzanie
+    "wpisz", "wprowadz", "wprowadź", "przepisz", "podaj",
+    # inne czynnosci fizyczne
+    "podejdz", "podejdź", "pokaz", "pokaż", "przyloz", "przyłóż",
+    "zeskanuj", "sprawdz", "sprawdź", "odpowiedz",
+)
+
+# Poczatek linii: numer punktu, myslnik, gwiazdka, pogrubienie —
+# wszystko, co moze stac PRZED samym poleceniem.
+_OZDOBNIK_POCZATKU = r"(?:[-*•+>]\s*|\d+[.)]\s*|\*\*\s*|#+\s*)*"
+
+# Polecenie stoi na poczatku linii ALBO po przecinku/dwukropku w tej
+# samej linii. To drugie widac w prawdziwym zadaniu z biegu 17:39:
+#
+#   3. Gdy uslyszysz, ze bot mowi '...', POWIEDZ COS GLOSNO
+#
+# Zdania relacjonujace sie tu nie lapia, bo maja czasownik w innej
+# formie: "zeby powiedzial", "moze powiedziec", "co robi klikniecie"
+# — po rdzeniu nie ma granicy slowa.
+_CZYNNOSC_CZLOWIEKA_LINIA_RE = re.compile(
+    r"(?im)(?:^\s*" + _OZDOBNIK_POCZATKU + r"|[,;:]\s+)"
+    + r"(?:" + "|".join(_CZASOWNIKI_CZLOWIEKA) + r")\b"
+)
+
+# Czasowniki, ktore same w sobie nie przesadzaja — sa tez zwyklymi
+# komendami dla maszyny ("sprawdz plik", "podaj wynik", "pokaz
+# liste"). Wymagamy przy nich slowa, ktore wskazuje na czlowieka
+# albo na jego zmysly.
+_DWUZNACZNE = ("sprawdz", "sprawdź", "podaj", "pokaz", "pokaż",
+               "przeczytaj", "odpowiedz", "wybierz")
+
+_ZMYSL_ALBO_CZLOWIEK_RE = re.compile(
+    r"\b(?:g[łl]o[śs]n\w*|g[łl]os\w*|na\s+g[łl]os|s[łl]uchem|wzrokowo|uchem|"
+    r"okiem|do\s+telefonu|do\s+mikrofonu|mikrofon\w*|na\s+ekranie|"
+    r"palcem|r[ęe]k\w*|osobi[śs]cie|samodzielnie|ty\b|sam\b)",
+    re.IGNORECASE
+)
+
+
+def _bez_kodu_i_cytatow(linia):
+    """
+    JEDNA linia bez wstawek `...` i bez tresci w cudzyslowach.
+
+    To jest cala obrona przed "samym slowem": print("powiedz cos"),
+    cytat z raportu i przyklad w dokumentacji trace znaczenie,
+    zanim zaczniemy szukac polecenia.
+
+    Pracujemy na POJEDYNCZEJ linii celowo — wczesniejsza wersja
+    czyscila caly tekst naraz i gubila linie, przez co numeracja
+    rozjezdzala sie z oryginalem.
+    """
+
+    t = str(linia or "")
+
+    t = re.sub(r"`[^`]*`", " ", t)
+    t = re.sub(r'"[^"]*"', " ", t)
+    t = re.sub(r"'[^']*'", " ", t)
+    t = re.sub(r"„[^”]*”", " ", t)
+
+    return t
+
+
+def _linia_jest_czynnoscia_czlowieka(linia):
+    """Czy TA linia jest poleceniem skierowanym do czlowieka."""
+
+    linia = _bez_kodu_i_cytatow(linia)
+
+    # Wciecie czterema spacjami to w tekscie zadania kod, nie
+    # polecenie do czlowieka.
+    if re.match(r"^\s{4,}\S", linia):
+        return False
+
+    m = _CZYNNOSC_CZLOWIEKA_LINIA_RE.search(linia)
+
+    if not m:
+        return False
+
+    slowo = re.sub(
+        r"^[\s,;:]*" + _OZDOBNIK_POCZATKU, "", m.group(0)
+    ).strip().lower()
+
+    # Przy czasownikach, ktore sa tez zwyklymi komendami dla
+    # maszyny, zadamy sladu czlowieka albo jego zmyslow.
+    if slowo in _DWUZNACZNE:
+        return bool(_ZMYSL_ALBO_CZLOWIEK_RE.search(linia))
+
+    return True
+
+
+def _pierwsza_czynnosc_czlowieka(tekst):
+    """
+    Pozycja POCZATKU LINII, w ktorej zaczyna sie polecenie dla
+    czlowieka. -1, gdy takiej linii nie ma.
+
+    Bloki ``` pomijamy w calosci — to kod, a nie prosba.
+    """
+
+    tekst = str(tekst or "")
+
+    if not tekst.strip():
+        return -1
+
+    pozycja = 0
+    w_bloku = False
+
+    for linia in tekst.split("\n"):
+
+        if linia.strip().startswith("```"):
+            w_bloku = not w_bloku
+            pozycja += len(linia) + 1
+            continue
+
+        if not w_bloku and _linia_jest_czynnoscia_czlowieka(linia):
+            return pozycja
+
+        pozycja += len(linia) + 1
+
+    return -1
+
+
 def _granica_tekstu_dla_czlowieka(task_text):
     """
     Od ktorego miejsca zadanie przestaje byc robota, a zaczyna byc
@@ -33004,10 +33168,26 @@ def _granica_tekstu_dla_czlowieka(task_text):
         if m
     ]
 
+    # v370: czynnosc, ktorej wykonawca nie zrobi za czlowieka —
+    # patrz _pierwsza_czynnosc_czlowieka(). Ta sama granica, jeden
+    # zrodlowy punkt ciecia, tylko szerzej widzi.
+    _czynnosc = _pierwsza_czynnosc_czlowieka(tekst)
+
+    if _czynnosc >= 0:
+        pozycje.append(_czynnosc)
+
     if not pozycje:
         return -1
 
-    return tekst.rfind("\n", 0, min(pozycje)) + 1
+    _od = min(pozycje)
+
+    # Gdy to juz jest poczatek linii (tak zwraca
+    # _pierwsza_czynnosc_czlowieka), rfind cofnie sie o linie za
+    # daleko — dlatego tniemy dokladnie tam, gdzie linia sie zaczyna.
+    if _od == 0 or tekst[_od - 1:_od] == "\n":
+        return _od
+
+    return tekst.rfind("\n", 0, _od) + 1
 
 
 def _czesc_maszynowa_zadania(task_text):
