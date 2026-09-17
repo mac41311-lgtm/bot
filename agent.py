@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v365
+AEL-MINI AUTONOMOUS AGENT v366
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v365")
+    print("             AEL-MINI AUTONOMOUS AGENT v366")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11393,6 +11393,38 @@ def chrome_open(
 # CHROME CLICK
 # ============================================================
 
+def _stan_strony(tab):
+    """
+    Adres, tytul i dlugosc tresci — tyle, zeby powiedziec, CZY cos
+    sie na stronie stalo. Zwraca None, gdy nie da sie odczytac.
+    """
+
+    try:
+
+        stan = chrome_eval(
+            tab,
+            "(() => ({"
+            " href: location.href,"
+            " title: document.title,"
+            " znakow: (document.body ?"
+            " document.body.innerText.replace(/\\s+/g, ' ')"
+            ".trim().length : 0)"
+            "}))()"
+        )
+
+        if isinstance(stan, dict) and stan.get("href") is not None:
+            return {
+                "href": stan.get("href"),
+                "title": stan.get("title"),
+                "znakow": stan.get("znakow")
+            }
+
+    except Exception:
+        pass
+
+    return None
+
+
 def chrome_click(
     text,
     tab_id=None,
@@ -11486,10 +11518,98 @@ def chrome_click(
 }})()
 """
 
-    return chrome_eval(
+    # v366: KLIKNIECIE MA POWIEDZIEC, CZY COS SIE STALO.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 16:42, krok 3).
+    # Gemini probowalo kliknac "Log in with Google" JEDENASCIE razy
+    # z rzedu — raz przez chrome_click, dziesiec razy przez wlasny
+    # JavaScript (`el.click()`, `dispatchEvent`, szukanie po
+    # `textContent`, po `outerHTML`, wywolanie reactowego onClick).
+    # Po KAZDEJ probie pytalo osobnym wywolaniem o
+    # `window.location.href` i za kazdym razem dostawalo to samo:
+    #
+    #     https://dashboard.daily.co/login
+    #
+    # Bo chrome_click odpowiadalo {"ok": true, "clicked": "Log in
+    # with Google"} niezaleznie od tego, czy klikniecie cokolwiek
+    # zrobilo. To byla prawda o WYSLANIU zdarzenia, a nie o jego
+    # SKUTKU — a Gemini potrzebowalo tego drugiego, wiec dopisywalo
+    # sobie sonde po kazdej probie.
+    #
+    # Nie uczymy Gemini, jak ma klikac. Mowimy mu, co sie stalo:
+    # patrzymy na adres, tytul i dlugosc tekstu przed i po, i
+    # dokladamy to do odpowiedzi. Gdy nic sie nie ruszylo, mowimy to
+    # wprost — jednym zdaniem, zamiast zostawiac "ok: true".
+    _przed = _stan_strony(tab)
+
+    wynik = chrome_eval(
         tab,
         javascript
     )
+
+    if not isinstance(wynik, dict) or not wynik.get("clicked"):
+        return wynik
+
+    # Reakcja strony nie jest natychmiastowa — to samo czekanie, co
+    # przed kliknieciem (patrz _poczekaj_az_strona_dojdzie).
+    _poczekaj_az_strona_dojdzie(tab)
+
+    _po = _stan_strony(tab)
+
+    if not _przed or not _po:
+        return wynik
+
+    _co_sie_zmienilo = []
+
+    if _przed.get("href") != _po.get("href"):
+        _co_sie_zmienilo.append(
+            "adres: " + str(_przed.get("href"))
+            + " -> " + str(_po.get("href"))
+        )
+
+    if _przed.get("title") != _po.get("title"):
+        _co_sie_zmienilo.append(
+            "tytul: " + str(_przed.get("title"))
+            + " -> " + str(_po.get("title"))
+        )
+
+    _roznica = abs(
+        int(_po.get("znakow") or 0)
+        - int(_przed.get("znakow") or 0)
+    )
+
+    # Kilka znakow to zwykle licznik albo animacja, nie nowa tresc.
+    if _roznica > 40:
+        _co_sie_zmienilo.append(
+            "tresc strony: " + str(_przed.get("znakow"))
+            + " -> " + str(_po.get("znakow")) + " znakow"
+        )
+
+    wynik["adres"] = _po.get("href")
+
+    if _co_sie_zmienilo:
+
+        wynik["po_klknieciu"] = "; ".join(_co_sie_zmienilo)
+
+    else:
+
+        wynik["bez_skutku"] = True
+        wynik["po_klknieciu"] = (
+            "Kliknalem w ten element, ale strona sie nie ruszyla: "
+            "adres, tytul i dlugosc tresci sa takie same jak przed "
+            "kliknieciem. Samo powtorzenie tego kliknięcia nic nie "
+            "zmieni. Zobacz chrome_inspect — pokazuje, co na tej "
+            "stronie da sie kliknac i wypelnic."
+        )
+
+        log(
+            "CHROME",
+            "Kliknalem \"" + short(str(text), 60)
+            + "\" — strona sie nie ruszyla (adres, tytul i tresc "
+            "bez zmian)."
+        )
+
+    return wynik
 
 
 # ============================================================
