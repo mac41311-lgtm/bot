@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v368
+AEL-MINI AUTONOMOUS AGENT v369
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v368")
+    print("             AEL-MINI AUTONOMOUS AGENT v369")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16688,6 +16688,152 @@ def _gemini_pisze_kod(command_str):
     return None
 
 
+# ============================================================
+# BRAK POSTEPU W TERMUKSIE (v369)
+# ============================================================
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 17:39, krok 3).
+# Piec razy z rzedu ten sam cykl:
+#
+#   termux_write_file bootstrap.py
+#   python -m py_compile bootstrap.py      -> rc=0
+#   python bootstrap.py                    -> rc=0, ZERO outputu
+#   find . -type f | wc -l                 -> 2
+#
+# Liczba plikow: 2, 2, 2, 2. Skrypt, ktory mial utworzyc strukture
+# katalogow, nie utworzyl nic — a kazde uruchomienie konczylo sie
+# zerowym kodem wyjscia, wiec wygladalo na sukces.
+#
+# v367 wykrywa to dla przegladarki. Tu jest ta sama zasada dla
+# Termuxa, na stanie, ktory i tak juz mamy w wyniku: kod wyjscia
+# oraz to, co komenda wypisala. Zadnych dodatkowych komend "zeby
+# zmierzyc stan" — pomiar ma byc darmowy.
+#
+# To jest INFORMACJA, nie zakaz. Pierwsza i druga proba sa ciche;
+# zmiana stanu zeruje licznik. Co dalej — decyduje wykonawca.
+
+_termux_historia = []
+
+
+def _stan_po_komendzie(wynik):
+    """
+    Tani odcisk tego, co komenda zastala i zostawila.
+
+    Bierzemy WYLACZNIE to, co juz jest w wyniku: kod wyjscia i
+    odcisk tego, co komenda wypisala. Nic nie uruchamiamy dodatkowo.
+    """
+
+    if not isinstance(wynik, dict):
+        return None
+
+    tresc = (
+        str(wynik.get("stdout") or "")
+        + "\x00"
+        + str(wynik.get("stderr") or "")
+    ).strip()
+
+    try:
+        odcisk = hashlib.sha256(
+            tresc.encode("utf-8", "replace")
+        ).hexdigest()[:16]
+    except Exception:
+        odcisk = str(len(tresc))
+
+    return {
+        "rc": wynik.get("returncode"),
+        "ok": wynik.get("ok"),
+        "znakow": len(tresc),
+        "odcisk": odcisk
+    }
+
+
+def _zapamietaj_komende_termux(command, wynik):
+    """
+    Czy w Termuksie krazymy w kolko. Zwraca (sygnal, zdanie) albo
+    (None, None) — te same progi, co w przegladarce (v367).
+    """
+
+    stan = _stan_po_komendzie(wynik)
+
+    if stan is None:
+        return None, None
+
+    komenda = " ".join(str(command or "").split())
+
+    # Zmiana stanu = inny kod wyjscia albo inna tresc wyjscia niz
+    # przy POPRZEDNIM uruchomieniu TEJ SAMEJ komendy. Przy nowej
+    # komendzie nie mamy z czym porownywac, wiec to jest zmiana.
+    poprzedni = None
+
+    for wpis in reversed(_termux_historia):
+        if wpis["komenda"] == komenda:
+            poprzedni = wpis["stan"]
+            break
+
+    zmienilo = (
+        poprzedni is None
+        or poprzedni.get("rc") != stan.get("rc")
+        or poprzedni.get("odcisk") != stan.get("odcisk")
+    )
+
+    _termux_historia.append({
+        "komenda": komenda,
+        "stan": stan,
+        "zmienilo": bool(zmienilo)
+    })
+
+    if len(_termux_historia) > _CHROME_HISTORIA_MAX:
+        del _termux_historia[:-_CHROME_HISTORIA_MAX]
+
+    if zmienilo:
+        return None, None
+
+    bez_skutku = []
+
+    for wpis in reversed(_termux_historia):
+        if wpis["zmienilo"]:
+            break
+        bez_skutku.append(wpis["komenda"])
+
+    ile_tej_samej = 0
+
+    for k in bez_skutku:
+        if k != bez_skutku[0]:
+            break
+        ile_tej_samej += 1
+
+    # Pierwszy przebieg komendy to punkt odniesienia — nie ma z czym
+    # go porownac, wiec nie liczy sie jako powtorzenie. Dlatego "+1":
+    # prog mowi o liczbie IDENTYCZNYCH przebiegow, tak samo jak w
+    # przegladarce.
+    if ile_tej_samej + 1 >= _CHROME_PETLA_PROG:
+        return "LOOP_DETECTED", (
+            "Ta sama komenda poszla " + str(ile_tej_samej + 1)
+            + " raz z rzedu i za kazdym razem skonczyla sie tak samo "
+            "— ten sam kod wyjscia, to samo wyjscie. Kolejne "
+            "uruchomienie da to samo."
+        )
+
+    if len(bez_skutku) >= 4:
+
+        a, b = bez_skutku[0], bez_skutku[1]
+
+        if a != b and bez_skutku[:4] == [a, b, a, b]:
+            return "LOOP_DETECTED", (
+                "Te dwie komendy ida na przemian i zadna nic nie "
+                "zmienia. To jest petla."
+            )
+
+    if len(bez_skutku) + 1 >= _CHROME_BRAK_POSTEPU_PROG:
+        return "NO_PROGRESS", (
+            str(len(bez_skutku) + 1) + " komend z rzedu skonczylo sie "
+            "dokladnie tak samo jak poprzednio — kod wyjscia i "
+            "wyjscie bez zmian. Nic sie nie posuwa."
+        )
+
+    return None, None
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -17221,6 +17367,25 @@ def termux_run(command):
                     "termux_run_background i podglądanie przez "
                     "termux_check_process."
                 )
+
+        # v369: czy ta komenda cokolwiek posunela. Patrz komentarz
+        # przy _zapamietaj_komende_termux() — stan bierzemy z tego,
+        # co juz jest w wyniku, wiec pomiar nic nie kosztuje.
+        _sygnal, _zdanie = _zapamietaj_komende_termux(
+            command_str,
+            result
+        )
+
+        if _sygnal and isinstance(result, dict):
+
+            result[_sygnal.lower()] = True
+            result["uwaga"] = _zdanie
+
+            log(
+                "TERMUX",
+                _sygnal.lower() + "=tak | "
+                + short(command_str, 70)
+            )
 
         return result
 
@@ -33667,7 +33832,11 @@ def _handle_need_user_login(decision):
     log(
         "MAIN",
         "NEED_USER_LOGIN: użytkownik odpowiedział na prośbę o "
-        "czynność ręczną na stronie " + (login_url or "(brak URL)") + "."
+        + (
+            "czynność ręczną na stronie " + login_url
+            if login_url else
+            "czynność ręczną (bez strony — to nie było logowanie)"
+        ) + "."
         + (
             " Wkleił tekst (" + str(len(user_typed)) + " znaków)."
             if user_typed else " Nacisnął Enter bez tekstu."
@@ -33689,7 +33858,13 @@ def _handle_need_user_login(decision):
     auto_found = []
     auto_error = ""
 
-    if not user_typed:
+    # v369: bez prawdziwego adresu nie ma czego odczytywac.
+    #
+    # W biegu 2026-09-17 17:39 MAIN wyslal url="" — a ten kod i tak
+    # szedl czytac strone po zalogowaniu i konczyl komunikatem "brak
+    # prawdziwego adresu http(s) do odczytania". Pytanie zadawane po
+    # fakcie, na ktore odpowiedz bylo wiadomo z gory.
+    if not user_typed and login_url.startswith(("http://", "https://")):
 
         auto_found, auto_error = _auto_extract_after_login(login_url)
 
@@ -34556,6 +34731,60 @@ Zwróć tylko JSON.
             }
 
             dtype = "NEED_USER_LOGIN"
+
+        # v369: TO SAMO ROZDZIELENIE, GDY MAIN OD RAZU POSZEDL DO
+        # CZLOWIEKA.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 17:39,
+        # krok 8). MAIN oddal uzytkownikowi cale zadanie:
+        #
+        #   1. Otworz Termux
+        #   2. Wklej: cd ~/audio_chain_poc && python3 run_local.py
+        #      --dry-run
+        #   3. POWIEDZ COS GLOSNO do telefonu przez 6 sekund
+        #   4. Skopiuj CALY output
+        #
+        # Punkt 2 to zwykla komenda — wykonawca robi takie
+        # kilkadziesiat razy na bieg. Punkt 3 rzeczywiscie wymaga
+        # czlowieka. Poszlo wszystko naraz, wiec `--dry-run` nie
+        # zostalo uruchomione ANI RAZU; wczesniej padlo tylko
+        # `--local` (zly przelacznik, rc=2) i `--help`.
+        #
+        # Mechanizm rozdzielajacy istnieje od v273, ale patrzyl
+        # wylacznie na dtype == "TASK". MAIN wybral tu
+        # NEED_USER_LOGIN z pustym "url", wiec go ominal.
+        #
+        # Nie budujemy drugiego systemu i nie wykonujemy tu niczego
+        # sami: zamieniamy decyzje z powrotem na TASK z SAMA czescia
+        # maszynowa i puszczamy ja normalna droga wykonawcza. Czesc
+        # ludzka wroci w nastepnym kroku, juz sama — dokladnie tak,
+        # jak v273 to obiecuje.
+        #
+        # Tylko przy PUSTYM url. Prawdziwe logowanie na stronie
+        # (http(s)) idzie swoja droga bez zmian.
+        if dtype == "NEED_USER_LOGIN" and not str(
+            decision.get("url") or ""
+        ).strip():
+
+            _instr = str(decision.get("instructions") or "").strip()
+            _masz = _czesc_maszynowa_zadania(_instr).strip()
+
+            if _masz and _extract_commands_from_text(_masz):
+
+                log(
+                    "MAIN",
+                    "W prośbie do człowieka jest komenda, którą "
+                    "potrafimy wykonać sami — robimy ją najpierw, "
+                    "a prośba wróci, gdy zostanie już tylko ona."
+                )
+
+                decision = {
+                    "type": "TASK",
+                    "task": _masz,
+                    "reason": str(decision.get("reason") or "").strip()
+                }
+
+                dtype = "TASK"
 
         # v273: zadanie mieszane — robota plus akapit dla czlowieka.
         # Robote wykonujemy, akapit odcinamy: Gemini i tak umie z nim
