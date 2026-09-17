@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v364
+AEL-MINI AUTONOMOUS AGENT v365
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v364")
+    print("             AEL-MINI AUTONOMOUS AGENT v365")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10074,6 +10074,106 @@ def _looks_like_delete_command(command):
     )
 
 
+# v365: NASZ WLASNY LOG Z TEGO BIEGU NIE WYMAGA PYTANIA.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16 22:39, krok 4).
+# O 23:04:28 Gemini poprosilo o:
+#
+#     rm ~/krok1.log && termux-change-repo
+#
+# ~/krok1.log to byl NASZ wlasny bufor: zalozylismy go 40 sekund
+# wczesniej jako log_file dla termux_run_background (23:01:31,
+# pid 5538, `pkg update && pkg install ...`). Straznik zobaczyl
+# `rm`, zablokowal i zapytal operatora w terminalu. Uzytkownik spal.
+#
+# Odpowiedz przyszla o 06:10:48 — po 7 godzinach i 6 minutach. Sama
+# komenda wykonala sie potem w 0,3 s (duration_s: 0.3). Caly nocny
+# bieg stal na pytaniu o skasowanie pliku, ktory sami zalozylismy.
+#
+# Nie oslabiamy straznika. Robimy jeden waski wyjatek, oparty na
+# danych, ktore juz mamy: _logi_w_tle. Ten slownik zaklada sie
+# WYLACZNIE w termux_run_background(), w chwili uruchomienia
+# procesu, i zyje tylko w pamieci tego procesu — wiec log z
+# POPRZEDNIEGO uruchomienia nigdy w nim nie jest.
+#
+# Warunki sa celowo ostre. Wyjatek dziala tylko, gdy KAZDY czlon
+# komendy, ktory cokolwiek usuwa, to gole `rm` z samymi sciezkami,
+# a KAZDA z tych sciezek jest dokladnie kluczem w _logi_w_tle.
+# Odpadaja wiec: `rm -rf`, `rm -f`, jakakolwiek flaga, gwiazdki i
+# inne wzorce powloki, `rmdir`, `unlink`, `find -delete`, pliki
+# uzytkownika, sciezki nieznane i logi z wczesniejszych biegow.
+#
+# Czlonow, ktore NIC nie usuwaja (`&& termux-change-repo`), ten
+# straznik nie ocenia — nigdy tego nie robil. On pilnuje usuwania.
+_ZNAKI_WZORCA_POWLOKI = "*?[]{}$`"
+
+
+def _sciezka_naszego_logu_z_tego_biegu(cel):
+    """Czy ta sciezka to dokladnie nasz log_file z tego biegu."""
+
+    cel = str(cel or "").strip().strip("'\"")
+
+    if not cel:
+        return False
+
+    if any(z in cel for z in _ZNAKI_WZORCA_POWLOKI):
+        return False
+
+    # Tylda tylko na poczatku, jako $HOME — nigdzie indziej.
+    if "~" in cel[1:]:
+        return False
+
+    # Sciezka musi byc ZAKOTWICZONA: "~/..." albo "/...".
+    #
+    # Gola nazwa wzgledna znaczy co innego dla nas niz dla powloki.
+    # `cd /gdzies && rm krok1.log` — my rozwiazalibysmy to wzgledem
+    # $HOME i znalezli nasz log w rejestrze, a powloka skasowalaby
+    # /gdzies/krok1.log. Klucze w _logi_w_tle sa zawsze bezwzgledne,
+    # wiec zadamy tego samego od sciezki w komendzie.
+    if not (cel.startswith("~/") or cel.startswith("/")):
+        return False
+
+    try:
+        return str(_resolve_home_relative_path(cel)) in _logi_w_tle
+    except Exception:
+        return False
+
+
+def _usuwa_tylko_nasze_logi_z_tego_biegu(command):
+    """
+    Czy ta komenda usuwa WYLACZNIE nasze wlasne logi z tego biegu.
+
+    Zwraca False przy najmniejszej watpliwosci — patrz komentarz
+    wyzej. Wtedy obowiazuje dotychczasowe zabezpieczenie.
+    """
+
+    usuwajace = 0
+
+    for czlon in re.split(r"[;&|]+|\n", str(command or "")):
+
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+
+        slowa = czlon.split()
+
+        # Tylko gole `rm`. rmdir, unlink, `find ... -delete` i
+        # wszystko, co ma `rm` gdzies dalej w czlonie — odpada.
+        if len(slowa) < 2 or slowa[0] != "rm":
+            return False
+
+        for arg in slowa[1:]:
+
+            if arg.startswith("-"):
+                return False
+
+            if not _sciezka_naszego_logu_z_tego_biegu(arg):
+                return False
+
+        usuwajace += 1
+
+    return usuwajace > 0
+
+
 def _confirm_destructive_action(description):
     """
     Blokuje i pyta operatora w terminalu, zanim agent wykona
@@ -10281,7 +10381,10 @@ def execute_shell(command, timeout=None):
     if fake_tool:
         return _fake_tool_invocation_error(fake_tool)
 
-    if _looks_like_delete_command(command):
+    if (
+        _looks_like_delete_command(command)
+        and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+    ):
 
         if not _confirm_destructive_action(
             "Komenda usuwająca: " + command
@@ -16418,7 +16521,10 @@ def termux_run_background(
         if fake_tool:
             return _fake_tool_invocation_error(fake_tool)
 
-        if _looks_like_delete_command(command):
+        if (
+            _looks_like_delete_command(command)
+            and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+        ):
 
             if not _confirm_destructive_action(
                 "Komenda usuwająca (w tle): " + command
