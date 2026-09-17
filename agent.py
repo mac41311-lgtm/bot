@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v367
+AEL-MINI AUTONOMOUS AGENT v368
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v367")
+    print("             AEL-MINI AUTONOMOUS AGENT v368")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19647,6 +19647,87 @@ def _zauwaz_powtarzane_ruchy(last_result, ile_wystarczy=3):
     )
 
 
+# v368: TOOL SUCCESS != TASK COMPLETED.
+#
+# ZAOBSERWOWANE W TRZECH BIEGACH Z RZEDU (19:38, 21:13, 22:39).
+# Status "COMPLETED" powstawal w JEDNYM miejscu: tam, gdzie Gemini
+# przestawalo wywolywac narzedzia. Znaczyl doslownie tyle: "tura sie
+# skonczyla i nic nie wybuchlo". Do MAIN-a szedl jako
+# "Ostatni krok skonczyl sie tak: COMPLETED (udany)".
+#
+# Ola w biegu 21:13 nazwala to wprost: "COMPLETED (udany) jest tu
+# nieprawda. Prawdziwa etykieta to FAIL — polaczenie wychodzace
+# 00:00, brak transmisji. Ktos wykonal test poprawnie, zebral dane,
+# uczciwie odpowiedzial na pytania — a potem na wierzchu polozyl
+# zielona pieczatke."
+#
+# Python NIE ocenia, czy cel uzytkownika zostal osiagniety — nie zna
+# celu i nie ma go znac. Robi dwie rzeczy:
+#   1. nazywa status tym, czym on jest: TASK_EXECUTION_FINISHED,
+#   2. zbiera DOWODY z tego, co narzedzia naprawde zwrocily, zeby
+#      MAIN mial na czym oprzec swoja decyzje.
+#
+# Decyzja zostaje MAIN-a. Zadnej heurystyki, zadnego NLP.
+
+
+def _dowody_z_wykonania(tool_trace, warnings=None):
+    """
+    Co narzedzia NAPRAWDE zwrocily w tym zadaniu — zwiezle.
+
+    Nie ocenia celu. Liczy fakty, ktore narzedzia same zglosily:
+    bledy, strony ktorych nie ma, klikniecia bez skutku, petle.
+    """
+
+    trace = list(tool_trace or [])
+
+    dowody = {
+        "wywolan_narzedzi": len(trace)
+    }
+
+    if not trace:
+        dowody["nic_nie_wykonano"] = True
+        return dowody
+
+    nieudane = [
+        w for w in trace
+        if isinstance(w, dict) and w.get("ok") is False
+    ]
+
+    if nieudane:
+        dowody["nieudane_narzedzia"] = [
+            str(w.get("tool")) for w in nieudane
+        ][:8]
+
+    # Sygnaly, ktore narzedzia przegladarki wystawiaja od v366/v367.
+    # Szukamy ich w dowodzie tekstowym, bo tam trafia skrot wyniku.
+    _slady = {
+        "page_not_found": "strony_ktorych_nie_ma",
+        "bez_skutku": "klikniecia_bez_skutku",
+        "loop_detected": "petle",
+        "no_progress": "brak_postepu"
+    }
+
+    for _slad, _nazwa in _slady.items():
+
+        ile = 0
+
+        for w in trace:
+
+            if not isinstance(w, dict):
+                continue
+
+            if _slad in str(w.get("evidence") or "").lower():
+                ile += 1
+
+        if ile:
+            dowody[_nazwa] = ile
+
+    if warnings:
+        dowody["ostrzezenia"] = len(list(warnings))
+
+    return dowody
+
+
 def _short_tool_evidence(result):
     """
     Co to wywolanie NAPRAWDE powiedzialo.
@@ -20212,9 +20293,22 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "fakt obok raportu."
                     )
 
+                # v368: TO NIE JEST "CEL OSIAGNIETY".
+                #
+                # Ten return wykonuje sie ZAWSZE, gdy Gemini
+                # przestaje wywolywac narzedzia. Do v367 wystawial
+                # status "COMPLETED", ktory MAIN czytal jako
+                # "(udany)" — takze wtedy, gdy narzedzia wlasnie
+                # pokazaly, ze sie nie udalo. Patrz komentarz przy
+                # _dowody_z_wykonania().
+                #
+                # Nazwa mowi teraz to, co sie stalo naprawde:
+                # wykonywanie TASK-a sie skonczylo. Czy cel zostal
+                # osiagniety, rozstrzyga MAIN — na podstawie
+                # raportu, sladu narzedzi i "dowodow" ponizej.
                 return {
                     "ok": True,
-                    "status": "COMPLETED",
+                    "status": "TASK_EXECUTION_FINISHED",
                     "key": key_name,
                     "report": short(
                         str(text),
@@ -20224,7 +20318,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     "interaction_id": interaction_id,
                     "tool_warnings": collected_warnings,
                     "tool_trace": collected_tool_trace,
-                    "confirmed_texts": collected_confirmed_texts
+                    "confirmed_texts": collected_confirmed_texts,
+                    "dowody": _dowody_z_wykonania(
+                        collected_tool_trace,
+                        collected_warnings
+                    )
                 }
 
             # ------------------------------------------------
@@ -21011,7 +21109,14 @@ def _checklist_record_result(task_id, result):
 
         item["tool_trace"] = result.get("tool_trace", [])
 
-        if result.get("status") == "COMPLETED":
+        # v368: ten sam moment, dwie mozliwe nazwy statusu —
+        # "COMPLETED" zostalo przemianowane na
+        # "TASK_EXECUTION_FINISHED" (patrz komentarz przy
+        # _dowody_z_wykonania). Weryfikacja warunku sukcesu dziala
+        # dokladnie jak przedtem.
+        if result.get("status") in (
+            "TASK_EXECUTION_FINISHED", "COMPLETED"
+        ):
             verified, evidence = _verify_success_condition_evidence(
                 item.get("success_condition", ""),
                 result.get("confirmed_texts", [])
@@ -21935,10 +22040,15 @@ def run_next_task():
                 + ("OK ✓" if applied else "nie nałożony")
             )
 
-    elif status == "COMPLETED":
+    elif status in ("TASK_EXECUTION_FINISHED", "COMPLETED"):
         report = short(result.get("report", ""), 300)
         if report:
             print(f"  RAPORT: {report}")
+        _dow = result.get("dowody") or {}
+        if _dow:
+            print("  DOWODY: " + ", ".join(
+                str(k) + "=" + str(v) for k, v in _dow.items()
+            ))
 
     elif status == "DONE_REJECTED_VERIFICATION_FAILED":
         checks = result.get("checks", [])
@@ -25501,6 +25611,8 @@ def _recent_task_summaries(n=8):
 # Krótkie, ludzkie etykiety statusów — zamiast wklejać surowe stałe
 # takie jak "GEMINI_TOOL_ERROR" wprost w wiadomość do Eli.
 _HUMAN_STATUS_LABELS = {
+    # v368: "ukonczono" mowilo o CELU, a status mowi o WYKONANIU.
+    "TASK_EXECUTION_FINISHED": "wykonywanie zadania zakończone",
     "COMPLETED": "ukończono",
     "GEMINI_TOOL_ERROR": "błąd narzędzia",
     "TOOL_LIMIT": "przekroczony limit narzędzi",
@@ -26216,15 +26328,39 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # jest ludzka, bo to czytaja ludzie-role, nie parser.
     _ok = last_result.get("ok")
 
-    parts = [
-        "Ostatni krok skończył się tak: "
-        + str(last_result.get("status", "?"))
-        + (
+    _status = str(last_result.get("status", "?"))
+
+    # v368: przy TASK_EXECUTION_FINISHED nie piszemy "(udany)".
+    # Sufiks bierze sie z "ok", a "ok" znaczy tam tylko tyle, ze tura
+    # Gemini sie skonczyla bez awarii — nie, ze cel zostal
+    # osiagniety. Patrz komentarz przy _dowody_z_wykonania().
+    if _status == "TASK_EXECUTION_FINISHED":
+        # v345: bez slowa o wykonawcy. Liczy sie, co sie stalo.
+        _sufiks = (
+            " — wykonywanie się skończyło; czy cel osiągnięty,"
+            " oceńcie z dowodów poniżej"
+        )
+    else:
+        _sufiks = (
             " (udany)" if _ok is True
             else " (nieudany)" if _ok is False
             else ""
         )
+
+    parts = [
+        "Ostatni krok skończył się tak: " + _status + _sufiks
     ]
+
+    _dowody = last_result.get("dowody")
+
+    if isinstance(_dowody, dict) and _dowody:
+        parts.append(
+            "dowody z wykonania: "
+            + ", ".join(
+                str(k) + "=" + str(v)
+                for k, v in _dowody.items()
+            )
+        )
 
     tool = last_result.get("tool")
 
@@ -29303,6 +29439,16 @@ def main_decide(
         "TASK_ALREADY_SATISFIED_ON_DISK": (
             'To Python już potwierdził bezpośrednio na dysku (wyżej co).\n'
             '  Wybierz następny, jeszcze niezrobiony krok.'
+        ),
+        # v368: bez slowa o wykonawcy — patrz v345. Rola ma wiedziec,
+        # CO sie stalo, a nie KTO to zrobil.
+        "TASK_EXECUTION_FINISHED": (
+            'Wykonywanie tego TASK-a się skończyło. To mówi o WYKONANIU,\n'
+            '  nie o celu: wyżej masz raport, ślad narzędzi i "dowody"\n'
+            '  (ile wywołań, które zawiodły, czy trafiliśmy na stronę,\n'
+            '  której nie ma, czy kliknięcia były bez skutku). Czy cel\n'
+            '  użytkownika jest osiągnięty — oceniasz Ty, na podstawie\n'
+            '  tych dowodów.'
         ),
         "WNIOSEK_ZE_SIE_NIE_DA": (
             'Padł wniosek, że celu się nie da — wyżej masz powód. Zespół\n'
