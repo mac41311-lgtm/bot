@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v366
+AEL-MINI AUTONOMOUS AGENT v367
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v366")
+    print("             AEL-MINI AUTONOMOUS AGENT v367")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11184,6 +11184,548 @@ def chrome_inspect(
 
 CDP_403 = False
 
+# ============================================================
+# PAMIEC I MIERNIK STANU PRZEGLADARKI (v367)
+# ============================================================
+#
+# ZAOBSERWOWANY REALNY BIEG (2026-09-17 16:42). Trzy rzeczy naraz:
+#
+#   1. W jednym kroku powstalo szesc kart: 1305, 1306, 1307, 1308,
+#      1309, 1311 — w tym dwie pary tej samej strony. Mechanizm
+#      "juz_otwarta" istnieje od dawna, ale w chrome_open pytal o
+#      karte TYLKO wtedy, gdy nikt nie podal tab_id. Ostatnie
+#      wywolanie podalo tab_id=1307, ta karta juz nie pokazywala tej
+#      strony, wiec poszlismy prosto do `am start` — i zrobilismy
+#      1311, choc ten sam adres wisial obok.
+#
+#   2. chrome_open("/dashboard") i chrome_open("/sign-in") wrocily
+#      z "ok": true, a strony mialy tytul "Not found | Daily".
+#      Sukces WYWOLANIA to nie sukces OPERACJI — dokladnie ta sama
+#      pomylka, ktora v366 naprawil dla klikania.
+#
+#   3. Gemini czytalo strone przez document.body.innerText i
+#      dostawalo najpierw baner ciasteczek ("This website stores
+#      cookies on your machine..."), a nie tresc strony. Na kazdej
+#      karcie, za kazdym razem.
+#
+# Nie dokladamy Gemini promptu i nie narzucamy kolejnosci narzedzi.
+# Python ma byc jego PAMIECIA i MIERNIKIEM: pamietac, co juz bylo,
+# i mowic, co naprawde sie stalo.
+
+# Ile ostatnich operacji w przegladarce pamietamy.
+_CHROME_HISTORIA_MAX = 12
+
+# Ile razy ta sama akcja bez skutku, zanim to nazwiemy petla.
+# Pierwsza i druga proba przechodza bez slowa — powtorzenie bywa
+# uzasadnione (strona mogla sie doladowac). Dopiero trzecia znaczy,
+# ze ta droga nie dziala.
+_CHROME_PETLA_PROG = 3
+
+# Ile roznych akcji z rzedu bez zadnej zmiany stanu = brak postepu.
+_CHROME_BRAK_POSTEPU_PROG = 4
+
+_chrome_historia = []
+
+
+def _chrome_stan_sie_zmienil(przed, po):
+    """Czy miedzy dwoma stanami strony cokolwiek drgnelo."""
+
+    if not przed or not po:
+        return False
+
+    if przed.get("href") != po.get("href"):
+        return True
+
+    if przed.get("title") != po.get("title"):
+        return True
+
+    try:
+        return abs(
+            int(po.get("znakow") or 0)
+            - int(przed.get("znakow") or 0)
+        ) > 40
+    except Exception:
+        return False
+
+
+def _zapamietaj_operacje_chrome(akcja, przed, po):
+    """
+    Odklada operacje w pamieci i mowi, czy zespol krazy w kolko.
+
+    Zwraca (sygnal, zdanie) albo (None, None). Sygnaly:
+      LOOP_DETECTED — ta sama akcja kilka razy bez zadnego skutku,
+                      albo dwie akcje na przemian (A, B, A, B).
+      NO_PROGRESS   — rozne akcje, kilka z rzedu, zero zmiany stanu.
+
+    To jest INFORMACJA, nie blokada. Gemini samo wybiera, co dalej.
+    """
+
+    zmienilo = _chrome_stan_sie_zmienil(przed, po)
+
+    _chrome_historia.append({
+        "akcja": str(akcja or ""),
+        "zmienilo": bool(zmienilo),
+        "href": (po or {}).get("href")
+    })
+
+    if len(_chrome_historia) > _CHROME_HISTORIA_MAX:
+        del _chrome_historia[:-_CHROME_HISTORIA_MAX]
+
+    if zmienilo:
+        return None, None
+
+    # Ile razy Z RZEDU, liczac od konca, ta sama akcja nic nie dala.
+    bez_skutku = []
+
+    for wpis in reversed(_chrome_historia):
+        if wpis["zmienilo"]:
+            break
+        bez_skutku.append(wpis["akcja"])
+
+    ile_tej_samej = 0
+
+    for a in bez_skutku:
+        if a != bez_skutku[0]:
+            break
+        ile_tej_samej += 1
+
+    if ile_tej_samej >= _CHROME_PETLA_PROG:
+        return "LOOP_DETECTED", (
+            "Ta sama akcja poszla " + str(ile_tej_samej)
+            + " raz z rzedu i za kazdym razem strona zostala taka "
+            "sama — ten sam adres, ten sam tytul, ta sama tresc. "
+            "Powtorzenie jej jeszcze raz da to samo. Sprobuj innej "
+            "drogi albo zobacz chrome_inspect, co na tej stronie "
+            "naprawde da sie zrobic."
+        )
+
+    # A, B, A, B — dwie akcje na przemian, zadna nic nie daje.
+    if len(bez_skutku) >= 4:
+
+        a, b = bez_skutku[0], bez_skutku[1]
+
+        if a != b and bez_skutku[:4] == [a, b, a, b]:
+            return "LOOP_DETECTED", (
+                "Te dwie akcje ida na przemian i zadna nie zmienia "
+                "strony. To jest petla — inna droga da wiecej niz "
+                "kolejne przejscie tej samej."
+            )
+
+    if len(bez_skutku) >= _CHROME_BRAK_POSTEPU_PROG:
+        return "NO_PROGRESS", (
+            str(len(bez_skutku)) + " operacji z rzedu nie zmienilo "
+            "stanu strony — ani adresu, ani tytulu, ani tresci. "
+            "Cokolwiek probujemy, ta strona na to nie reaguje."
+        )
+
+    return None, None
+
+
+# Znaczniki, ktore w ID albo klasie elementu oznaczaja zgode na
+# ciasteczka. Szukamy ich w STRUKTURZE, nie w tekscie — strona o
+# polityce prywatnosci ma slowo "cookie" w tresci i ma prawo miec.
+_ZNACZNIKI_BANERA_COOKIES = (
+    "cookie", "consent", "gdpr", "cmp-", "onetrust", "truste",
+    "privacy-banner", "hs-eu"
+)
+
+
+def _tresc_strony(tab, limit=4000):
+    """
+    Tresc strony z oddzielonym banerem ciasteczek.
+
+    Zwraca {"page_content": ..., "cookie_notice": ...} albo None.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 16:42).
+    document.body.innerText na dashboard.daily.co zaczynalo sie od
+    "This website stores cookies on your machine. These cookies are
+    used to collect information about how you interact with our
+    website and allow us to remember you..." — i to szlo do Gemini
+    jako "tresc strony", na kazdej karcie, w kazdym kroku.
+
+    Baner poznajemy po ID/klasie kontenera, nie po slowie w tekscie,
+    i tylko wtedy, gdy trzyma mniej niz 40% tekstu strony. Dzieki
+    temu strona O ciasteczkach zostaje strona o ciasteczkach.
+    """
+
+    znaczniki = json.dumps(
+        list(_ZNACZNIKI_BANERA_COOKIES),
+        ensure_ascii=False
+    )
+
+    javascript = """
+(() => {
+
+    const MARKERY = __MARKERY__;
+
+    const clean = (v) =>
+        (v || "").replace(/\\s+/g, " ").trim();
+
+    const body = document.body;
+
+    if (!body) {
+        return { page_content: "", cookie_notice: "" };
+    }
+
+    const calosc = clean(body.innerText).length || 1;
+
+    const czyBaner = (el) => {
+
+        const opis = (
+            (el.id || "") + " " +
+            (typeof el.className === "string" ? el.className : "")
+        ).toLowerCase();
+
+        if (!MARKERY.some(m => opis.includes(m))) {
+            return false;
+        }
+
+        // Kontener trzymajacy wiekszosc tekstu strony to nie baner,
+        // tylko sama strona — np. polityka prywatnosci.
+        const ile = clean(el.innerText).length;
+
+        return ile > 0 && (ile / calosc) < 0.4;
+    };
+
+    const banery = [];
+
+    document.querySelectorAll(
+        'div,section,aside,dialog,[role="dialog"]'
+    ).forEach(el => {
+        if (czyBaner(el) && !banery.some(b => b.contains(el))) {
+            banery.push(el);
+        }
+    });
+
+    const wBanerze = (el) =>
+        banery.some(b => b === el || b.contains(el));
+
+    // Tresc wlasciwa: najpierw main/article, potem cale body.
+    let zrodlo =
+        document.querySelector('main') ||
+        document.querySelector('[role="main"]') ||
+        document.querySelector('article') ||
+        body;
+
+    const kawalki = [];
+    const dodaj = (t) => {
+        t = clean(t);
+        if (t && kawalki.indexOf(t) === -1) {
+            kawalki.push(t);
+        }
+    };
+
+    zrodlo.querySelectorAll(
+        'h1,h2,h3,h4,p,li,td,th,label,legend,summary'
+    ).forEach(el => {
+        if (!wBanerze(el)) {
+            dodaj(el.innerText);
+        }
+    });
+
+    if (!kawalki.length) {
+        // Strona bez zadnej z tych struktur — bierzemy caly tekst
+        // poza banerem, zamiast oddawac pustke.
+        const klon = zrodlo.cloneNode(true);
+        klon.querySelectorAll(
+            'div,section,aside,dialog,[role="dialog"]'
+        ).forEach(el => {
+            const opis = (
+                (el.id || "") + " " +
+                (typeof el.className === "string" ? el.className : "")
+            ).toLowerCase();
+            if (MARKERY.some(m => opis.includes(m))) {
+                el.remove();
+            }
+        });
+        dodaj(klon.innerText);
+    }
+
+    const kontrolki = [];
+
+    zrodlo.querySelectorAll(
+        'a,button,input,textarea,select,[role="button"]'
+    ).forEach(el => {
+        if (wBanerze(el)) { return; }
+        const etykieta = clean(
+            el.innerText || el.value ||
+            el.getAttribute("aria-label") ||
+            el.getAttribute("placeholder")
+        );
+        if (!etykieta) { return; }
+        const rodzaj = el.tagName.toLowerCase();
+        const wpis =
+            rodzaj === "a"
+                ? ("link: " + etykieta)
+                : (rodzaj === "input" || rodzaj === "textarea" ||
+                   rodzaj === "select")
+                    ? ("pole: " + etykieta)
+                    : ("przycisk: " + etykieta);
+        if (kontrolki.indexOf(wpis) === -1) {
+            kontrolki.push(wpis);
+        }
+    });
+
+    return {
+        page_content: kawalki.join("\\n"),
+        controls: kontrolki,
+        cookie_notice: banery.map(b => clean(b.innerText)).join(" "),
+        cookie_banners: banery.length
+    };
+
+})()
+""".replace("__MARKERY__", znaczniki)
+
+    try:
+
+        wynik = chrome_eval(tab, javascript)
+
+        if not isinstance(wynik, dict):
+            return None
+
+        tresc = str(wynik.get("page_content") or "")
+        baner = str(wynik.get("cookie_notice") or "")
+
+        out = {
+            "page_content": short(tresc, limit)
+        }
+
+        if wynik.get("controls"):
+            out["controls"] = list(wynik["controls"])[:40]
+
+        if baner:
+            # Idzie OSOBNO i krotko — zespol ma wiedziec, ze baner
+            # jest (bo moze zaslaniac klikanie), ale nie czytac go
+            # zamiast strony.
+            out["cookie_notice"] = short(baner, 200)
+
+        return out
+
+    except Exception:
+        return None
+
+
+# Jednoznaczne slady strony, ktorej nie ma. Szukamy ich w TYTULE
+# albo na samym POCZATKU tresci — nie gdziekolwiek w tekscie, zeby
+# artykul o bledach 404 nie zostal uznany za blad 404.
+_SLADY_BRAKU_STRONY = (
+    "404", "not found", "page not found", "nie znaleziono",
+    "strona nie istnieje", "nie ma takiej strony",
+)
+
+
+def _strona_nie_istnieje(stan, tresc=None):
+    """
+    Czy ta strona jednoznacznie mowi, ze jej nie ma.
+
+    Zwraca krotki dowod (tekst, na ktorym opieramy wniosek) albo
+    None. Celowo ostroznie: tytul albo pierwsze 200 znakow tresci.
+    """
+
+    if not stan:
+        return None
+
+    tytul = str(stan.get("title") or "").strip()
+    tytul_maly = tytul.lower()
+
+    for slad in _SLADY_BRAKU_STRONY:
+        if slad in tytul_maly:
+            return "tytuł strony: " + tytul
+
+    # Tresc jest slabszym sygnalem niz tytul, wiec pytamy waziej:
+    # strona musi ZACZYNAC sie od takiego komunikatu. "Witamy w
+    # pomocy. Jesli widzisz 404, napisz do nas" to nie jest strona
+    # 404 — to strona, ktora o niej wspomina.
+    poczatek = ""
+
+    if isinstance(tresc, dict):
+        poczatek = str(tresc.get("page_content") or "").strip()
+
+    naglowek = poczatek[:25].lower()
+
+    for slad in _SLADY_BRAKU_STRONY:
+        if slad in naglowek:
+            return "strona zaczyna się od: " + short(poczatek, 120)
+
+    return None
+
+
+def _chrome_snapshot(tab, akcja=None, stan=None, tresc=None):
+    """
+    Maly, spojny stan przegladarki — tyle, zeby Gemini nie musialo
+    dopytywac osobnym wywolaniem o window.location.href ani o to,
+    ktore karty sa otwarte.
+
+    Zadnego DOM-u, zadnych powtorzen.
+    """
+
+    snap = {}
+
+    try:
+        karty = chrome_tabs()
+    except Exception:
+        karty = []
+
+    if stan is None:
+        stan = _stan_strony(tab)
+
+    if stan:
+        snap["active_tab"] = {
+            "tab_id": (tab or {}).get("id"),
+            "url": stan.get("href"),
+            "title": stan.get("title")
+        }
+
+    if karty:
+        snap["open_tabs"] = [
+            {
+                "tab_id": k.get("id"),
+                "url": short(str(k.get("url") or ""), 120),
+                "title": short(str(k.get("title") or ""), 80)
+            }
+            for k in karty[:12]
+        ]
+
+    if akcja:
+        snap["last_action"] = str(akcja)
+
+    if tresc:
+        if tresc.get("page_content"):
+            snap["page_content"] = tresc["page_content"]
+        if tresc.get("controls"):
+            snap["controls"] = tresc["controls"]
+        if tresc.get("cookie_notice"):
+            snap["cookie_notice"] = tresc["cookie_notice"]
+
+    return snap
+
+
+def _zaloguj_operacje_chrome(
+    akcja, przed, po, zmienilo,
+    karta_uzyta_ponownie=False,
+    nowa_karta=False,
+    brak_strony=None,
+    sygnal=None
+):
+    """Jedna linia w logu na operacje — bez DOM-u."""
+
+    czesci = ["action=" + short(str(akcja), 70)]
+
+    if przed:
+        czesci.append("before=" + short(str(przed.get("href") or ""), 60))
+
+    if po:
+        czesci.append("after=" + short(str(po.get("href") or ""), 60))
+
+    czesci.append("state_changed=" + ("tak" if zmienilo else "NIE"))
+
+    if karta_uzyta_ponownie:
+        czesci.append("reused_existing_tab=tak")
+
+    if nowa_karta:
+        czesci.append("created_new_tab=tak")
+
+    if brak_strony:
+        czesci.append("page_not_found=tak")
+
+    if sygnal:
+        czesci.append(str(sygnal).lower() + "=tak")
+
+    log("CHROME", " | ".join(czesci))
+
+
+def _chrome_open_wynik(
+    tab,
+    url,
+    czekalismy=None,
+    metoda=None,
+    juz_otwarta=False,
+    nowa_karta=False,
+    message=None
+):
+    """
+    Jedno miejsce, w ktorym chrome_open odpowiada — zeby kazda z
+    jego trzech drog (istniejaca karta, CDP, am start) mowila to
+    samo i tak samo.
+
+    v367: "ok": true znaczylo dotad tylko tyle, ze WYWOLANIE sie
+    udalo. W biegu 2026-09-17 16:42 chrome_open("/dashboard") i
+    chrome_open("/sign-in") wrocily z sukcesem, a strony mialy tytul
+    "Not found | Daily". Zespol dostawal zielone swiatlo na strone,
+    ktorej nie ma. Teraz patrzymy, co naprawde sie otworzylo.
+    """
+
+    stan = _stan_strony(tab)
+    tresc = _tresc_strony(tab)
+
+    wynik = {
+        "ok": True,
+        "tab_id": (tab or {}).get("id"),
+        "url": (stan or {}).get("href") or str(url),
+        "title": (stan or {}).get("title") or (tab or {}).get("title")
+    }
+
+    if czekalismy:
+        wynik["czekalem_na_zaladowanie_s"] = czekalismy
+
+    if metoda:
+        wynik["method"] = metoda
+
+    if juz_otwarta:
+        wynik["juz_otwarta"] = True
+
+    if message:
+        wynik["message"] = message
+
+    _brak = _strona_nie_istnieje(stan, tresc)
+
+    if _brak:
+
+        wynik["ok"] = False
+        wynik["error"] = "page_not_found"
+        wynik["dowod"] = _brak
+        wynik["message"] = (
+            "Adres sie otworzyl, ale tej strony tam nie ma ("
+            + _brak + "). To nie jest blad przegladarki — ten "
+            "konkretny URL nie istnieje. Zgadywanie kolejnych "
+            "sciezek zwykle konczy sie tak samo; pewniejsze jest "
+            "przejscie ze strony, ktora dziala."
+        )
+
+    snap = _chrome_snapshot(
+        tab,
+        akcja="open " + short(str(url), 80),
+        stan=stan,
+        tresc=tresc
+    )
+
+    if snap:
+        wynik["snapshot"] = snap
+
+    _sygnal, _zdanie = _zapamietaj_operacje_chrome(
+        "open " + short(str(url), 80),
+        None,
+        stan
+    )
+
+    if _sygnal:
+        wynik[_sygnal.lower()] = True
+        wynik["uwaga"] = _zdanie
+
+    _zaloguj_operacje_chrome(
+        "open " + short(str(url), 80),
+        None,
+        stan,
+        True,
+        karta_uzyta_ponownie=juz_otwarta,
+        nowa_karta=nowa_karta,
+        brak_strony=_brak,
+        sygnal=_sygnal
+    )
+
+    return wynik
+
+
 def chrome_open(
     url,
     tab_id=None,
@@ -11208,18 +11750,17 @@ def chrome_open(
                 "zamiast otwierac kolejna karte."
             )
 
-            return {
-                "ok": True,
-                "tab_id": _juz["id"],
-                "url": _juz["url"],
-                "title": _juz["title"],
-                "juz_otwarta": True,
-                "message": (
+            return _chrome_open_wynik(
+                _juz,
+                url,
+                czekalismy=_czekalismy,
+                juz_otwarta=True,
+                message=(
                     "Ta strona juz byla otwarta w karcie "
                     + str(_juz["id"]) + " — przelaczylem na nia, "
                     "zamiast otwierac druga taka sama."
                 )
-            }
+            )
 
     global CDP_403
 
@@ -11263,6 +11804,41 @@ def chrome_open(
     # jeszcze raz bez wymuszenia pakietu jako ostatniej deski ratunku.
     if tab is None:
 
+        # v367: ZANIM ZROBIMY NOWA KARTE — sprawdzamy jeszcze raz.
+        #
+        # Wyzej pytalismy o to tylko wtedy, gdy nikt nie podal
+        # tab_id. W biegu 2026-09-17 16:42 ostatnie wywolanie podalo
+        # tab_id=1307, ta karta juz nie pokazywala tej strony, wiec
+        # dedup zostal pominiety i `am start` zrobil karte 1311 —
+        # choc ten sam adres wisial obok. Ten sam mechanizm
+        # (_karta_z_tym_adresem), tylko pytany takze tutaj, w
+        # ostatniej chwili przed utworzeniem duplikatu.
+        _juz = _karta_z_tym_adresem(url)
+
+        if _juz is not None:
+
+            _przelacz_na_karte(_juz["id"])
+            _czekalismy = _poczekaj_az_strona_dojdzie(_juz)
+
+            log(
+                "CHROME",
+                "Podana karta juz nie pokazuje tej strony, ale inna "
+                "tak (" + str(_juz["id"]) + ") — przelaczam sie na "
+                "nia zamiast otwierac duplikat."
+            )
+
+            return _chrome_open_wynik(
+                _juz,
+                url,
+                czekalismy=_czekalismy,
+                juz_otwarta=True,
+                message=(
+                    "Ta strona juz byla otwarta w karcie "
+                    + str(_juz["id"]) + " — przelaczylem na nia, "
+                    "zamiast otwierac druga taka sama."
+                )
+            )
+
         fallback = execute_shell(
             "am start -a android.intent.action.VIEW -p "
             "com.android.chrome -d "
@@ -11303,8 +11879,18 @@ def chrome_open(
         except Exception:
             pass
 
+        # v367: NAJPIERW karta z TYM adresem, dopiero potem
+        # jakakolwiek z tej domeny.
+        #
+        # Bylo: find_tab(None, domain) — czyli PIERWSZA karta z tej
+        # domeny. Gdy na dashboard.daily.co wisiala juz karta
+        # /login, a wlasnie otwierali smy /rooms, dostawalismy z
+        # powrotem /login i jego tresc. Nawigacja sie udala, a
+        # odpowiedz mowila o zupelnie innej stronie — stad
+        # "przeciez otworzylem, a widze stare".
         tab = (
-            find_tab(None, domain or None)
+            _karta_z_tym_adresem(url)
+            or find_tab(None, domain or None)
             or find_tab(None, None)
         )
 
@@ -11330,14 +11916,13 @@ def chrome_open(
         except Exception:
             pass
 
-        return {
-            "ok": True,
-            "tab_id": tab["id"],
-            "url": tab["url"],
-            "title": tab["title"],
-            "czekalem_na_zaladowanie_s": _czekalismy,
-            "method": "am_start_fallback"
-        }
+        return _chrome_open_wynik(
+            tab,
+            url,
+            czekalismy=_czekalismy,
+            metoda="am_start_fallback",
+            nowa_karta=True
+        )
 
     ws = cdp_connect(tab)
 
@@ -11371,22 +11956,20 @@ def chrome_open(
     # potrzebuje. Patrz _poczekaj_az_strona_dojdzie().
     _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
-    wynik = {
-        "ok":
-            result.get(
-                "ok",
-                False
-            ),
-        "tab_id":
-            tab["id"],
-        "url":
-            str(url)
-    }
+    if not result.get("ok", False):
 
-    if _czekalismy:
-        wynik["czekalem_na_zaladowanie_s"] = _czekalismy
+        return {
+            "ok": False,
+            "tab_id": tab["id"],
+            "url": str(url),
+            "error": "Page.navigate nie powiodlo sie"
+        }
 
-    return wynik
+    return _chrome_open_wynik(
+        tab,
+        url,
+        czekalismy=_czekalismy
+    )
 
 
 # ============================================================
@@ -11602,12 +12185,40 @@ def chrome_click(
             "stronie da sie kliknac i wypelnic."
         )
 
-        log(
-            "CHROME",
-            "Kliknalem \"" + short(str(text), 60)
-            + "\" — strona sie nie ruszyla (adres, tytul i tresc "
-            "bez zmian)."
-        )
+    # v367: to samo, co chrome_open — jeden spojny stan i pamiec o
+    # tym, co juz probowalismy. Sam pomiar skutku z v366 zostaje
+    # wyzej bez zmian.
+    _zmienilo = _chrome_stan_sie_zmienil(_przed, _po)
+
+    wynik["state_changed"] = bool(_zmienilo)
+
+    _sygnal, _zdanie = _zapamietaj_operacje_chrome(
+        "click " + short(str(text), 60),
+        _przed,
+        _po
+    )
+
+    if _sygnal:
+        wynik[_sygnal.lower()] = True
+        wynik["uwaga"] = _zdanie
+
+    _snap = _chrome_snapshot(
+        tab,
+        akcja="click " + short(str(text), 60),
+        stan=_po,
+        tresc=(_tresc_strony(tab) if not _zmienilo else None)
+    )
+
+    if _snap:
+        wynik["snapshot"] = _snap
+
+    _zaloguj_operacje_chrome(
+        "click " + short(str(text), 60),
+        _przed,
+        _po,
+        _zmienilo,
+        sygnal=_sygnal
+    )
 
     return wynik
 
