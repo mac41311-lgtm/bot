@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v377
+AEL-MINI AUTONOMOUS AGENT v379
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v377")
+    print("             AEL-MINI AUTONOMOUS AGENT v379")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -15645,20 +15645,13 @@ DRUGIE_SPOJRZENIE = 20
 # Narzedzia, ktorych calym zadaniem jest powiedziec, JAK JEST TERAZ.
 # Powtorzone pytanie o stan to nie marnotrawstwo — to jedyny sposob,
 # zeby zobaczyc zmiane (v327).
+#
+# v379: ta lista stala tu osobno od v327 i rozjechala sie z
+# _NARZEDZIA_OBSERWACYJNE. Zostala usunieta; jedynym zrodlem prawdy o
+# tym, co jest patrzeniem, jest teraz _to_obserwacja().
+#
 # Ktory proces w tle pisze do ktorego pliku: {sciezka: (pid, start)}.
 _logi_w_tle = {}
-
-_NARZEDZIA_PATRZACE = {
-    "termux_check_process",
-    "termux_read_file",
-    "termux_ls",
-    "termux_check_apk",
-    "android_state",
-    "android_screenshot",
-    "android_list_packages",
-    "chrome_tabs",
-    "chrome_state",
-}
 
 # Komenda, ktora szuka procesow PO TRESCI linii polecen — i przez to
 # potrafi trafic w powloke, ktora sama ja uruchomila (v326).
@@ -20990,7 +20983,22 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # Pytanie o stan jest wlasnie po to, zeby zadac je
                 # ponownie. Powtorka ma sens tylko przy narzedziach,
                 # ktore COS ROBIA — nie przy tych, ktore patrza.
-                if name in _NARZEDZIA_PATRZACE:
+                #
+                # v379: ZRODLEM PRAWDY JEST _NARZEDZIA_OBSERWACYJNE.
+                #
+                # v327 mial wlasna liste (_NARZEDZIA_PATRZACE) i przez
+                # dwa lata wersji rozjechala sie ona z ta, ktorej uzywa
+                # caly reszta systemu. Poza nia zostalo SZESC narzedzi
+                # tylko-do-odczytu: termux_processes, termux_file_exists,
+                # chrome_inspect, android_logcat, android_screenshot_ocr,
+                # android_assert_text_visible. Trzeci chrome_inspect
+                # dostawal wiec opis strony sprzed dwoch minut zamiast
+                # spojrzec na nia teraz — dokladnie ten blad, ktory v327
+                # naprawial. Byla tam tez pozycja "chrome_state", ktora
+                # nie jest zadnym istniejacym narzedziem.
+                #
+                # Jedna lista, jedna definicja: patrzenie to patrzenie.
+                if _to_obserwacja(name):
                     _klucz_wywolania = None
                     _bylo, _stary_wynik = 0, None
 
@@ -21087,7 +21095,25 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 except Exception:
                     _signature = None
 
-                if _signature and _signature == _last_call_signature:
+                # v379: OBSERWACJA NIE BUDUJE SERII.
+                #
+                # Ten straznik jest bezpiecznikiem WYKONYWANIA: po
+                # czterech identycznych wywolaniach przerywa runde. To
+                # ma sens, gdy cos jest ROBIONE bez skutku. Nie ma
+                # sensu, gdy ktos PATRZY — czterokrotne android_state
+                # przy nieruchomym ekranie albo termux_check_process
+                # przy dlugiej instalacji to czekanie, a nie petla.
+                # Dokladnie to ustalilo v375 dla TARGET_STATE; tu jest
+                # ta sama zasada, ta sama lista i ta sama funkcja.
+                #
+                # Obserwacja nie zwieksza licznika, wiec nigdy nie
+                # dojdzie do progu i nigdy nie wywola polling_guard
+                # ani break. TARGET_STATE nadal moze — i powinien —
+                # powiedziec o niej NO_PROGRESS. To sa dwie rozne
+                # rzeczy: on mowi, on nie przerywa.
+                if _to_obserwacja(name):
+                    _identical_streak = 1
+                elif _signature and _signature == _last_call_signature:
                     _identical_streak += 1
                 else:
                     _identical_streak = 1
