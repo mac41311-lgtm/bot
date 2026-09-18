@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v382
+AEL-MINI AUTONOMOUS AGENT v383
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v382")
+    print("             AEL-MINI AUTONOMOUS AGENT v383")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3294,12 +3294,34 @@ def _engineer_feedback_block():
     if dane["stderr"].strip():
         czesci.append("\nBLEDY:\n" + short(dane["stderr"], 2000))
 
-    if not dane["stdout"].strip() and not dane["stderr"].strip():
-        czesci.append("\n" + short(dane["report"], 1500))
+    # v383: gdy program nic nie wypisal, w to miejsce szla PROZA z
+    # wykonania — a zdanie ponizej mowilo o niej "to jest surowy
+    # wynik z urzadzenia, nie czyjes streszczenie". To bylo
+    # nieprawda dokladnie wtedy, gdy mialo najwieksze znaczenie:
+    # Bartek dostawal czyjs opis i byl zapewniany, ze to pomiar.
+    # Mowimy wiec, czym ta tresc jest naprawde.
+    _bylo_wyjscie = bool(
+        dane["stdout"].strip() or dane["stderr"].strip()
+    )
+
+    if not _bylo_wyjscie:
+        czesci.append(
+            "\nProgram nie wypisal ANI JEDNEGO znaku — ani na "
+            "wyjscie, ani na bledy. Ponizej jest RELACJA z "
+            "wykonania, czyli opis slowami, a nie to, co wypisalo "
+            "urzadzenie:\n"
+            + short(dane["report"], 1500)
+        )
 
     czesci.append(
-        "\nTo jest surowy wynik z urzadzenia, nie czyjes streszczenie. "
-        "Jesli cos nie zadzialalo — popraw to, ale podaj TYLKO "
+        (
+            "\nTo jest surowy wynik z urzadzenia, nie czyjes "
+            "streszczenie. "
+            if _bylo_wyjscie else
+            "\nSurowego wyjscia nie bylo, wiec powyzsze to opis, a "
+            "nie pomiar. "
+        )
+        + "Jesli cos nie zadzialalo — popraw to, ale podaj TYLKO "
         "zmieniony fragment przez SZUKAJ/ZAMIEN albo caly plik, gdy "
         "poprawka jest wieksza niz polowa. Nie przepisuj calosci bez "
         "potrzeby."
@@ -26226,7 +26248,7 @@ def researcher_web_search(
 {action} RESULT.
 
 To jest rzeczywisty wynik {"pobrania strony" if fetch_match else "wyszukiwania"}
-wykonanego przez Python (nie przez Ciebie, nie przez Gemini).
+wykonanego przez Python — to nie jest ani Twój domysł, ani czyjaś relacja.
 
 Nie wykonuj żadnych innych narzędzi.
 
@@ -26602,9 +26624,17 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
     # v236: dowód z tool_trace — patrz _co_narzedzia_naprawde_zrobily().
     narzedzia_block = _co_narzedzia_naprawde_zrobily()
 
+    # v383: bez imienia wykonawcy (v345). Rozroznienie "to sa cudze
+    # slowa, nie pomiar" ZOSTAJE — bo dla Eli jest kluczowe: ocenia
+    # postep i musi wiedziec, ze czyta relacje, a nie dowod. Znika
+    # tylko odpowiedz na pytanie, KTO je napisal.
+    #
+    # Straznik v345 tego nie widzial, bo prompty pisane jako
+    # potrojnie cytowane f-stringi byly z niego wycinane razem z
+    # docstringami. Patrz bezwykonawcy.py.
     prompt = f"""
-Tak to opisało Gemini, od najstarszego kroku do najnowszego — to jego
-własne relacje:
+Tak to zostało opisane, od najstarszego kroku do najnowszego — to są
+relacje z samego wykonania, słowami, nie pomiar:
 {_human_task_summary_lines(summaries)}
 {checklist_block}{narzedzia_block}
 {device_state_block}
@@ -27260,7 +27290,35 @@ def _condense_last_result_for_team(last_result, limit=2500):
     if report:
         # v345: bez podpisu wykonawcy — to jest po prostu to, co
         # wrocilo z wykonania.
-        parts.append(short(str(report), 1200))
+        #
+        # v383: ...ale Z ETYKIETA, bo to jedyna czesc tego bloku,
+        # ktora jest OPISEM, a nie POMIAREM.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-18 20:12,
+        # krok 2). Zespol dostal:
+        #
+        #   Ostatni krok skonczyl sie tak: TASK_EXECUTION_FINISHED
+        #     — wykonywanie sie skonczylo; czy cel osiagniety,
+        #     ocencie z dowodow ponizej
+        #   dowody z wykonania: wywolan_narzedzi=13
+        #   Czesc! Zadanie zostalo w pelni zrealizowane. ...
+        #
+        # Trzecia linia to proza wykonawcy — jego wlasna ocena, ze
+        # "w pelni zrealizowane". Dwie pierwsze to pomiar. Kazda
+        # inna pozycja w tym bloku ma przedrostek ("komunikat:",
+        # "blad narzedzia:", "stdout:", "dowody z wykonania:") —
+        # tylko ta jedna szla naga, sklejona z faktami bez szwu.
+        # Zdanie "ocencie z dowodow ponizej" wskazywalo wiec prosto
+        # na cudze twierdzenie.
+        #
+        # v345 mowilo "bez PODPISU wykonawcy" — czyli nie nazywamy,
+        # KTO to napisal. To nie znaczy "bez etykiety": mozna
+        # powiedziec, CZYM ta tresc jest, nie mowiac czyja jest.
+        parts.append(
+            "relacja z wykonania (opis słowami, nie pomiar — liczby "
+            "i ślad narzędzi są wyżej):\n"
+            + short(str(report), 1200)
+        )
 
     tool_calls = last_result.get("tool_calls")
 
@@ -30680,6 +30738,27 @@ def _handle_main_ask(
     log(
         "MAIN",
         "ASK -> " + ask_role + ": " + short(ask_question, 300)
+    )
+
+    # v383: PYTANIE MAIN-a TO TEZ WYPOWIEDZ.
+    #
+    # ZMIERZONE (bieg 2026-09-18 21:16, krok 1). MAIN dostal prompt,
+    # odpowiedzial 1241 znakami (ASK do Bartka) — i w zapisie
+    # rozmowy nie ma po tym sladu. W .jsonl MAIN ma szesc rekordow
+    # "odpowiedz" i tylko piec "wypowiedz"; w przebiegu nie ma
+    # naglowka "--- MAIN (MAIN) ---", tylko jedna linia logu, uciata
+    # po 300 znakach. Nastepnym naglowkiem jest od razu Bartek — jak
+    # gdyby odpowiadal na nic.
+    #
+    # A to jest zdanie, na ktore odpowiada cala reszta kroku.
+    # Komentarz przy _speak("MAIN", ...) mowil "ASK ma juz wlasny,
+    # czytelny log" — ma, ale log to indeks, nie zapis rozmowy.
+    # Jedna droga dla wypowiedzi, tak jak dla kazdej innej roli.
+    _speak(
+        "MAIN",
+        "Pytanie do "
+        + _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
+        + ":\n" + ask_question
     )
 
     answer = deepseek(
