@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v371
+AEL-MINI AUTONOMOUS AGENT v372
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v371")
+    print("             AEL-MINI AUTONOMOUS AGENT v372")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4047,6 +4047,7 @@ def _set_current_goal(goal):
     # "nie widzial" (patrz _only_if_new).
     _reset_step_by_step_memory()
     _reset_ruchy_w_celu()
+    _reset_celow()
     _ostatnie_pytanie.clear()
     _set_current_project_file(None)
     _reset_code_review_budget()
@@ -19893,6 +19894,220 @@ def _dowody_z_wykonania(tool_trace, warnings=None):
     return dowody
 
 
+# ============================================================
+# JEDEN CEL, JEDEN STAN (v372)
+# ============================================================
+#
+# Do v371 mielismy CZTERY rozne odpowiedzi na pytanie "czy to samo
+# dzialanie powtarza sie bez skutku":
+#
+#   _identical_streak (v211)        podpis nazwa+argumenty+wynik
+#   _ruchy_w_celu                   narzedzie -> tekst przycisku
+#   _zapamietaj_operacje_chrome     stan strony przed/po (v367)
+#   _zapamietaj_komende_termux      kod wyjscia + odcisk wyjscia (v369)
+#
+# Zadna nie zlapala tego, co widac w biegu 2026-09-17 19:20:
+#
+#   krok 4:  check_process(21451) x12, read_file(log) x9
+#   krok 6:  check_process(24793), sleep 10, check_process, sleep 15,
+#            check_process, sleep 20, sleep 25, sleep 30
+#
+# Bo porownywaly DOSLOWNY TEKST komendy. `sleep 10` i `sleep 15` to
+# dwa rozne lancuchy, wiec kazdy byl "nowym dzialaniem" — a w
+# rzeczywistosci to jedno czekanie na jeden proces.
+#
+# Tu jest jedna definicja: CEL. Wszystko, co dotyczy tego samego
+# procesu, tego samego pliku albo tego samego adresu, jest jednym
+# dzialaniem — niezaleznie od tego, jakim narzedziem i z jakimi
+# argumentami zostalo wykonane.
+#
+# WAZNE, i to jest granica, ktorej nie przekraczamy: NICZEGO NIE
+# POMIJAMY I NICZEGO NIE BLOKUJEMY. Pomysl "skoro stan sie nie
+# zmienil, to nie wykonuj ponownie" brzmi oszczednie, ale to Python
+# decydowalby za wykonawce. Mierzymy i mowimy; decyzja zostaje po
+# jego stronie. Ta sama zasada, co w v366, v367 i v371.
+#
+# Czekanie na proces, ktory faktycznie pracuje, NIE jest bledem.
+# Krok 4 tego biegu byl uzasadniony: log instalacji rosl (218 -> 258
+# -> 530 znakow). Dlatego kazda zmiana stanu celu zeruje licznik.
+
+_cele_stan = {}
+
+# Cel, na ktory wlasnie czekamy — zeby `sleep` mial sie do czego
+# przypisac. Lista jednoelementowa, bo zmieniamy ja z wnetrza petli.
+_ostatni_cel = [""]
+
+
+def _reset_celow():
+    _cele_stan.clear()
+    _ostatni_cel[0] = ""
+
+
+def _cel_wywolania(nazwa, argumenty, wynik):
+    """
+    Na co to wywolanie patrzy albo czym rusza.
+
+    "proces:22824", "plik:/data/.../log", "adres:https://..." albo
+    pusty string, gdy celu nie da sie wskazac.
+    """
+
+    nazwa = str(nazwa or "")
+
+    def _z(zrodlo, klucz):
+        if not isinstance(zrodlo, dict):
+            return ""
+        return str(zrodlo.get(klucz) or "").strip()
+
+    for zrodlo in (argumenty, wynik):
+
+        pid = _z(zrodlo, "pid")
+
+        if pid:
+            return "proces:" + pid
+
+    for zrodlo in (argumenty, wynik):
+
+        for klucz in ("log_file", "path"):
+
+            sciezka = _z(zrodlo, klucz)
+
+            if sciezka:
+                return "plik:" + sciezka
+
+    for zrodlo in (argumenty, wynik):
+
+        adres = _z(zrodlo, "url")
+
+        if adres:
+            return "adres:" + adres.split("#", 1)[0].rstrip("/").lower()
+
+    return ""
+
+
+def _stan_celu(wynik):
+    """
+    Tani odcisk stanu celu — wylacznie z tego, co juz jest w wyniku.
+
+    Zero dodatkowych komend. None znaczy "to wywolanie nic nie mowi
+    o stanie celu" (np. `sleep`) — i wtedy liczy sie jako dzialanie
+    bez nowej informacji.
+    """
+
+    if not isinstance(wynik, dict):
+        return None
+
+    czesci = []
+
+    for klucz in ("running", "returncode", "ok", "exists", "bytes"):
+
+        if klucz in wynik:
+            czesci.append(klucz + "=" + str(wynik.get(klucz)))
+
+    for klucz in ("stdout", "stderr", "content"):
+
+        tresc = str(wynik.get(klucz) or "")
+
+        if tresc:
+            czesci.append(klucz + ":" + str(len(tresc)))
+
+            try:
+                czesci.append(
+                    hashlib.sha256(
+                        tresc.encode("utf-8", "replace")
+                    ).hexdigest()[:12]
+                )
+            except Exception:
+                pass
+
+    if not czesci:
+        return None
+
+    return "|".join(czesci)
+
+
+# Komendy, ktore same w sobie sa czekaniem — nie maja wlasnego celu,
+# wiec przypisujemy je do celu, na ktory wlasnie czekamy.
+_TO_CZEKANIE_RE = re.compile(
+    r"^\s*(?:sleep|wait|usleep)\b", re.IGNORECASE
+)
+
+
+def _to_samo_czekanie(nazwa, argumenty):
+    """Czy to wywolanie jest samym czekaniem, bez wlasnego celu."""
+
+    if str(nazwa) not in ("termux_run", "shell", "execute_shell"):
+        return False
+
+    if not isinstance(argumenty, dict):
+        return False
+
+    return bool(
+        _TO_CZEKANIE_RE.search(str(argumenty.get("command") or ""))
+    )
+
+
+def _zapamietaj_cel(cel, stan, akcja):
+    """
+    Czy wokol tego celu cokolwiek drgnelo.
+
+    Zwraca (sygnal, zdanie) albo (None, None). Progi te same, co w
+    przegladarce i w Termuksie — jedna definicja dla calego systemu.
+
+    To jest INFORMACJA, nie zakaz. Wykonawca sam decyduje, czy czeka
+    dalej, zaglada gdzie indziej, czy idzie inna droga.
+    """
+
+    if not cel:
+        return None, None
+
+    wpis = _cele_stan.setdefault(
+        cel,
+        {"stan": None, "bez_zmiany": 0, "akcje": []}
+    )
+
+    # None znaczy "to wywolanie nic nie mowi o stanie" — samo
+    # czekanie. Nowy, inny stan znaczy, ze cos sie posunelo.
+    if stan is not None and stan != wpis["stan"]:
+
+        wpis["stan"] = stan
+        wpis["bez_zmiany"] = 0
+        wpis["akcje"] = []
+
+        return None, None
+
+    wpis["bez_zmiany"] += 1
+    wpis["akcje"].append(str(akcja or ""))
+
+    if len(wpis["akcje"]) > 8:
+        del wpis["akcje"][:-8]
+
+    ile = wpis["bez_zmiany"]
+
+    if ile + 1 >= _CHROME_BRAK_POSTEPU_PROG:
+
+        # Jedno dzialanie w kolko czy kilka roznych — mowimy to
+        # wprost, bo to zmienia, co warto zrobic dalej.
+        jedno = len(set(wpis["akcje"])) == 1
+
+        sygnal = "LOOP_DETECTED" if jedno else "NO_PROGRESS"
+
+        czym = (
+            "Ta sama operacja poszla " + str(ile) + " raz z rzedu"
+            if jedno else
+            str(ile) + " operacji pod rzad ("
+            + ", ".join(sorted(set(wpis["akcje"]))[:4]) + ")"
+        )
+
+        return sygnal, (
+            czym + " wokol tego samego celu (" + str(cel) + "), a "
+            "jego stan ani drgnal. Nie przerywam Ci pracy — mowie "
+            "tylko, co widac. Sam zdecyduj, czy czekasz dalej, "
+            "zagladasz gdzie indziej, czy idziesz inna droga."
+        )
+
+    return None, None
+
+
 def _odpowiedz_narzedzia(call, name, result):
     """
     Jedna odpowiedz na jedno wywolanie narzedzia, w formacie, ktorego
@@ -20908,6 +21123,50 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                                     300
                                 )
                             )
+
+                # v372: JEDNO miejsce, przez ktore przechodzi kazde
+                # wywolanie — wiec tu pytamy, czy wokol celu tego
+                # wywolania cokolwiek drgnelo. Patrz _zapamietaj_cel().
+                #
+                # Samo czekanie (`sleep`) nie ma wlasnego celu, wiec
+                # dopisuje sie do tego, na ktory wlasnie czekamy. To
+                # jest ta roznica, przez ktora v369 nie widzialo
+                # `sleep 10 / 15 / 20 / 25 / 30` jako jednego
+                # oczekiwania na jeden proces.
+                if _to_samo_czekanie(name, args):
+
+                    _cel = _ostatni_cel[0]
+                    _stan = None
+
+                else:
+
+                    _cel = _cel_wywolania(name, args, result)
+                    _stan = _stan_celu(result)
+
+                    if _cel:
+                        _ostatni_cel[0] = _cel
+
+                _sygnal_celu, _zdanie_celu = _zapamietaj_cel(
+                    _cel, _stan, name
+                )
+
+                if _sygnal_celu and isinstance(result, dict):
+
+                    result = dict(result)
+                    result[_sygnal_celu.lower()] = True
+                    result["cel"] = _cel
+                    result["uwaga"] = _zdanie_celu
+
+                    log(
+                        "GEMINI",
+                        _sygnal_celu.lower() + "=tak | cel="
+                        + short(str(_cel), 60)
+                    )
+
+                    collected_warnings.append(
+                        "gemini [" + _sygnal_celu.lower() + "]: "
+                        + _zdanie_celu
+                    )
 
                 collected_tool_trace.append({
                     "tool": name,
