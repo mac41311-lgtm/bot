@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v381
+AEL-MINI AUTONOMOUS AGENT v382
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v381")
+    print("             AEL-MINI AUTONOMOUS AGENT v382")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -24951,15 +24951,50 @@ _SEARCH_REPLACE_RE = re.compile(
 # Nie wymagamy wiec skladni ze znacznikami — wystarczy, ze ktos
 # powie "stary/obecny fragment" i zaraz potem "nowy/poprawiony
 # fragment". To jest normalna rozmowa, tylko czytana do konca.
+# v382: ...ORAZ SLOWA, O KTORE SAMI PROSIMY.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-18 21:16, kroki 3 i 4).
+# Zapis calego pliku odbil sie od straznika rozmiaru, ktory odpowiedzial
+# Bartkowi doslownie:
+#
+#   "...albo daj samą poprawkę przez SZUKAJ/ZAMIEŃ — nałożę ją na
+#    istniejącą treść."
+#
+# Bartek zrobil DOKLADNIE to, o co prosilismy:
+#
+#   **SZUKAJ:**
+#   ```
+#   const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+#   ```
+#   **ZAMIEŃ NA:**
+#   ```
+#   let _openai = null; ...
+#   ```
+#
+# I nic. _SEARCH_REPLACE_RE szuka znacznikow <<<<<<< SZUKAJ, ktorych
+# tam nie ma. _STARY_FRAGMENT_RE i _NOWY_FRAGMENT_RE znaly "stary
+# fragment" i "nowy fragment", ale NIE znaly slow SZUKAJ i ZAMIEN —
+# czyli tych, ktorymi sami go o to poprosilismy. Poprawka przepadla,
+# kod poszedl sciezka "zapisz caly plik", straznik zmierzyl 239 B
+# wobec 3823 B i odmowil. W kroku 4 to samo, z blokiem 153 B.
+#
+# Dwa kroki i siedem minut na to, ze program prosi wlasnymi slowami i
+# potem tych slow nie rozumie.
+#
+# Wymagamy dwukropka, zeby to byl NAGLOWEK ("SZUKAJ:", "ZAMIEŃ NA:"),
+# a nie slowo w zdaniu ("szukaj w logu"). Nawias miedzy nimi jest
+# dozwolony, bo Bartek pisze np. "SZUKAJ (jest w pliku raz):".
 _STARY_FRAGMENT_RE = re.compile(
     r"(?:star[aeyąą]|obecn|dotychczasow|poprzedni|przed\s+zmian)\w*"
-    r"\s+(?:fragment|kod|wersj|blok|linij|linie)",
+    r"\s+(?:fragment|kod|wersj|blok|linij|linie)"
+    r"|SZUKAJ(?:\s*\([^)]*\))?\s*\**\s*:",
     re.IGNORECASE
 )
 
 _NOWY_FRAGMENT_RE = re.compile(
     r"(?:now[aey]|poprawion|zmienion|docelow|po\s+zmianie)\w*"
-    r"\s+(?:fragment|kod|wersj|blok|linij|linie)",
+    r"\s+(?:fragment|kod|wersj|blok|linij|linie)"
+    r"|ZAMIE[ŃN](?:\s+NA)?(?:\s*\([^)]*\))?\s*\**\s*:",
     re.IGNORECASE
 )
 
