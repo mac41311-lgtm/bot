@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v375
+AEL-MINI AUTONOMOUS AGENT v376
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v375")
+    print("             AEL-MINI AUTONOMOUS AGENT v376")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -16722,152 +16722,6 @@ def _gemini_pisze_kod(command_str):
     return None
 
 
-# ============================================================
-# BRAK POSTEPU W TERMUKSIE (v369)
-# ============================================================
-#
-# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 17:39, krok 3).
-# Piec razy z rzedu ten sam cykl:
-#
-#   termux_write_file bootstrap.py
-#   python -m py_compile bootstrap.py      -> rc=0
-#   python bootstrap.py                    -> rc=0, ZERO outputu
-#   find . -type f | wc -l                 -> 2
-#
-# Liczba plikow: 2, 2, 2, 2. Skrypt, ktory mial utworzyc strukture
-# katalogow, nie utworzyl nic — a kazde uruchomienie konczylo sie
-# zerowym kodem wyjscia, wiec wygladalo na sukces.
-#
-# v367 wykrywa to dla przegladarki. Tu jest ta sama zasada dla
-# Termuxa, na stanie, ktory i tak juz mamy w wyniku: kod wyjscia
-# oraz to, co komenda wypisala. Zadnych dodatkowych komend "zeby
-# zmierzyc stan" — pomiar ma byc darmowy.
-#
-# To jest INFORMACJA, nie zakaz. Pierwsza i druga proba sa ciche;
-# zmiana stanu zeruje licznik. Co dalej — decyduje wykonawca.
-
-_termux_historia = []
-
-
-def _stan_po_komendzie(wynik):
-    """
-    Tani odcisk tego, co komenda zastala i zostawila.
-
-    Bierzemy WYLACZNIE to, co juz jest w wyniku: kod wyjscia i
-    odcisk tego, co komenda wypisala. Nic nie uruchamiamy dodatkowo.
-    """
-
-    if not isinstance(wynik, dict):
-        return None
-
-    tresc = (
-        str(wynik.get("stdout") or "")
-        + "\x00"
-        + str(wynik.get("stderr") or "")
-    ).strip()
-
-    try:
-        odcisk = hashlib.sha256(
-            tresc.encode("utf-8", "replace")
-        ).hexdigest()[:16]
-    except Exception:
-        odcisk = str(len(tresc))
-
-    return {
-        "rc": wynik.get("returncode"),
-        "ok": wynik.get("ok"),
-        "znakow": len(tresc),
-        "odcisk": odcisk
-    }
-
-
-def _zapamietaj_komende_termux(command, wynik):
-    """
-    Czy w Termuksie krazymy w kolko. Zwraca (sygnal, zdanie) albo
-    (None, None) — te same progi, co w przegladarce (v367).
-    """
-
-    stan = _stan_po_komendzie(wynik)
-
-    if stan is None:
-        return None, None
-
-    komenda = " ".join(str(command or "").split())
-
-    # Zmiana stanu = inny kod wyjscia albo inna tresc wyjscia niz
-    # przy POPRZEDNIM uruchomieniu TEJ SAMEJ komendy. Przy nowej
-    # komendzie nie mamy z czym porownywac, wiec to jest zmiana.
-    poprzedni = None
-
-    for wpis in reversed(_termux_historia):
-        if wpis["komenda"] == komenda:
-            poprzedni = wpis["stan"]
-            break
-
-    zmienilo = (
-        poprzedni is None
-        or poprzedni.get("rc") != stan.get("rc")
-        or poprzedni.get("odcisk") != stan.get("odcisk")
-    )
-
-    _termux_historia.append({
-        "komenda": komenda,
-        "stan": stan,
-        "zmienilo": bool(zmienilo)
-    })
-
-    if len(_termux_historia) > _CHROME_HISTORIA_MAX:
-        del _termux_historia[:-_CHROME_HISTORIA_MAX]
-
-    if zmienilo:
-        return None, None
-
-    bez_skutku = []
-
-    for wpis in reversed(_termux_historia):
-        if wpis["zmienilo"]:
-            break
-        bez_skutku.append(wpis["komenda"])
-
-    ile_tej_samej = 0
-
-    for k in bez_skutku:
-        if k != bez_skutku[0]:
-            break
-        ile_tej_samej += 1
-
-    # Pierwszy przebieg komendy to punkt odniesienia — nie ma z czym
-    # go porownac, wiec nie liczy sie jako powtorzenie. Dlatego "+1":
-    # prog mowi o liczbie IDENTYCZNYCH przebiegow, tak samo jak w
-    # przegladarce.
-    if ile_tej_samej + 1 >= _CHROME_PETLA_PROG:
-        return "LOOP_DETECTED", (
-            "Ta sama komenda poszla " + str(ile_tej_samej + 1)
-            + " raz z rzedu i za kazdym razem skonczyla sie tak samo "
-            "— ten sam kod wyjscia, to samo wyjscie. Kolejne "
-            "uruchomienie da to samo."
-        )
-
-    if len(bez_skutku) >= 4:
-
-        a, b = bez_skutku[0], bez_skutku[1]
-
-        if a != b and bez_skutku[:4] == [a, b, a, b]:
-            return "LOOP_DETECTED", (
-                "Te dwie komendy ida na przemian i zadna nic nie "
-                "zmienia. To jest petla."
-            )
-
-    if len(bez_skutku) + 1 >= _CHROME_BRAK_POSTEPU_PROG:
-        return "NO_PROGRESS", (
-            str(len(bez_skutku) + 1) + " komend z rzedu skonczylo sie "
-            "dokladnie tak samo jak poprzednio — kod wyjscia i "
-            "wyjscie bez zmian. Nic sie nie posuwa."
-        )
-
-    return None, None
-
-
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -17402,25 +17256,13 @@ def termux_run(command):
                     "termux_check_process."
                 )
 
-        # v369: czy ta komenda cokolwiek posunela. Patrz komentarz
-        # przy _zapamietaj_komende_termux() — stan bierzemy z tego,
-        # co juz jest w wyniku, wiec pomiar nic nie kosztuje.
-        _sygnal, _zdanie = _zapamietaj_komende_termux(
-            command_str,
-            result
-        )
-
-        if _sygnal and isinstance(result, dict):
-
-            result[_sygnal.lower()] = True
-            result["uwaga"] = _zdanie
-
-            log(
-                "TERMUX",
-                _sygnal.lower() + "=tak | "
-                + short(command_str, 70)
-            )
-
+        # v376: pytanie "czy ta komenda cokolwiek posunela" zadaje
+        # teraz wspolny rdzen TARGET_STATE, w tym samym miejscu, co
+        # dla przegladarki, Androida i procesow — patrz
+        # _zapamietaj_cel(). Celem jest sama komenda
+        # ("powloka:<komenda>"), a stanem kod wyjscia i odcisk
+        # wyjscia, ktore _stan_celu() i tak czyta z wyniku. Stad
+        # zniknal osobny licznik z v369.
         return result
 
     except Exception as e:
@@ -19939,6 +19781,11 @@ def _dowody_z_wykonania(tool_trace, warnings=None):
 #   _zapamietaj_operacje_chrome     stan strony przed/po (v367)
 #   _zapamietaj_komende_termux      kod wyjscia + odcisk wyjscia (v369)
 #
+# v376: tego ostatniego juz nie ma. Termux liczy sie tu, razem z
+# reszta — cel "powloka:<komenda>", stan z kodu wyjscia i odcisku
+# wyjscia. Zostaly TRZY rownolegle mechanizmy: _identical_streak,
+# _ruchy_w_celu i _zapamietaj_operacje_chrome.
+#
 # Zadna nie zlapala tego, co widac w biegu 2026-09-17 19:20:
 #
 #   krok 4:  check_process(21451) x12, read_file(log) x9
@@ -20029,6 +19876,36 @@ def _cel_wywolania(nazwa, argumenty, wynik):
 
         if adres:
             return "adres:" + adres.split("#", 1)[0].rstrip("/").lower()
+
+    # v376: KOMENDA POWLOKI JEST SWOIM WLASNYM CELEM.
+    #
+    # Do v375 `termux_run` wychodzil stad z pustym celem, czyli byl
+    # dla rdzenia niewidzialny — i wlasnie dlatego v369 musial miec
+    # wlasny, rownolegly licznik (_zapamietaj_komende_termux). Tamten
+    # porownywal kazde uruchomienie z POPRZEDNIM uruchomieniem TEJ
+    # SAMEJ komendy. To jest dokladnie "cel + stan", tylko zapisane
+    # osobnym mechanizmem: celem jest ta konkretna komenda, a jej
+    # stanem to, co po sobie zostawila — kod wyjscia i odcisk
+    # wyjscia, ktore _stan_celu() juz czyta.
+    #
+    # Dlaczego NIE jeden wspolny cel "termux" na cala powloke: w
+    # biegu 2026-09-17 17:39 krok 3 szedl piec razy tym samym cyklem
+    #   py_compile          -> rc=0, pusto
+    #   python bootstrap.py -> rc=0, pusto
+    #   find . | wc -l      -> rc=0, "2"
+    # Przy jednym wspolnym celu stan skakalby "pusto -> pusto -> 2" i
+    # kazdy obrot zerowalby licznik — przegapilibysmy dokladnie ten
+    # przypadek, dla ktorego v369 powstal. Osobny cel na komende widzi
+    # go tak samo jak v369: `python bootstrap.py` konczy sie za kazdym
+    # razem identycznie.
+    #
+    # Spacje zwijamy tak samo, jak robil to v369.
+    if nazwa in ("termux_run", "shell", "execute_shell"):
+
+        komenda = " ".join(_z(argumenty, "command").split())
+
+        if komenda:
+            return "powloka:" + komenda
 
     return ""
 
