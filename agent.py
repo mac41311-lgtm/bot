@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v376
+AEL-MINI AUTONOMOUS AGENT v377
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v376")
+    print("             AEL-MINI AUTONOMOUS AGENT v377")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11213,20 +11213,8 @@ CDP_403 = False
 # Python ma byc jego PAMIECIA i MIERNIKIEM: pamietac, co juz bylo,
 # i mowic, co naprawde sie stalo.
 
-# Ile ostatnich operacji w przegladarce pamietamy.
-_CHROME_HISTORIA_MAX = 12
-
-# Ile razy ta sama akcja bez skutku, zanim to nazwiemy petla.
-# Pierwsza i druga proba przechodza bez slowa — powtorzenie bywa
-# uzasadnione (strona mogla sie doladowac). Dopiero trzecia znaczy,
-# ze ta droga nie dziala.
-_CHROME_PETLA_PROG = 3
-
 # Ile roznych akcji z rzedu bez zadnej zmiany stanu = brak postepu.
 _CHROME_BRAK_POSTEPU_PROG = 4
-
-_chrome_historia = []
-
 
 def _chrome_stan_sie_zmienil(przed, po):
     """Czy miedzy dwoma stanami strony cokolwiek drgnelo."""
@@ -11247,79 +11235,6 @@ def _chrome_stan_sie_zmienil(przed, po):
         ) > 40
     except Exception:
         return False
-
-
-def _zapamietaj_operacje_chrome(akcja, przed, po):
-    """
-    Odklada operacje w pamieci i mowi, czy zespol krazy w kolko.
-
-    Zwraca (sygnal, zdanie) albo (None, None). Sygnaly:
-      LOOP_DETECTED — ta sama akcja kilka razy bez zadnego skutku,
-                      albo dwie akcje na przemian (A, B, A, B).
-      NO_PROGRESS   — rozne akcje, kilka z rzedu, zero zmiany stanu.
-
-    To jest INFORMACJA, nie blokada. Gemini samo wybiera, co dalej.
-    """
-
-    zmienilo = _chrome_stan_sie_zmienil(przed, po)
-
-    _chrome_historia.append({
-        "akcja": str(akcja or ""),
-        "zmienilo": bool(zmienilo),
-        "href": (po or {}).get("href")
-    })
-
-    if len(_chrome_historia) > _CHROME_HISTORIA_MAX:
-        del _chrome_historia[:-_CHROME_HISTORIA_MAX]
-
-    if zmienilo:
-        return None, None
-
-    # Ile razy Z RZEDU, liczac od konca, ta sama akcja nic nie dala.
-    bez_skutku = []
-
-    for wpis in reversed(_chrome_historia):
-        if wpis["zmienilo"]:
-            break
-        bez_skutku.append(wpis["akcja"])
-
-    ile_tej_samej = 0
-
-    for a in bez_skutku:
-        if a != bez_skutku[0]:
-            break
-        ile_tej_samej += 1
-
-    if ile_tej_samej >= _CHROME_PETLA_PROG:
-        return "LOOP_DETECTED", (
-            "Ta sama akcja poszla " + str(ile_tej_samej)
-            + " raz z rzedu i za kazdym razem strona zostala taka "
-            "sama — ten sam adres, ten sam tytul, ta sama tresc. "
-            "Powtorzenie jej jeszcze raz da to samo. Sprobuj innej "
-            "drogi albo zobacz chrome_inspect, co na tej stronie "
-            "naprawde da sie zrobic."
-        )
-
-    # A, B, A, B — dwie akcje na przemian, zadna nic nie daje.
-    if len(bez_skutku) >= 4:
-
-        a, b = bez_skutku[0], bez_skutku[1]
-
-        if a != b and bez_skutku[:4] == [a, b, a, b]:
-            return "LOOP_DETECTED", (
-                "Te dwie akcje ida na przemian i zadna nie zmienia "
-                "strony. To jest petla — inna droga da wiecej niz "
-                "kolejne przejscie tej samej."
-            )
-
-    if len(bez_skutku) >= _CHROME_BRAK_POSTEPU_PROG:
-        return "NO_PROGRESS", (
-            str(len(bez_skutku)) + " operacji z rzedu nie zmienilo "
-            "stanu strony — ani adresu, ani tytulu, ani tresci. "
-            "Cokolwiek probujemy, ta strona na to nie reaguje."
-        )
-
-    return None, None
 
 
 # Znaczniki, ktore w ID albo klasie elementu oznaczaja zgode na
@@ -11703,16 +11618,10 @@ def _chrome_open_wynik(
     if snap:
         wynik["snapshot"] = snap
 
-    _sygnal, _zdanie = _zapamietaj_operacje_chrome(
-        "open " + short(str(url), 80),
-        None,
-        stan
-    )
-
-    if _sygnal:
-        wynik[_sygnal.lower()] = True
-        wynik["uwaga"] = _zdanie
-
+    # v377: o tym, czy krecimy sie w kolko, mowi teraz wspolny rdzen
+    # TARGET_STATE — w tym samym miejscu, co dla Termuxa, Androida i
+    # procesow. chrome_open juz zwraca "url" i "title", wiec rdzen ma
+    # z czego wziac cel i stan; nic tu nie dokladamy.
     _zaloguj_operacje_chrome(
         "open " + short(str(url), 80),
         None,
@@ -11720,8 +11629,7 @@ def _chrome_open_wynik(
         True,
         karta_uzyta_ponownie=juz_otwarta,
         nowa_karta=nowa_karta,
-        brak_strony=_brak,
-        sygnal=_sygnal
+        brak_strony=_brak
     )
 
     return wynik
@@ -12186,22 +12094,21 @@ def chrome_click(
             "stronie da sie kliknac i wypelnic."
         )
 
+    # v377: STAN STRONY PO KLIKNIECIU — tak samo, jak
+    # chrome_execute_js robi to od v373. Zadnej nowej sondy nie ma:
+    # _po jest zmierzone wyzej, na potrzeby pomiaru skutku z v366.
+    # Dzieki temu wspolny rdzen TARGET_STATE widzi cel (adres) i stan
+    # (tytul, dlugosc tresci) tego klikniecia — i stad mogl zniknac
+    # osobny licznik przegladarki z v367.
+    wynik["tytul"] = _po.get("title")
+    wynik["znakow"] = _po.get("znakow")
+
     # v367: to samo, co chrome_open — jeden spojny stan i pamiec o
     # tym, co juz probowalismy. Sam pomiar skutku z v366 zostaje
     # wyzej bez zmian.
     _zmienilo = _chrome_stan_sie_zmienil(_przed, _po)
 
     wynik["state_changed"] = bool(_zmienilo)
-
-    _sygnal, _zdanie = _zapamietaj_operacje_chrome(
-        "click " + short(str(text), 60),
-        _przed,
-        _po
-    )
-
-    if _sygnal:
-        wynik[_sygnal.lower()] = True
-        wynik["uwaga"] = _zdanie
 
     _snap = _chrome_snapshot(
         tab,
@@ -12217,8 +12124,7 @@ def chrome_click(
         "click " + short(str(text), 60),
         _przed,
         _po,
-        _zmienilo,
-        sygnal=_sygnal
+        _zmienilo
     )
 
     return wynik
@@ -19781,10 +19687,14 @@ def _dowody_z_wykonania(tool_trace, warnings=None):
 #   _zapamietaj_operacje_chrome     stan strony przed/po (v367)
 #   _zapamietaj_komende_termux      kod wyjscia + odcisk wyjscia (v369)
 #
-# v376: tego ostatniego juz nie ma. Termux liczy sie tu, razem z
-# reszta — cel "powloka:<komenda>", stan z kodu wyjscia i odcisku
-# wyjscia. Zostaly TRZY rownolegle mechanizmy: _identical_streak,
-# _ruchy_w_celu i _zapamietaj_operacje_chrome.
+# v376: nie ma juz Termuxa. Cel "powloka:<komenda>", stan z kodu
+# wyjscia i odcisku wyjscia.
+# v377: nie ma juz przegladarki. Cel "adres:<strona>", stan z tytulu
+# i dlugosci tresci — tych samych danych, ktore _stan_strony() mierzy
+# od v366. Zostaly DWA rownolegle mechanizmy: _identical_streak
+# (strumien identycznych wywolan) i _ruchy_w_celu (ruchy w
+# interfejsie). Oba mierza cos innego niz cel+stan, wiec ich
+# migracja to osobna decyzja.
 #
 # Zadna nie zlapala tego, co widac w biegu 2026-09-17 19:20:
 #
@@ -19872,10 +19782,20 @@ def _cel_wywolania(nazwa, argumenty, wynik):
 
     for zrodlo in (argumenty, wynik):
 
-        adres = _z(zrodlo, "url")
+        # v377: "adres" to to samo co "url", tyle ze po polsku —
+        # chrome_click od v366 zapisuje adres strony wlasnie pod tym
+        # kluczem. Bez tego chrome_click wychodzil stad z PUSTYM celem
+        # i byl dla rdzenia niewidzialny, przez co musial miec wlasny
+        # licznik (_zapamietaj_operacje_chrome).
+        for klucz in ("url", "adres"):
 
-        if adres:
-            return "adres:" + adres.split("#", 1)[0].rstrip("/").lower()
+            adres = _z(zrodlo, klucz)
+
+            if adres:
+                return (
+                    "adres:"
+                    + adres.split("#", 1)[0].rstrip("/").lower()
+                )
 
     # v376: KOMENDA POWLOKI JEST SWOIM WLASNYM CELEM.
     #
@@ -19976,9 +19896,13 @@ def _stan_celu(wynik, nazwa=""):
     # ani drgnela. Gdyby "value" liczylo sie do stanu, kazda z tych
     # prob wygladalaby na nowa droge i brak postepu nigdy by nie
     # wyszedl na jaw. Postep mierzymy po stronie, nie po skladni JS.
+    # v377: "title" obok "tytul" — chrome_open zapisuje tytul strony
+    # pod angielskim kluczem i to jest jedyne, co mowi, czy otworzyl
+    # sie dashboard, czy "Not found | Daily". Nie dokladamy przez to
+    # zadnego pola do odpowiedzi: czytamy to, co juz tam jest.
     for klucz in (
         "running", "returncode", "ok", "exists", "bytes",
-        "tytul", "znakow"
+        "tytul", "title", "znakow"
     ):
 
         if klucz in wynik:
