@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v379
+AEL-MINI AUTONOMOUS AGENT v380
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v379")
+    print("             AEL-MINI AUTONOMOUS AGENT v380")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21016,6 +21016,25 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         _stary_wynik, dict
                     ) else _stary_wynik
 
+                    # v380: CO ZWROCILO NARZEDZIE, a co dopisala
+                    # infrastruktura — to sa dwie rozne rzeczy.
+                    #
+                    # "juz_to_bylo" nie jest wynikiem narzedzia. To
+                    # notatka od nas, ze o to samo juz pytano w tym
+                    # kroku — i niesie w sobie LICZNIK powtorzen,
+                    # ktory rosnie z kazdym razem. Do v379 szla ona do
+                    # tego samego slownika, z ktorego straznik v211
+                    # liczy sygnature, wiec narzedzie zwracajace
+                    # bez przerwy to samo X wygladalo dla niego jak
+                    # X, X, X+"2 razy", X+"3 razy" — czyli cztery
+                    # rozne wyniki. Licznik wracal do jedynki i
+                    # bezpiecznik stawal sie nieosiagalny.
+                    #
+                    # _stary_wynik JEST tym, co narzedzie naprawde
+                    # zwrocilo: pamiec v317 zapisuje go czysto (patrz
+                    # nizej) i nigdy go nie dopisuje.
+                    _wynik_narzedzia = _stary_wynik
+
                     if isinstance(result, dict):
                         result["juz_to_bylo"] = (
                             "To samo wywołanie z tymi samymi "
@@ -21040,6 +21059,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                             "error": str(e),
                             "error_type": type(e).__name__
                         }
+
+                    # v380: nic tego jeszcze nie dopisalo, wiec wynik
+                    # narzedzia i odpowiedz dla wykonawcy to tu jedno
+                    # i to samo.
+                    _wynik_narzedzia = result
 
                 if _klucz_wywolania:
                     _wywolania_w_zadaniu[_klucz_wywolania] = (
@@ -21084,12 +21108,18 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 
                 # v211: to samo narzedzie + te same argumenty + ten
                 # sam wynik = petla czekania, patrz _identical_streak.
+                # v380: sygnatura z TEGO, CO ZWROCILO NARZEDZIE —
+                # _wynik_narzedzia, a nie z odpowiedzi wzbogaconej o
+                # dopiski infrastruktury. Patrz komentarz przy
+                # "juz_to_bylo" wyzej. Sama konstrukcja sygnatury,
+                # prog i reszta straznika bez zmian.
                 try:
                     _signature = (
                         str(name)
                         + "|" + json.dumps(args, sort_keys=True,
                                            default=str)
-                        + "|" + json.dumps(result, sort_keys=True,
+                        + "|" + json.dumps(_wynik_narzedzia,
+                                           sort_keys=True,
                                            default=str)
                     )
                 except Exception:
