@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v380
+AEL-MINI AUTONOMOUS AGENT v381
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v380")
+    print("             AEL-MINI AUTONOMOUS AGENT v381")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4053,6 +4053,7 @@ def _set_current_goal(goal):
     _reset_code_review_budget()
     _reset_critic_objection_memory()
     _reset_progress_memory()
+    _reset_pomiarow_postepu()
     _reset_irreversible_memory()
     _reset_powody_zakonczenia()
     _role_inbox.clear()
@@ -26601,6 +26602,112 @@ Ile z tego celu jest naprawdę zrobione?
     }
 
 
+# ============================================================
+# POSTEP CELU WRACA DO ZESPOLU (v381)
+# ============================================================
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-18 20:12).
+# Ela policzyla postep dwa razy:
+#
+#   krok  5: 5%  "tylko przygotowanie srodowiska"
+#   krok 10: 4%  "nadal tylko przygotowanie i planowanie"
+#
+# Piec krokow i osiemnascie minut pozniej postep byl NIZSZY. W tym
+# czasie zespol wykonal dwadziescia wywolan narzedzi, z czego ZERO
+# zapisow — siedem krokow ogladania dwoch plikow .md coraz to innym
+# poleceniem (ls, wc, head, tail, file, grep).
+#
+# Ta liczba istniala. Byla policzona, wyswietlona na pasku i zapisana
+# do dziennika — i na tym sie konczylo. Nie docierala do nikogo, kto
+# mogl z niej cokolwiek zrobic.
+#
+# Tu sie to zmienia: pomiar Eli idzie do MAIN-a i do zespolu jako
+# ZWYKLY FAKT, ta sama droga, co "co przybylo na dysku" (v348) czy
+# "co powiedzial uzytkownik" (v230) — przez _only_if_new, wiec ten
+# sam pomiar nie wraca dwa razy.
+#
+# CZEGO TU NIE MA, i to jest granica: zadnego "percent < X -> przerwij"
+# ani "postep spadl -> zrob Y". Python nie wyciaga wniosku i nie
+# proponuje kierunku. Podaje liczbe, poprzednia liczbe, roznice i
+# zdanie Eli. Co z tym zrobic, decyduje MAIN — dokladnie tak samo,
+# jak przy sygnalach TARGET_STATE od v366.
+
+_postep_pomiary = []
+
+
+def _reset_pomiarow_postepu():
+    """Nowy cel = postep liczy sie od nowa."""
+
+    _postep_pomiary[:] = []
+
+
+def _zapamietaj_postep(step, percent, summary):
+    """Odklada pomiar Eli, zeby bylo z czym porownac nastepny."""
+
+    try:
+        _postep_pomiary.append(
+            (int(step), int(percent), str(summary or ""))
+        )
+    except Exception:
+        return
+
+    # Do zdania potrzebne sa dwa ostatnie; reszta to balast.
+    if len(_postep_pomiary) > 8:
+        del _postep_pomiary[:-8]
+
+
+def _postep_blok():
+    """
+    Pomiar Eli jako fakt dla MAIN-a i zespolu.
+
+    Pusty string, gdy Ela jeszcze nic nie policzyla.
+    """
+
+    if not _postep_pomiary:
+        return ""
+
+    krok, ile, opis = _postep_pomiary[-1]
+
+    linie = [
+        "",
+        "Postęp celu według Eli — po kroku " + str(krok) + ": "
+        + str(ile) + "%"
+    ]
+
+    if len(_postep_pomiary) >= 2:
+
+        krok_p, ile_p, _ = _postep_pomiary[-2]
+        roznica = ile - ile_p
+
+        # "1 punkt", "2 punkty", "12 punktow" — po polsku, bo to
+        # czyta czlowiek i czyta MAIN.
+        _ile = abs(roznica)
+        _koncowka = (
+            "punkt" if _ile == 1
+            else (
+                "punkty"
+                if (_ile % 10 in (2, 3, 4) and _ile % 100 not in (12, 13, 14))
+                else "punktów"
+            )
+        )
+
+        linie.append(
+            "Poprzedni pomiar (po kroku " + str(krok_p) + "): "
+            + str(ile_p) + "% — "
+            + (
+                "bez zmiany"
+                if roznica == 0
+                else (("+" if roznica > 0 else "") + str(roznica)
+                      + " " + _koncowka)
+            )
+        )
+
+    if opis:
+        linie.append("Ela: " + opis)
+
+    return "\n".join(linie) + "\n"
+
+
 def print_progress_bar(step, percent, summary):
 
     filled = int(round(percent / 5))
@@ -28848,6 +28955,12 @@ def consult_team(
                 "uzytkownik_powiedzial",
                 _co_powiedzial_uzytkownik_block()
             ),
+            # v381: ile z celu jest naprawde zrobione — ta sama liczba,
+            # ktora dostaje MAIN. Zespol tez ma prawo wiedziec, czy to,
+            # co robi od kilku krokow, cokolwiek posuwa. Patrz
+            # _postep_blok(); przez _only_if_new, wiec kazdy pomiar
+            # idzie raz.
+            _only_if_new(role_name, "postep", _postep_blok()),
             # v231: czym ten telefon dysponuje sam z siebie — raz, jak
             # pokazanie warsztatu. Patrz _narzedzia_telefonu().
             _only_if_new(
@@ -30470,7 +30583,13 @@ tym kroku dopytać jedną osobę:
     # _co_przybylo_blok().
     _nowe_pliki = _only_if_new("MAIN", "przybylo", _co_przybylo_blok())
 
-    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}
+    # v381: ile z celu jest naprawde zrobione — liczba Eli, ktora do
+    # v380 konczyla zycie na pasku postepu. Przez _only_if_new, wiec
+    # ten sam pomiar nie wraca dwa razy; nowy dociera zawsze.
+    # Patrz _postep_blok().
+    _postep_dla_maina = _only_if_new("MAIN", "postep", _postep_blok())
+
+    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
 Co się właśnie stało:
 {_facts}
 
@@ -35052,6 +35171,16 @@ def run_agent(goal):
                     log_event(
                         "progress_estimate",
                         progress
+                    )
+
+                    # v381: ta liczba jedzie dalej — do MAIN-a i do
+                    # zespolu. Patrz _postep_blok(). Ela liczy PRZED
+                    # consult_team(), wiec swiezy pomiar trafia jeszcze
+                    # do TEGO kroku.
+                    _zapamietaj_postep(
+                        step,
+                        progress["percent"],
+                        progress["summary"]
                     )
 
             except Exception as e:
