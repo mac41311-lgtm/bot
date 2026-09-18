@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v383
+AEL-MINI AUTONOMOUS AGENT v384
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v383")
+    print("             AEL-MINI AUTONOMOUS AGENT v384")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -27946,8 +27946,6 @@ def _dla_tej_roli(tekst, rola):
 
         moje.append(tekst[m.start():koniec].strip())
 
-    czesci = [c for c in ([ogolne] + moje) if c]
-
     # v351: cisza jest gorsza niz nadmiar.
     #
     # Gdy ktos ZACZYNA wypowiedz od zawolania ("Tomku, twoj plan
@@ -27964,8 +27962,33 @@ def _dla_tej_roli(tekst, rola):
     # Ciecie po adresacie ma kierowac wypowiedz tam, gdzie powinna
     # wpasc, a nie sprawiac, ze nie wpada nigdzie. Gdy dla kogos nie
     # zostalo nic, dostaje calosc — tak, jak przy braku zawolan.
-    if not czesci:
+    #
+    # v384: warunkiem jest PUSTE `moje`, nie puste `czesci`.
+    #
+    # v351 mierzylo "czy dla niego cos zostalo" po `czesci`, czyli po
+    # sumie wstepu i jego akapitow. Wstep jest jednak prawie zawsze —
+    # ludzie zaczynaja od przywitania — wiec warunek nie zapalal sie
+    # nigdy poza przypadkiem, gdy wypowiedz startowala od zawolania.
+    # Kto nie byl wolany po imieniu, dostawal SAM WSTEP:
+    #
+    #     Marek (9243 znaki)  -> Kamil: "Marek tutaj."
+    #     Marek (7027 znakow) -> Bartek: "Marek tutaj."
+    #     Wojtek (10335)      -> wszyscy: 2608 znakow z 10335
+    #     Ola (4286)          -> MAIN: 323 znaki
+    #
+    # ZMIERZONE na wszystkich Twoich logach: 165 takich par, razem
+    # 223286 znakow, ktore nie doszly do NIKOGO — bo do adresatow
+    # poszly ich wlasne akapity, a cala reszta wypowiedzi zostala
+    # ucieta kazdemu pozostalemu.
+    #
+    # "Nie skracamy nikomu wypowiedzi" — wiec gdy nie ma dla kogos
+    # ani jednego akapitu z imienia, czytamy calosc, tak jak przy
+    # braku zawolan. Kto MA swoj akapit, dostaje jak dotad wstep
+    # plus swoje akapity.
+    if not moje:
         return tekst
+
+    czesci = [c for c in ([ogolne] + moje) if c]
 
     return "\n\n".join(czesci)
 
