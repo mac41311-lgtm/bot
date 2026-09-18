@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v374
+AEL-MINI AUTONOMOUS AGENT v375
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v374")
+    print("             AEL-MINI AUTONOMOUS AGENT v375")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -19986,6 +19986,22 @@ def _cel_wywolania(nazwa, argumenty, wynik):
 
     nazwa = str(nazwa or "")
 
+    # v375: telefon ma JEDEN ekran. Nie ma tam adresu, tytulu ani
+    # DOM-u, wiec nie ma czego wyluskac z argumentow — ale nie ma tez
+    # czego szukac: kazde android_* dziala na tym samym urzadzeniu i
+    # na tym, co akurat jest na wierzchu. Wspolny cel "ekran" sprawia,
+    # ze android_tap, android_state i android_launch_app trafiaja do
+    # JEDNEGO ciagu, zamiast do trzech osobnych.
+    #
+    # Nie budujemy celu z nazwy pakietu: android_tap zwraca etykiete
+    # aplikacji ("Kalkulator"), android_launch_app nazwe pakietu
+    # ("com.android.calculator2"), a android_state naglowek zdania —
+    # cel skakalby miedzy trzema zapisami tego samego i zadna petla
+    # nigdy by sie nie uzbierala. Zmiane aplikacji widac tam, gdzie
+    # naprawde jest: w zrzucie ekranu, czyli w stanie celu.
+    if nazwa.startswith("android_"):
+        return "ekran"
+
     def _z(zrodlo, klucz):
         if not isinstance(zrodlo, dict):
             return ""
@@ -20017,7 +20033,7 @@ def _cel_wywolania(nazwa, argumenty, wynik):
     return ""
 
 
-def _stan_celu(wynik):
+def _stan_celu(wynik, nazwa=""):
     """
     Tani odcisk stanu celu — wylacznie z tego, co juz jest w wyniku.
 
@@ -20025,6 +20041,48 @@ def _stan_celu(wynik):
     o stanie celu" (np. `sleep`) — i wtedy liczy sie jako dzialanie
     bez nowej informacji.
     """
+
+    nazwa = str(nazwa or "")
+
+    # v375: STAN EKRANU ZNA WYLACZNIE android_state.
+    #
+    # android_tap zwraca {"ok": true, "x": 540, "y": 1180,
+    # "foreground": "Kalkulator"} — to mowi, ze dotkniecie poszlo, a
+    # nie co jest teraz na ekranie. Gdyby liczylo sie jako stan celu,
+    # ciag z zycia
+    #   android_launch_app -> android_state -> android_tap(A)
+    #   -> android_state -> android_tap(B) -> android_state
+    # zmienialby "stan" co drugie wywolanie (raz odcisk zrzutu, raz
+    # "ok=True") i licznik zerowalby sie bez konca — nigdy nie dalo
+    # by sie zobaczyc, ze ekran stoi w miejscu.
+    #
+    # Wiec jak przy `sleep`: te wywolania nie klamia o stanie, tylko
+    # nic o nim nie mowia. To jest dokladnie None.
+    if nazwa.startswith("android_") and nazwa != "android_state":
+        return None
+
+    # v375: android_state zwraca GOLY TEKST — zrzut drzewa
+    # dostepnosci — a nie slownik. Odcisk tego tekstu to najtanszy
+    # mozliwy stan ekranu: nic nie dopytujemy, bierzemy to, co
+    # narzedzie i tak przynioslo. Zegarek i pasek nawigacji sa z
+    # niego odfiltrowane juz w _parse_hierarchy, wiec ten sam ekran
+    # daje ten sam odcisk.
+    if isinstance(wynik, str):
+
+        tresc = wynik.strip()
+
+        if not tresc:
+            return None
+
+        try:
+            return (
+                "ekran:" + str(len(tresc)) + ":"
+                + hashlib.sha256(
+                    tresc.encode("utf-8", "replace")
+                ).hexdigest()[:12]
+            )
+        except Exception:
+            return "ekran:" + str(len(tresc))
 
     if not isinstance(wynik, dict):
         return None
@@ -20146,6 +20204,57 @@ def _to_samo_czekanie(nazwa, argumenty):
     )
 
 
+# v375: PATRZENIE TO NIE RUSZANIE.
+#
+# Narzedzia, ktore niczego nie zmieniaja — tylko czytaja. Powtorzona
+# obserwacja sama w sobie nie jest petla: to normalne czekanie, az
+# ekran sie przerysuje albo proces skonczy. W biegu 2026-09-17 19:20,
+# krok 4 bylo to widac wprost: check_process(21451) x12 i read_file
+# tego samego logu x9 — instalacja naprawde trwala, a log naprawde
+# rosl (218 -> 258 -> 530 znakow).
+#
+# Nie znaczy to, ze o takim ciagu milczymy. Jesli stan celu naprawde
+# stoi, mowimy NO_PROGRESS — czyli "patrzysz i nic sie nie zmienia".
+# Nie mowimy LOOP_DETECTED, bo "kreciesz sie w kolko" to zarzut wobec
+# dzialania, a tu nikt nic nie zrobil.
+#
+# Lista jest po nazwach narzedzi, nie po tresci argumentow: kazde z
+# nich jest tylko-do-odczytu z definicji, niezaleznie od tego, o co
+# sie go zapyta.
+_NARZEDZIA_OBSERWACYJNE = (
+    # Android
+    "android_state",
+    "android_screenshot",
+    "android_screenshot_ocr",
+    "android_assert_text_visible",
+    "android_list_packages",
+    "android_logcat",
+    # Chrome
+    "chrome_tabs",
+    "chrome_inspect",
+    # Termux
+    "termux_ls",
+    "termux_read_file",
+    "termux_processes",
+    "termux_check_process",
+    "termux_file_exists",
+    "termux_check_apk",
+)
+
+
+def _to_obserwacja(akcja):
+    """
+    Czy to bylo patrzenie, czy ruszanie.
+
+    Przyjmuje sygnature z v374 ("nazwa#odcisk") albo sama nazwe.
+    """
+
+    return (
+        str(akcja or "").split("#", 1)[0]
+        in _NARZEDZIA_OBSERWACYJNE
+    )
+
+
 def _zapamietaj_cel(cel, stan, akcja):
     """
     Czy wokol tego celu cokolwiek drgnelo.
@@ -20194,7 +20303,21 @@ def _zapamietaj_cel(cel, stan, akcja):
         # to NO_PROGRESS, bo proby byly rozne, a strona stala.
         jedno = len(set(wpis["akcje"])) == 1
 
-        sygnal = "LOOP_DETECTED" if jedno else "NO_PROGRESS"
+        # v375: LOOP_DETECTED to zarzut wobec DZIALANIA. Jesli caly
+        # ten ciag to samo patrzenie — android_state, check_process,
+        # read_file — to nikt sie w kolko nie kreci, tylko czeka.
+        # Zostaje NO_PROGRESS: stan celu stoi i tyle. Patrz
+        # _NARZEDZIA_OBSERWACYJNE.
+        sama_obserwacja = all(
+            _to_obserwacja(akcja)
+            for akcja in wpis["akcje"]
+        )
+
+        sygnal = (
+            "LOOP_DETECTED"
+            if (jedno and not sama_obserwacja)
+            else "NO_PROGRESS"
+        )
 
         # Do zdania idzie sama nazwa narzedzia — odcisk argumentow
         # sluzy do porownywania, a nie do czytania.
@@ -20205,12 +20328,25 @@ def _zapamietaj_cel(cel, stan, akcja):
             )
         )
 
-        czym = (
-            "Ta sama operacja poszla " + str(ile) + " raz z rzedu"
-            if jedno else
-            str(ile) + " roznych operacji pod rzad ("
-            + ", ".join(nazwy[:4]) + ")"
-        )
+        if jedno and sama_obserwacja:
+            czym = (
+                "To samo sprawdzenie poszlo " + str(ile)
+                + " raz z rzedu"
+            )
+        elif jedno:
+            czym = (
+                "Ta sama operacja poszla " + str(ile) + " raz z rzedu"
+            )
+        elif sama_obserwacja:
+            czym = (
+                str(ile) + " sprawdzen pod rzad ("
+                + ", ".join(nazwy[:4]) + ")"
+            )
+        else:
+            czym = (
+                str(ile) + " roznych operacji pod rzad ("
+                + ", ".join(nazwy[:4]) + ")"
+            )
 
         return sygnal, (
             czym + " wokol tego samego celu (" + str(cel) + "), a "
@@ -21255,7 +21391,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 else:
 
                     _cel = _cel_wywolania(name, args, result)
-                    _stan = _stan_celu(result)
+
+                    # v375: nazwa narzedzia trafia do _stan_celu, bo
+                    # na Androidzie tylko android_state cokolwiek
+                    # mowi o ekranie — reszta android_* nie klamie o
+                    # stanie, tylko nic o nim nie wie.
+                    _stan = _stan_celu(result, name)
 
                     if _cel:
                         _ostatni_cel[0] = _cel
