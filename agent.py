@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v373
+AEL-MINI AUTONOMOUS AGENT v374
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v373")
+    print("             AEL-MINI AUTONOMOUS AGENT v374")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -20071,6 +20071,60 @@ def _stan_celu(wynik):
     return "|".join(czesci)
 
 
+def _sygnatura_operacji(nazwa, argumenty):
+    """
+    Czym BYLO to wywolanie: nazwa narzedzia plus jego argumenty.
+
+    Do v373 rdzen porownywal "te sama operacje" po samej nazwie
+    narzedzia. To bylo za grube. W biegu 2026-09-17 16:42 jedenascie
+    prob klikniecia "Log in with Google" szlo przez el.click(),
+    dispatchEvent(), szukanie po textContent, po outerHTML, reactowy
+    onClick, getBoundingClientRect — a wszystkie mialy nazwe
+    "chrome_execute_js", wiec wygladaly na jedno dzialanie w kolko.
+    To byly ROZNE proby; nieskuteczne, ale rozne.
+
+    Zwraca "nazwa" (gdy nie ma argumentow) albo "nazwa#odcisk".
+    Odcisk jest krotki, zeby zdanie dla wykonawcy zostalo czytelne —
+    nazwa narzedzia zawsze stoi z przodu i to ja pokazujemy.
+
+    Co do sygnatury NIE wchodzi: wynik narzedzia, "value", stan
+    strony, czas. Sygnatura mowi, CO zrobilismy, a nie CO Z TEGO
+    WYSZLO — to drugie jest zadaniem _stan_celu().
+    """
+
+    nazwa = str(nazwa or "")
+
+    if not isinstance(argumenty, dict) or not argumenty:
+        return nazwa
+
+    # Kolejnosc kluczy w slowniku argumentow nie jest niczym
+    # gwarantowanym, wiec sortujemy — te same argumenty maja dac ten
+    # sam odcisk niezaleznie od tego, jak przyszly.
+    try:
+        tresc = json.dumps(
+            argumenty,
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str
+        )
+    except Exception:
+        tresc = repr(
+            sorted(
+                argumenty.items(),
+                key=lambda para: str(para[0])
+            )
+        )
+
+    try:
+        odcisk = hashlib.sha256(
+            tresc.encode("utf-8", "replace")
+        ).hexdigest()[:10]
+    except Exception:
+        odcisk = str(len(tresc))
+
+    return nazwa + "#" + odcisk
+
+
 # Komendy, ktore same w sobie sa czekaniem — nie maja wlasnego celu,
 # wiec przypisujemy je do celu, na ktory wlasnie czekamy.
 _TO_CZEKANIE_RE = re.compile(
@@ -20133,15 +20187,29 @@ def _zapamietaj_cel(cel, stan, akcja):
 
         # Jedno dzialanie w kolko czy kilka roznych — mowimy to
         # wprost, bo to zmienia, co warto zrobic dalej.
+        #
+        # v374: porownujemy SYGNATURY (narzedzie + argumenty), a nie
+        # same nazwy narzedzi. Jedenascie roznych prob klikniecia
+        # przez chrome_execute_js to nie jest "ta sama operacja" —
+        # to NO_PROGRESS, bo proby byly rozne, a strona stala.
         jedno = len(set(wpis["akcje"])) == 1
 
         sygnal = "LOOP_DETECTED" if jedno else "NO_PROGRESS"
 
+        # Do zdania idzie sama nazwa narzedzia — odcisk argumentow
+        # sluzy do porownywania, a nie do czytania.
+        nazwy = sorted(
+            set(
+                str(akcja).split("#", 1)[0]
+                for akcja in wpis["akcje"]
+            )
+        )
+
         czym = (
             "Ta sama operacja poszla " + str(ile) + " raz z rzedu"
             if jedno else
-            str(ile) + " operacji pod rzad ("
-            + ", ".join(sorted(set(wpis["akcje"]))[:4]) + ")"
+            str(ile) + " roznych operacji pod rzad ("
+            + ", ".join(nazwy[:4]) + ")"
         )
 
         return sygnal, (
@@ -21192,8 +21260,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     if _cel:
                         _ostatni_cel[0] = _cel
 
+                # v374: "co zrobilismy" to narzedzie RAZEM z
+                # argumentami — inaczej kazde chrome_execute_js
+                # wygladaloby tak samo, niezaleznie od tego, jaki kod
+                # poszedl na strone. Patrz _sygnatura_operacji().
                 _sygnal_celu, _zdanie_celu = _zapamietaj_cel(
-                    _cel, _stan, name
+                    _cel, _stan, _sygnatura_operacji(name, args)
                 )
 
                 if _sygnal_celu and isinstance(result, dict):
