@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v372
+AEL-MINI AUTONOMOUS AGENT v373
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v372")
+    print("             AEL-MINI AUTONOMOUS AGENT v373")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12494,6 +12494,39 @@ def chrome_execute_js(
     if dom_fields_warning:
         final["dom_fields_warning"] = dom_fields_warning
 
+    # v373: STAN STRONY PO TYM JS — tym samym snapshotem, ktorego
+    # uzywa chrome_click od v366. Nie powstaje zadna nowa sonda: to
+    # jest _stan_strony(), jedno lekkie pytanie o adres, tytul i
+    # dlugosc tresci.
+    #
+    # Po co: wynik chrome_execute_js to bylo dotad samo {"ok": true,
+    # "value": ...}. "value" mowi, co zwrocil JavaScript, a nie co
+    # zrobil ze strona.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 16:42, krok 3).
+    # Gemini probowalo kliknac "Log in with Google" jedenascie razy,
+    # za kazdym razem innym kodem: el.click(), dispatchEvent(),
+    # szukanie po textContent, po outerHTML, reactowy onClick,
+    # getBoundingClientRect. "value" bylo za kazdym razem INNE
+    # ("clicked", "clicked via button text", "clicked element with
+    # exact text", "not found"...), wiec po samym "value" kazda proba
+    # wygladala na nowa droge. Strona przez caly czas byla ta sama:
+    # https://dashboard.daily.co/login.
+    #
+    # Dlatego stanem celu jest STRONA, a nie to, co zwrocil JS.
+    # Adres trafia do wyniku jako "url" — po nim wspolny rdzen z
+    # v372 rozpoznaje cel (_cel_wywolania), a po tytule i dlugosci
+    # tresci widzi, czy cokolwiek drgnelo (_stan_celu).
+    _po = _stan_strony(tab)
+
+    if _po:
+
+        if _po.get("href"):
+            final["url"] = _po.get("href")
+
+        final["tytul"] = _po.get("title")
+        final["znakow"] = _po.get("znakow")
+
     return final
 
 
@@ -19998,7 +20031,20 @@ def _stan_celu(wynik):
 
     czesci = []
 
-    for klucz in ("running", "returncode", "ok", "exists", "bytes"):
+    # v373: "tytul" i "znakow" to stan STRONY po chrome_execute_js —
+    # ten sam snapshot, ktorego chrome_click uzywa od v366.
+    #
+    # Czego tu celowo NIE MA: "value", czyli to, co zwrocil JavaScript.
+    # W biegu 2026-09-17 16:42 jedenascie roznych prob klikniecia
+    # "Log in with Google" zwrocilo jedenascie roznych "value"
+    # ("clicked", "clicked via button text", "not found"...), a strona
+    # ani drgnela. Gdyby "value" liczylo sie do stanu, kazda z tych
+    # prob wygladalaby na nowa droge i brak postepu nigdy by nie
+    # wyszedl na jaw. Postep mierzymy po stronie, nie po skladni JS.
+    for klucz in (
+        "running", "returncode", "ok", "exists", "bytes",
+        "tytul", "znakow"
+    ):
 
         if klucz in wynik:
             czesci.append(klucz + "=" + str(wynik.get(klucz)))
