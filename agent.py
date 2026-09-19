@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v385
+AEL-MINI AUTONOMOUS AGENT v386
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v385")
+    print("             AEL-MINI AUTONOMOUS AGENT v386")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4079,6 +4079,7 @@ def _set_current_goal(goal):
     _reset_irreversible_memory()
     _reset_powody_zakonczenia()
     _role_inbox.clear()
+    _reset_watkow()
     _role_response_cache.clear()
     _role_response_step.clear()
     _wyciagniecia_na_wierzch.clear()
@@ -27875,6 +27876,8 @@ def _collect_role_messages(speaker_role, text):
     do nastepnego zawolania. Tu bierzemy dokladnie te sama miare.
     """
 
+    _nazwani = set()
+
     for adresat, tresc in _zawolania(text):
 
         if adresat == speaker_role:
@@ -27903,6 +27906,195 @@ def _collect_role_messages(speaker_role, text):
                 tresc
             )
         )
+
+        _nazwani.add(adresat)
+
+    # v386: imie nie jest jedynym adresem — patrz _zapamietaj_watek().
+    _zapamietaj_watek(speaker_role, text, _nazwani)
+
+
+# ============================================================
+# WATEK ROZMOWY (v386)
+# ============================================================
+#
+# ZMIERZONE NA WSZYSTKICH LOGACH (1122 wypowiedzi rol):
+#
+#   - 645 wypowiedzi (57%) nie zawiera ZADNEGO imienia,
+#   - 242 wypowiedzi (22%) nie dociera do NIKOGO — 178 Oli, 64 Marka,
+#   - 112 wypowiedzi to wyraznie odpowiedz na czyjes slowa
+#     (>=45% wspolnych slow znaczacych), ktora nie wraca do tego,
+#     komu odpowiada. Bartek odpowiada Tomkowi 38 razy, Marek
+#     Tomkowi 18 razy. Razem 767811 znakow.
+#
+# PRZYCZYNA. Sa dokladnie dwie drogi, ktorymi cudza wypowiedz
+# dociera do kolegi: skrzynka (dziala tylko, gdy padnie imie) i
+# siedem PAR WYPISANYCH W KODZIE w consult_team (Wojtek->Kamil,
+# Kamil->Tomek, Wojtek->Tomek, Tomek->Bartek, Kamil->Bartek,
+# Wojtek->Bartek, Tomek->Marek) plus kanal zarzutu Marka. Z 30
+# mozliwych par 23 nie maja stalego kanalu, a w 19 z nich role
+# realnie do siebie mowily. Kanal Tomek->Bartek jest
+# JEDNOKIERUNKOWY, wiec 38 odpowiedzi Bartka dla Tomka nie mialo
+# czym wrocic.
+#
+# CZEGO TU NIE MA. Nie ma nowego agenta, nowego promptu, nowego
+# zapytania do modelu ani sztywnej kolejnosci. Nie ma tez cieca
+# tresci: to, co dochodzi, dochodzi w calosci.
+#
+# CZEGO UZYWAMY. Wylacznie tego, co juz jest:
+#   _slowa_tresci()  — miara "o czym to jest" (v312),
+#   _juz_to_czytal() — co ta osoba juz w tym kroku dostala (v296),
+#   _zapamietaj_co_dostal(), zapisz_zdarzenie() — jak skrzynka.
+#
+# ZASADA. Gdy B mowi o tym, o czym przed chwila mowil A, i nie
+# zawolal A po imieniu (bo wtedy zadziala skrzynka), A dostaje
+# wypowiedz B. Nic wiecej: nie kopiujemy historii, nie budzimy
+# nikogo do odpowiedzi, nie mowimy nikomu, co ma z tym zrobic.
+#
+# To, KTO sie odzywa, zostaje bez zmian — decyduje o tym zawolanie
+# po imieniu (_zawolany_teraz) i prosba MAIN-a (_o_kogo_prosi_main).
+# Watek decyduje wylacznie o tym, CO dostaje ten, kto i tak mowi.
+# Dzieki temu liczba zapytan do DeepSeeka jest identyczna.
+
+# Kto co powiedzial w tym celu: [(krok, rola, slowa znaczace)].
+_watki_pamiec = []
+
+# Co czeka na te osobe z watku, ktory sama zaczela:
+# {rola: [(imie mowiacego, tresc)]}
+_watek_skrzynka = {}
+
+# Ile rdzeni A musi uslyszec z powrotem, zeby uznac, ze B mowi o
+# JEGO sprawie.
+#
+# SKALIBROWANE NA LOGACH. Przy 0.60 dochodzi 0.14 dodatkowej
+# dostawy na wypowiedz, czyli 4.6% wszystkich mozliwych par
+# "autor -> kolega" — przy 1.17 dostawy na wypowiedz, ktore idzie
+# dzis samym imieniem. Prog 0.45 dawalby 15% par i bylby juz
+# wysylaniem wszystkiego wszystkim; 0.70 lapie 1.7%. Na tym progu
+# wraca 116 ze 139 zmierzonych zgubionych odpowiedzi (83%).
+_WATEK_POKRYCIE = 0.60
+
+# Ile krokow wstecz siega watek. Rozmowa toczy sie w kroku i
+# przechodzi na nastepny; dalej to juz inna sprawa.
+_WATEK_OKNO = 1
+
+# Ponizej tylu slow znaczacych nie ma czego porownywac — krotkie
+# "przyjete, zamykam" pasuje do wszystkiego.
+_WATEK_MIN_SLOW = 25
+
+# Ile pierwszych liter slowa decyduje, ze to to samo slowo.
+#
+# Po polsku odpowiada sie odmieniona forma: Marek pisze "ten plik",
+# Bartek odpowiada "pliku", Tomek "o pliku". _slowa_tresci() traktuje
+# je jako trzy rozne slowa, wiec na samych slowach odpowiedz Bartka
+# do Tomka wychodzila 0.36 podobienstwa i nie wracala do nikogo.
+# Cztery litery to nie mniej niz dlugosc najkrotszego slowa, ktore
+# _slowa_tresci() w ogole przepuszcza.
+#
+# ZMIERZONE: rdzen laczy plik/pliku, test/testu, rozmiar/rozmiarze,
+# zmienil/zmieniany, zapis/zapisal, numer/numerow, konto/konta.
+_WATEK_RDZEN = 4
+
+
+def _rdzenie_tresci(tekst):
+    """
+    To samo co _slowa_tresci(), ale bez koncowek — zeby ta sama
+    rzecz nazwana w dwoch przypadkach byla ta sama rzecza.
+
+    _slowa_tresci() zostaje nietkniete: uzywa go _to_samo_pytanie()
+    (v312) i tam porownujemy dwa pytania napisane niezaleznie, a nie
+    wypowiedz z odpowiedzia na nia.
+    """
+
+    return set(
+        slowo[:_WATEK_RDZEN] for slowo in _slowa_tresci(tekst)
+    )
+
+
+def _reset_watkow():
+    """Nowy cel to nowa rozmowa."""
+
+    del _watki_pamiec[:]
+    _watek_skrzynka.clear()
+
+
+def _zapamietaj_watek(rola, tekst, nazwani):
+    """
+    Odklada wypowiedz temu, na czyje slowa ona odpowiada.
+
+    Patrzymy wstecz po jednej, NAJSWIEZSZEJ wypowiedzi kazdej
+    osoby — bo odpowiada sie na to, co ktos powiedzial teraz, nie
+    na wszystko, co kiedykolwiek napisal. Kto zostal zawolany po
+    imieniu, ten dostanie to skrzynka i tu go pomijamy.
+    """
+
+    rola = str(rola)
+    tekst = str(tekst or "")
+    moje = _rdzenie_tresci(tekst)
+
+    if len(moje) >= _WATEK_MIN_SLOW:
+
+        widziani = set()
+
+        for krok, kto, ich in reversed(_watki_pamiec):
+
+            if _biezacy_krok - krok > _WATEK_OKNO:
+                break
+
+            if kto == rola or kto in widziani or kto in nazwani:
+                continue
+
+            widziani.add(kto)
+
+            if len(ich) < _WATEK_MIN_SLOW:
+                continue
+
+            if len(moje & ich) / float(len(ich)) < _WATEK_POKRYCIE:
+                continue
+
+            _watek_skrzynka.setdefault(kto, []).append(
+                (_ROLE_DISPLAY_NAME.get(rola, rola), tekst)
+            )
+
+    _watki_pamiec.append((_biezacy_krok, rola, moje))
+
+
+def _watek_blok(rola):
+    """
+    Co w tym kroku powiedziano o sprawie, ktora ta osoba zaczela.
+
+    Ten sam ksztalt co skrzynka: imie i tresc, bez ani jednego
+    zdania od Pythona o tym, co ma z tym zrobic. Czego juz
+    dostala innym kanalem, tego nie podajemy drugi raz — patrz
+    _juz_to_czytal().
+    """
+
+    wiadomosci = _watek_skrzynka.pop(str(rola), [])
+
+    nowe = [
+        (kto, tresc) for kto, tresc in wiadomosci
+        if not _juz_to_czytal(rola, tresc)
+    ]
+
+    if not nowe:
+        return ""
+
+    blok = (
+        "\n"
+        + "\n\n".join(kto + ":\n" + tresc for kto, tresc in nowe)
+        + "\n"
+    )
+
+    _zapamietaj_co_dostal(rola, blok)
+
+    zapisz_zdarzenie(
+        "blok",
+        rola=str(rola),
+        co="watek",
+        znaki=len(blok),
+        poczatek=_poczatek_bloku(blok)
+    )
+
+    return blok
 
 
 def _dla_tej_roli(tekst, rola):
@@ -29092,6 +29284,11 @@ def consult_team(
             # tuż przed pytaniem do niej, żeby było ostatnią rzeczą,
             # którą czyta przed odpowiedzią.
             _role_inbox_block(role_name),
+            # v386: i to, co w tym kroku powiedziano o sprawie, którą
+            # ta osoba zaczęła — nawet jeśli nikt nie wymienił jej z
+            # imienia. Patrz _watek_blok(); obok skrzynki, bo to ten
+            # sam rodzaj rzeczy: czyjeś słowa skierowane do niej.
+            _watek_blok(role_name),
         ]
         return "".join(p for p in pieces if p)
 
