@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v386
+AEL-MINI AUTONOMOUS AGENT v387
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v386")
+    print("             AEL-MINI AUTONOMOUS AGENT v387")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -27895,19 +27895,50 @@ def _collect_role_messages(speaker_role, text):
             # przekazywać.
             continue
 
+        # v387: jego akapit RAZEM z czescia wspolna.
+        #
+        # ZMIERZONE NA LOGACH: 690 razy skrzynka oddala komus sam
+        # akapit, podczas gdy wypowiedz miala czesc wspolna przed
+        # pierwszym zawolaniem. Srednio 1290 znakow, ktorych
+        # odbiorca nie widzial — razem 890672. Tak to wygladalo:
+        #
+        #   Marek NIE dostawal: "Tomek tu. Robimy to. Ponizej
+        #   kompletne repo audio_chain_poc/ — sparametryzowane, z
+        #   trybem --dry-run..."
+        #   Marek DOSTAWAL:     "jak widzisz dziury, mow teraz,
+        #   dopisuje."
+        #
+        # Dziury w czym? _zawolania() tnie od zawolania do
+        # zawolania, wiec czesc wspolna nie trafiala tu nigdy —
+        # mimo ze _dla_tej_roli() bierze ja od poczatku i tamtedy
+        # (kanal "Wojtek:") dochodzila. Bierzemy wiec ten sam
+        # kawalek, ktory dostaje kazdy inny kanal: jeden slicer,
+        # jedna miara.
+        #
+        # Raz na osobe i w calosci: gdy ktos zawolal ja dwa razy,
+        # _dla_tej_roli() i tak sklada oba akapity.
+        if adresat in _nazwani:
+            continue
+
+        _nazwani.add(adresat)
+
         # v275: bez short(). To jest wiadomosc napisana WPROST do
         # tej osoby — jesli cokolwiek ma dojsc w calosci, to
         # wlasnie to. 600 znakow bylo obejsciem z czasow, gdy
         # skrzynka szla obok pelnej wypowiedzi i dublowala ja;
         # od v269 to jest jej wlasny, jedyny egzemplarz.
+        # _utnij_na_sekcji_wykonawcy() zostaje: _zawolania() konczy
+        # kazdy kawalek tam, gdzie autor zaczyna mowic do wykonawcy,
+        # a _dla_tej_roli() tego nie robi. Bez tego komenda dla
+        # wykonawcy wchodzilaby do cudzej skrzynki — patrz v345.
         _role_inbox.setdefault(adresat, []).append(
             (
                 _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role)),
-                tresc
+                _utnij_na_sekcji_wykonawcy(
+                    _dla_tej_roli(text, adresat)
+                ).strip().lstrip("*_#>- \t\n")
             )
         )
-
-        _nazwani.add(adresat)
 
     # v386: imie nie jest jedynym adresem — patrz _zapamietaj_watek().
     _zapamietaj_watek(speaker_role, text, _nazwani)
@@ -27965,13 +27996,29 @@ _watek_skrzynka = {}
 # Ile rdzeni A musi uslyszec z powrotem, zeby uznac, ze B mowi o
 # JEGO sprawie.
 #
-# SKALIBROWANE NA LOGACH. Przy 0.60 dochodzi 0.14 dodatkowej
-# dostawy na wypowiedz, czyli 4.6% wszystkich mozliwych par
-# "autor -> kolega" — przy 1.17 dostawy na wypowiedz, ktore idzie
-# dzis samym imieniem. Prog 0.45 dawalby 15% par i bylby juz
-# wysylaniem wszystkiego wszystkim; 0.70 lapie 1.7%. Na tym progu
-# wraca 116 ze 139 zmierzonych zgubionych odpowiedzi (83%).
-_WATEK_POKRYCIE = 0.60
+# SKALIBROWANE NA LOGACH:
+#
+#   0.45 -> 15.1% mozliwych par — to juz wszystko do wszystkich
+#   0.55 ->  6.7% par, wraca 136 ze 139 zgubionych odpowiedzi (98%)
+#   0.60 ->  4.6% par, wraca 116 ze 139 (83%)
+#   0.70 ->  1.7% par — przepuszcza wiekszosc
+#
+# v387: 0.60 -> 0.55. Priorytet to zrozumienie rozmowy, nie
+# oszczednosc kilku tokenow.
+#
+# ZMIERZONE NA PRAWDZIWEJ PARZE: watpliwosc Marka o zapis pliku i
+# odpowiedz Bartka na nia trafiaja w siebie wszystkimi slowami
+# tematu (server.js, plik, rozmiar, zapis, test, zielony,
+# write_file, bajt) i wychodza 0.56 — bo miare rozcienczaja
+# spojniki, ktorych nie ma w _SLOWA_POSPOLITE: "jezeli", "mimo",
+# "naprawde", "tutaj", "podczas", "trzeba". Przy 0.60 ta odpowiedz
+# nie wracala do Marka. Lista _SLOWA_POSPOLITE zostaje nietknieta,
+# bo sluzy _to_samo_pytanie() przy progu 0.8; zamiast ja ruszac,
+# obnizamy prog o te roznice.
+#
+# Cena: 6.7% zamiast 4.6% mozliwych par. Kanal imienia daje dzis
+# 1.17 dostawy na wypowiedz, watek dolozy 0.21.
+_WATEK_POKRYCIE = 0.55
 
 # Ile krokow wstecz siega watek. Rozmowa toczy sie w kroku i
 # przechodzi na nastepny; dalej to juz inna sprawa.
@@ -27993,6 +28040,11 @@ _WATEK_MIN_SLOW = 25
 # ZMIERZONE: rdzen laczy plik/pliku, test/testu, rozmiar/rozmiarze,
 # zmienil/zmieniany, zapis/zapisal, numer/numerow, konto/konta.
 _WATEK_RDZEN = 4
+
+# Ile znakow wlasnej wypowiedzi wystarczy komus, zeby poznal, o
+# ktora jego mysl chodzi. To cytat z jego wlasnych slow, wiec ma
+# byc wskaznikiem, nie powtorka — patrz _o_czym_mowil().
+_WATEK_KOTWICA = 200
 
 
 def _rdzenie_tresci(tekst):
@@ -28035,7 +28087,7 @@ def _zapamietaj_watek(rola, tekst, nazwani):
 
         widziani = set()
 
-        for krok, kto, ich in reversed(_watki_pamiec):
+        for krok, kto, ich, ich_tekst in reversed(_watki_pamiec):
 
             if _biezacy_krok - krok > _WATEK_OKNO:
                 break
@@ -28051,11 +28103,37 @@ def _zapamietaj_watek(rola, tekst, nazwani):
             if len(moje & ich) / float(len(ich)) < _WATEK_POKRYCIE:
                 continue
 
+            _na_co = _o_czym_mowil(ich_tekst)
+
             _watek_skrzynka.setdefault(kto, []).append(
-                (_ROLE_DISPLAY_NAME.get(rola, rola), tekst)
+                (_ROLE_DISPLAY_NAME.get(rola, rola), tekst, _na_co)
             )
 
-    _watki_pamiec.append((_biezacy_krok, rola, moje))
+    _watki_pamiec.append((_biezacy_krok, rola, moje, tekst))
+
+
+def _o_czym_mowil(tekst):
+    """
+    Czym ta wypowiedz sie otwiera — tyle, zeby jej autor poznal
+    po tym wlasna mysl.
+
+    Tniemy na granicy zdania, nie w polowie slowa: to ma byc
+    czytelny cytat, a nie ogryzek.
+    """
+
+    tekst = " ".join(str(tekst or "").split())
+
+    if len(tekst) <= _WATEK_KOTWICA:
+        return tekst
+
+    uciete = tekst[:_WATEK_KOTWICA]
+    kropka = max(uciete.rfind(". "), uciete.rfind("? "),
+                 uciete.rfind("! "))
+
+    if kropka > _WATEK_KOTWICA // 3:
+        return uciete[:kropka + 1]
+
+    return uciete.rsplit(" ", 1)[0] + "…"
 
 
 def _watek_blok(rola):
@@ -28071,16 +28149,34 @@ def _watek_blok(rola):
     wiadomosci = _watek_skrzynka.pop(str(rola), [])
 
     nowe = [
-        (kto, tresc) for kto, tresc in wiadomosci
+        (kto, tresc, na_co) for kto, tresc, na_co in wiadomosci
         if not _juz_to_czytal(rola, tresc)
     ]
 
     if not nowe:
         return ""
 
+    # v387: do czego to sie odnosi.
+    #
+    # ZMIERZONE: w 100 ze 162 dostaw (62%) autor watku powiedzial w
+    # oknie wiecej niz jedna rzecz albo napisal ponad 2500 znakow —
+    # wtedy sama odpowiedz nie mowi, KTOREJ z nich dotyczy. Oddajemy
+    # wiec przy niej otwarcie tej wlasnej wypowiedzi, na ktora ona
+    # pada. To jego wlasne slowa, wiec wystarczy tyle, zeby je
+    # rozpoznal — patrz _o_czym_mowil().
     blok = (
         "\n"
-        + "\n\n".join(kto + ":\n" + tresc for kto, tresc in nowe)
+        + "\n\n".join(
+            (
+                (
+                    kto + " — w nawiązaniu do tego, co powiedziałeś "
+                    "(„" + na_co + "”):\n"
+                )
+                if na_co else kto + ":\n"
+            )
+            + tresc
+            for kto, tresc, na_co in nowe
+        )
         + "\n"
     )
 
@@ -28139,6 +28235,27 @@ def _dla_tej_roli(tekst, rola):
             if i + 1 < len(trafienia) else len(tekst)
         )
 
+        # v387: TU NIE MA KOTWICY Z SASIEDNIEGO AKAPITU.
+        #
+        # Probowalem jej i wycofalem. ZMIERZONE: 684 razy akapit do
+        # kogos stoi w srodku wypowiedzi bez czesci wspolnej, wiec
+        # odbiorca dostaje zdanie bez tego, o czym ono jest
+        # ("Tomek: czekam na wybor sciezki" — jakiej sciezki?).
+        # Doklejenie poprzedzajacego akapitu to naprawia, ale ten
+        # akapit jest napisany do KOGOS INNEGO, a mediana ma 214
+        # znakow, wiec dokleja sie w polowie przypadkow.
+        #
+        # To jest dokladnie blad, ktory ten program juz raz mial i
+        # ktory zglosil uzytkownik: "Kamil dostawal wszystkie trzy,
+        # lacznie ze szczegolowa instrukcja testu dla Bartka"
+        # (patrz komentarz na gorze tej funkcji). Cztery pakiety
+        # testowe pilnuja, zeby nie wrocil.
+        #
+        # Ten sam brak zrozumienia naprawia czesc wspolna, ktora od
+        # v387 dochodzi skrzynka (690 przypadkow, 890672 znakow) —
+        # i ona jest napisana DO WSZYSTKICH, wiec nikomu nie oddaje
+        # cudzego zlecenia. Akapit zaczynajacy sie od "przez to",
+        # gdy czesci wspolnej nie ma w ogole, zostaje niedomkniety.
         moje.append(tekst[m.start():koniec].strip())
 
     # v351: cisza jest gorsza niz nadmiar.
