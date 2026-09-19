@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v387
+AEL-MINI AUTONOMOUS AGENT v388
 
 ARCHITEKTURA:
 
@@ -1290,6 +1290,7 @@ def ustaw_krok(numer):
     if _biezacy_krok != poprzedni:
         del _uruchomienia_kroku[:]
         del _przybylo_w_kroku[:]
+        _kod_polozony_w_kroku.clear()
 
     zapisz_zdarzenie("krok")
 
@@ -2105,6 +2106,34 @@ _gdzie_zapisalismy = {}
 _przybylo_w_kroku = []
 
 
+# v388: co juz polozylismy w TYM kroku — odcisk tresci -> sciezka.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-19 09:39). Gemini
+# poprosilo o zapis trzech plikow, a Bartek napisal w tym kroku
+# jeden. Ta sama tresc poszla wiec pod dwiema nazwami:
+#
+#   krok 2: trigger.py 3422 B  i  main_server.py 3422 B
+#   krok 3: main.py    7717 B  i  pull.py        7717 B
+#
+# Bartek zobaczyl to w nastepnej turze i sam nazwal: "backend/main.py
+# — kopia trigger.py (3422 B, zla tresc)". Nikt tego nie chcial —
+# extract_code_block() dostawalo sciezke, dla ktorej autor nie
+# napisal nic, i oddawalo jedyny blok, jaki mial pasujacy jezyk.
+_kod_polozony_w_kroku = {}
+
+
+def _odcisk_tresci(tekst):
+    """sha256 tego, co mamy zapisac — nigdy nie rzuca."""
+
+    try:
+        return hashlib.sha256(
+            str(tekst or "").encode("utf-8", "replace")
+        ).hexdigest()
+
+    except Exception:
+        return ""
+
+
 def _odcisk_pliku(p):
     """sha256 tresci pliku albo "" — nigdy nie rzuca."""
 
@@ -2456,7 +2485,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v387")
+    print("             AEL-MINI AUTONOMOUS AGENT v388")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14047,6 +14076,12 @@ def termux_write_file(path, content, append=False):
                     _track_project_path(p)
                     _zapamietaj_gdzie(p)
 
+                    # v388: zapamietujemy, ze ta tresc juz gdzies
+                    # lezy — patrz _code_target_rejection().
+                    _kod_polozony_w_kroku.setdefault(
+                        _odcisk_tresci(_kod), str(p)
+                    )
+
                 except Exception as _e:
                     return {
                         "ok": False,
@@ -22984,6 +23019,34 @@ def _blok_dla_pliku(text, sciezka, kandydaci):
             if len(_po_jezyku) == 1:
                 return _po_jezyku[0]
 
+            # v388: nazwa nad blokiem to nie wszystko — jezyk musi
+            # sie zgadzac.
+            #
+            # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-19 09:39,
+            # krok 3). Bartek napisal w tym kroku JEDEN plik,
+            # backend/main.py, a pod koniec wypowiedzi dal Tobie
+            # komende do sprawdzenia:
+            #
+            #     ```bash
+            #     cat ~/agent/spike/backend/main.py | head -3
+            #     # ma pokazac: Bartek / plan v2.1 / backend ...
+            #     ```
+            #
+            # Nad tym blokiem, w tabeli "Co jest na dysku", stalo
+            # miedzy innymi "| `trigger.py` | OK | bez zmian |".
+            # Nazwa trafila wiec w okno 400 znakow, _po_jezyku
+            # zostalo puste (bash to nie .py) — i ta galaz i tak
+            # oddawala blok z nazwa. Do trigger.py poszlo 108 bajtow
+            # polecenia powloki, ast.parse padl na "cat", a krok
+            # umarl na SyntaxError.
+            #
+            # Blok ```bash``` nigdy nie jest trescia pliku .py.
+            # Skoro rozszerzenie niesie twardy sygnal i ani jeden
+            # blok z nazwa go nie spelnia, to znaczy, ze autor tego
+            # pliku tu nie napisal — a nie, ze napisal go w bashu.
+            if not _po_jezyku:
+                return None
+
         return _z_nazwa[0][1]
 
     # 2. JEZYK ZGODNY Z ROZSZERZENIEM.
@@ -23926,6 +23989,38 @@ def _code_target_rejection(path, code_text):
         return None
 
     if not (plik_danych or istnieje_z_danymi):
+
+        # v388: ta sama tresc pod druga nazwa w tym samym kroku.
+        #
+        # Gdy autor napisal w tym kroku JEDEN plik, a poproszono o
+        # zapis trzech, extract_code_block() oddaje ten sam blok
+        # kazdej sciezce — bo on jeden ma pasujacy jezyk. Na dysku
+        # laduja wtedy dwa pliki o roznych nazwach i identycznej
+        # tresci, z ktorych jeden na pewno nie jest tym, czym sie
+        # nazywa (bieg 2026-09-19: main.py i pull.py po 7717 B).
+        #
+        # Nie zgadujemy, ktory. Odmawiamy drugiego zapisu i mowimy
+        # wprost, gdzie ta tresc juz lezy — autor dopisze brakujacy
+        # plik w nastepnej turze, zamiast odkrywac za trzy kroki, ze
+        # pull.py to kopia main.py.
+        #
+        # Stoi TUTAJ, a nie na gorze funkcji, bo kolejnosc w tej
+        # funkcji ma znaczenie: gdy plik trzyma dane, zespol ma
+        # najpierw dostac jego prawdziwa tresc (v207).
+        _gdzie_juz = _kod_polozony_w_kroku.get(
+            _odcisk_tresci(code_text)
+        )
+
+        if _gdzie_juz and _gdzie_juz != nazwa:
+
+            return (
+                baza + ": ta sama tresc lezy juz w " + _gdzie_juz,
+                "Nie polozylem " + nazwa + " — dostalbym tam co do "
+                "znaku to samo, co juz zapisalem jako "
+                + _gdzie_juz + ". Dla tego pliku nie ma osobnej "
+                "tresci od autora."
+            )
+
         # Plik kodu albo nieznane rozszerzenie bez danych w srodku.
         return None
 
