@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v384
+AEL-MINI AUTONOMOUS AGENT v385
 
 ARCHITEKTURA:
 
@@ -2456,7 +2456,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v384")
+    print("             AEL-MINI AUTONOMOUS AGENT v385")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -26263,7 +26263,10 @@ RESULT:
 ORYGINALNY KONTEKST:
 {short(original_context, 5000)}
 
-Teraz przygotuj finalną odpowiedź RESEARCHER-a.
+Teraz przygotuj finalną odpowiedź RESEARCHER-a. Podaj wynik.
+
+Pisz po polsku — zespół czyta po polsku i po chińsku tego
+nie odczyta.
 
 Nie wymyślaj faktów.
 Jeżeli wyniku nie wystarcza do potwierdzenia informacji,
