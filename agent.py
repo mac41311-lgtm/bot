@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v389
+AEL-MINI AUTONOMOUS AGENT v390
 
 ARCHITEKTURA:
 
@@ -1670,9 +1670,27 @@ def znajdz_zgloszone_braki(sciezka_przebiegu=None):
     # cytat wracal przy kazdym kolejnym podsumowaniu.
     w_podsumowaniu = False
 
+    # v390: przebieg zawiera teraz takze CALE wiadomosci, ktore
+    # wyslalismy (patrz _wyslano). W nich siedza cytowane wypowiedzi
+    # kolegow, wiec bez pominiecia tych blokow czujnik znajdowalby
+    # kazda skarge po raz drugi — i przypisywal ja nie temu, kto ja
+    # napisal, tylko temu, komu ja przekazalismy.
+    w_wyslanym = False
+
     try:
         with open(sciezka_przebiegu, encoding="utf-8") as f:
             for linia in f:
+
+                if linia.startswith(_RAMKA_WYSLANE):
+                    w_wyslanym = True
+                    continue
+
+                if linia.startswith(_RAMKA_WYSLANE_KONIEC):
+                    w_wyslanym = False
+                    continue
+
+                if w_wyslanym:
+                    continue
 
                 if "JAK IDZIE KOMUNIKACJA" in linia:
                     w_podsumowaniu = True
@@ -1849,8 +1867,13 @@ def _speak(role, text, preview_chars=400):
     # v278: w terminalu podglad, w pliku CALOSC. To jest sama
     # rozmowa zespolu — jesli czegos nie zapiszemy tutaj, nie da
     # sie potem sprawdzic, kto co komu powiedzial.
+    # v390: "ODEBRANE" dopisane ZA rola, nie przed imieniem —
+    # znajdz_zgloszone_braki() czyta autora przez
+    # linia[4:].split("(")[0], wiec imie musi zostac na swoim
+    # miejscu. Slowo idzie tylko tutaj, do pliku przebiegu; ramka
+    # na ekranie zostaje taka, jaka byla.
     dopisz_do_przebiegu(
-        "\n--- " + speaker + " (" + str(role) + ") ---\n"
+        "\n--- " + speaker + " (" + str(role) + ") — ODEBRANE ---\n"
         + str(text or "").strip() + "\n"
     )
 
@@ -1889,6 +1912,70 @@ def _speak(role, text, preview_chars=400):
         # Terminal bez obsługi kolorów/ramek — nigdy nie wolno
         # przez to stracić samej treści.
         log("DEEPSEEK", f"{role}: " + body.replace("\n", " "))
+
+
+# v390: co POSZLO do agenta — na prosbe uzytkownika.
+#
+# Dotad cala tresc wyslanej wiadomosci szla wylacznie do pliku
+# zdarzen (.jsonl, zdarzenie "prompt", v313), a w przebiegu i na
+# ekranie zostawala jedna linia z 70 znakami poczatku:
+#
+#   [17:17:12] [krok 1] [WYSYŁKA] WOJTEK ← 254 B: zrób agenta...
+#
+# Wypowiedzi, ktore DOSTAJEMY, sa w przebiegu w calosci i w ramce
+# na ekranie — patrz _speak(). Ta funkcja jest jej lustrem w druga
+# strone: w pliku cala tresc, na ekranie ramka z podgladem.
+_RAMKA_WYSLANE = "=== WYSŁANA WIADOMOŚĆ DO: "
+_RAMKA_WYSLANE_KONIEC = "=== KONIEC WYSŁANEJ WIADOMOŚCI ==="
+
+
+def _wyslano(role, text, preview_chars=400):
+    """
+    Co wlasnie poszlo do tej osoby. W pliku przebiegu CALOSC,
+    na ekranie ramka z podgladem — dokladnie jak przy odbieraniu.
+    """
+
+    speaker, color, _topic = _ROLE_SPEAKERS.get(
+        role, (role, "white", "")
+    )
+
+    tresc = str(text or "")
+
+    dopisz_do_przebiegu(
+        "\n" + _RAMKA_WYSLANE + speaker + " (" + str(role) + ") — "
+        + _po_ludzku_rozmiar(len(tresc)) + " ===\n"
+        + tresc.strip() + "\n"
+        + _RAMKA_WYSLANE_KONIEC
+    )
+
+    body = short(tresc, preview_chars).strip()
+
+    if _rich_console is None or _RichPanel is None:
+        log(
+            "WYSYŁKA",
+            str(role) + " ← " + _po_ludzku_rozmiar(len(tresc))
+            + ": " + _poczatek_bloku(tresc, 70)
+        )
+        return
+
+    try:
+        _rich_console.print(
+            _RichPanel(
+                body or "(pusta wiadomość)",
+                title="→ WYSŁANE DO: " + speaker
+                + " (" + str(role) + ")",
+                title_align="left",
+                border_style=color,
+                subtitle=_po_ludzku_rozmiar(len(tresc)),
+                subtitle_align="right",
+            )
+        )
+    except Exception:
+        log(
+            "WYSYŁKA",
+            str(role) + " ← " + _po_ludzku_rozmiar(len(tresc))
+            + ": " + _poczatek_bloku(tresc, 70)
+        )
 
 
 # v192 -- zaobserwowany realny, kosztowny bug (log 2026-09-04, cel
@@ -2485,7 +2572,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v389")
+    print("             AEL-MINI AUTONOMOUS AGENT v390")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4418,6 +4505,7 @@ def start_session(name, system_prompt):
                     # przez limiter — patrz komentarz przy trzecim
                     # send_message w tej funkcji.
                     _deepseek_pace(name)
+                    _wyslano(name, _teraz_fakty)
                     session.send_message(_teraz_fakty)
 
                     _save_session_state(
@@ -4448,12 +4536,13 @@ def start_session(name, system_prompt):
 
                 _deepseek_pace(name)
 
-                session.send_message(
-                    _build_prompt_update_message(
-                        saved.get("prompt_text"),
-                        system_prompt
-                    )
+                _zmiana_promptu = _build_prompt_update_message(
+                    saved.get("prompt_text"),
+                    system_prompt
                 )
+
+                _wyslano(name, _zmiana_promptu)
+                session.send_message(_zmiana_promptu)
 
                 _save_session_state(
                     name,
@@ -4502,6 +4591,7 @@ def start_session(name, system_prompt):
                 # ktory konczy sie "Messages too frequent".
                 _deepseek_pace(name)
 
+                _wyslano(name, _powitanie)
                 session.send_message(_powitanie)
 
             _save_session_state(
@@ -6629,12 +6719,7 @@ def deepseek(name, message):
                     tresc=_tresc_wyslana
                 )
 
-                log(
-                    "WYSYŁKA",
-                    str(name) + " ← "
-                    + _po_ludzku_rozmiar(len(_tresc_wyslana))
-                    + ": " + _poczatek_bloku(_tresc_wyslana, 70)
-                )
+                _wyslano(name, _tresc_wyslana)
 
                 text, status = _deepseek_send_experimental(
                     name,
