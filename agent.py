@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v394
+AEL-MINI AUTONOMOUS AGENT v395
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v394")
+    print("             AEL-MINI AUTONOMOUS AGENT v395")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28272,6 +28272,25 @@ _watki_pamiec = []
 # {rola: [(imie mowiacego, tresc)]}
 _watek_skrzynka = {}
 
+# v395: odcisk wypowiedzi -> role, ktorych slowa ja wywolaly.
+#
+# ADRESOWANIE KONTEKSTOWE, BEZ IMION. Wypowiedz bez ani jednego
+# imienia szla dotad do wszystkich, bo nie bylo jak rozpoznac
+# adresata. Ale adresat czesto JEST — tylko wynika z rozmowy, nie z
+# zawolania: ktos zadal pytanie, o cos poprosil, cos zlecil, a to
+# jest odpowiedz na to.
+#
+# Nie liczymy tego osobno: _zapamietaj_watek() i tak juz ustala, na
+# czyje slowa dana wypowiedz odpowiada — po to, zeby oddac ja temu
+# komus. Tutaj tylko zapisujemy ten sam wynik, zeby moglo z niego
+# skorzystac takze ustalanie odbiorcow w _dla_tej_roli().
+#
+# Pusto znaczy "nikogo konkretnie" — czyli zwykla wspolna rozmowa,
+# ktora idzie szeroko. To jest wazne: nowa mysl, ktora niczemu nie
+# odpowiada, ma dotrzec do kazdego, takze do kogos, kto o niej
+# jeszcze nie slyszal.
+_wywolane_przez = {}
+
 # Ile rdzeni A musi uslyszec z powrotem, zeby uznac, ze B mowi o
 # JEGO sprawie.
 #
@@ -28414,6 +28433,7 @@ def _reset_watkow():
 
     del _watki_pamiec[:]
     _watek_skrzynka.clear()
+    _wywolane_przez.clear()
 
 
 def _zapamietaj_watek(rola, tekst, nazwani):
@@ -28479,6 +28499,12 @@ def _zapamietaj_watek(rola, tekst, nazwani):
                     _o_czym_mowil(najlepsza or "")
                 )
             )
+
+            # v395: ten sam wynik sluzy takze do ustalenia, KTO jest
+            # adresatem tej wypowiedzi — patrz _wywolane_przez.
+            _wywolane_przez.setdefault(
+                _odcisk_tresci(tekst), set()
+            ).add(kto)
 
     _watki_pamiec.append(
         (
@@ -28601,6 +28627,32 @@ def _dla_tej_roli(tekst, rola):
     trafienia = list(_ADDRESS_RE.finditer(tekst))
 
     if not trafienia:
+
+        # v395: bez imienia — ale nie zawsze do wszystkich.
+        #
+        # 94% wypowiedzi nie zawiera ani jednego imienia, wiec do
+        # tej pory kazda z nich szla do kazdego. Adresat jednak
+        # czesto JEST: ktos zadal pytanie, o cos poprosil, cos
+        # zlecil — a to jest odpowiedz na to. Wynika on z rozmowy,
+        # nie z zawolania.
+        #
+        # Kto ja wywolal, wiemy juz z watku (v386/v389): ta sama
+        # miara, ten sam prog, zaden nowy. Gdy kogos wskazala —
+        # wypowiedz nalezy do niego i do reszty uczestnikow tej
+        # sprawy, a nie do calej sali.
+        #
+        # Gdy nie wskazala nikogo, jest tak jak byla: wspolna
+        # rozmowa dla wszystkich. To celowe — nowa mysl, ktora
+        # niczemu nie odpowiada, ma dotrzec takze do kogos, kto o
+        # niej jeszcze nie slyszal. Tu nie ma zadnego filtra po tym,
+        # czym dana rola sie zajmuje.
+        _wywolali = _wywolane_przez.get(_odcisk_tresci(tekst))
+
+        # MAIN czyta kazda wypowiedz w calosci — decyduje, wiec musi
+        # miec wszystko. Ta sama zasada, co w _collect_role_messages().
+        if _wywolali and rola != "MAIN" and rola not in _wywolali:
+            return ""
+
         return tekst
 
     ogolne = tekst[:trafienia[0].start()].strip()
