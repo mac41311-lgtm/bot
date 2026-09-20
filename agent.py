@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v388
+AEL-MINI AUTONOMOUS AGENT v389
 
 ARCHITEKTURA:
 
@@ -2485,7 +2485,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v388")
+    print("             AEL-MINI AUTONOMOUS AGENT v389")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28091,29 +28091,61 @@ _watek_skrzynka = {}
 # Ile rdzeni A musi uslyszec z powrotem, zeby uznac, ze B mowi o
 # JEGO sprawie.
 #
-# SKALIBROWANE NA LOGACH:
-#
-#   0.45 -> 15.1% mozliwych par — to juz wszystko do wszystkich
-#   0.55 ->  6.7% par, wraca 136 ze 139 zgubionych odpowiedzi (98%)
-#   0.60 ->  4.6% par, wraca 116 ze 139 (83%)
-#   0.70 ->  1.7% par — przepuszcza wiekszosc
-#
-# v387: 0.60 -> 0.55. Priorytet to zrozumienie rozmowy, nie
-# oszczednosc kilku tokenow.
-#
-# ZMIERZONE NA PRAWDZIWEJ PARZE: watpliwosc Marka o zapis pliku i
-# odpowiedz Bartka na nia trafiaja w siebie wszystkimi slowami
-# tematu (server.js, plik, rozmiar, zapis, test, zielony,
-# write_file, bajt) i wychodza 0.56 — bo miare rozcienczaja
-# spojniki, ktorych nie ma w _SLOWA_POSPOLITE: "jezeli", "mimo",
-# "naprawde", "tutaj", "podczas", "trzeba". Przy 0.60 ta odpowiedz
-# nie wracala do Marka. Lista _SLOWA_POSPOLITE zostaje nietknieta,
-# bo sluzy _to_samo_pytanie() przy progu 0.8; zamiast ja ruszac,
-# obnizamy prog o te roznice.
-#
-# Cena: 6.7% zamiast 4.6% mozliwych par. Kanal imienia daje dzis
-# 1.17 dostawy na wypowiedz, watek dolozy 0.21.
+# Ile z CALEJ wypowiedzi A musi wrocic u B, zeby uznac, ze B na nia
+# odpowiada. Bez zmian od v387 — ta droga dziala i nic z niej nie
+# zabieramy.
 _WATEK_POKRYCIE = 0.55
+
+# ...albo ile z JEDNEJ JEGO MYSLI. Druga droga, ostrzejsza, dodana
+# w v389 — patrz nizej.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-19 17:16, 40 krokow).
+# Przez cala sesje Bartek, Kamil i Wojtek powtarzali, ze pytaja i
+# nie dostaja odpowiedzi ("Przestaje pytac. Trzy rundy z rzedu
+# zadalem to samo pytanie", "zadajemy je od 26 rund"). Marek zadal
+# to samo pytanie w krokach 35 i 36, cytujac wlasne slowa.
+#
+# ZMIERZONE NA WSZYSTKICH LOGACH: szansa, ze dostaniesz odpowiedz,
+# spada z dlugoscia tego, co powiedziales —
+#
+#    25-49 rdzeni  12.3%      150-174  5.3%
+#   100-124        12.2%      200-224  4.6%
+#                             250-274  2.4%
+#
+# ...bo mianownikiem byla CALA wypowiedz. Marek pisze osiem tysiecy
+# znakow o pieciu sprawach naraz (mediana 251 rdzeni, przy 143-156
+# u reszty), Bartek odpowiada rzetelnie na JEDNA — i wychodzi 0.30,
+# wiec Marek nigdy sie nie dowiaduje, ze mu odpowiedziano.
+#
+# Miara po mysli pyta o to, o co chodzi: czy ktos odpowiedzial na
+# TE jedna rzecz.
+#
+# DLACZEGO OBOK, A NIE ZAMIAST. Probowalem zastapic: sama miara po
+# mysli przy 0.85 daje mniej ruchu niz dzis (256 dostaw zamiast
+# 325), ale gubi pary, ktore dzis dochodza. Watpliwosc Marka o
+# zapis pliku to JEDEN akapit — ciecie nic nie zmienia, zostaje
+# 0.56, wiec odpowiedz Bartka przestalaby do niego wracac. To samo
+# przy Tomku i Bartku z biegu 2026-09-12 (najlepszy kawalek 0.79).
+# Zamiana jednej straty na druga to nie jest poprawka.
+#
+# Wiec: dochodzi ten, kto odpowiedzial na CALOSC (0.55, jak dotad)
+# ALBO na JEDNA MYSL w calosci (0.85). Nadzbior dzisiejszego —
+# nikt nie traci, a dlugo mowiacy zyskuja najwiecej. Na calym
+# archiwum:
+#
+#              dzis   po zmianie
+#   dostaw      325       421
+#   znakow  2306928   2979759   (+29% tego kanalu)
+#   Marek        16        33   (+106%)
+#   Kamil        10        19   (+90%)
+#   Tomek       131       159
+#   Bartek       64        84
+#   Ola          64        76
+#   Wojtek       40        50
+#
+# Prog 0.90 dla mysli dawalby 379 dostaw, ale Marek spada do 24 —
+# czyli traci wlasnie ten, dla kogo ta droga powstala.
+_WATEK_POKRYCIE_MYSLI = 0.85
 
 # Ile krokow wstecz siega watek. Rozmowa toczy sie w kroku i
 # przechodzi na nastepny; dalej to juz inna sprawa.
@@ -28140,6 +28172,42 @@ _WATEK_RDZEN = 4
 # ktora jego mysl chodzi. To cytat z jego wlasnych slow, wiec ma
 # byc wskaznikiem, nie powtorka — patrz _o_czym_mowil().
 _WATEK_KOTWICA = 200
+
+
+def _kawalki_wypowiedzi(tekst):
+    """
+    Wypowiedz pocieta na mysli, z ktorych kazda cos znaczy sama.
+
+    Akapit ponizej _WATEK_MIN_SLOW rdzeni nie stoi sam — doklejamy
+    go do nastepnego, zeby nie rozbic jednej mysli na strzepy
+    ("Jeszcze jedno:" + lista pod spodem to jedna rzecz, nie dwie).
+    """
+
+    czesci = []
+    biezacy = ""
+
+    for akapit in re.split(r"\n\s*\n", str(tekst or "")):
+
+        akapit = akapit.strip()
+
+        if not akapit:
+            continue
+
+        biezacy = (biezacy + "\n\n" + akapit) if biezacy else akapit
+
+        if len(_rdzenie_tresci(biezacy)) >= _WATEK_MIN_SLOW:
+            czesci.append(biezacy)
+            biezacy = ""
+
+    # Ogon, ktory nie uzbieral wlasnej miary, nalezy do ostatniej
+    # mysli — a gdy innej nie bylo, jest ta jedyna.
+    if biezacy and czesci:
+        czesci[-1] = czesci[-1] + "\n\n" + biezacy
+
+    elif biezacy:
+        czesci.append(biezacy)
+
+    return czesci
 
 
 def _rdzenie_tresci(tekst):
@@ -28172,6 +28240,11 @@ def _zapamietaj_watek(rola, tekst, nazwani):
     osoby — bo odpowiada sie na to, co ktos powiedzial teraz, nie
     na wszystko, co kiedykolwiek napisal. Kto zostal zawolany po
     imieniu, ten dostanie to skrzynka i tu go pomijamy.
+
+    v389: pytamy o KAZDA jego mysl z osobna i bierzemy te, ktora
+    wrocila najpelniej — patrz _WATEK_POKRYCIE. Dzieki temu wiemy
+    takze, NA CO to odpowiedz: nie na "cala tamta wypowiedz", tylko
+    na ten jeden akapit.
     """
 
     rola = str(rola)
@@ -28182,7 +28255,7 @@ def _zapamietaj_watek(rola, tekst, nazwani):
 
         widziani = set()
 
-        for krok, kto, ich, ich_tekst in reversed(_watki_pamiec):
+        for krok, kto, ich, mysli in reversed(_watki_pamiec):
 
             if _biezacy_krok - krok > _WATEK_OKNO:
                 break
@@ -28195,16 +28268,46 @@ def _zapamietaj_watek(rola, tekst, nazwani):
             if len(ich) < _WATEK_MIN_SLOW:
                 continue
 
-            if len(moje & ich) / float(len(ich)) < _WATEK_POKRYCIE:
+            calosc = len(moje & ich) / float(len(ich))
+
+            najlepsza = None
+            najwyzej = 0.0
+
+            for rdzenie, kawalek in mysli:
+
+                pokrycie = len(moje & rdzenie) / float(len(rdzenie))
+
+                if pokrycie > najwyzej:
+                    najwyzej = pokrycie
+                    najlepsza = kawalek
+
+            if (calosc < _WATEK_POKRYCIE
+                    and najwyzej < _WATEK_POKRYCIE_MYSLI):
                 continue
 
-            _na_co = _o_czym_mowil(ich_tekst)
-
             _watek_skrzynka.setdefault(kto, []).append(
-                (_ROLE_DISPLAY_NAME.get(rola, rola), tekst, _na_co)
+                (
+                    _ROLE_DISPLAY_NAME.get(rola, rola),
+                    tekst,
+                    # Kotwica pokazuje te mysl, ktora wrocila
+                    # najpelniej — a gdy wypowiedz byla jedna
+                    # mysla, po prostu jej poczatek.
+                    _o_czym_mowil(najlepsza or "")
+                )
             )
 
-    _watki_pamiec.append((_biezacy_krok, rola, moje, tekst))
+    _watki_pamiec.append(
+        (
+            _biezacy_krok,
+            rola,
+            moje,
+            [
+                (_rdzenie_tresci(kawalek), kawalek)
+                for kawalek in _kawalki_wypowiedzi(tekst)
+                if len(_rdzenie_tresci(kawalek)) >= _WATEK_MIN_SLOW
+            ]
+        )
+    )
 
 
 def _o_czym_mowil(tekst):
