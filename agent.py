@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v393
+AEL-MINI AUTONOMOUS AGENT v394
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v393")
+    print("             AEL-MINI AUTONOMOUS AGENT v394")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28680,7 +28680,48 @@ def _dla_tej_roli(tekst, rola):
     # braku zawolan. Kto MA swoj akapit, dostaje jak dotad wstep
     # plus swoje akapity.
     if not moje:
-        return tekst
+
+        # v394: kto nie byl wolany, dostaje wszystko OPROCZ cudzej
+        # poczty.
+        #
+        # v384 oddawalo tu cala wypowiedz — i mialo racje co do
+        # ciszy: kto nie byl wolany, nie moze zostac z niczym. Ale
+        # "cala wypowiedz" znaczylo takze akapity napisane WPROST do
+        # kogos innego ("Bartku: kup numer w Twilio").
+        #
+        # ZMIERZONE, akapit po akapicie: 66% tego, co dostaje kazda
+        # rola, ma w tym samym kroku ktos inny (bieg 2026-09-20
+        # 19:39; w krokach 4-5 Marek 99%, Bartek 99%, Kamil 100%).
+        # Czesc tego to normalna rozmowa — plan Tomka MA isc i do
+        # Marka, i do Bartka, bo jeden go ocenia, a drugi wykonuje.
+        # Ale zlecenie zaadresowane imiennie do Bartka nie jest
+        # rozmowa dla Marka; to jego poczta.
+        #
+        # Wiec: czesc wspolna zostaje (jest do wszystkich), akapity
+        # niczyje zostaja (te tez), a akapity z czyims imieniem nad
+        # nimi ida tylko do niego — tak jak szly zawsze, gdy to JA
+        # bylem wolany.
+        #
+        # Niczyjej wypowiedzi nie skracamy dla oszczednosci: gdyby
+        # po odjeciu cudzej poczty nie zostalo nic, wraca calosc —
+        # zasada v351/v384 jest nienaruszona.
+        # Warunek jest jeden i jest mierzalny: czy czesc wspolna
+        # STOI SAMA. _WATEK_MIN_SLOW rdzeni to ta sama miara, ktorej
+        # uzywa watek (v389) do pytania "czy to jest mysl, czy sam
+        # naglowek".
+        #
+        # "Marek tutaj." ma 2 rdzenie — nie stoi. Wtedy odejmowanie
+        # cudzej poczty zostawiloby samo przywitanie, czyli dokladnie
+        # blad, ktory naprawialo v384 (890672 znakow, 165 przypadkow).
+        # W takim razie wraca calosc, jak dotad.
+        #
+        # Osiem tysiecy znakow analizy przed pierwszym zawolaniem
+        # stoi samo — i wtedy nie ma powodu doklejac do niej zlecen
+        # napisanych imiennie do kogos innego.
+        if len(_rdzenie_tresci(ogolne)) < _WATEK_MIN_SLOW:
+            return tekst
+
+        return ogolne
 
     czesci = [c for c in ([ogolne] + moje) if c]
 
