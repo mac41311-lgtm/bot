@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v395
+AEL-MINI AUTONOMOUS AGENT v396
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v395")
+    print("             AEL-MINI AUTONOMOUS AGENT v396")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5069,6 +5069,21 @@ DEEPSEEK_REZERWA_DLA_CZLOWIEKA = int(
 
 _OKNO_BUDZETU = 3600.0
 
+# v396: odstep, ktory wystarczy, zeby nie zrobic SERII — dopoki w
+# oknie godzinowym jest luzno.
+#
+# Nie zgaduje w dol bez zabezpieczenia: gdy serwer kiedykolwiek
+# powie "za szybko", _zwolnij_tempo() podwaja to do skutku (20 ->
+# 40 -> 80 -> 160, sufit 180) i tak zostaje do konca biegu. Czyli
+# najgorsze, co moze sie stac, to jedna odbita wiadomosc na
+# poczatku — a nie 22 minuty spania w kazdym biegu.
+#
+# Ponad trzykrotnie wiecej niz 6 s, na ktorych to sie kiedys
+# wysypalo (v302: cztery wiadomosci w 24 sekundy).
+_ODSTEP_BEZ_SERII = float(
+    os.environ.get("DEEPSEEK_ODSTEP_BEZ_SERII", "20")
+)
+
 # Znaczniki czasu wyslanych wiadomosci, osobno na konto.
 _deepseek_wyslane = {}
 
@@ -5213,9 +5228,44 @@ def _odstep_z_budzetu(account):
         _budzet_konta_teraz(account) - DEEPSEEK_REZERWA_DLA_CZLOWIEKA
     )
 
+    # v396: 45 s placilismy zawsze, a oszczedzalismy tylko czasem.
+    #
+    # ZMIERZONE NA BIEGU 2026-09-20 22:02 (9 krokow, 57 wiadomosci):
+    #   caly bieg            37.8 min
+    #   z tego samo myslenie 12.9 min
+    #   z tego CZEKANIE      22.4 min  (59% biegu)
+    #
+    # ZMIERZONE NA CALYM ARCHIWUM (51 przebiegow): serwer ANI RAZU
+    # nie powiedzial "wysylamy za szybko" — _zwolnij_tempo() nie
+    # zapalilo sie nigdy. Okno godzinowe siegnelo najwyzej 73 z 90,
+    # a powyzej 60 bylo w 3 biegach na 51.
+    #
+    # Czyli: rowny rozklad calego budzetu na godzine to cena placona
+    # za scenariusz, ktory sie nie zdarza. Limitu i tak pilnuja dwie
+    # inne rzeczy, obie nietkniete: _czekaj_na_budzet() (twarde okno
+    # godzinowe) i _zwolnij_tempo() (podwaja odstep, gdy serwer
+    # zaprotestuje).
+    #
+    # Zostaje wiec to, co odstep ma naprawde robic: nie dopuscic do
+    # SERII. Powod z v302 byl konkretny — cztery wiadomosci w 24
+    # sekundy, czyli 6 s odstepu. Dopoki w oknie jest luzno,
+    # trzymamy _ODSTEP_BEZ_SERII; gdy zaczyna sie robic ciasno,
+    # wracamy do rozkladania budzetu, i to gesciej, bo zostalo go
+    # mniej.
+    zajete = len(_deepseek_wyslane.get(account, []))
+
+    if zajete * 2 < budzet:
+        return max(DEEPSEEK_MIN_INTERVAL_SECONDS, _ODSTEP_BEZ_SERII)
+
+    # Sufit ten sam, co przy zwalnianiu na zadanie serwera — inaczej
+    # przy 75 zajetych wyszloby 720 s i bieg stanalby na kwadrans
+    # zamiast dojsc do twardej sciany _czekaj_na_budzet().
     return max(
         DEEPSEEK_MIN_INTERVAL_SECONDS,
-        _OKNO_BUDZETU / float(budzet)
+        min(
+            _DEEPSEEK_MAX_ODSTEP,
+            _OKNO_BUDZETU / float(max(1, budzet - zajete))
+        )
     )
 
 
