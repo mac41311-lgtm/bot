@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v392
+AEL-MINI AUTONOMOUS AGENT v393
 
 ARCHITEKTURA:
 
@@ -1287,8 +1287,35 @@ def ustaw_krok(numer):
     # v342: log z terminala nalezy do kroku, w ktorym padl. Autor
     # dostaje go raz, przy najblizszej swojej turze — patrz
     # _log_dla_autora().
+    #
+    # v393: "najblizsza jego tura" jest W NASTEPNYM KROKU, a my
+    # czyscilismy te liste na jego poczatku — czyli zanim ktokolwiek
+    # zdazyl ja przeczytac.
+    #
+    # KOLEJNOSC W KROKU, odczytana z kazdego logu: najpierw pytamy
+    # zespol (Ola, Wojtek, Kamil, Tomek, Bartek, Marek, MAIN), a
+    # DOPIERO POTEM Gemini uruchamia narzedzia. Uruchomienia kroku N
+    # powstaja wiec po naradzie kroku N, a narada kroku N+1 zastawala
+    # juz pusta liste.
+    #
+    # ZMIERZONE: blok "moj_log" pojawil sie 2 razy w 50 biegach — i
+    # to tylko u Ani, bo CODE_REVIEWER i CODE_FIXER sa pytani PO
+    # uruchomieniach, w tym samym kroku. Bartek, ktory pisze
+    # wiekszosc kodu, ani razu nie zobaczyl, co jego kod wypisal.
+    #
+    # Zostawiamy wiec uruchomienia z kroku, ktory wlasnie sie
+    # skonczyl — to jedyna chwila, w ktorej ich autor moze je
+    # przeczytac. Starsze odpadaja, wiec lista nie rosnie.
     if _biezacy_krok != poprzedni:
+
+        _z_ostatniego_kroku = [
+            u for u in _uruchomienia_kroku
+            if u.get("krok") == poprzedni
+        ]
+
         del _uruchomienia_kroku[:]
+        _uruchomienia_kroku.extend(_z_ostatniego_kroku)
+
         del _przybylo_w_kroku[:]
         _kod_polozony_w_kroku.clear()
 
@@ -2586,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v392")
+    print("             AEL-MINI AUTONOMOUS AGENT v393")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4235,6 +4262,7 @@ def _set_current_goal(goal):
     _reset_irreversible_memory()
     _reset_powody_zakonczenia()
     _role_inbox.clear()
+    _autor_pliku.clear()
     _reset_watkow()
     _role_response_cache.clear()
     _role_response_step.clear()
@@ -14251,6 +14279,15 @@ def termux_write_file(path, content, append=False):
                 # autor. Kod autora z wczesniejszego kroku jest
                 # oryginalem, nie kopia — nie ma po co wolac Bartka,
                 # zeby ogladal wlasna prace.
+                # v393: kto naprawde napisal to, co wlasnie lezy w
+                # tym pliku. Patrz _log_dla_autora() — do tej pory
+                # zgadywal to z NAZWY pliku wymienionej w cudzej
+                # wypowiedzi, a nazwe wybiera MAIN, nie autor.
+                _autor_pliku[p.name] = (
+                    "ENGINEER" if _wprost_od_bartka
+                    else (_z_pamieci[1] if _z_pamieci_uzyte else "")
+                )
+
                 if not _wprost_od_bartka and not _z_pamieci_uzyte:
                     globals()["_kod_z_drugiej_reki"] = str(p)
 
@@ -15494,6 +15531,19 @@ def _co_lezy_w_home():
 # albo po tresci, patrz _log_dla_autora().
 _uruchomienia_kroku = []
 
+# v393: nazwa pliku -> rola, ktorej kod w nim wyladowal.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-20 19:39, krok 2).
+# Bartek zaproponowal kod i nazwal swoje pliki `agent_sip.py`,
+# `loop.py`, `Agent.sh`. MAIN kazal zapisac go jako `test_env.py`
+# i to ten plik sie uruchomil. _log_dla_autora() szukal nazwy pliku
+# W WYPOWIEDZI AUTORA — a nazwe wybiera MAIN, nie autor, wiec nie
+# mial szans trafic.
+#
+# To jest fakt, ktory Python ustala przy zapisie (patrz _skad w
+# termux_write_file), a nie zgadywanie z tekstu.
+_autor_pliku = {}
+
 
 def _zapisz_uruchomienie(nazwa, args, result):
     """Co sie uruchomilo i co z tego wyszlo. Nigdy nie rzuca."""
@@ -15514,6 +15564,8 @@ def _zapisz_uruchomienie(nazwa, args, result):
             return
 
         _uruchomienia_kroku.append({
+            # v393: z ktorego kroku — patrz ustaw_krok().
+            "krok": _biezacy_krok,
             "narzedzie": str(nazwa),
             "komenda": komenda,
             "stdout": str(result.get("stdout") or ""),
@@ -15559,6 +15611,13 @@ def _log_dla_autora(rola):
             nazwa = str(m.group(0)).strip().strip("`'\"").split("/")[-1]
             if nazwa:
                 moje_pliki.add(nazwa)
+
+    # v393: a przede wszystkim pliki, o ktorych WIEMY, ze jej kod w
+    # nich wyladowal — bo nazwe nadal im ktos inny. Patrz
+    # _autor_pliku.
+    for nazwa, kto in _autor_pliku.items():
+        if kto == str(rola) and nazwa:
+            moje_pliki.add(nazwa)
 
     kawalki = []
 
