@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v391
+AEL-MINI AUTONOMOUS AGENT v392
 
 ARCHITEKTURA:
 
@@ -2586,7 +2586,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v391")
+    print("             AEL-MINI AUTONOMOUS AGENT v392")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3506,6 +3506,12 @@ def _reset_step_by_step_memory():
     _role_seen_blocks.clear()
 
 
+# v392: "| bounds=[191,17][239,107]" — wspolrzedne do stuknięcia.
+_WSPOLRZEDNE_EKRANU_RE = re.compile(
+    r"\s*\|\s*bounds=\[\d+,\d+\]\[\d+,\d+\]"
+)
+
+
 def _ekran_bez_mapy_klikania(tekst):
     """
     Zrzut ekranu bez drzewa widgetow, gdy na wierzchu jest WLASNY
@@ -3525,15 +3531,35 @@ def _ekran_bez_mapy_klikania(tekst):
 
     tekst = str(tekst or "")
 
-    if "com.termux" not in tekst:
+    if "com.termux" in tekst:
+
+        linie = [l for l in tekst.split("\n") if l.strip()]
+
+        if linie:
+            return linie[0]
+
         return tekst
 
-    linie = [l for l in tekst.split("\n") if l.strip()]
-
-    if not linie:
-        return tekst
-
-    return linie[0]
+    # v392: wspolrzedne przyciskow odpadaja TAKZE poza Termuxem.
+    #
+    # Powyzsze rozumowanie ("ma sens, gdy ktos bedzie w to klikal")
+    # bylo dobre, ale stosowalismy je tylko wtedy, gdy na wierzchu
+    # byl nasz wlasny terminal. Poza nim cztery role dalej dostawaly
+    # pelna mape.
+    #
+    # A klikajacy jest jeden i NIE jest nim zadna z tych rol: ekran
+    # z mapa bierze sobie sam, narzedziem android_state — jest ono w
+    # _ALWAYS_ON_TOOLS, wiec ma je zawsze pod reka. Tomek, Marek,
+    # Bartek i MAIN czytaja, CO jest na ekranie, i o tym rozmawiaja;
+    # zadne z nich nie poda wspolrzednej piksela.
+    #
+    # ZMIERZONE NA CALYM ARCHIWUM: blok ekranu w promptach to 723506
+    # znakow, z czego 196657 (27%) to same "| bounds=[191,17][239,107]".
+    #
+    # Zostaje opis i to, czy element jest klikalny — bo to niesie
+    # sens ("da sie w to stuknac"). Znika tylko liczba, ktorej nikt
+    # z nich nie uzyje.
+    return _WSPOLRZEDNE_EKRANU_RE.sub("", tekst)
 
 
 def _bez_maszynowni_dla(rola):
@@ -30147,12 +30173,17 @@ def consult_team(
             "użyta ostatnia znana odpowiedź."
         )
 
+        # v392: ta sama zasada co u Kamila nizej — gdy Wojtek nic
+        # jeszcze nie powiedzial, nie podajemy dalej zdania o tym,
+        # ze zdania nie ma.
+        _ostatnia_wojtka = _role_response_cache.get("WOJTEK", "")
+
         results["WOJTEK"] = (
-            _podpis_starej_wypowiedzi("Wojtek", "WOJTEK")
-            + _role_response_cache.get(
-                "WOJTEK",
-                "(WOJTEK nie był jeszcze konsultowany.)"
+            (
+                _podpis_starej_wypowiedzi("Wojtek", "WOJTEK")
+                + _ostatnia_wojtka
             )
+            if _ostatnia_wojtka.strip() else ""
         )
 
     # RESEARCHER PRZED PLANNEREM — żeby świeże ustalenia (gdy w
@@ -30246,12 +30277,28 @@ def consult_team(
             "użyta ostatnia znana odpowiedź."
         )
 
+        # v392: gdy Kamil jeszcze NIC nie powiedzial, nie ma czego
+        # przekazywac.
+        #
+        # Dotad szedl stad do Tomka i Bartka blok o tresci:
+        #
+        #   Kamil:
+        #   Kamil, wcześniej:
+        #   (RESEARCHER nie był jeszcze konsultowany.)
+        #
+        # Czyli dwa podpisy i zdanie o tym, ze zdania nie ma.
+        # ZMIERZONE NA LOGACH: 20 takich blokow, 1360 znakow, ktore
+        # nie niosa nic — a wygladaja jak wypowiedz kolegi.
+        # Ostatnia ZNANA odpowiedz zostaje bez zmian; pusto jest
+        # tylko wtedy, gdy jej nie ma.
+        _ostatnia_kamila = _role_response_cache.get("RESEARCHER", "")
+
         results["RESEARCHER"] = (
-            _podpis_starej_wypowiedzi("Kamil", "RESEARCHER")
-            + _role_response_cache.get(
-                "RESEARCHER",
-                "(RESEARCHER nie był jeszcze konsultowany.)"
+            (
+                _podpis_starej_wypowiedzi("Kamil", "RESEARCHER")
+                + _ostatnia_kamila
             )
+            if _ostatnia_kamila.strip() else ""
         )
 
     # Zarzut Marka do POPRZEDNIEGO planu Tomka — patrz
@@ -30370,12 +30417,15 @@ def consult_team(
             "użyta ostatnia znana odpowiedź."
         )
 
+        # v392: to samo u Oli.
+        _ostatnia_oli = _role_response_cache.get("BROWSER", "")
+
         results["BROWSER"] = (
-            _podpis_starej_wypowiedzi("Ola", "BROWSER")
-            + _role_response_cache.get(
-                "BROWSER",
-                "(BROWSER nie był jeszcze konsultowany.)"
+            (
+                _podpis_starej_wypowiedzi("Ola", "BROWSER")
+                + _ostatnia_oli
             )
+            if _ostatnia_oli.strip() else ""
         )
 
     # Jeżeli Tomek był pytany — odbieramy odpowiedź dla Marka.
