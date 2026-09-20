@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v390
+AEL-MINI AUTONOMOUS AGENT v391
 
 ARCHITEKTURA:
 
@@ -1929,10 +1929,21 @@ _RAMKA_WYSLANE = "=== WYSŁANA WIADOMOŚĆ DO: "
 _RAMKA_WYSLANE_KONIEC = "=== KONIEC WYSŁANEJ WIADOMOŚCI ==="
 
 
-def _wyslano(role, text, preview_chars=400):
+def _wyslano(role, text):
     """
-    Co wlasnie poszlo do tej osoby. W pliku przebiegu CALOSC,
-    na ekranie ramka z podgladem — dokladnie jak przy odbieraniu.
+    Co wlasnie poszlo do tej osoby — W CALOSCI, i w pliku, i na
+    ekranie.
+
+    v390b: bylo tu preview_chars=400, tak jak przy odbieraniu.
+    Uzytkownik poprawil: "co wyslane maja byc pelne od pierwszej
+    wiadomosci do roli po cel i kazda jedna wiadomosc cala
+    widoczna co wysylamy". Wiec zadnego short() — wysylana
+    wiadomosc jest jedyna rzecza w tym programie, ktorej nie
+    widzial nigdzie poza plikiem zdarzen.
+
+    Idzie tedy WSZYSTKO, co wychodzi do roli: powitanie z jej
+    instrukcjami (pierwsza wiadomosc sesji), zmiana instrukcji,
+    fakty o maszynie i kazda wiadomosc kroku razem z celem.
     """
 
     speaker, color, _topic = _ROLE_SPEAKERS.get(
@@ -1948,14 +1959,17 @@ def _wyslano(role, text, preview_chars=400):
         + _RAMKA_WYSLANE_KONIEC
     )
 
-    body = short(tresc, preview_chars).strip()
+    # Bez short(): na ekranie ma byc DOKLADNIE to, co poszlo.
+    body = tresc.strip()
 
     if _rich_console is None or _RichPanel is None:
+        # Terminal bez ramek — tresc i tak musi byc cala, wiec
+        # idzie surowa, a linia logu zostaje jako naglowek.
         log(
             "WYSYŁKA",
             str(role) + " ← " + _po_ludzku_rozmiar(len(tresc))
-            + ": " + _poczatek_bloku(tresc, 70)
         )
+        print(body, flush=True)
         return
 
     try:
@@ -1974,8 +1988,8 @@ def _wyslano(role, text, preview_chars=400):
         log(
             "WYSYŁKA",
             str(role) + " ← " + _po_ludzku_rozmiar(len(tresc))
-            + ": " + _poczatek_bloku(tresc, 70)
         )
+        print(body, flush=True)
 
 
 # v192 -- zaobserwowany realny, kosztowny bug (log 2026-09-04, cel
@@ -2572,7 +2586,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v390")
+    print("             AEL-MINI AUTONOMOUS AGENT v391")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
