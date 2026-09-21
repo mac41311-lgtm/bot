@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v397
+AEL-MINI AUTONOMOUS AGENT v398
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v397")
+    print("             AEL-MINI AUTONOMOUS AGENT v398")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7861,6 +7861,61 @@ def _foreground_app():
     nazwa = _ZNANE_PAKIETY.get(pakiet)
 
     return pakiet, (nazwa + " — " + pakiet) if nazwa else pakiet
+
+
+# v398: "Android niedostępny." to NIE jest stan telefonu.
+#
+# ZGLOSZONE PRZEZ UZYTKOWNIKA (sesja CRITIC). Marek dostal w
+# promcie:
+#
+#     Na ekranie telefonu jest teraz:
+#     Android niedostępny.
+#
+# — i w tym samym kroku, nizej, surowy output z terminala tego
+# samego telefonu: `uid=10420`, `free`, zawartosc diag.txt. Telefon
+# dzialal. Uzytkownik: "Tu jest jak mają dostępny".
+#
+# PRZYCZYNA. android_summary() zwraca ten napis, gdy nie udalo sie
+# podlaczyc uiautomator2/ADB. To jest awaria JEDNEGO KANALU ODCZYTU
+# ekranu, a nie stan urzadzenia — wykonawca i tak pracuje na nim
+# druga droga. Naglowek "Na ekranie telefonu jest teraz:" podaje to
+# jednak jako FAKT O SWIECIE. Agent czyta wiec dwie sprzeczne
+# rzeczy naraz i zaczyna planowac wokol blokady, ktorej nie ma.
+#
+# To samo dotyczy Chrome: "Brak dostępnych kart Chrome/CDP." moze
+# znaczyc, ze CDP nie jest podpiete, a nie ze Chrome nie ma kart.
+#
+# Python ma byc rekami, nie cenzorem — ale tym bardziej nie ma
+# twierdzic rzeczy, ktorych nie wie. Gdy odczyt sie nie udal, blok
+# nie idzie w ogole. Milczenie jest uczciwe; falszywy fakt nie.
+# Ta sama droga, co v392 (placeholdery "(X nie byl jeszcze
+# konsultowany.)" zastapione pustka zamiast zmyslona trescia).
+_ODCZYT_NIEUDANY = (
+    "Android niedostępny.",
+    "Android niedostępny",
+    "Brak dostępnych kart Chrome/CDP.",
+    "CDP niedostępne",
+)
+
+
+def _odczyt_sie_udal(tekst):
+    """
+    Czy to, co wrocilo, jest odczytem stanu — czy komunikatem o
+    awarii kanalu odczytu.
+
+    Awaria kanalu nie jest stanem urzadzenia i nie ma czego
+    opowiadac zespolowi.
+    """
+
+    tekst = str(tekst or "").strip()
+
+    if not tekst:
+        return False
+
+    if tekst in _ODCZYT_NIEUDANY:
+        return False
+
+    return not tekst.startswith("Android state error:")
 
 
 def android_summary(with_header=True):
@@ -29954,26 +30009,25 @@ def consult_team(
         ]
         return "".join(p for p in pieces if p)
 
+    _chrome_tekst = (
+        chrome_text if chrome_text is not None else chrome_summary()
+    )
+
     chrome_block = (
         "\nW Chrome jest teraz:\n"
-        + short(
-            chrome_text if chrome_text is not None else chrome_summary(),
-            2000
-        )
+        + short(_chrome_tekst, 2000)
         + "\n"
+    ) if _odczyt_sie_udal(_chrome_tekst) else ""
+
+    _android_tekst = (
+        android_text if android_text is not None else android_summary()
     )
 
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
-        + short(
-            _ekran_bez_mapy_klikania(
-                android_text if android_text is not None
-                else android_summary()
-            ),
-            2000
-        )
+        + short(_ekran_bez_mapy_klikania(_android_tekst), 2000)
         + "\n"
-    )
+    ) if _odczyt_sie_udal(_android_tekst) else ""
 
     # v184 (na wyraźną prośbę użytkownika, 2026-08-30): usunięte
     # przypomnienie roli doklejane do KAŻDEJ wiadomości ("Tu Tomek.
@@ -31338,19 +31392,22 @@ def main_decide(
         "\nW Chrome jest teraz:\n"
         + _resolved_chrome_text
         + "\n"
-        if _chrome_relevant_now(goal, last_result) else ""
+        if (_chrome_relevant_now(goal, last_result)
+            and _odczyt_sie_udal(_resolved_chrome_text)) else ""
+    )
+
+    _resolved_android_text = (
+        android_text if android_text is not None else android_summary()
     )
 
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(
-            _ekran_bez_mapy_klikania(
-                android_text if android_text is not None
-                else android_summary()
-            ),
+            _ekran_bez_mapy_klikania(_resolved_android_text),
             3500
         ) + "\n"
-        if _goal_mentions_android(goal) else ""
+        if (_goal_mentions_android(goal)
+            and _odczyt_sie_udal(_resolved_android_text)) else ""
     )
 
     # ASK (2026-08-24, na wyraźną prośbę użytkownika — role mają się
