@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v395
+AEL-MINI AUTONOMOUS AGENT v397
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v395")
+    print("             AEL-MINI AUTONOMOUS AGENT v397")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -28219,6 +28219,14 @@ def _collect_role_messages(speaker_role, text):
             )
         )
 
+        # v397: zapamietujemy takze, KTO zawolal — patrz
+        # _kto_mnie_zawolal. Skrzynke zaraz zabierze
+        # _role_inbox_block(), a ta informacja jest potrzebna
+        # dopiero wtedy, gdy zawolany sie ODEZWIE.
+        _kto_mnie_zawolal.setdefault(adresat, set()).add(
+            str(speaker_role)
+        )
+
     # v386: imie nie jest jedynym adresem — patrz _zapamietaj_watek().
     _zapamietaj_watek(speaker_role, text, _nazwani)
 
@@ -28290,6 +28298,46 @@ _watek_skrzynka = {}
 # odpowiada, ma dotrzec do kazdego, takze do kogos, kto o niej
 # jeszcze nie slyszal.
 _wywolane_przez = {}
+
+# v397: kto napisal do tej roli po imieniu i jeszcze nie dostal
+# odpowiedzi.
+#
+# ZMIERZONE NA BIEGU 2026-09-20 22:02 (67 wysylek, 590748 znakow,
+# ~147 tys. tokenow wejscia). Wzialem kazdy glos i sprawdzilem, co
+# z niego dostal odbiorca A, a co odbiorca B, w tym samym kroku:
+#
+#   49 z 69 par (71%) bylo IDENTYCZNYCH.
+#
+#   MAIN   -> CRITIC/ENGINEER/PLANNER      100% identycznie
+#   Kamil  -> MAIN/PLANNER/ENGINEER        100% identycznie
+#   Wojtek -> MAIN/PLANNER/ENGINEER/RESEARCHER  91-100% identycznie
+#   Marek  -> MAIN/PLANNER                   0% wspolnych zdan
+#
+# Marek jest JEDYNYM glosem, ktory routing naprawde tnie — bo Marek
+# wola po imieniu ("Tomku, twoj plan zaklada..."). Reszta pisze bez
+# imion i idzie do wszystkich w calosci. Marek jest przy tym
+# najglosniejszy w calym biegu: 136912 znakow, 23% wszystkiego, co
+# wyslalismy.
+#
+# PRZYCZYNA. _dla_tej_roli() ma dwa wyjscia: imie jest — tnij po
+# imieniu; imienia nie ma — oddaj CALOSC KAZDEMU. Drugie wyjscie
+# obsluguje 71% wypowiedzi w tym biegu.
+#
+# v395 mialo to zwezac przez _wywolane_przez, ale napelnia je
+# WYLACZNIE miara podobienstwa tekstu (_zapamietaj_watek: >=55%
+# wspolnych rdzeni z cala wypowiedzia albo >=85% z jedna mysla).
+# Odpowiedz rzadko powtarza slowa pytania, wiec ta droga zapala sie
+# sporadycznie — i dlatego w pomiarze wyzej nie widac po niej sladu.
+#
+# Adresat jest jednak znany BEZ zgadywania z tekstu. Gdy Marek
+# napisal "Kamilu, sprawdz X", Python wlozyl to Kamilowi do
+# skrzynki i zapisal, ze to Marek. Kamil odpowiada w nastepnym
+# ruchu — i to jest odpowiedz DLA MARKA, nawet jesli Kamil nie
+# napisal jego imienia. Tego nie trzeba mierzyc ani wnioskowac z
+# jezyka: to juz stoi w danych.
+#
+# Rola -> zbior rol, ktore ja zawolaly i czekaja na odpowiedz.
+_kto_mnie_zawolal = {}
 
 # Ile rdzeni A musi uslyszec z powrotem, zeby uznac, ze B mowi o
 # JEGO sprawie.
@@ -28434,6 +28482,7 @@ def _reset_watkow():
     del _watki_pamiec[:]
     _watek_skrzynka.clear()
     _wywolane_przez.clear()
+    _kto_mnie_zawolal.clear()
 
 
 def _zapamietaj_watek(rola, tekst, nazwani):
@@ -28505,6 +28554,27 @@ def _zapamietaj_watek(rola, tekst, nazwani):
             _wywolane_przez.setdefault(
                 _odcisk_tresci(tekst), set()
             ).add(kto)
+
+    # v397: drugie zrodlo adresata — kanal imion, ktory juz zadzialal.
+    #
+    # Petla wyzej pyta "czy ta wypowiedz brzmi jak odpowiedz na
+    # tamta". To dziala tylko wtedy, gdy odpowiedz powtarza slowa
+    # pytania, wiec zapala sie rzadko. Tu nie ma zadnej miary i
+    # niczego nie trzeba wnioskowac z jezyka: jesli ktos napisal do
+    # tej roli po imieniu, to jest wpisane w _kto_mnie_zawolal.
+    #
+    # Zawolanie jest jednorazowe — zabieramy je, bo zostalo wlasnie
+    # odebrane. Inaczej Kamil odpowiadalby Markowi jeszcze pol biegu
+    # po tym, jak Marek przestal pytac.
+    #
+    # Kogo zawolal AUTOR tej wypowiedzi, tego tu nie ma: _nazwani
+    # idzie do skrzynki osobno, a to jest kanal w druga strone.
+    _zawolali_mnie = _kto_mnie_zawolal.pop(rola, None)
+
+    if _zawolali_mnie:
+        _wywolane_przez.setdefault(
+            _odcisk_tresci(tekst), set()
+        ).update(_zawolali_mnie)
 
     _watki_pamiec.append(
         (
