@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v400
+AEL-MINI AUTONOMOUS AGENT v401
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v400")
+    print("             AEL-MINI AUTONOMOUS AGENT v401")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29414,9 +29414,78 @@ def _critic_objects(text):
     wcześniej, gdy uruchamiało to luźne szukanie słów "BLOKUJ"/
     "OSTRZEŻENIE" gdziekolwiek w tekście i regularnie brało cudze
     ostrzeżenie, opisane przez Marka w prozie, za jego własne.
+
+    v401: TO JEST BRAMKA KANALU PARY — i byla zamknieta.
+    ---------------------------------------------------------------
+    Uzytkownik, patrzac na to, co dostaje MAIN: "nie da sie tego
+    zrobic pojedynczo? Niech sie jedni dogadaja, potem nastepni",
+    "konkrety, a nie wszystko wszystkich i rozwiazywanie ich spraw,
+    a nie celu".
+
+    Kanal pary istnieje od v195: gdy Marek ma zastrzezenie, Python
+    pyta o odpowiedz JESZCZE W TYM KROKU (patrz team_exchange), a
+    MAIN dostaje wymiane zamiast samej skargi.
+
+    ZMIERZONE NA BIEGU 2026-09-21 21:00 (5 krokow, 40 wysylek):
+    kanal nie otworzyl sie ANI RAZU. W logu jest 0 wystapien
+    "zglosil zastrzezenie i dostal odpowiedz".
+
+    A Marek mial zastrzezenie w kazdym z pieciu krokow. Tak je
+    otwieral:
+
+        "Tomek, dobra proba, ale to nie jest domkniecie."
+        "Tomek, znowu robisz to samo: deklarujesz zamkniecie,
+         ktorego nie ma."
+        "Tomek, tym razem polowa jest dobra, a polowa to ucieczka."
+
+    _CRITIC_OBJECTION_RE szuka formulek: "nie zgadzam sie", "mam
+    zastrzezenia", "nie zadziala", "brak dowodu". Marek pisze po
+    ludzku, wiec nie trafil w zadna — werdykt wyszedl None, czyli
+    "nie ma sprzeciwu", i jego 6000 znakow szlo do MAIN-a jako
+    osobny esej. Piec krokow z rzedu, to samo zastrzezenie, ani razu
+    nie odpowiedziane w kroku. MAIN czytal ten spor za kazdym razem:
+    4827 znakow, 31% wszystkiego, co dostawal.
+
+    Nie dopisujemy kolejnych formulek — od tego ta bramka wlasnie
+    sie zacina. Bierzemy fakt, ktory juz stoi w danych: Marek zwrocil
+    sie do Tomka albo Bartka PO IMIENIU, tym samym kanalem, co cala
+    reszta zespolu (_ADDRESS_RE), i nie zaczal od zgody. Krytyk
+    piszacy do planisty ma do niego sprawe — to jest cala regula,
+    bez slownika i bez progu.
+
+    SPRAWDZONE NA TYCH SAMYCH DANYCH: para otwiera sie 5/5, a na
+    wypowiedziach, w ktorych Marek sie zgadza ("zgadzam sie", "bez
+    zastrzezen", "wyglada dobrze"), nie otwiera sie ani razu —
+    _CRITIC_ACCEPT_RE lapie je wczesniej.
     """
 
-    return _critic_verdict(text) not in (None, "OK")
+    werdykt = _critic_verdict(text)
+
+    if werdykt is not None:
+        return werdykt != "OK"
+
+    return _krytyk_pisze_do_kogos(text)
+
+
+def _krytyk_pisze_do_kogos(text):
+    """
+    Czy Marek zwraca sie na poczatku wprost do Tomka albo Bartka.
+
+    Ten sam kanal imion, ktorym gada caly zespol — patrz
+    _ADDRESS_RE. Nie ma tu zadnego czytania intencji: liczy sie, ze
+    padlo imie osoby, ktorej plan albo kod jest oceniany.
+    """
+
+    poczatek = str(text or "")[:_CRITIC_OPENING_CHARS]
+
+    for m in _ADDRESS_RE.finditer(poczatek):
+
+        if _VOCATIVE_TO_ROLE.get(
+            m.group(1).upper()
+        ) in ("PLANNER", "ENGINEER"):
+            return True
+
+    return False
 
 
 CRITIC_QUESTION_MAX_AGE = 2
@@ -31688,8 +31757,17 @@ tym kroku dopytać jedną osobę:
          _kod_na_jedna_linie(team.get("engineer", ""))),
         ("Kamil sprawdził:",
          _kod_na_jedna_linie(team.get("researcher", ""))),
+        # v401: gdy wymiana sie odbyla, Marek idzie RAZ.
+        #
+        # team_exchange zaczyna sie od ("Marek", _critic_out_full) —
+        # czyli od tej samej wypowiedzi, i to w pelnej wersji, bez
+        # LIMIT_BEZPIECZENSTWA. Dopoki bramka _critic_objects() byla
+        # zamknieta (patrz tam), wymiana nie odbywala sie nigdy i
+        # nikt tego nie zobaczyl. Od chwili, gdy zaczyna dzialac,
+        # oba wpisy staja obok siebie i MAIN czyta Marka dwa razy.
         ("Marek ocenia:",
-         _kod_na_jedna_linie(team.get("critic", ""))),
+         "" if _exchange
+         else _kod_na_jedna_linie(team.get("critic", ""))),
         ("Marek zgłosił zastrzeżenie i dostał odpowiedź:",
          _kod_na_jedna_linie(_exchange)),
         ("Ola streszcza:",
