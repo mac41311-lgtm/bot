@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v398
+AEL-MINI AUTONOMOUS AGENT v399
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v398")
+    print("             AEL-MINI AUTONOMOUS AGENT v399")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29989,13 +29989,26 @@ def consult_team(
             # _postep_blok(); przez _only_if_new, wiec kazdy pomiar
             # idzie raz.
             _only_if_new(role_name, "postep", _postep_blok()),
-            # v231: czym ten telefon dysponuje sam z siebie — raz, jak
-            # pokazanie warsztatu. Patrz _narzedzia_telefonu().
-            _only_if_new(
-                role_name,
-                "narzedzia_telefonu",
-                _narzedzia_telefonu_block()
-            ) if not _bez_maszynowni else "",
+            # v399: spis komend termux-* wylecial z promptu.
+            #
+            # Uzytkownik: "po co kazdemu wysylamy komendy?", "to
+            # kazdemu jest taki skrypt narzedzia wyslane, nie
+            # kazdemu to jest potrzebne lub w ogole jest to
+            # niepotrzebne, wez to usun i nie piszemy co maja
+            # robic".
+            #
+            # Szlo do KAZDEJ roli — takze do tych, ktore niczego nie
+            # uruchamiaja — i zajmowalo ~1900 znakow, czyli wiecej
+            # niz niejedna cala wypowiedz. Sama lista komend jest
+            # przy tym instrukcja przebrana za fakt: v231 juz raz
+            # musial z niej zdejmowac dopisek, ktory Marek zaczal
+            # cytowac jako warunek postawiony przez uzytkownika,
+            # a log 2026-09-06 pokazal cztery kroki meczenia sie z
+            # termux-dialog zamiast otwarcia kontaktow na ekranie.
+            #
+            # Co na telefonie jest, a czego nie ma, i tak wychodzi w
+            # chwili uruchomienia — z wyniku narzedzia. To jest fakt
+            # z proby, nie spis rozeslany na zapas.
             # v221: co koledzy z zespołu powiedzieli WPROST do tej
             # osoby — patrz _collect_role_messages(). Idzie na końcu,
             # tuż przed pytaniem do niej, żeby było ostatnią rzeczą,
@@ -32608,50 +32621,12 @@ def _pierwsza_wiadomosc():
     return "Termux API, ADB DEBUGOWANIE, Android"
 
 
-def _narzedzia_telefonu_block():
-    """
-    Jedno zdanie o tym, co ten telefon potrafi sam z siebie.
-    Pusty string, gdy niczego nie znalezlismy (np. nie-Termux).
-    """
-
-    narzedzia = _narzedzia_telefonu()
-
-    if not narzedzia:
-        return ""
-
-    # Sam spis, bez zadnej oceny. v231 dopisywal tu "dzialajace
-    # lokalnie, bez zakladania kont i bez oplat" -- i Marek zaczal
-    # cytowac to jako "mamy wyrazny, powtarzany warunek: dzialamy bez
-    # zakladania kont i bez oplat" (log 2026-09-06, KROK 1), czego
-    # uzytkownik nigdy nie powiedzial. Fakt o srodowisku ma byc
-    # faktem; co z niego wynika, zespol ustala sam.
-    # Nazwa tej listy tez ma znaczenie. v231 podawal ja jako "narzedzia
-    # tego telefonu" — i zespol czytal ja jako CALY swiat, jaki ma do
-    # dyspozycji. Log 2026-09-06, 15:27-15:30: przez cztery kroki
-    # meczyli sie z termux-dialog (--list, --values, --options,
-    # -v, -h, potem radio), zamiast po prostu otworzyc kontakty na
-    # ekranie. Wojtek mowil to od poczatku: "otworz dialer i wpisz
-    # Beata, to zajmuje 5 sekund". To spis komend, ktore SA JUZ
-    # zainstalowane — nie granica tego, co wolno.
-    blok = (
-        "\nKomendy termux-* zainstalowane w tej chwili na telefonie:\n"
-        + ", ".join(narzedzia)
-        + "\n"
-    )
-
-    # W tym samym miejscu — druga strona tej samej prawdy o
-    # srodowisku: czego tu NIE MA. Patrz _zapamietaj_brakujaca_komende().
-    _brak = _brakujace_komendy()
-
-    if _brak:
-        blok += (
-            "Próbowaliśmy już uruchomić i na tym telefonie ich nie "
-            "ma: " + ", ".join(_brak) + ".\n"
-        )
-
-    return blok
-
-
+# v399: _narzedzia_telefonu_block() usuniete — spis komend termux-*
+# nie idzie juz do zadnej roli. Patrz komentarz przy miejscu, w
+# ktorym byl skladany prompt. _narzedzia_telefonu(),
+# _zapamietaj_brakujaca_komende() i _brakujace_komendy() zostaja:
+# nadal zbieraja fakt o tym, czego na telefonie nie ma, tyle ze
+# nikt juz tego nie rozsyla na zapas.
 def _co_powiedzial_uzytkownik_block():
     """Zdania uzytkownika z tego celu, albo pusty string."""
 
@@ -33819,63 +33794,27 @@ def _goal_progress_snapshot(goal):
     # tu nie napiszemy, będzie zgadywał, czy plik istnieje.
     lines.extend(_python_written_files_lines(listed_paths))
 
-    # UWAGA (zaobserwowany realny bug): ta pętla dawniej NIE
-    # sprawdzała świeżości pliku względem BIEŻĄCEGO celu — mimo że
-    # docstring tej funkcji obiecuje "te same sprawdzenia, których
-    # używa verify_final()", a verify_final() takie sprawdzenie MA
-    # (patrz komentarz przy checks.append FINAL_OK.txt). Efekt:
-    # stary FINAL_OK.txt sprzed zupełnie innego, wcześniejszego celu
-    # (np. ~/FINAL_OK.txt z treścią "TEST_V73_ZAKONCZONY" sprzed
-    # wielu dni) był pokazywany zespołowi jako aktualny stan, co
-    # realnie zmyliło PLANNERA ("FINAL_OK.txt potwierdza jedynie
-    # poprzedni test V73"). Naprawiono przez dodanie identycznego
-    # progu mtime < goal_started_at co w verify_final().
-
-    try:
-        goal_started_at = GOAL_FILE.stat().st_mtime
-    except Exception:
-        goal_started_at = 0.0
-
-    final_ok_seen = False
-    final_ok_stale_seen = False
-
-    for candidate in (
-        HOME / "FINAL_OK.txt",
-        AGENT_DIR / "FINAL_OK.txt",
-        APK_OUTPUT_DIR / "FINAL_OK.txt"
-    ):
-
-        content = read_text(candidate).strip()
-
-        if not content:
-            continue
-
-        try:
-            is_stale = candidate.stat().st_mtime < goal_started_at
-        except Exception:
-            is_stale = False
-
-        if is_stale:
-            final_ok_stale_seen = True
-            continue
-
-        lines.append(
-            "- FINAL_OK.txt: istnieje (" + str(candidate) + ") — \""
-            + content[:60] + "\""
-        )
-        final_ok_seen = True
-        break
-
-    if not final_ok_seen:
-        if final_ok_stale_seen:
-            lines.append(
-                "- FINAL_OK.txt: BRAK dla BIEŻĄCEGO celu (znaleziono "
-                "tylko plik STARSZY niż ten cel — to pozostałość po "
-                "wcześniejszym, niepowiązanym zadaniu, zignoruj jego "
-                "treść)"
-            )
-        else:
-            lines.append("- FINAL_OK.txt: BRAK (nigdzie nie znaleziono)")
+    # v399: FINAL_OK.txt wylecial z tego, co widzi zespol.
+    #
+    # Uzytkownik: "Ten FINAL_OK.txt usuwamy, bo to nam niepotrzebne,
+    # nie ma, tym sie opieramy".
+    #
+    # I tak jest — od v225 verify_final() trzyma go w czesci
+    # "Informacyjnie (nigdy nie blokuje)". Zadna decyzja o DONE od
+    # niego nie zalezy. Zostawal tu ostatni slad ceremonii: linia
+    # "- FINAL_OK.txt: BRAK (nigdzie nie znaleziono)" szla do
+    # zespolu w KAZDYM kroku kazdego celu, takze takiego, ktory tego
+    # pliku nigdy nie wspominal.
+    #
+    # To nie byla informacja obojetna. Realnie mylila: PLANNER
+    # czytal stary plik jako stan biezacy ("FINAL_OK.txt potwierdza
+    # jedynie poprzedni test V73"), a galaz dla starego pliku
+    # konczyla sie poleceniem "zignoruj jego tresc" — czyli Python
+    # mowil rolom, co maja robic. Uzytkownik: "nie piszemy co maja
+    # robic".
+    #
+    # Gdy CEL sam wymienia FINAL_OK.txt z nazwy, plik i tak jest
+    # sprawdzany — ta sama sciezka, co kazdy inny plik z celu.
 
     if CUSTOM_TOOLS:
 
