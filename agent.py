@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v399
+AEL-MINI AUTONOMOUS AGENT v400
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v399")
+    print("             AEL-MINI AUTONOMOUS AGENT v400")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10973,6 +10973,61 @@ def chrome_tabs():
         return []
 
 
+# v400: adres bez ogona sledzacego.
+#
+# ZGLOSZONE PRZEZ UZYTKOWNIKA, wyslana wiadomosc do Oli. Blok
+# "W Chrome jest teraz:" zajmowal kilkaset znakow na jedna karte:
+#
+#   https://www.google.com/search?q=kod+pocztowy+rembertow+antonieg
+#   o+kacpury&client=ms-android-realme-terr2-rso3&hs=CDLB&sca_esv=1
+#   292a53073048c05&sxsrf=APpeQnv2AudabpGgm8GzpgICQjd73kxoDQ%3A1790
+#   007437277&ei=jVixata-EO-nwPAPmbWN4Qg&biw=360&bih=663&oq=antonie
+#   go+kacpury+kod+poztowy+&gs_lp=EhNtb2JpbGUtZ ......
+#
+# Tresc tego adresu to `q=kod pocztowy rembertow antoniego kacpury`
+# — i to samo stoi obok, w tytule karty. Reszta to identyfikatory
+# sesji i wymiary ekranu.
+#
+# Nie skracamy wiec adresu na slepo (to by go urwalo w polowie
+# nazwy), tylko zdejmujemy parametry, ktore nic nie znacza. Gdy
+# jakis parametr niesie tresc (?frameUrl=..., ?id=..., ?q=...),
+# zostaje — patrz _ta_sama_strona(), gdzie query zostaje z tego
+# samego powodu.
+_PARAMETRY_BEZ_TRESCI = (
+    "client", "hs", "sca_esv", "sxsrf", "ei", "biw", "bih", "oq",
+    "gs_lp", "sclient", "source", "sourceid", "ie", "oe", "ved",
+    "uact", "usg", "gs_lcrp", "rlz", "gbv", "aqs", "sa", "iflsig",
+    "utm_source", "utm_medium", "utm_campaign", "utm_term",
+    "utm_content", "fbclid", "gclid",
+)
+
+
+def _adres_bez_ogona(url):
+    """
+    Adres bez parametrow, ktore nie niosa tresci.
+
+    Zostawia sciezke i te parametry, ktore cos znacza. Gdy nie ma
+    czego zdejmowac, zwraca to, co dostal.
+    """
+
+    url = str(url or "")
+
+    if "?" not in url:
+        return url
+
+    baza, pytajnik, ogon = url.partition("?")
+
+    zostaje = [
+        czesc for czesc in ogon.split("&")
+        if czesc.split("=", 1)[0].lower() not in _PARAMETRY_BEZ_TRESCI
+    ]
+
+    if not zostaje:
+        return baza
+
+    return baza + "?" + "&".join(zostaje)
+
+
 def chrome_summary():
 
     tabs = chrome_tabs()
@@ -10987,7 +11042,7 @@ def chrome_summary():
         lines.append(
             f"[{tab['id']}] "
             f"{short(tab['title'], 100)} | "
-            f"{short(tab['url'], 300)}"
+            f"{short(_adres_bez_ogona(tab['url']), 300)}"
         )
 
     return "\n".join(lines)
@@ -28268,9 +28323,15 @@ def _collect_role_messages(speaker_role, text):
         _role_inbox.setdefault(adresat, []).append(
             (
                 _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role)),
-                _utnij_na_sekcji_wykonawcy(
-                    _dla_tej_roli(text, adresat)
-                ).strip().lstrip("*_#>- \t\n")
+                # v400: ta sama zasada, co w _od_kolegi() — kod w
+                # calosci tylko dla tych, ktorzy przy nim siedza.
+                # Ta droga dostarczyla Oli skrypt test_uplink.sh.
+                _kod_dla_tej_roli(
+                    _utnij_na_sekcji_wykonawcy(
+                        _dla_tej_roli(text, adresat)
+                    ).strip().lstrip("*_#>- \t\n"),
+                    adresat
+                )
             )
         )
 
@@ -28930,6 +28991,49 @@ def _dla_zespolu(autor, tekst, limit, klucz=None, rola=None):
     return _role_output_for_team(autor, tekst, limit, klucz)
 
 
+# v400: kto naprawde potrzebuje CUDZEGO kodu w calosci.
+#
+# ZGLOSZONE PRZEZ UZYTKOWNIKA, wyslana wiadomosc do Oli: "mialo byc
+# jedna wiadomosc i jedna wiadomosc, a nie cale bloki", "trzeba to
+# logiczniej zrobic, nie cale bloki wysylac".
+#
+# ZMIERZONE NA TEJ WYPOWIEDZI (Tomek, 5073 znaki):
+#   - jedno zawolanie po imieniu, na pozycji 4674, czyli w 92%
+#     tekstu ("Ola: dokumentuje wynik testu"),
+#   - czesc "wspolna" = wszystko przed nim = 4674 znaki, 92%
+#     calej wypowiedzi,
+#   - w tym skrypt test_uplink.sh w blokach ```: 1547 znakow (30%).
+#
+# Zadanie Oli to jedna linia. Skrypt bash dostaje w calosci, mimo
+# ze go nie pisze, nie uruchamia i nie recenzuje.
+#
+# Mechanizm juz jest i uzytkownik go przyjal: v347 zwija bloki kodu
+# do jednej linii dla MAIN-a, "bo on decyduje, a nie pisze". Ten
+# sam argument dotyczy Oli, Kamila, Wojtka i Eli. Nie skracamy
+# nikomu WYPOWIEDZI — zwijamy kod, ktory i tak trafia na dysk przez
+# Pythona, z surowej wypowiedzi autora.
+#
+# Kto zostaje przy calym kodzie: Bartek (pisze), Piotr (recenzuje),
+# Ania (poprawia), Marek (potrafi rozebrac skrypt linijka po
+# linijce — robil to na bashu Bartka) i Tomek (planuje wokol tego,
+# co realnie stoi w kodzie).
+_ROLE_PRZY_KODZIE = (
+    "ENGINEER", "CODE_REVIEWER", "CODE_FIXER", "CRITIC", "PLANNER",
+)
+
+
+def _kod_dla_tej_roli(tekst, rola):
+    """
+    Cudzy kod w calosci — tylko dla tych, ktorzy przy nim siedza.
+    Reszta dostaje jedna linie: co to za plik i ile ma.
+    """
+
+    if str(rola) in _ROLE_PRZY_KODZIE:
+        return tekst
+
+    return _kod_na_jedna_linie(tekst)
+
+
 def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     """
     Naglowek "Kamil ustalil:" tylko wtedy, gdy pod nim faktycznie
@@ -28944,6 +29048,10 @@ def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
 
     if not moje:
         return ""
+
+    # v400: kod zwijamy dopiero TU, po wybraniu jego czesci — zeby
+    # _dla_tej_roli() widzialo dokladnie ten sam tekst, co dotad.
+    moje = _kod_dla_tej_roli(moje, rola)
 
     return str(etykieta) + _role_output_for_team(
         autor, moje, limit, klucz
@@ -29886,9 +29994,36 @@ def consult_team(
         # Termuxie byl u niego najdluzszym kawalkiem, jaki nie
         # dotyczyl niczego, o co go pytamy. Wartosci wypisane przez
         # narzedzie zostaja — to konkretny fakt, nie przebieg.
+        # v400: nikomu nie oddajemy jego wlasnych slow.
+        #
+        # ZGLOSZONE PRZEZ UZYTKOWNIKA, wyslana wiadomosc do Oli
+        # (6161 znakow). Pod naglowkiem "Co sie wlasnie stalo:"
+        # stalo:
+        #
+        #     Cześć, tu Ola. Najpierw posprzątam bałagan z
+        #     poprzedniego kroku, a potem wytłumaczę projekt po
+        #     ludzku.
+        #
+        # czyli ~1800 znakow wlasnej wypowiedzi Oli, oddanych Oli.
+        #
+        # PRZYCZYNA. report_body to `readable_report or
+        # raw_report_material`, a readable_report jest TLUMACZENIEM
+        # OLI — powstaje wyzej z deepseek("BROWSER", ...). Dla
+        # kazdej innej roli to jest streszczenie kolegi i ma sens.
+        # Dla Oli to jest lustro.
+        #
+        # Ola ma juz jedno i drugie: sama przeczytala surowy
+        # material i sama napisala z niego streszczenie. Dostaje
+        # wiec to, z czego tlumaczyla — fakty, nie wlasna proze.
+        _moj_raport = (
+            raw_report_material
+            if (role_name == "BROWSER" and readable_report)
+            else report_body
+        )
+
         _co_sie_stalo = (
             ("" if _bez_maszynowni
-             else "\nCo się właśnie stało:\n" + report_body)
+             else "\nCo się właśnie stało:\n" + _moj_raport)
             + success_values_block
             + ("" if _bez_maszynowni else error_details_block)
         )
