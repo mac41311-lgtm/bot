@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v413
+AEL-MINI AUTONOMOUS AGENT v414
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v413")
+    print("             AEL-MINI AUTONOMOUS AGENT v414")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -31622,7 +31622,9 @@ def consult_team(
                 "Marek (CRITIC)", _critic_out_full,
                 LIMIT_BEZPIECZENSTWA, "CRITIC"
             )
-            + "\n\nCo Ty na to?"
+            # v414: bez "Co Ty na to?" na koncu. Uzytkownik: "usun
+            # tez 'Co Ty na to' i 'I co teraz'". Wiadomosc to: od
+            # kogo i co powiedzial — reszta nalezy do rozmowy.
         )
 
         # v407: jego werdykt z poprzedniej rundy juz tu lezy.
@@ -31674,7 +31676,7 @@ def consult_team(
             ("Tomek" if _addressee == "PLANNER" else "Bartek")
             + " na to:\n\n"
             + _reply_for_critic
-            + "\n\nI co teraz?"
+            # v414: bez "I co teraz?" — patrz wyzej.
         )
 
         if not str(_verdict or "").strip():
