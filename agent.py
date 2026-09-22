@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v408
+AEL-MINI AUTONOMOUS AGENT v409
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v408")
+    print("             AEL-MINI AUTONOMOUS AGENT v409")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4564,7 +4564,7 @@ def start_session(name, system_prompt):
             # uruchomieniami (inne adb, doinstalowane termux-*) —
             # wtedy mowimy je jeszcze raz, tak jak mowi sie komus,
             # ze w warsztacie doszlo narzedzie.
-            _teraz_fakty = _pierwsza_wiadomosc()
+            _teraz_fakty = _pierwsza_wiadomosc(name)
 
             if _teraz_fakty and _teraz_fakty != saved.get("fakty"):
 
@@ -4639,9 +4639,13 @@ def start_session(name, system_prompt):
             # zmierzone przez Pythona — patrz _pierwsza_wiadomosc().
             # Gdy rola ma jeszcze wlasny ksztalt JSON-a (MAIN, Ela),
             # idzie on razem z nimi, w tej samej wiadomosci.
-            _powitanie = (
-                _pierwsza_wiadomosc()
-                + str(system_prompt or "")
+            # v409: z odstepem. Bylo sklejone bez niczego i szlo jako
+            # "Termux API, ADB DEBUGOWANIE, AndroidJestes Wojtkiem."
+            _powitanie = "\n\n".join(
+                c for c in (
+                    _pierwsza_wiadomosc(name),
+                    str(system_prompt or "").strip(),
+                ) if c
             ).strip()
 
             if _powitanie:
@@ -4667,7 +4671,7 @@ def start_session(name, system_prompt):
                 session,
                 prompt_hash=_prompt_hash(system_prompt),
                 prompt_text=system_prompt,
-                fakty=_pierwsza_wiadomosc()
+                fakty=_pierwsza_wiadomosc(name)
             )
 
             log(
@@ -33259,7 +33263,7 @@ def _brakujace_komendy():
     return []
 
 
-def _pierwsza_wiadomosc():
+def _pierwsza_wiadomosc(rola=None):
     """
     Pierwsza wiadomosc w kazdej rozmowie: co to za maszyna. Tyle.
 
@@ -33276,7 +33280,39 @@ def _pierwsza_wiadomosc():
     _zglos_to_co_przybylo() i raport z narzedzi.
     """
 
+    # v409: tylko dla tych, ktorzy dzialaja na telefonie.
+    #
+    # Uzytkownik: "po co stwierdzenia termuxa itp.? Mieli sobie gadac,
+    # rozwiazywac. To nie tylko z Markiem problem, to z kazdym jednym
+    # agentem".
+    #
+    # ZMIERZONE NA BIEGU 2026-09-22 17:43: okolo 240 wzmianek o
+    # Termuksie w wyslanych wiadomosciach, z czego ~85% w
+    # WYPOWIEDZIACH agentow ("Termux to nie runtime produkcyjny",
+    # "APK != Termux", "Termux odpada"). Skad to wiedza? Z tej linii:
+    # byla PIERWSZYMI slowami rozmowy KAZDEJ z osmiu rol, zanim
+    # ktokolwiek cokolwiek powiedzial. Cala rozmowa dostawala rame
+    # "jestesmy w Termuksie na Androidzie" i o tej ramie gadala.
+    #
+    # Ta linia przeczyla przy tym dwom innym decyzjom uzytkownika,
+    # zapisanym w tym pliku: Wojtek ma myslec o celu "bez wiedzy o
+    # Termuxie/Androidzie", a Kamil ma szukac "nie wiedzac, ze jest w
+    # Termuksie". Obaj dostawali ja jako pierwsze zdanie.
+    #
+    # Uzytkownik wybral: zostaje u tych, ktorzy dzialaja na telefonie
+    # — MAIN zleca zadania, Bartek pisze kod, ktory sie tam uruchamia,
+    # Piotr i Ania ten kod recenzuja i poprawiaja. Reszta zaczyna od
+    # samego celu; o platformie dowie sie z wynikow narzedzi i od
+    # kolegow, gdy bedzie potrzebowac.
+    if rola is not None and str(rola) not in _ROLE_NA_TELEFONIE:
+        return ""
+
     return "Termux API, ADB DEBUGOWANIE, Android"
+
+
+# v409: kto dostaje na start zdanie o platformie — patrz
+# _pierwsza_wiadomosc().
+_ROLE_NA_TELEFONIE = ("MAIN", "ENGINEER", "CODE_REVIEWER", "CODE_FIXER")
 
 
 # v399: _narzedzia_telefonu_block() usuniete — spis komend termux-*
