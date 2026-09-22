@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v410
+AEL-MINI AUTONOMOUS AGENT v411
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v410")
+    print("             AEL-MINI AUTONOMOUS AGENT v411")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29138,6 +29138,138 @@ def _kod_dla_tej_roli(tekst, rola):
     return _kod_na_jedna_linie(tekst)
 
 
+# v411: cudza wypowiedz, do ktorej nikt tej osoby nie wolal —
+# wstep autora zamiast calego eseju.
+# ---------------------------------------------------------------
+# Uzytkownik, o pierwszej wiadomosci do Tomka: "skad sie bierze w
+# pierwszej wiadomosci takie dlugie? czemu to takie dlugie? przeciez
+# da sie wycinac, co potrzebne?"
+#
+# Ta wiadomosc to byl cel (175 znakow) i CALA odpowiedz Wojtka: 4165
+# znakow, w tym 1639 znakow kodu Kotlina i instrukcja Android Studio
+# krok po kroku — pisana do uzytkownika, nie do Tomka. Wojtek nie
+# wolal nikogo po imieniu, wiec szla do kazdego w calosci.
+#
+# ZMIERZONE NA WSZYSTKICH LOGACH (109 wypowiedzi rol): 61% dlugich
+# wypowiedzi zaczyna sie od WLASNEGO podsumowania autora, przed
+# pierwszym naglowkiem — mediana 259 znakow przy calosci 4205. Tak
+# pisze kazda rola:
+#
+#   Wojtek: "Za darmo to nie ma tak, ze wlaczasz skrypt i sam dzwoni"
+#   Kamil:  "Wniosek: w obecnych warunkach nie da sie zrealizowac..."
+#   Marek:  "Przyjales obie linie, kod jest finalny, zastrzezen nie
+#            mam. Zgadzam sie z Tomkiem w calosci."
+#
+# To jest to "co potrzebne". Reszta to rozpisanie dla kogos, kto o
+# nie prosil — albo dla uzytkownika.
+#
+# Nie tniemy w polowie zdania ani akapitu: bierzemy cale akapity
+# wstepu, a o reszcie mowimy faktem — o czym autor pisal dalej i ile
+# to ma. Gdy wstepu brakuje, dobieramy pierwsze akapity pierwszej
+# sekcji. Gdy wstep konczy sie dwukropkiem, dobieramy to, na co
+# wskazuje.
+#
+# CALOSC dostaje nadal ten, kogo autor zawolal po imieniu, i ten,
+# kto o te wypowiedz prosil (_wywolane_przez, v395/v397) — "jak beda
+# potrzebowac". Kto chce wiecej, pisze do autora, a v408 zapyta go w
+# tym samym kroku.
+#
+# NA WSZYSTKICH LOGACH: 460347 -> 90247 znakow (-81%), zajawka
+# mediana 595 znakow.
+_ZAJAWKA_OD = 1500
+_ZAJAWKA_MIN = 200
+_NAGLOWEK_MD_RE = re.compile(r"^#{1,4}\s+(.+?)\s*#*\s*$", re.M)
+
+
+def _zajawka(tekst, kto="Autor"):
+    """
+    Wstep autora i fakt o tym, co pisal dalej. Krotkie wypowiedzi
+    wracaja w calosci.
+    """
+
+    tekst = str(tekst or "").strip()
+
+    if len(tekst) < _ZAJAWKA_OD:
+        return tekst
+
+    akapity = [a.strip() for a in re.split(r"\n\s*\n", tekst) if a.strip()]
+
+    wziete = []
+    dl = 0
+    w_sekcji = False
+
+    for i, a in enumerate(akapity):
+
+        if a.startswith("```"):
+            break
+
+        linie = a.split("\n")
+
+        if _NAGLOWEK_MD_RE.match(linie[0]):
+
+            if dl >= 120 and not (wziete and wziete[-1].endswith(":")):
+                break
+
+            w_sekcji = True
+            a = "\n".join(linie[1:]).strip()
+
+            if not a:
+                continue
+
+            if a.startswith("```"):
+                break
+
+        wziete.append(a)
+        dl += len(a)
+
+        # Wstep konczy sie dwukropkiem — to, na co wskazuje, jest w
+        # nastepnym akapicie. Bierzemy jeszcze jeden.
+        if a.endswith(":"):
+            continue
+
+        if w_sekcji and dl >= _ZAJAWKA_MIN:
+            break
+
+    if not wziete:
+        return tekst
+
+    poczatek = "\n\n".join(wziete)
+
+    if len(poczatek) >= 0.7 * len(tekst):
+        return tekst
+
+    reszta = tekst[tekst.find(wziete[-1]) + len(wziete[-1]):]
+    naglowki = [h.strip("*_ ") for h in _NAGLOWEK_MD_RE.findall(reszta)]
+
+    fakt = "(" + str(kto) + " pisał dalej"
+
+    if naglowki:
+        fakt += ": " + " · ".join(naglowki[:8])
+
+    fakt += " — cała wypowiedź ma " + str(len(tekst)) + " znaków"
+
+    if "```" in reszta:
+        fakt += ", w tym kod"
+
+    return poczatek + "\n\n" + fakt + ")"
+
+
+def _chce_calosci(tekst, rola):
+    """
+    Czy TA osoba ma dostac cala wypowiedz: autor zawolal ja po
+    imieniu albo to ona o te wypowiedz prosila.
+    """
+
+    tekst = str(tekst or "")
+    rola = str(rola)
+
+    for m in _ADDRESS_RE.finditer(tekst):
+        if _VOCATIVE_TO_ROLE.get(m.group(1).upper()) == rola:
+            return True
+
+    return rola in (_wywolane_przez.get(_odcisk_tresci(tekst)) or ())
+
+
 def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     """
     Naglowek "Kamil ustalil:" tylko wtedy, gdy pod nim faktycznie
@@ -29152,6 +29284,11 @@ def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
 
     if not moje:
         return ""
+
+    # v411: nikt jej nie wolal i o to nie prosila — wstep autora
+    # zamiast calego eseju. Patrz _zajawka().
+    if not _chce_calosci(tekst, rola):
+        moje = _zajawka(moje, str(autor).split(" (")[0])
 
     # v400: kod zwijamy dopiero TU, po wybraniu jego czesci — zeby
     # _dla_tej_roli() widzialo dokladnie ten sam tekst, co dotad.
@@ -30359,7 +30496,10 @@ def consult_team(
                 "\nOla tak to czyta (jej odczyt, nie sprawdzony "
                 "fakt):\n"
                 + _kod_dla_tej_roli(
-                    readable_report.strip(), role_name
+                    # v411: jej odczyt tez jest wypowiedzia do nikogo
+                    # konkretnie — wstep i fakt o reszcie.
+                    _zajawka(readable_report.strip(), "Ola"),
+                    role_name
                 )
                 + "\n"
             )
