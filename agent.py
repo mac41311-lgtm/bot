@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v414
+AEL-MINI AUTONOMOUS AGENT v415
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v414")
+    print("             AEL-MINI AUTONOMOUS AGENT v415")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7088,6 +7088,42 @@ def deepseek(name, message):
                                     if _obce > 0.05 else ""
                                 )
                             )
+
+                            # v415: po chinsku NIE idzie dalej do
+                            # zespolu. Bieg 2026-09-22 19:59: Kamil po
+                            # "Podaj wynik." oddal 1969 znakow w 38%
+                            # chinskich — log to zauwazyl i mimo to
+                            # tekst poszedl do Tomka i Bartka. Prosimy
+                            # raz, w tej samej rozmowie, po polsku —
+                            # tak jak v385 dla Kamila. Gdy i to wroci
+                            # po chinsku, nie ma czego przekazac.
+                            if _obce > 0.2:
+                                _po_polsku = "Po polsku, proszę."
+                                _deepseek_pace(name)
+                                _wyslano(name, _po_polsku)
+                                try:
+                                    if _bez_myslenia:
+                                        session.thinking_enabled = False
+                                    _pl, _ = _deepseek_send_experimental(
+                                        name, session, _po_polsku
+                                    )
+                                finally:
+                                    session.thinking_enabled = _bylo_myslenie
+                                if (
+                                    _pl and _pl.strip()
+                                    and _udzial_cjk(_pl) <= 0.05
+                                ):
+                                    text = _pl
+                                else:
+                                    text = ""
+                                log(
+                                    "DEEPSEEK",
+                                    name + ": poprosiłem o odpowiedź po "
+                                    "polsku — "
+                                    + ("jest." if text else
+                                       "znowu nie po polsku, nie "
+                                       "przekazuję dalej.")
+                                )
 
                         else:
 
@@ -29248,6 +29284,15 @@ def _zajawka(tekst):
         if w_sekcji and dl >= _ZAJAWKA_MIN:
             break
 
+    # v415: bez zawieszonego "...cos takiego:" na koncu. Gdy wstep
+    # konczy sie dwukropkiem, a to, na co wskazuje, to kod albo nowa
+    # sekcja, ktorych nie bierzemy, odbiorca dostawal zdanie urwane w
+    # pol mysli (Ola, bieg 2026-09-22 19:58: "Opcja A: Ponow prosbe do
+    # ENGINEER. Wyslij dokladnie cos takiego:" — i koniec). Takie
+    # akapity zdejmujemy od konca.
+    while len(wziete) > 1 and wziete[-1].rstrip("*_ ").endswith(":"):
+        wziete.pop()
+
     if not wziete:
         return tekst
 
@@ -31472,8 +31517,10 @@ def consult_team(
         _critic_question = None
 
     critic_answer_block = ""
+    _tresc_odpowiedzi_dla_marka = ""
 
     if _answer_for_critic:
+        _tresc_odpowiedzi_dla_marka = _answer_for_critic.get("text", "")
         critic_answer_block = (
             "\n\n" + _answer_for_critic.get("od", "Ktoś")
             + " ODPOWIEDZIAŁ NA TWOJE POPRZEDNIE PYTANIE:\n"
@@ -31530,6 +31577,25 @@ def consult_team(
         results["CRITIC"] = ""
 
     else:
+        # v415: odpowiedz Tomka nie idzie do Marka drugi raz.
+        #
+        # Gdy Marek pytal Tomka w poprzednim kroku, dostawal teraz
+        # dwa razy to samo: cala wypowiedz jako "Tomek proponuje:" i
+        # jej pierwsze 400 znakow, sklejone w jedna linie, pod
+        # naglowkiem "Tomek ODPOWIEDZIAL NA TWOJE POPRZEDNIE
+        # PYTANIE:". Bo _extract_answer_for_critic(), gdy Tomek nie
+        # napisal "Marku, ...", oddaje po prostu poczatek jego
+        # wypowiedzi — a ta wypowiedz jest juz w tej samej wiadomosci.
+        # Gdy odpowiedz lezy w tym, co Marek i tak dostaje od Tomka,
+        # nie dokladamy jej drugi raz.
+        _odp_dla_marka = " ".join(str(_tresc_odpowiedzi_dla_marka or "").split())
+        if (
+            _odp_dla_marka
+            and _odp_dla_marka[:200].rstrip(".…[] ")
+            in " ".join(str(planner_out or "").split())
+        ):
+            critic_answer_block = ""
+
         results["CRITIC"] = deepseek(
         "CRITIC",
         _team_context(
