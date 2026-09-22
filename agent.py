@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v405
+AEL-MINI AUTONOMOUS AGENT v406
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v405")
+    print("             AEL-MINI AUTONOMOUS AGENT v406")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -31982,6 +31982,50 @@ tym kroku dopytać jedną osobę:
             _glosy.append(_wstep + "\n" + str(_tekst).strip())
 
     team_block = "\n\n".join(_glosy)
+
+    # v406: narada dochodzi do MAIN-a PO KOLEI, nie jednym blokiem.
+    # ---------------------------------------------------------------
+    # Uzytkownik: "ktos pisze i odp, i pisze i odp, i osobna odp — nie
+    # wszyscy na jedna wiadomosc do kazdego, trzeba to rozdzielic,
+    # moze byc wiecej wywolan, ale zeby to bylo pojedynczo".
+    #
+    # ZMIERZONE NA BIEGU 2026-09-22 17:43 (8 wysylek do MAIN-a,
+    # srednio 16150 znakow). Z czego sie skladaly:
+    #
+    #   Marek:                   6474/wys   (wymiana z Tomkiem)
+    #   Tomek:                   2472/wys   (jego odpowiedzi w niej)
+    #   Tomek zaplanowal tak:    1634/wys
+    #   Wojtek:                  1547/wys
+    #   Co sie wlasnie stalo:    1283/wys
+    #   Bartek na to:            1165/wys
+    #   Kamil sprawdzil:         1104/wys
+    #
+    # Sama wymiana Tomek<->Marek to 8946 znakow, 55% promptu — bo
+    # para rozmawiala trzy rundy (krok 2), a MAIN dostawal caly
+    # zapis naraz, sklejony z pozostalymi piecioma glosami w jedna
+    # sciane.
+    #
+    # Sesja MAIN-a jest trwala — to ta sama rozmowa w przegladarce.
+    # Wiec glos, ktory doszedl do niego osobna wiadomoscia, zostaje
+    # w jego historii i nie musi byc powtarzany w promcie decyzji.
+    # To nie jest nowy pomysl w tym pliku: v363 z dokladnie tego
+    # powodu ustawia team_block = "" przy drugim wywolaniu po ASK, a
+    # v284 robi to samo dla ekranu i Chrome'a.
+    #
+    # Koszt: jedno wywolanie na glos zamiast jednego na cala narade.
+    # Uzytkownik zgodzil sie na to wprost. Gorny limit i tak trzyma
+    # _czekaj_na_budzet().
+    if _glosy and not asked_followup:
+
+        for _glos in _glosy:
+
+            # Odpowiedzi nie uzywamy — to jest przekazanie glosu, nie
+            # pytanie. MAIN odpowie, jak odpowiada czlowiek, ktoremu
+            # ktos wlasnie cos powiedzial; liczy sie, ze ma to w
+            # swojej rozmowie, gdy przyjdzie decydowac.
+            deepseek("MAIN", _glos)
+
+        team_block = ""
 
     # v363: PRZY ODPOWIEDZI NA ASK NARADA NIE IDZIE DRUGI RAZ.
     #
