@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v420
+AEL-MINI AUTONOMOUS AGENT v421
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v420")
+    print("             AEL-MINI AUTONOMOUS AGENT v421")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3114,14 +3114,31 @@ def _kod_autora_dla(sciezka, rola=None):
     return None
 
 
+# v421: kazdy, kto moze napisac kod (v340: pisza wszyscy), a nie
+# tylko Bartek, Ania i Piotr — dla Tomka wychodzilo "PLANNER napisal".
+_IMIE_AUTORA = {
+    "ENGINEER": ("Bartek", "Bartka"),
+    "CODE_FIXER": ("Ania", "Ani"),
+    "CODE_REVIEWER": ("Piotr", "Piotra"),
+    "PLANNER": ("Tomek", "Tomka"),
+    "CRITIC": ("Marek", "Marka"),
+    "RESEARCHER": ("Kamil", "Kamila"),
+    "WOJTEK": ("Wojtek", "Wojtka"),
+    "BROWSER": ("Ola", "Oli"),
+    "PROGRESS_ESTIMATOR": ("Ela", "Eli"),
+}
+
+
 def _kto_to_napisal(rola):
     """Imie autora, tak jak zespol go wola."""
 
-    return {
-        "ENGINEER": "Bartek",
-        "CODE_FIXER": "Ania",
-        "CODE_REVIEWER": "Piotr",
-    }.get(str(rola), str(rola))
+    return _IMIE_AUTORA.get(str(rola), (str(rola), str(rola)))[0]
+
+
+def _czyj_kod_to(rola):
+    """Do zdan o autorstwie: kod Tomka, kod Bartka."""
+
+    return "kod " + _IMIE_AUTORA.get(str(rola), (str(rola), str(rola)))[1]
 
 # Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
 # wkleja w nia kod Bartka — patrz termux_write_file().
@@ -14131,6 +14148,28 @@ _ZNAK_ZACHETY_RE = re.compile(
 )
 
 
+def _czyja_kopia(kod):
+    """
+    Rola, ktora napisala ten kod (bez bialych znakow, jako fragment
+    jej wypowiedzi) — albo "". Najnowsza wypowiedz wygrywa.
+    """
+
+    bez = "".join(str(kod or "").split())
+
+    if not bez:
+        return ""
+
+    if bez in "".join(str(_kod_bartka_teraz or "").split()):
+        return "ENGINEER"
+
+    for w in reversed(_kod_autorow):
+
+        if bez in "".join(str(w.get("tekst") or "").split()):
+            return str(w.get("rola") or "")
+
+    return ""
+
+
 def _kopia_kodu_zespolu(kod):
     """
     Ten sam kod, jesli napisal go ktos z zespolu — inaczej None.
@@ -14140,17 +14179,7 @@ def _kopia_kodu_zespolu(kod):
     bash), a MAIN przenosi do zlecenia sam plik.
     """
 
-    bez = "".join(str(kod or "").split())
-
-    if not bez:
-        return None
-
-    for tekst in [_kod_bartka_teraz] + [w["tekst"] for w in _kod_autorow]:
-
-        if bez in "".join(str(tekst or "").split()):
-            return kod
-
-    return None
+    return kod if _czyja_kopia(kod) else None
 
 
 def _tresc_napisana_dla(p):
@@ -14453,7 +14482,14 @@ def termux_write_file(path, content, append=False):
                     )
 
                 else:
-                    _skad = "kod z treści zadania"
+                    # v421: od v418 kod z tresci zadania przechodzi
+                    # tylko jako kopia czyjegos kodu — wiec wiemy czyja.
+                    _autor_kopii = _czyja_kopia(_kod)
+                    _skad = (
+                        _czyj_kod_to(_autor_kopii)
+                        + " przepisany do treści zadania"
+                        if _autor_kopii else "kod z treści zadania"
+                    )
 
                 # v276: kod z tresci zadania NIE jest kodem Bartka —
                 # to wersja, ktora MAIN przepisal z pamieci do
@@ -14504,7 +14540,7 @@ def termux_write_file(path, content, append=False):
             _powod = (
                 "ten plik trzyma dane, wiec kod do niego nie wchodzi"
                 if _blokada else
-                "nie mam jeszcze kodu Bartka do tego pliku"
+                "nikt z zespołu nie napisał jeszcze kodu do tego pliku"
             )
 
             log(
@@ -17003,7 +17039,7 @@ def _gemini_zmienia_cudzy_kod(command_str):
         return (
             str(p),
             "nie mam dowodu, ze ten plik zawiera autoryzowany kod "
-            "Bartka — albo nikt go tu nie kladl, albo jego tresc "
+            "zespolu — albo nikt go tu nie kladl, albo jego tresc "
             "zmienila sie po autoryzacji"
         )
 
@@ -17052,11 +17088,15 @@ def _gemini_pisze_kod(command_str):
             # ten plik sam, bez literowek. Przepuszczamy.
             continue
 
+        # v421: mowimy, CZYJ to kod — nie zawsze "Bartka". Tomek,
+        # Marek i Ania tez pisza pliki (v340), a do v420 kazda odmowa
+        # przypisywala je Bartkowi.
         return (
             str(p),
-            "nie mam jeszcze kodu Bartka do tego pliku"
+            "nikt z zespołu nie napisał jeszcze kodu do tego pliku"
             if not _kod_autora else
-            "to nie jest kod Bartka — tresc w komendzie jest inna"
+            "to nie jest " + _czyj_kod_to(_czyja_kopia(_kod_autora) or "ENGINEER")
+            + " — treść w komendzie jest inna"
         )
 
     return None
