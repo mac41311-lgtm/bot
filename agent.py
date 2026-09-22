@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v417
+AEL-MINI AUTONOMOUS AGENT v418
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v417")
+    print("             AEL-MINI AUTONOMOUS AGENT v418")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14131,6 +14131,28 @@ _ZNAK_ZACHETY_RE = re.compile(
 )
 
 
+def _kopia_kodu_zespolu(kod):
+    """
+    Ten sam kod, jesli napisal go ktos z zespolu — inaczej None.
+
+    v418: "ten sam" liczymy bez bialych znakow i jako fragment: autor
+    czesto pisze plik w srodku wiekszego skryptu (heredoc w bloku
+    bash), a MAIN przenosi do zlecenia sam plik.
+    """
+
+    bez = "".join(str(kod or "").split())
+
+    if not bez:
+        return None
+
+    for tekst in [_kod_bartka_teraz] + [w["tekst"] for w in _kod_autorow]:
+
+        if bez in "".join(str(tekst or "").split()):
+            return kod
+
+    return None
+
+
 def _tresc_napisana_dla(p):
     """
     Tresc, ktora zespol napisal DLA TEGO PLIKU — i skad ja mamy.
@@ -14165,12 +14187,29 @@ def _tresc_napisana_dla(p):
 
     z_pamieci = u_wskazanego or _kod_autora_dla(p)
 
+    # v418: kod ze zlecenia MAIN-a liczy sie TYLKO jako kopia kodu
+    # kogos z zespolu. Uzytkownik: "autorstwo ma byc".
+    #
+    # Do v417 byl brany bez sprawdzenia, na zalozeniu z v293: "MAIN
+    # nigdy nie pisze kodu — jesli kod jest w jego zadaniu, to jest
+    # CZYJAS kopia". ZAOBSERWOWANE, ze to nieprawda (bieg 2026-09-22
+    # 19:44): MainActivity.java z "AUTOCALLER_2A_OK" i caly skrypt
+    # budowania APK pojawiaja sie pierwszy raz w zleceniu MAIN-a w
+    # kroku 9 — nikt z zespolu ich wczesniej nie napisal. MAIN je
+    # napisal, wykonanie zapisalo je na dysk.
+    #
+    # Kopia kodu Bartka (v281, log 2026-09-07) dalej przechodzi: jest
+    # w notatniku autorow, wiec _kopia_kodu_zespolu() ja rozpozna.
     kod = (
         (u_wskazanego[0] if u_wskazanego else None)
         or extract_code_block(_kod_bartka_teraz or "", p)
         or (z_pamieci[0] if z_pamieci else None)
-        or extract_code_block(_tresc_zadania_teraz or "", p)
-        or _kod_z_heredoca(_tresc_zadania_teraz, p)
+        or _kopia_kodu_zespolu(
+            extract_code_block(_tresc_zadania_teraz or "", p)
+        )
+        or _kopia_kodu_zespolu(
+            _kod_z_heredoca(_tresc_zadania_teraz, p)
+        )
     )
 
     return kod, z_pamieci
@@ -14303,9 +14342,8 @@ def termux_write_file(path, content, append=False):
         # droge, ktora jest wlasciwa. Zwykle dane (konfiguracja,
         # wartosc klucza, plik tekstowy) zapisuje dalej normalnie —
         # blokujemy pisanie PROGRAMOW, nie pisanie w ogole.
-        _code_suffix = p.suffix.lower() in (
-            ".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash"
-        )
+        # v418: ta sama lista, co przy termux_run — patrz _KOD_SUFIKSY.
+        _code_suffix = p.suffix.lower() in _KOD_SUFIKSY
         _has_shebang = data.lstrip().startswith("#!")
 
         # WYJATEK: custom_tools/ to sankcjonowana sciezka rozszerzania
@@ -16752,7 +16790,17 @@ def _to_dluga_robota(command):
 # tu nie wpada. Lapiemy wylacznie `cat >`, `cat >>`, `tee`,
 # `tee -a` celujace w PLIK Z KODEM.
 
-_KOD_SUFIKSY = (".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash")
+_KOD_SUFIKSY = (
+    ".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash",
+    # v418: jezyki kompilowane i reszta zrodel. Bieg 2026-09-22 19:44,
+    # kroki 9-10: `cat > src/.../MainActivity.java << 'EOF'` przeszlo
+    # przez termux_run, bo .java nie bylo na liscie — a tresc napisal
+    # MAIN, nie Bartek. .xml zostaje plikiem danych
+    # (_DATA_FILE_EXTENSIONS).
+    ".java", ".kt", ".kts", ".gradle", ".c", ".h", ".cpp", ".cc",
+    ".hpp", ".go", ".rs", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
+    ".php", ".swift", ".dart", ".cs",
+)
 
 # `cat > plik`, `cat >> plik` — bez argumentow miedzy, zeby
 # `cat a.sh > b.sh` (kopiowanie) tu nie wpadlo.
@@ -27714,18 +27762,6 @@ def _jeszcze_nic_sie_nie_stalo(last_result):
     )
 
 
-def _na_wierzchu_nasz_terminal(tekst):
-    """
-    Czy ekran pokazuje tylko nasz wlasny terminal.
-
-    To ten sam warunek, co w _ekran_bez_mapy_klikania(): gdy na
-    wierzchu jest com.termux, z ekranu zostaje jedno zdanie "Na
-    wierzchu jest teraz: Termux (nasz wlasny terminal)".
-    """
-
-    return "com.termux" in str(tekst or "")
-
-
 def _condense_last_result_for_team(last_result, limit=2500):
     """
     Buduje ZWIĘZŁE, czytelne podsumowanie last_result zamiast
@@ -30722,10 +30758,17 @@ def consult_team(
         # tych, ktorzy na telefonie dzialaja (_ROLE_NA_TELEFONIE).
         # Gdy na ekranie jest cos innego (dialer, przegladarka), to
         # jest juz fakt o sprawie i idzie jak dotad.
-        if include_android and (
-            str(role_name) in _ROLE_NA_TELEFONIE
-            or not _na_wierzchu_nasz_terminal(_android_tekst)
-        ):
+        #
+        # v418: bez wyjatku "gdy na ekranie jest cos innego".
+        # Uzytkownik, pokazujac pierwsza wiadomosc do Marka (bieg
+        # 2026-09-22 22:47): cel, a pod nim ekran — launcher i
+        # klawiatura, klawisz po klawiszu ("desc="q"", "desc="w""...).
+        # "Po co od razu ekran wysylamy? Na poczatek ma sie skupic na
+        # zadaniu." ZMIERZONE NA LOGACH: Tomek i Marek dostali ekran
+        # 21 razy, ~18,7 tys. znakow — a zaden z nich nie kliknie
+        # niczego na telefonie. Ekran ida do tych, ktorzy na nim
+        # dzialaja.
+        if include_android and str(role_name) in _ROLE_NA_TELEFONIE:
             pieces.append(
                 _only_if_new(role_name, "android", android_block)
             )
