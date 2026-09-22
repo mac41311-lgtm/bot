@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v402
+AEL-MINI AUTONOMOUS AGENT v403
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v402")
+    print("             AEL-MINI AUTONOMOUS AGENT v403")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -24852,12 +24852,19 @@ def _role_output_for_team(role_label, text, limit, role_key=None):
 
         return out
 
+    # v403: sam fakt, bez rady, jak go czytac.
+    #
+    # ZMIERZONE NA BIEGU 2026-09-21 22:11: sesja Oli oddawala pustke
+    # w KAZDYM z osmiu krokow, a ten akapit szedl do MAIN-a osiem
+    # razy co do znaku — 282 znaki x 8.
+    #
+    # Druga polowa ("To nie jest jego opinia ani zgoda... Nie czytaj
+    # tego jako 'brak zastrzezen'") to byla instrukcja Pythona dla
+    # roli. Uzytkownik: "nie piszemy co maja robic". Fakt, ze ktos
+    # nie odpowiedzial, mowi to samo i mowi to krocej.
     return (
-        "(" + role_label + " został zapytany w tym kroku, ale "
-        "odpowiedział pustym tekstem — ponowienie też nic nie dało, "
-        "najpewniej chwilowy problem po stronie sesji DeepSeeka. To "
-        "nie jest jego opinia ani zgoda: tej opinii po prostu nie ma. "
-        "Nie czytaj tego jako 'brak zastrzeżeń'.)"
+        "(" + role_label + " nie odpowiedział w tym kroku — sesja "
+        "oddała pusty tekst, ponowienie też.)"
     )
 
 
@@ -27539,6 +27546,65 @@ def _reset_critic_objection_memory():
     del _critic_recent_objections[:]
 
 
+# v403: "Requirement already satisfied" to nie jest wypowiedz.
+#
+# Uzytkownik: "powtarzam ten log np", "jest duzo tego, logi itp.",
+# "wyslana nie tniemy nic, ale da sie to lepiej skomponowac".
+#
+# ZMIERZONE NA BIEGU 2026-09-21 22:11 (56 wysylek, 650819 znakow):
+# same linie "Requirement already satisfied: ..." to 35562 znakow —
+# 10% tego, co dostaje PLANNER, 11% ENGINEER, 14% CRITIC. Jeden
+# `pip install -r requirements.txt` na juz zainstalowanych paczkach
+# wypluwa ich 33 pod rzad.
+#
+# Ta linia znaczy doslownie "nic sie nie stalo, paczka juz byla".
+# Nie ucinamy przez to niczyjej wypowiedzi — to wydruk maszyny,
+# ktory Python i tak sam wklejal zespolowi.
+#
+# WAZNE, SKAD TO WRACA: w tym biegu wiekszosc tych linii nie
+# pochodzila juz z bloku Pythona, tylko z wypowiedzi Tomka i Oli,
+# ktorzy CYTOWALI wynik. Cytowali go dlatego, ze dostali go od nas
+# krok wczesniej. Odcinamy wiec zrodlo, a nie cytat — efekt widac
+# z jednym krokiem opoznienia.
+#
+# Co zostaje: "Collecting", "Downloading", "Installing collected",
+# "Successfully installed", kazdy ERROR i kazdy traceback. Czyli
+# wszystko, co mowi, ze cos sie ZMIENILO albo zepsulo.
+_SZUM_MASZYNY_RE = re.compile(
+    r"^[ \t]*Requirement already satisfied:[^\n]*\n?",
+    re.MULTILINE
+)
+
+
+def _bez_szumu_maszyny(tekst):
+    """
+    Wydruk narzedzia bez linii, ktore nie niosa zadnej informacji.
+
+    Gdy po odsianiu nie zostaje nic, oddajemy oryginal — lepiej
+    pokazac szum niz pustke po wyniku, ktory realnie byl.
+    """
+
+    tekst = str(tekst or "")
+
+    if "Requirement already satisfied:" not in tekst:
+        return tekst
+
+    ile = len(_SZUM_MASZYNY_RE.findall(tekst))
+    bez = _SZUM_MASZYNY_RE.sub("", tekst)
+
+    if not bez.strip():
+        return tekst
+
+    # Sam fakt, ze paczki juz byly, zostaje — jedna linia zamiast
+    # trzydziestu trzech. To jest informacja; powtorzenie jej
+    # trzydziesci trzy razy nia nie jest.
+    return (
+        bez.rstrip()
+        + "\n[" + str(ile) + " x \"Requirement already satisfied\""
+        + " — paczki juz byly zainstalowane]"
+    )
+
+
 def _condense_last_result_for_team(last_result, limit=2500):
     """
     Buduje ZWIĘZŁE, czytelne podsumowanie last_result zamiast
@@ -27676,7 +27742,13 @@ def _condense_last_result_for_team(last_result, limit=2500):
             or tool_result.get("stdout_partial")
         )
         if tr_stdout and str(tr_stdout).strip():
-            parts.append("stdout: " + short(str(tr_stdout), 500))
+            parts.append(
+                "stdout: "
+                # v403: bez linii, ktore nic nie mowia — patrz
+                # _bez_szumu_maszyny(). Odsiewamy PRZED short(),
+                # inaczej limit zjada szum zamiast tresci.
+                + short(_bez_szumu_maszyny(str(tr_stdout)), 500)
+            )
 
     report = last_result.get("report")
 
@@ -31689,7 +31761,16 @@ albo FAILED.
     else:
 
         ask_block = ""
-        ask_contract_block = f"""
+        # v403: kontrakt ASK raz, nie w kazdym kroku.
+        #
+        # ZMIERZONE: 231 znakow x 8 krokow, identycznie co do znaku.
+        # To jest dokladnie ta klasa, ktora v184 usunelo przy rolach
+        # ("przypomnienie roli doklejane do KAZDEJ wiadomosci"), i ta,
+        # ktora v193 opisuje: blok identyczny z poprzednim krokiem
+        # siedzi juz w historii tej rozmowy, a powtarzany zaglusza to,
+        # co naprawde nowe. _only_if_new poda go ponownie, gdyby
+        # kiedykolwiek sie zmienil.
+        ask_contract_block = _only_if_new("MAIN", "kontrakt_ask", f"""
 Gdyby do decyzji brakowało Ci jednej konkretnej rzeczy, możesz raz w
 tym kroku dopytać jedną osobę:
 {{
@@ -31697,7 +31778,7 @@ tym kroku dopytać jedną osobę:
   "ask_role": "jedna z: {", ".join(_MAIN_ASK_ALLOWED_ROLES)}",
   "ask_question": "konkretne pytanie"
 }}
-"""
+""")
 
     # v193: MAIN tez zaczyna od JEDNEJ rzeczy, ktora teraz blokuje
     # postep -- to on podejmuje decyzje, wiec najbardziej potrzebuje
@@ -33329,7 +33410,8 @@ def _tool_stdout_values(last_result):
     if not kawalki:
         return ""
 
-    razem = "\n".join(kawalki).strip()
+    # v403: to samo, co w _condense_last_result_for_team().
+    razem = _bez_szumu_maszyny("\n".join(kawalki)).strip()
 
     if len(razem) <= _SUCCESS_VALUES_MAX:
         return razem
@@ -33870,12 +33952,46 @@ def _policz_odpowiedzi_dla_zespolu(pary):
     seen = []
     kto_pytal = {}
 
+    # v403: ten sam plik raz, nie raz na kazdy sposob zapisania
+    # sciezki.
+    #
+    # ZGLOSZONE PRZEZ UZYTKOWNIKA, wyslana wiadomosc do ENGINEER-a:
+    #
+    #   /data/data/com.termux/files/home/voice_bot_demo/bookings.log:
+    #   JEST (47 B). Zawiera dokladnie to:
+    #   2026-09-22T06:00:17.307108 | status: completed
+    #   - ~/voice_bot_demo/bookings.log: JEST (47 B). Zawiera
+    #   dokladnie to:
+    #   2026-09-22T06:00:17.307108 | status: completed
+    #
+    # Ten sam plik, ta sama tresc, dwa razy pod rzad. Bo `seen`
+    # odsiewalo po NAPISIE sciezki, a ktos napisal ja raz pelna, raz
+    # przez ~. Przy _FILE_ANSWER_MAX = 60000 taki dublet potrafi
+    # kosztowac 120 kB.
+    #
+    # Odsiewamy wiec po tym, na co sciezka realnie wskazuje. Do
+    # pokazania zostaje ta wersja, ktorej ktos uzyl pierwszy.
+    _wskazuje_na = {}
+
     for rola, text in pary:
         for match in _TEAM_MENTIONED_PATH_RE.finditer(str(text or "")):
             candidate = match.group(0).rstrip(".,;:)\'\"`")
-            if candidate not in seen:
-                seen.append(candidate)
-                kto_pytal[candidate] = rola
+
+            try:
+                _cel = str(_resolve_home_relative_path(
+                    candidate.replace(
+                        "/data/data/com.termux/files/home", "~", 1
+                    )
+                ))
+            except Exception:
+                _cel = candidate
+
+            if _cel in _wskazuje_na:
+                continue
+
+            _wskazuje_na[_cel] = candidate
+            seen.append(candidate)
+            kto_pytal[candidate] = rola
 
     for candidate in seen[:8]:
 
