@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v406
+AEL-MINI AUTONOMOUS AGENT v407
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v406")
+    print("             AEL-MINI AUTONOMOUS AGENT v407")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29713,6 +29713,44 @@ def _podpis_starej_wypowiedzi(imie, rola):
     )
 
 
+def _wymiana_dla_maina(wymiana, zostaw_z_konca=2):
+    """
+    Wymiana zdan pary, widziana przez MAIN-a: od czego sie zaczelo
+    i czym skonczylo.
+
+    Srodkowe rundy pomijamy w calosci — nie tniemy ich w polowie,
+    tylko nie wysylamy. Gdy cos pominieto, mowimy ile i czyje to
+    bylo; to fakt o rozmowie, nie rada, jak go czytac.
+    """
+
+    wymiana = list(wymiana or [])
+
+    if len(wymiana) <= zostaw_z_konca + 1:
+        return "\n\n".join(kto + ": " + tekst for kto, tekst in wymiana)
+
+    pierwsza = wymiana[:1]
+    ostatnie = wymiana[-zostaw_z_konca:]
+    pominiete = wymiana[1:len(wymiana) - zostaw_z_konca]
+
+    czesci = [kto + ": " + tekst for kto, tekst in pierwsza]
+
+    if pominiete:
+        _kto = []
+        for kto, _ in pominiete:
+            if kto not in _kto:
+                _kto.append(kto)
+        czesci.append(
+            "(potem " + " i ".join(_kto) + " wymienili sie jeszcze "
+            + str(len(pominiete)) + " raz"
+            + ("y" if 2 <= len(pominiete) <= 4 else "")
+            + "; ponizej to, czym to sie skonczylo)"
+        )
+
+    czesci.extend(kto + ": " + tekst for kto, tekst in ostatnie)
+
+    return "\n\n".join(czesci)
+
+
 def consult_team(
     goal,
     last_result,
@@ -31388,7 +31426,20 @@ def consult_team(
             + "\n\nCo Ty na to?"
         )
 
-        team_exchange.append(("Marek", _critic_out_full))
+        # v407: jego werdykt z poprzedniej rundy juz tu lezy.
+        #
+        # Na koncu kazdej rundy dopisujemy ("Marek", _verdict) i
+        # ustawiamy _critic_out_full = _verdict. Petla zaczynala
+        # wiec runde nastepna od dopisania DOKLADNIE TEJ SAMEJ
+        # wypowiedzi drugi raz. Przy trzech rundach — a tyle bylo w
+        # kroku 2 biegu 2026-09-22 17:43 — Marek szedl do MAIN-a
+        # piec razy zamiast trzech.
+        if not (
+            team_exchange
+            and team_exchange[-1] == ("Marek", _critic_out_full)
+        ):
+            team_exchange.append(("Marek", _critic_out_full))
+
         team_exchange.append((
             "Tomek" if _addressee == "PLANNER" else "Bartek",
             _reply
@@ -31607,9 +31658,25 @@ def consult_team(
         # odbyla sie w TYM kroku. MAIN musi widziec nie tylko koncowy
         # werdykt, ale i to, co go zmienilo -- inaczej "OCENA: OK" po
         # burzliwej dyskusji wyglada jak brak zastrzezen od poczatku.
-        "exchange": "\n\n".join(
-            kto + ": " + tekst for kto, tekst in team_exchange
-        ),
+        #
+        # v407: ale nie CALY spor. Uzytkownik: "MAIN-a popraw, nie
+        # moze calego sporu dostawac, co co wazne".
+        #
+        # ZMIERZONE NA BIEGU 2026-09-22 17:43: wymiana Tomek<->Marek
+        # to 8946 znakow na wysylke do MAIN-a, 55% jego promptu. W
+        # kroku 2 para rozmawiala trzy rundy — szesc wypowiedzi tam
+        # i z powrotem — i MAIN dostawal wszystkie.
+        #
+        # Spor zbiega sie: kazda runda jest odpowiedzia na
+        # poprzednia, wiec srodkowe rundy sa przez nastepne
+        # unieważnione. Wazne jest, OD CZEGO sie zaczelo (zastrzezenie
+        # v195) i GDZIE wyladowali (ostatnia odpowiedz i werdykt).
+        # Srodek to droga miedzy jednym a drugim.
+        #
+        # Zadne zdanie nie jest ciete — bierzemy CALE wypowiedzi,
+        # tylko nie wszystkie. Przy jednej rundzie nic sie nie
+        # zmienia, bo nie ma czego pomijac.
+        "exchange": _wymiana_dla_maina(team_exchange),
     }
 
 
