@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v412
+AEL-MINI AUTONOMOUS AGENT v413
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v412")
+    print("             AEL-MINI AUTONOMOUS AGENT v413")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -27705,6 +27705,19 @@ def _condense_last_result_for_team(last_result, limit=2500):
             )
         )
 
+    # v413: ostrzezenia z narzedzi to FAKTY o tym, co sie wydarzylo —
+    # "ten numer wyglada na przykladowy", "to juz drugi telefon do
+    # zywego czlowieka, tego nie da sie cofnac", "dzwiek nie dotrze
+    # do rozmowcy". Do v412 szly tylko do zespolu, jako osobny spis
+    # z naglowkiem "Przy okazji zauwazylem w narzedziach to:" — a
+    # MAIN nie dostawal ich ZADNA droga. Uzytkownik kazal spisy
+    # usunac z rozmowy; te zdania nie moga zniknac razem z nimi,
+    # wiec ida tu, do relacji — jako zwykle zdania, bez naglowka.
+    # Stad dostaje je i zespol ("Co sie wlasnie stalo"), i MAIN.
+    for _ostrz in (last_result.get("tool_warnings") or [])[:8]:
+        if str(_ostrz or "").strip():
+            parts.append(str(_ostrz).strip())
+
     tool = last_result.get("tool")
 
     if tool:
@@ -30508,8 +30521,25 @@ def consult_team(
             # patrz _progress_for_role().
             "" if _bez_maszynowni
             else _progress_for_role(role_name, progress_snapshot),
-            _only_if_new(role_name, "checklist", checklist_block)
-            if not _bez_maszynowni else "",
+            # v413: BEZ SPISOW PYTHONA W ROZMOWIE ZESPOLU.
+            #
+            # Uzytkownik: "usun je tez, ma byc normalna rozmowa".
+            # Wylatuja: checklista celu ("Z 7 punktow tego celu... Do
+            # tych warto wrocic... Z ostatnich rzeczy..."), spis
+            # prob ("Tego juz probowalismy — ngrok — 2 krokow..."),
+            # uwagi Pythona ("Przy okazji zauwazylem w narzedziach
+            # to:", "Zauwazylem jeszcze to:"), rada "Czas na inne
+            # podejscie" i postep Eli.
+            #
+            # Zostaje to, co sie naprawde wydarzylo: "Co sie wlasnie
+            # stalo" (status, blad, dowody z wykonania — w tym
+            # "wywolan_narzedzi=0, nic_nie_wykonano=True"), wartosci
+            # z narzedzia i szczegoly bledu. Kazdy fakt z tych spisow
+            # juz tam jest.
+            #
+            # MAIN dostaje je dalej — decyduje o DONE i o nastepnym
+            # zadaniu. Ela tez — to jej narzedzie do mierzenia.
+            "",
             # v301: decyzja MAIN-a to maszynownia — patrz
             # _bez_maszynowni_dla().
             #
@@ -30543,8 +30573,8 @@ def consult_team(
             # v404: odczyt Oli — osobno od faktow, pod jej imieniem.
             # Patrz _odczyt_oli wyzej.
             _odczyt_oli,
-            _only_if_new(role_name, "tool_hint", tool_hint)
-            if not _bez_maszynowni else "",
+            # v413: bez tool_hint — patrz wyzej.
+            "",
             # v321: ten kanal tez jest maszynownia.
             #
             # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-12 12:40,
@@ -30566,11 +30596,8 @@ def consult_team(
             # v270 wyprowadzilo ten kanal z tool_hint, zeby docieral
             # do wszystkich — ale tresc w nim to dalej karty Chrome,
             # procesy i narzedzia telefonu.
-            ""
-            if _bez_maszynowni
-            else _only_if_new(
-                role_name, "python_zauwazyl", python_zauwazyl
-            ),
+            # v413: bez "Zauwazylem jeszcze to:" — patrz wyzej.
+            "",
             # v230: co użytkownik powiedział w trakcie tego celu.
             # Przez _only_if_new, więc mówimy to raz — ale plik żyje
             # do końca celu, więc nowe zdanie użytkownika dotrze
@@ -30585,7 +30612,8 @@ def consult_team(
             # co robi od kilku krokow, cokolwiek posuwa. Patrz
             # _postep_blok(); przez _only_if_new, wiec kazdy pomiar
             # idzie raz.
-            _only_if_new(role_name, "postep", _postep_blok()),
+            # v413: bez postepu Eli w rozmowie zespolu — patrz wyzej.
+            "",
             # v399: spis komend termux-* wylecial z promptu.
             #
             # Uzytkownik: "po co kazdemu wysylamy komendy?", "to
