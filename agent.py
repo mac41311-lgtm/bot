@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v415
+AEL-MINI AUTONOMOUS AGENT v416
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v415")
+    print("             AEL-MINI AUTONOMOUS AGENT v416")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29187,123 +29187,6 @@ def _kod_dla_tej_roli(tekst, rola):
     return _kod_na_jedna_linie(tekst)
 
 
-# v411: cudza wypowiedz, do ktorej nikt tej osoby nie wolal —
-# wstep autora zamiast calego eseju.
-# ---------------------------------------------------------------
-# Uzytkownik, o pierwszej wiadomosci do Tomka: "skad sie bierze w
-# pierwszej wiadomosci takie dlugie? czemu to takie dlugie? przeciez
-# da sie wycinac, co potrzebne?"
-#
-# Ta wiadomosc to byl cel (175 znakow) i CALA odpowiedz Wojtka: 4165
-# znakow, w tym 1639 znakow kodu Kotlina i instrukcja Android Studio
-# krok po kroku — pisana do uzytkownika, nie do Tomka. Wojtek nie
-# wolal nikogo po imieniu, wiec szla do kazdego w calosci.
-#
-# ZMIERZONE NA WSZYSTKICH LOGACH (109 wypowiedzi rol): 61% dlugich
-# wypowiedzi zaczyna sie od WLASNEGO podsumowania autora, przed
-# pierwszym naglowkiem — mediana 259 znakow przy calosci 4205. Tak
-# pisze kazda rola:
-#
-#   Wojtek: "Za darmo to nie ma tak, ze wlaczasz skrypt i sam dzwoni"
-#   Kamil:  "Wniosek: w obecnych warunkach nie da sie zrealizowac..."
-#   Marek:  "Przyjales obie linie, kod jest finalny, zastrzezen nie
-#            mam. Zgadzam sie z Tomkiem w calosci."
-#
-# To jest to "co potrzebne". Reszta to rozpisanie dla kogos, kto o
-# nie prosil — albo dla uzytkownika.
-#
-# Nie tniemy w polowie zdania ani akapitu: bierzemy cale akapity
-# wstepu i nic poza nimi (v412: bez spisu tego, co bylo dalej). Gdy
-# wstepu brakuje, dobieramy pierwsze akapity pierwszej sekcji. Gdy wstep konczy sie dwukropkiem, dobieramy to, na co
-# wskazuje.
-#
-# CALOSC dostaje nadal ten, kogo autor zawolal po imieniu, i ten,
-# kto o te wypowiedz prosil (_wywolane_przez, v395/v397) — "jak beda
-# potrzebowac". Kto chce wiecej, pisze do autora, a v408 zapyta go w
-# tym samym kroku.
-#
-# NA WSZYSTKICH LOGACH: 460347 -> 90247 znakow (-81%), zajawka
-# mediana 595 znakow.
-_ZAJAWKA_OD = 1500
-_ZAJAWKA_MIN = 200
-_NAGLOWEK_MD_RE = re.compile(r"^#{1,4}\s+(.+?)\s*#*\s*$", re.M)
-
-
-def _zajawka(tekst):
-    """
-    Wstep autora — jego wlasne slowa, cale akapity. Krotkie
-    wypowiedzi wracaja w calosci.
-
-    v412: bez zadnego dopisku Pythona. Uzytkownik: "nie spisow,
-    zadnych spisow — ma byc normalna rozmowa miedzy agentami". Do
-    v411 za wstepem szla linia "(X pisal dalej: A · B · C — cala
-    wypowiedz ma N znakow)". To byl spis, nie rozmowa. Teraz odbiorca
-    dostaje to, co autor powiedzial, i nic wiecej.
-    """
-
-    tekst = str(tekst or "").strip()
-
-    if len(tekst) < _ZAJAWKA_OD:
-        return tekst
-
-    akapity = [a.strip() for a in re.split(r"\n\s*\n", tekst) if a.strip()]
-
-    wziete = []
-    dl = 0
-    w_sekcji = False
-
-    for a in akapity:
-
-        if a.startswith("```"):
-            break
-
-        linie = a.split("\n")
-
-        if _NAGLOWEK_MD_RE.match(linie[0]):
-
-            if dl >= 120 and not (wziete and wziete[-1].endswith(":")):
-                break
-
-            w_sekcji = True
-            a = "\n".join(linie[1:]).strip()
-
-            if not a:
-                continue
-
-            if a.startswith("```"):
-                break
-
-        wziete.append(a)
-        dl += len(a)
-
-        # Wstep konczy sie dwukropkiem — to, na co wskazuje, jest w
-        # nastepnym akapicie. Bierzemy jeszcze jeden.
-        if a.endswith(":"):
-            continue
-
-        if w_sekcji and dl >= _ZAJAWKA_MIN:
-            break
-
-    # v415: bez zawieszonego "...cos takiego:" na koncu. Gdy wstep
-    # konczy sie dwukropkiem, a to, na co wskazuje, to kod albo nowa
-    # sekcja, ktorych nie bierzemy, odbiorca dostawal zdanie urwane w
-    # pol mysli (Ola, bieg 2026-09-22 19:58: "Opcja A: Ponow prosbe do
-    # ENGINEER. Wyslij dokladnie cos takiego:" — i koniec). Takie
-    # akapity zdejmujemy od konca.
-    while len(wziete) > 1 and wziete[-1].rstrip("*_ ").endswith(":"):
-        wziete.pop()
-
-    if not wziete:
-        return tekst
-
-    poczatek = "\n\n".join(wziete)
-
-    if len(poczatek) >= 0.7 * len(tekst):
-        return tekst
-
-    return poczatek
-
-
 def _chce_calosci(tekst, rola):
     """
     Czy TA osoba ma dostac cala wypowiedz: autor zawolal ja po
@@ -29335,10 +29218,21 @@ def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     if not moje:
         return ""
 
-    # v411: nikt jej nie wolal i o to nie prosila — wstep autora
-    # zamiast calego eseju. Patrz _zajawka().
+    # v416: nikt jej nie wolal i o to nie prosila — nic.
+    #
+    # Uzytkownik, o rundzie z biegu 2026-09-22 19:58: "wszystko
+    # poplatane, mial nie byc schemat, miala byc normalna rozmowa, a
+    # tu wszystko kopiowane". I wybral: agent dostaje tylko to, co
+    # ktos napisal DO NIEGO — po imieniu albo w odpowiedzi na jego
+    # pytanie. Wypowiedz do nikogo idzie tylko do MAIN-a.
+    #
+    # ZMIERZONE: Kamil, Wojtek i Ola pisza do nikogo w 100%
+    # wypowiedzi. Do v415 szly wiec do Tomka i Bartka co krok,
+    # skrocone do wstepu (v411) — ten sam zestaw glosow u kazdego,
+    # czyli wlasnie ten "schemat". Rozmowa miedzy nimi nadal idzie:
+    # skrzynka (_role_inbox_block) i watki niosa to, co adresowane.
     if not _chce_calosci(tekst, rola):
-        moje = _zajawka(moje)
+        return ""
 
     # v400: kod zwijamy dopiero TU, po wybraniu jego czesci — zeby
     # _dla_tej_roli() widzialo dokladnie ten sam tekst, co dotad.
@@ -30496,7 +30390,8 @@ def consult_team(
         # zeby przynajmniej Oli nie oddawac jej wlasnych slow.
         # Teraz nikt nie dostaje tu cudzej prozy, wiec wyjatek dla
         # niej jest zbedny — a v400 zostaje sprawdzone przez to, ze
-        # BROWSER nie dostaje tez _odczyt_oli nizej.
+        # BROWSER nie dostaje tez odczytu Oli (v416: nikt z zespolu
+        # go nie dostaje).
         # v410: na starcie celu nic sie jeszcze nie stalo — nie ma o
         # czym mowic. Patrz _jeszcze_nic_sie_nie_stalo().
         _co_sie_stalo = "" if _jeszcze_nic_sie_nie_stalo(last_result) else (
@@ -30504,45 +30399,6 @@ def consult_team(
              else "\nCo się właśnie stało:\n" + raw_report_material)
             + success_values_block
             + ("" if _bez_maszynowni else error_details_block)
-        )
-
-        # Jej odczyt — osobno, pod jej imieniem, tym samym kanalem,
-        # co kazdy inny glos kolegi (v256: _only_if_new dotyczy takze
-        # wypowiedzi kolegow). Do niej samej nie wraca.
-        # v405: odczyt Oli to glos kolegi, wiec przechodzi przez tê
-        # sama bramke na kod, co kazdy inny glos.
-        #
-        # MOJ BLAD Z v404, zlapany na biegu 2026-09-22 17:43. v404
-        # slusznie wyprowadzilo odczyt Oli spod naglowka "Co sie
-        # wlasnie stalo" i przestalo go wylaczac dla Kamila — bo to
-        # ludzki tekst, nie maszynownia. Ale przepuscilem go obok
-        # _kod_dla_tej_roli(), ktore v400 zalozylo na pozostale
-        # drogi.
-        #
-        # A Ola pisze w swoich odczytach kod. ZMIERZONE NA TYM
-        # BIEGU: w jej odczytach jest 4493 znakow blokow ```, i
-        # dokladnie tyle dostal KAMIL — ktory kodu nie pisze, nie
-        # uruchamia i nie recenzuje, i ktory do v404 nie dostawal
-        # tego bloku w ogole.
-        #
-        # Bartek, Marek i Tomek dostaja go dalej w calosci: sa w
-        # _ROLE_PRZY_KODZIE.
-        _odczyt_oli = _only_if_new(
-            role_name,
-            "odczyt_oli",
-            (
-                "\nOla tak to czyta (jej odczyt, nie sprawdzony "
-                "fakt):\n"
-                + _kod_dla_tej_roli(
-                    # v411: jej odczyt tez jest wypowiedzia do nikogo
-                    # konkretnie — wstep i fakt o reszcie.
-                    _zajawka(readable_report.strip()),
-                    role_name
-                )
-                + "\n"
-            )
-            if (readable_report.strip() and role_name != "BROWSER")
-            else ""
         )
 
         pieces = [
@@ -30615,9 +30471,11 @@ def consult_team(
             # komunikat bledu ma juz w streszczeniu Oli. Ta sama
             # zasada, co przy checkliscie i liscie narzedzi telefonu.
             (_co_sie_stalo + "\n") if _co_sie_stalo else "",
-            # v404: odczyt Oli — osobno od faktow, pod jej imieniem.
-            # Patrz _odczyt_oli wyzej.
-            _odczyt_oli,
+            # v416: odczyt Oli nie idzie tu do nikogo. To wypowiedz
+            # do nikogo konkretnie, wiec trafia tylko do MAIN-a (patrz
+            # "odczyt_oli" w consult_team). To, co pisze DO kogos po
+            # imieniu, i tak dochodzi osobno: ola_role_callouts.
+            "",
             # v413: bez tool_hint — patrz wyzej.
             "",
             # v321: ten kanal tez jest maszynownia.
@@ -32061,6 +31919,10 @@ def consult_team(
         "exchange": _wymiana_dla_maina(team_exchange),
         # v408: rozmowy z tego kroku, kazda osobno — patrz _rozmowy.
         "rozmowy": _rozmowy,
+        # v416: odczyt raportu przez Ole — jej wypowiedz do nikogo,
+        # wiec tylko do MAIN-a. Czesci, w ktorych wola kogos po
+        # imieniu, poszly juz do tych osob (ola_role_callouts).
+        "odczyt_oli": readable_report,
     }
 
 
@@ -32431,6 +32293,9 @@ tym kroku dopytać jedną osobę:
          _kod_na_jedna_linie(_exchange)),
         ("Ola streszcza:",
          _kod_na_jedna_linie(team.get("browser", ""))),
+        # v416: do v415 szlo to do zespolu, a MAIN-owi nie.
+        ("Ola tak to czyta:",
+         _kod_na_jedna_linie(team.get("odczyt_oli", ""))),
         ("Wojtek:",
          _kod_na_jedna_linie(team.get("wojtek", ""))),
     ):
