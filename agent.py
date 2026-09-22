@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v419
+AEL-MINI AUTONOMOUS AGENT v420
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v419")
+    print("             AEL-MINI AUTONOMOUS AGENT v420")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -23582,6 +23582,53 @@ def _wyrownaj_blok(raw):
     return "\n".join(linie).lstrip(" ").rstrip()
 
 
+def _obcy_jezyk_dla(sciezka, znacznik, kod):
+    """
+    Czy ten blok jest na pewno w innym jezyku niz plik `sciezka`.
+
+    v420. Uzytkownik pokazal odczyt Oli: "plik MainActivity.kt w
+    srodku ma XML: <?xml version=...> — to wyglada na layout
+    Androida zapisany jako MainActivity.kt". Pytal, czy to wymysl
+    DeepSeeka, czy nasza wina. Nasza: extract_code_block() przy
+    JEDNYM bloku oddawal go bez pytania, do jakiego jest pliku, a
+    gdy _blok_dla_pliku() nie rozstrzygnal — bral NAJDLUZSZY. Layout
+    XML bywa dluzszy niz Activity, wiec wygrywal.
+
+    Jezyk znamy tylko z twardych znakow: znacznik po ``` (xml,
+    kotlin, bash...), shebang, albo "<?xml" na poczatku. Blok bez
+    zadnego z nich nie jest "obcy" — nie zgadujemy. Rozszerzenia,
+    ktore nie sa niczyim jezykiem (.txt, .conf), przyjmuja wszystko.
+    """
+
+    nazwa = str(sciezka or "").split("/")[-1].lower()
+    kropka = nazwa.rfind(".")
+
+    if kropka < 0:
+        return False
+
+    cel = nazwa[kropka:]
+
+    if cel not in _ROZSZERZENIA_ZAJETE:
+        return False
+
+    kod = str(kod or "")
+
+    z_shebanga = _rozszerzenie_z_shebanga(kod)
+
+    if z_shebanga:
+        return z_shebanga != cel
+
+    znacznik = str(znacznik or "").strip().lower()
+
+    if znacznik in _ROZSZERZENIA_JEZYKA:
+        return cel not in _ROZSZERZENIA_JEZYKA[znacznik]
+
+    if kod.lstrip().startswith("<?xml"):
+        return cel != ".xml"
+
+    return False
+
+
 def extract_code_block(text, sciezka=None):
     """
     Wyciąga zawartość PIERWSZEGO bloku ```...``` z tekstu.
@@ -23624,17 +23671,29 @@ def extract_code_block(text, sciezka=None):
     #   2. przy remisie: blok NAJDLUZSZY.
     # Gdy blok jest tylko jeden, zachowanie jest identyczne jak dotad.
     blocks = re.findall(
-        r"```[a-zA-Z0-9_+-]*\n(.*?)```",
+        r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
         text or "",
         re.DOTALL
     )
 
     candidates = []
 
-    for raw in blocks:
+    for znacznik, raw in blocks:
         code = _wyrownaj_blok(raw)
-        if code.strip():
-            candidates.append(code)
+        if not code.strip():
+            continue
+        # v420: blok w INNYM jezyku niz plik nie jest trescia tego
+        # pliku — patrz _obcy_jezyk_dla().
+        # Wyjatek: blok powloki, ktory heredokiem tworzy WLASNIE ten
+        # plik (`cat > MainActivity.kt << 'EOF'`) — tresc pliku jest
+        # w srodku i to ja ocenia _sama_tresc_pliku() nizej.
+        if (
+            sciezka
+            and not _tresc_z_heredoc(code, sciezka)
+            and _obcy_jezyk_dla(sciezka, znacznik, code)
+        ):
+            continue
+        candidates.append(code)
 
     if not candidates:
         return None
