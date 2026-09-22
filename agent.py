@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v411
+AEL-MINI AUTONOMOUS AGENT v412
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v411")
+    print("             AEL-MINI AUTONOMOUS AGENT v412")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29164,9 +29164,8 @@ def _kod_dla_tej_roli(tekst, rola):
 # nie prosil — albo dla uzytkownika.
 #
 # Nie tniemy w polowie zdania ani akapitu: bierzemy cale akapity
-# wstepu, a o reszcie mowimy faktem — o czym autor pisal dalej i ile
-# to ma. Gdy wstepu brakuje, dobieramy pierwsze akapity pierwszej
-# sekcji. Gdy wstep konczy sie dwukropkiem, dobieramy to, na co
+# wstepu i nic poza nimi (v412: bez spisu tego, co bylo dalej). Gdy
+# wstepu brakuje, dobieramy pierwsze akapity pierwszej sekcji. Gdy wstep konczy sie dwukropkiem, dobieramy to, na co
 # wskazuje.
 #
 # CALOSC dostaje nadal ten, kogo autor zawolal po imieniu, i ten,
@@ -29181,10 +29180,16 @@ _ZAJAWKA_MIN = 200
 _NAGLOWEK_MD_RE = re.compile(r"^#{1,4}\s+(.+?)\s*#*\s*$", re.M)
 
 
-def _zajawka(tekst, kto="Autor"):
+def _zajawka(tekst):
     """
-    Wstep autora i fakt o tym, co pisal dalej. Krotkie wypowiedzi
-    wracaja w calosci.
+    Wstep autora — jego wlasne slowa, cale akapity. Krotkie
+    wypowiedzi wracaja w calosci.
+
+    v412: bez zadnego dopisku Pythona. Uzytkownik: "nie spisow,
+    zadnych spisow — ma byc normalna rozmowa miedzy agentami". Do
+    v411 za wstepem szla linia "(X pisal dalej: A · B · C — cala
+    wypowiedz ma N znakow)". To byl spis, nie rozmowa. Teraz odbiorca
+    dostaje to, co autor powiedzial, i nic wiecej.
     """
 
     tekst = str(tekst or "").strip()
@@ -29198,7 +29203,7 @@ def _zajawka(tekst, kto="Autor"):
     dl = 0
     w_sekcji = False
 
-    for i, a in enumerate(akapity):
+    for a in akapity:
 
         if a.startswith("```"):
             break
@@ -29238,20 +29243,7 @@ def _zajawka(tekst, kto="Autor"):
     if len(poczatek) >= 0.7 * len(tekst):
         return tekst
 
-    reszta = tekst[tekst.find(wziete[-1]) + len(wziete[-1]):]
-    naglowki = [h.strip("*_ ") for h in _NAGLOWEK_MD_RE.findall(reszta)]
-
-    fakt = "(" + str(kto) + " pisał dalej"
-
-    if naglowki:
-        fakt += ": " + " · ".join(naglowki[:8])
-
-    fakt += " — cała wypowiedź ma " + str(len(tekst)) + " znaków"
-
-    if "```" in reszta:
-        fakt += ", w tym kod"
-
-    return poczatek + "\n\n" + fakt + ")"
+    return poczatek
 
 
 def _chce_calosci(tekst, rola):
@@ -29288,7 +29280,7 @@ def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     # v411: nikt jej nie wolal i o to nie prosila — wstep autora
     # zamiast calego eseju. Patrz _zajawka().
     if not _chce_calosci(tekst, rola):
-        moje = _zajawka(moje, str(autor).split(" (")[0])
+        moje = _zajawka(moje)
 
     # v400: kod zwijamy dopiero TU, po wybraniu jego czesci — zeby
     # _dla_tej_roli() widzialo dokladnie ten sam tekst, co dotad.
@@ -29896,8 +29888,7 @@ def _wymiana_dla_maina(wymiana, zostaw_z_konca=2):
     i czym skonczylo.
 
     Srodkowe rundy pomijamy w calosci — nie tniemy ich w polowie,
-    tylko nie wysylamy. Gdy cos pominieto, mowimy ile i czyje to
-    bylo; to fakt o rozmowie, nie rada, jak go czytac.
+    tylko nie wysylamy.
     """
 
     wymiana = list(wymiana or [])
@@ -29907,22 +29898,11 @@ def _wymiana_dla_maina(wymiana, zostaw_z_konca=2):
 
     pierwsza = wymiana[:1]
     ostatnie = wymiana[-zostaw_z_konca:]
-    pominiete = wymiana[1:len(wymiana) - zostaw_z_konca]
-
+    # v412: bez dopisku Pythona o pominietych rundach. Uzytkownik:
+    # "nie spisow, zadnych spisow — ma byc normalna rozmowa". MAIN
+    # dostaje to, co powiedzieli: od czego sie zaczelo i czym sie
+    # skonczylo.
     czesci = [kto + ": " + tekst for kto, tekst in pierwsza]
-
-    if pominiete:
-        _kto = []
-        for kto, _ in pominiete:
-            if kto not in _kto:
-                _kto.append(kto)
-        czesci.append(
-            "(potem " + " i ".join(_kto) + " wymienili sie jeszcze "
-            + str(len(pominiete)) + " raz"
-            + ("y" if 2 <= len(pominiete) <= 4 else "")
-            + "; ponizej to, czym to sie skonczylo)"
-        )
-
     czesci.extend(kto + ": " + tekst for kto, tekst in ostatnie)
 
     return "\n\n".join(czesci)
@@ -30498,7 +30478,7 @@ def consult_team(
                 + _kod_dla_tej_roli(
                     # v411: jej odczyt tez jest wypowiedzia do nikogo
                     # konkretnie — wstep i fakt o reszcie.
-                    _zajawka(readable_report.strip(), "Ola"),
+                    _zajawka(readable_report.strip()),
                     role_name
                 )
                 + "\n"
