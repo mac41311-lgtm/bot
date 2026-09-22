@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v401
+AEL-MINI AUTONOMOUS AGENT v402
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v401")
+    print("             AEL-MINI AUTONOMOUS AGENT v402")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29467,25 +29467,61 @@ def _critic_objects(text):
     return _krytyk_pisze_do_kogos(text)
 
 
+# v402: imie w otwarciu, w dowolnej formie — nie tylko w wolaczu.
+#
+# v401 pytalo o to _ADDRESS_RE, a ono wymaga zawolania: imie musi
+# stac przed dwukropkiem, przecinkiem albo myslnikiem ("Tomku, ...",
+# "Tomek: ..."). Na biegu 21:00 Marek pisal dokladnie tak i regula
+# trafiala 5/5. Na biegu 22:11 pisze o Tomku w trzeciej osobie:
+#
+#     "Marek tu. Tomek zrobil cos, czego sie nie spodziewalem..."
+#     "Marek. Tomek wreszcie przyswoil moja poprawke..."
+#     "Marek. Zatrzymaj sie na jedno zdanie: Tomek cytuje
+#      ~/uvicorn.log, ktorego nie ma w dowodach."
+#
+# Zadne z tych zdan nie jest zawolaniem, wiec para otwarla sie
+# 1 raz na 9 — a Marek pisal o Tomku w osmiu z nich.
+#
+# To nie jest ten sam kanal, co skrzynka. Skrzynka pyta "czy on
+# napisal DO niego", i tam wolacz ma sens. Tu pytanie jest inne:
+# czy ocena krytyka dotyczy tej osoby. Na to odpowiada samo imie,
+# w dowolnym przypadku.
+_IMIE_OCENIANEGO_RE = re.compile(
+    r"\b("
+    + "|".join(sorted(
+        (
+            k for k, v in _VOCATIVE_TO_ROLE.items()
+            if v in ("PLANNER", "ENGINEER")
+        ),
+        key=len, reverse=True
+    ))
+    # Formy, ktorych _VOCATIVE_TO_ROLE nie ma, bo do zawolania sie
+    # nie nadaja: "Tomkowi", "Tomkiem", "Bartkowi", "Bartkiem".
+    + r"|Tomkowi|Tomkiem|Bartkowi|Bartkiem"
+    + r")\b",
+    re.IGNORECASE
+)
+
+
 def _krytyk_pisze_do_kogos(text):
     """
-    Czy Marek zwraca sie na poczatku wprost do Tomka albo Bartka.
+    Czy ocena Marka dotyczy Tomka albo Bartka.
 
-    Ten sam kanal imion, ktorym gada caly zespol — patrz
-    _ADDRESS_RE. Nie ma tu zadnego czytania intencji: liczy sie, ze
-    padlo imie osoby, ktorej plan albo kod jest oceniany.
+    Nie ma tu zadnego czytania intencji ani slownika ocen: liczy
+    sie, ze w otwarciu padlo imie osoby, ktorej plan albo kod jest
+    oceniany.
+
+    SPRAWDZONE NA DWOCH BIEGACH: 21:00 — 5/5, 22:11 — 8/9. Dziewiata
+    wypowiedz zostaje zamknieta i slusznie: dotyczy Oli, nie Tomka
+    ani Bartka. Na wypowiedziach ze zgoda nie otwiera sie ani razu —
+    _CRITIC_ACCEPT_RE lapie je wczesniej, w _critic_verdict().
     """
 
-    poczatek = str(text or "")[:_CRITIC_OPENING_CHARS]
-
-    for m in _ADDRESS_RE.finditer(poczatek):
-
-        if _VOCATIVE_TO_ROLE.get(
-            m.group(1).upper()
-        ) in ("PLANNER", "ENGINEER"):
-            return True
-
-    return False
+    return bool(
+        _IMIE_OCENIANEGO_RE.search(
+            str(text or "")[:_CRITIC_OPENING_CHARS]
+        )
+    )
 
 
 CRITIC_QUESTION_MAX_AGE = 2
