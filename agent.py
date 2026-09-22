@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v421
+AEL-MINI AUTONOMOUS AGENT v422
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v421")
+    print("             AEL-MINI AUTONOMOUS AGENT v422")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -32540,12 +32540,15 @@ tym kroku dopytać jedną osobę:
     # v347: do MAIN-a kod idzie jako jedna linia. On decyduje, a nie
     # pisze — patrz _kod_na_jedna_linie(). Pliki i tak zapisuje
     # Python, z surowej wypowiedzi autora.
-    for _wstep, _tekst in (
-        ("Tomek zaplanował tak:",
+    # v422: kazdy glos z rola, zeby wiedziec, czy padl w TYM kroku.
+    _milczeli = []
+
+    for _rola, _wstep, _tekst in (
+        ("PLANNER", "Tomek zaplanował tak:",
          _kod_na_jedna_linie(team.get("planner", ""))),
-        ("Bartek na to:",
+        ("ENGINEER", "Bartek na to:",
          _kod_na_jedna_linie(team.get("engineer", ""))),
-        ("Kamil sprawdził:",
+        ("RESEARCHER", "Kamil sprawdził:",
          _kod_na_jedna_linie(team.get("researcher", ""))),
         # v401: gdy wymiana sie odbyla, Marek idzie RAZ.
         #
@@ -32555,19 +32558,49 @@ tym kroku dopytać jedną osobę:
         # zamknieta (patrz tam), wymiana nie odbywala sie nigdy i
         # nikt tego nie zobaczyl. Od chwili, gdy zaczyna dzialac,
         # oba wpisy staja obok siebie i MAIN czyta Marka dwa razy.
-        ("Marek ocenia:",
+        ("CRITIC", "Marek ocenia:",
          "" if _exchange
          else _kod_na_jedna_linie(team.get("critic", ""))),
-        ("Marek zgłosił zastrzeżenie i dostał odpowiedź:",
+        (None, "Marek zgłosił zastrzeżenie i dostał odpowiedź:",
          _kod_na_jedna_linie(_exchange)),
-        ("Ola streszcza:",
+        ("BROWSER", "Ola streszcza:",
          _kod_na_jedna_linie(team.get("browser", ""))),
         # v416: do v415 szlo to do zespolu, a MAIN-owi nie.
-        ("Ola tak to czyta:",
+        (None, "Ola tak to czyta:",
          _kod_na_jedna_linie(team.get("odczyt_oli", ""))),
-        ("Wojtek:",
+        ("WOJTEK", "Wojtek:",
          _kod_na_jedna_linie(team.get("wojtek", ""))),
     ):
+
+        # v422: tylko to, co padlo w TYM kroku.
+        #
+        # Uzytkownik, patrzac na terminal: "czemu nastepne
+        # wiadomosci sie uruchamiaja?" — po planie Tomka szly do
+        # MAIN-a osobno "Bartek, wczesniej: (Bartek nie zabieral
+        # jeszcze glosu.)" i "(Kamil nie odpowiedzial w tym kroku)".
+        # Kazda to osobne wywolanie DeepSeeka, na ktore MAIN
+        # odpisuje pelna decyzja, ktorej nie uzywamy.
+        #
+        # ZMIERZONE NA LOGACH: 22 ze 115 wiadomosci do MAIN-a to
+        # STARE wypowiedzi wyslane jeszcze raz ("Tomek, wczesniej
+        # (krok 3): ..."), 52 tys. znakow — a MAIN ma je w swojej
+        # rozmowie od kroku, w ktorym padly (v406). Dalsze 9 to same
+        # notki o pustej odpowiedzi.
+        #
+        # Rola, ktora w tym kroku nie mowila — pomijamy. Rola, ktora
+        # mowila, ale oddala pustke — jedno zdanie przy decyzji,
+        # bez osobnego wywolania. Wymiana z Markiem i odczyt Oli
+        # (rola None) powstaja zawsze w tym kroku.
+        if _rola is not None:
+
+            if _role_response_step.get(_rola) != step:
+                continue
+
+            if not str(
+                (team.get("kod_full") or {}).get(_rola) or ""
+            ).strip():
+                _milczeli.append(_kto_to_napisal(_rola))
+                continue
 
         if str(_tekst or "").strip():
             _glosy.append(_wstep + "\n" + str(_tekst).strip())
@@ -32624,6 +32657,17 @@ tym kroku dopytać jedną osobę:
             deepseek("MAIN", _glos)
 
         team_block = ""
+
+    # v422: kto w tym kroku nie odpowiedzial — jednym zdaniem, w tej
+    # samej wiadomosci co decyzja. Patrz _milczeli wyzej.
+    if _milczeli and not asked_followup:
+        team_block = (
+            (team_block + "\n\n" if team_block else "")
+            + ", ".join(_milczeli)
+            + " nie "
+            + ("odpowiedział" if len(_milczeli) == 1 else "odpowiedzieli")
+            + " w tym kroku — sesja oddała pusty tekst."
+        )
 
     # v363: PRZY ODPOWIEDZI NA ASK NARADA NIE IDZIE DRUGI RAZ.
     #
@@ -33706,7 +33750,66 @@ def _pierwsza_wiadomosc(rola=None):
     if rola is not None and str(rola) not in _ROLE_NA_TELEFONIE:
         return ""
 
+    # v422: MAIN dostaje na poczatek, jak dziala program.
+    if str(rola) == "MAIN":
+        return "Termux API, ADB DEBUGOWANIE, Android\n\n" + _JAK_TO_DZIALA
+
     return "Termux API, ADB DEBUGOWANIE, Android"
+
+
+# v422: opis programu dla MAIN-a — w pierwszej wiadomosci jego
+# rozmowy, raz (patrz _pierwsza_wiadomosc i sesja w deepseek()).
+#
+# Uzytkownik: "MAIN-owi opisz po ludzku, co robia jakie role; on moze
+# wiedziec troche wiecej, jak dziala program i co robi w nim Gemini,
+# i Termux — ale fajnie, bez zakazow, tylko informacja, w pierwszej
+# wiadomosci". Kazde zdanie jest tu faktem o tym, jak ten kod dziala:
+#   - role: tozsamosci z *_PROMPT; Piotr i Ania: napraw_kod/patch,
+#   - narzedzia wykonawcy: deklaracje dla Gemini (termux_*, android_*,
+#     chrome_*), GEMINI_MAX_TOOL_CALLS,
+#   - kod kladzie Python: write_engineer_code_to / termux_write_file
+#     i kontrola autorstwa (v418),
+#   - glosy po kolei: v406; ASK w tym samym kroku: v363,
+#   - sciezki kodu na dysku: v419; ekran po dzialaniu na nim: v419.
+# Tylko MAIN: v345 dalej trzyma zespol z dala od tego, kto wykonuje.
+_JAK_TO_DZIALA = (
+    "Kilka słów o tym, jak to wszystko działa.\n\n"
+    "Program chodzi na telefonie z Androidem, w Termuxie. To zwykły "
+    "linuksowy terminal: katalog domowy to ~ "
+    "(/data/data/com.termux/files/home), jest Termux:API, a ADB jest "
+    "połączone bezprzewodowo z tym samym telefonem — przez nie da się "
+    "instalować APK, uruchamiać aplikacje i zaglądać na ekran.\n\n"
+    "Zespół to osoby na DeepSeeku, każda we własnej rozmowie:\n"
+    "- Tomek szuka sensownego następnego kroku,\n"
+    "- Kamil sprawdza fakty i szuka informacji w sieci,\n"
+    "- Marek ocenia plany Tomka i szuka w nich słabych punktów,\n"
+    "- Bartek pisze kod i skrypty,\n"
+    "- Ola opowiada po ludzku, co wyszło z wykonania,\n"
+    "- Wojtek patrzy na cel oczami zwykłego użytkownika,\n"
+    "- Ela ocenia, ile celu jest naprawdę zrobione,\n"
+    "- Piotr i Ania wchodzą, gdy kod się wysypie: Piotr szuka "
+    "przyczyny, Ania pisze poprawkę.\n\n"
+    "Ty decydujesz, co dalej. Twój TASK wykonuje Gemini — to on ma "
+    "ręce: uruchamia komendy w Termuxie (także w tle), czyta i "
+    "zapisuje pliki, klika i pisze na ekranie telefonu, obsługuje "
+    "Chrome. Na jedno zadanie ma około "
+    + str(GEMINI_MAX_TOOL_CALLS) + " wywołań narzędzi. Kod do plików "
+    "kładzie Python — dokładnie ten, który napisał ktoś z zespołu. "
+    "Gdy podasz write_engineer_code_to, ten kod ląduje pod tą "
+    "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia.\n\n"
+    "W każdym kroku wypowiedzi zespołu przychodzą do Ciebie po kolei, "
+    "każda osobno. Python bierze Twoją decyzję z ostatniej wiadomości "
+    "w kroku — tej, która przychodzi po nich. ASK to pytanie do "
+    "jednej osoby z zespołu; odpowiedź wraca w tym samym kroku. "
+    "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
+    "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
+    "cel.\n\n"
+    "Po wykonaniu dostajesz fakty z narzędzi: co wypisały, co się "
+    "udało, co padło. Kod, który leży już na dysku, widzisz jako "
+    "ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na dysku] — "
+    "można go po prostu uruchomić. Ekran telefonu i Chrome zobaczysz "
+    "po kroku, w którym Gemini coś na nich robiło."
+)
 
 
 # v409: kto dostaje na start zdanie o platformie — patrz
