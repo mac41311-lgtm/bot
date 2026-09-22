@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v404
+AEL-MINI AUTONOMOUS AGENT v405
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v404")
+    print("             AEL-MINI AUTONOMOUS AGENT v405")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -30254,12 +30254,34 @@ def consult_team(
         # Jej odczyt — osobno, pod jej imieniem, tym samym kanalem,
         # co kazdy inny glos kolegi (v256: _only_if_new dotyczy takze
         # wypowiedzi kolegow). Do niej samej nie wraca.
+        # v405: odczyt Oli to glos kolegi, wiec przechodzi przez tê
+        # sama bramke na kod, co kazdy inny glos.
+        #
+        # MOJ BLAD Z v404, zlapany na biegu 2026-09-22 17:43. v404
+        # slusznie wyprowadzilo odczyt Oli spod naglowka "Co sie
+        # wlasnie stalo" i przestalo go wylaczac dla Kamila — bo to
+        # ludzki tekst, nie maszynownia. Ale przepuscilem go obok
+        # _kod_dla_tej_roli(), ktore v400 zalozylo na pozostale
+        # drogi.
+        #
+        # A Ola pisze w swoich odczytach kod. ZMIERZONE NA TYM
+        # BIEGU: w jej odczytach jest 4493 znakow blokow ```, i
+        # dokladnie tyle dostal KAMIL — ktory kodu nie pisze, nie
+        # uruchamia i nie recenzuje, i ktory do v404 nie dostawal
+        # tego bloku w ogole.
+        #
+        # Bartek, Marek i Tomek dostaja go dalej w calosci: sa w
+        # _ROLE_PRZY_KODZIE.
         _odczyt_oli = _only_if_new(
             role_name,
             "odczyt_oli",
             (
                 "\nOla tak to czyta (jej odczyt, nie sprawdzony "
-                "fakt):\n" + readable_report.strip() + "\n"
+                "fakt):\n"
+                + _kod_dla_tej_roli(
+                    readable_report.strip(), role_name
+                )
+                + "\n"
             )
             if (readable_report.strip() and role_name != "BROWSER")
             else ""
