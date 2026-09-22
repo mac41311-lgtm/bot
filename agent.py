@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v416
+AEL-MINI AUTONOMOUS AGENT v417
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v416")
+    print("             AEL-MINI AUTONOMOUS AGENT v417")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -20626,6 +20626,54 @@ def _short_tool_evidence(result):
             + short(str(result.get("text", "")), 80)
         )
 
+    # v417: udane wywolanie mowi najpierw WYNIKIEM, a stderr dopiero
+    # za nim — tak, jak czlowiek widzi to w terminalu: oba naraz.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-22 19:44, krok 9).
+    # Szosta proba zbudowania APK sie UDALA. stdout: "Performing
+    # Incremental Install / Success / INSTALL_EXIT=0 / START_EXIT=0".
+    # stderr: "All files should be loaded. Notifying the device. /
+    # cat: /sdcard/dump.xml: No such file or directory" — czyli
+    # gadanie adb i nieudany zrzut ekranu PO instalacji.
+    #
+    # Evidence bralo stderr, bo "blad jest wazniejszy niz wyjscie".
+    # Zespol dostal wiec "cat: ... No such file" — i ani slowa o
+    # "Success". Dwie proby NIEUDANE zaczynaly sie od tego samego
+    # "All files should be loaded", wiec udana i nieudane wygladaly
+    # tak samo. MAIN w kroku 10 kazal "naprawic 4 bledy", skasowac
+    # katalog i zbudowac wszystko od zera. Tomek wiedzial o
+    # "Success" (z relacji wykonawcy), ale relacja to czyjes slowa,
+    # a to tu mialo byc pomiarem — i pomiar mowil co innego.
+    #
+    # Przy bledzie (ok=False albo sygnatura awarii w tresci)
+    # kolejnosc zostaje: tam liczy sie, CO sie zepsulo.
+    if (
+        result.get("ok") is True
+        and not _find_embedded_failure_signature(result)
+    ):
+
+        _wyjscie = ""
+
+        for key in ("stdout", "value", "content", "text"):
+
+            value = result.get(key)
+
+            if isinstance(value, (dict, list)):
+                continue
+
+            _wyjscie = str(value or "").strip()
+
+            if _wyjscie:
+                break
+
+        _stderr = str(result.get("stderr") or "").strip()
+
+        if _wyjscie and _stderr and not result.get("error"):
+            return (
+                short(_wyjscie, 160)
+                + " / stderr: " + short(_stderr, 100)
+            )
+
     # Kolejnosc ma znaczenie: blad jest wazniejszy niz wyjscie.
     for key in ("error", "stderr", "stdout", "value", "content", "text"):
 
@@ -27296,6 +27344,11 @@ _critic_verdict_for_engineer = None
 # niego oczekuje.
 _main_decision_for_team = None
 
+# v417: TRESC ostatniego zlecenia MAIN-a — obok "dlaczego" z
+# _main_decision_for_team. Osobno, zeby _o_kogo_prosi_main() dalej
+# czytalo samo uzasadnienie. Patrz main_decision_block.
+_main_task_for_team = ""
+
 
 # v350: o kogo MAIN prosi w swojej decyzji.
 #
@@ -27750,9 +27803,18 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # usunac z rozmowy; te zdania nie moga zniknac razem z nimi,
     # wiec ida tu, do relacji — jako zwykle zdania, bez naglowka.
     # Stad dostaje je i zespol ("Co sie wlasnie stalo"), i MAIN.
-    for _ostrz in (last_result.get("tool_warnings") or [])[:8]:
-        if str(_ostrz or "").strip():
-            parts.append(str(_ostrz).strip())
+    #
+    # v417: kazde zdanie raz. Bieg 2026-09-22 19:44, krok 10: trzy
+    # identyczne "to WYGLADA jak prawdziwa awaria" (po jednym na
+    # nieudana instalacje) szly jedno pod drugim — a udana instalacja
+    # nie miala zadnego zdania. Trzy razy to samo brzmi jak trzy
+    # rozne fakty.
+    _ostrzezenia = []
+    for _ostrz in (last_result.get("tool_warnings") or []):
+        _ostrz = str(_ostrz or "").strip()
+        if _ostrz and _ostrz not in _ostrzezenia:
+            _ostrzezenia.append(_ostrz)
+    parts.extend(_ostrzezenia[:8])
 
     tool = last_result.get("tool")
 
@@ -30219,30 +30281,53 @@ def consult_team(
         if isinstance(last_result, dict) else str(last_result or "")
     )
 
-    error_details_block = ""
-
-    if (
-        readable_report
-        and isinstance(last_result, dict)
-        and (
-            last_result.get("ok") is False
-            or last_result.get("status") == "GEMINI_TOOL_ERROR"
-        )
-    ):
-        error_details_block = (
-            "\n\nNarzędzie zwróciło dokładnie to:\n"
-            + _condense_last_result_for_team(
-                last_result_for_team,
-                limit=1400
-            )
-        )
+    # v417: bez "Narzędzie zwróciło dokładnie to:". Ten blok
+    # doklejal przy bledzie _condense_last_result_for_team() — dokladnie
+    # to samo, co od v404 idzie juz pod "Co się właśnie stało" (wtedy
+    # tamten naglowek niosl esej Oli, wiec fakty trzeba bylo dolozyc).
+    # Bieg 2026-09-22 19:44, krok 10: Bartek i Marek dostali te sama
+    # relacje dwa razy, jedna pod druga — 23 wiadomosci na 4 logach.
+    # Fakty ida raz.
 
     # Co MAIN postanowił w POPRZEDNIM kroku — patrz
     # _main_decision_for_team. Bez tego zespół proponuje w próżnię:
     # nie wie, czy jego plan został użyty, zmieniony, czy odrzucony.
+    #
+    # v417: ...i CO zlecil, nie tylko dlaczego.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-22 19:44). Do
+    # zespolu szlo samo uzasadnienie ("TASK — Rozstrzygam zastrzezenie
+    # Marka wprost..."), a tresc zlecenia nie szla nigdy. W kroku 11
+    # MAIN zlecil: "odczytaj istniejacy raport 2a, jedna komenda: cat
+    # ~/autocaller/TOOLCHAIN_PROBE.md, zero budowania". Wykonanie
+    # zrobilo dokladnie to. W kroku 12 Marek, Tomek, Wojtek i Ola
+    # zobaczyli w wyniku stary plik ze starymi godzinami — i orzekli,
+    # ze "executor znowu pobral zly TASK z kolejki", a "zlecone dwa
+    # termux_run NIE ZOSTALY WYKONANE" (to byly propozycje z narady,
+    # nie zlecenie). MAIN oglosil FAILED: "napraw kolejke".
+    #
+    # Kolejka dzialala: we wszystkich 11 krokach wykonano zlecenie z
+    # TEGO kroku. Zespol porownywal wynik z tym, co sam proponowal,
+    # bo tego, co naprawde poszlo do wykonania, nie widzial.
+    #
+    # Kod zwiniety do jednej linii — to, co robil, widac w wyniku
+    # ponizej; tu chodzi o to, O CO prosil MAIN.
     main_decision_block = (
         "\nMAIN:\n"
         + _main_decision_for_team
+        + (
+            "\n\nTreść zlecenia:\n"
+            # Jednolinijkowa komenda JEST zleceniem ("cat ~/plik") —
+            # zostaje w tekscie. Zwijamy skrypty.
+            + _kod_na_jedna_linie(re.sub(
+                r"```[a-zA-Z0-9_+-]*\n[ \t]*([^\n`]+?)[ \t]*\n```",
+                r"`\1`",
+                str(_main_task_for_team)
+            ))
+            if str(_main_task_for_team or "").strip()
+            and str(_main_decision_for_team).upper().startswith("TASK")
+            else ""
+        )
         + "\n"
     ) if _main_decision_for_team else ""
 
@@ -30398,7 +30483,6 @@ def consult_team(
             ("" if _bez_maszynowni
              else "\nCo się właśnie stało:\n" + raw_report_material)
             + success_values_block
-            + ("" if _bez_maszynowni else error_details_block)
         )
 
         pieces = [
@@ -37226,6 +37310,8 @@ albo:
         # gdzie MAIN mowil, o kogo mu chodzi, a _o_kogo_prosi_main
         # czytalo ten sam ogryzek. 1200 miesci kazde uzasadnienie,
         # jakie u Ciebie padlo, z zapasem.
+        globals()["_main_task_for_team"] = ""
+
         globals()["_main_decision_for_team"] = short(
             dtype
             + (
@@ -37563,6 +37649,8 @@ Zwróć tylko JSON.
                 }
 
                 continue
+
+            globals()["_main_task_for_team"] = task_text
 
             # --------------------------------------------------
             # ZAPIS KODU ENGINEER BEZ UDZIAŁU GEMINI
