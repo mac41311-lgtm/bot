@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v407
+AEL-MINI AUTONOMOUS AGENT v408
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v407")
+    print("             AEL-MINI AUTONOMOUS AGENT v408")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -29713,6 +29713,14 @@ def _podpis_starej_wypowiedzi(imie, rola):
     )
 
 
+# v408: kogo mozna dopytac w trakcie kroku — ci, ktorzy maja
+# wlasna sesje rozmowy. MAIN ma do tego ASK; Ela, Piotr i Ania sa
+# wolani przez Pythona w konkretnych chwilach, nie przez zespol.
+_ROLE_DO_ROZMOWY = (
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
+)
+
+
 def _wymiana_dla_maina(wymiana, zostaw_z_konca=2):
     """
     Wymiana zdan pary, widziana przez MAIN-a: od czego sie zaczelo
@@ -31568,6 +31576,121 @@ def consult_team(
         # Marek nie ma zastrzeżeń — seria się zeruje.
         _critic_block_streak = 0
 
+    # v408: KTO ZOSTAL ZAWOLANY, TEN ODPOWIADA W TYM SAMYM KROKU.
+    # ---------------------------------------------------------------
+    # Uzytkownik: "ma to byc normalna krotka rozmowa, nie wszystko w
+    # jednej wiadomosci", "ktos pisze i odp, i pisze i odp".
+    #
+    # ZMIERZONE NA BIEGU 2026-09-22 17:43 (49 wypowiedzi):
+    #
+    #   PLANNER  -> CRITIC     7 x
+    #   CRITIC   -> PLANNER    6 x
+    #   ENGINEER -> PLANNER    1 x
+    #   ENGINEER -> CRITIC     1 x
+    #
+    #   Ola, Kamil, Wojtek, Ela: 100% wypowiedzi do nikogo.
+    #
+    # 13 z 15 par to Tomek<->Marek, bo kanal pary (team_exchange)
+    # otwiera sie tylko dla Marka. Cala reszta mowi raz i koniec.
+    #
+    # A zawolania do innych SA — tylko czekaja. Kto zawolal kogos,
+    # kto juz sie w tym kroku odezwal (Bartek -> Tomek, Marek ->
+    # Kamil), ten list lezy w _role_inbox do NASTEPNEGO kroku i
+    # tam ginie w pelnej naradzie. Po rundzie skrzynki zawieraja
+    # wiec dokladnie jedno: pytania, na ktore nikt nie odpowiedzial.
+    #
+    # Wiec pytamy te osoby teraz — kazda osobno, jedna wiadomoscia,
+    # w ktorej jest TYLKO to, co do niej napisano (ta sama tresc,
+    # ktora i tak przeczytalaby w nastepnym kroku). Jej odpowiedz
+    # wraca do tego, kto pytal, a MAIN dostaje te rozmowe jako
+    # osobny glos — v406 przekaze ja osobna wiadomoscia.
+    #
+    # Jedna runda na krok: pytamy tylko tych, ktorzy czekali w
+    # chwili konca narady. Odpowiedz trafia do pytajacego na jego
+    # nastepna ture — i tam rozmowa idzie dalej.
+    _rozmowy = []
+
+    # Kto juz odpowiedzial Markowi w wymianie wyzej, ten ma te
+    # rozmowe za soba — wymiana pisze do niego wprost, z pominieciem
+    # skrzynki, wiec list Marka dalej tam lezy. Bez tego pytalibysmy
+    # go drugi raz o to samo, a MAIN dostalby te sama rozmowe dwa
+    # razy. List zdejmujemy tez na nastepny krok: odpowiedz jest juz
+    # w jego rozmowie.
+    _marek = _ROLE_DISPLAY_NAME.get("CRITIC", "Marek")
+
+    for _rola, _imie_roli in _ROLE_DISPLAY_NAME.items():
+
+        if _rola == "CRITIC" or _rola not in _role_inbox:
+            continue
+
+        if not any(kto == _imie_roli for kto, _ in team_exchange):
+            continue
+
+        _role_inbox[_rola] = [
+            (n, t) for n, t in _role_inbox[_rola] if n != _marek
+        ]
+
+        if not _role_inbox[_rola]:
+            del _role_inbox[_rola]
+
+    for _adresat in [
+        r for r in list(_role_inbox.keys())
+        if r in _ROLE_DO_ROZMOWY
+    ]:
+
+        # Kto czekal na odpowiedz — zanim _collect_role_messages()
+        # zdejmie to zawolanie (patrz _kto_mnie_zawolal, v397).
+        _wolajacy = sorted(_kto_mnie_zawolal.get(_adresat, set()))
+
+        _do_niego = _role_inbox_block(_adresat)
+
+        if not _do_niego.strip():
+            continue
+
+        log(
+            "DEEPSEEK",
+            _adresat + " był wołany i jeszcze nie odpowiedział — "
+            "pytam teraz, osobno, zamiast odkładać to do "
+            "następnego kroku."
+        )
+
+        if _adresat == "RESEARCHER":
+            _odp = researcher_web_search(
+                deepseek(_adresat, _do_niego), _do_niego
+            )
+        else:
+            _odp = deepseek(_adresat, _do_niego)
+
+        if not str(_odp or "").strip():
+            continue
+
+        _odp = str(_odp).strip()
+        _imie = _ROLE_DISPLAY_NAME.get(_adresat, _adresat)
+
+        # Jego odpowiedz to wypowiedz jak kazda inna: jesli kogos w
+        # niej wola, trafi to tam, gdzie trzeba.
+        _collect_role_messages(_adresat, _odp)
+
+        # I wraca do tego, kto pytal — chyba ze juz tam trafila,
+        # bo odpowiadajacy zawolal go po imieniu.
+        for _kto in _wolajacy:
+
+            if _kto == "MAIN":
+                continue
+
+            if any(
+                n == _imie for n, _ in _role_inbox.get(_kto, [])
+            ):
+                continue
+
+            _role_inbox.setdefault(_kto, []).append(
+                (_imie, _kod_dla_tej_roli(_odp, _kto))
+            )
+
+        _rozmowy.append(
+            _do_niego.strip() + "\n\n" + _imie + ":\n" + _odp
+        )
+
     # v192: zapamietujemy sciezki, o ktore zespol pytal w TEJ
     # naradzie, zeby w NASTEPNEJ dostac na nie konkretna odpowiedz
     # od Pythona (patrz _remember_team_file_questions).
@@ -31677,6 +31800,8 @@ def consult_team(
         # tylko nie wszystkie. Przy jednej rundzie nic sie nie
         # zmienia, bo nie ma czego pomijac.
         "exchange": _wymiana_dla_maina(team_exchange),
+        # v408: rozmowy z tego kroku, kazda osobno — patrz _rozmowy.
+        "rozmowy": _rozmowy,
     }
 
 
@@ -32047,6 +32172,13 @@ tym kroku dopytać jedną osobę:
 
         if str(_tekst or "").strip():
             _glosy.append(_wstep + "\n" + str(_tekst).strip())
+
+    # v408: kazda rozmowa z tego kroku to osobny glos — i dzieki v406
+    # osobna wiadomosc do MAIN-a. Pytanie i odpowiedz razem, bo
+    # jedno bez drugiego nie mowi, o czym byla mowa.
+    for _rozmowa in team.get("rozmowy") or []:
+        if str(_rozmowa or "").strip():
+            _glosy.append(_kod_na_jedna_linie(str(_rozmowa).strip()))
 
     team_block = "\n\n".join(_glosy)
 
