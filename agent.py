@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v403
+AEL-MINI AUTONOMOUS AGENT v404
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v403")
+    print("             AEL-MINI AUTONOMOUS AGENT v404")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -30192,17 +30192,77 @@ def consult_team(
         # Ola ma juz jedno i drugie: sama przeczytala surowy
         # material i sama napisala z niego streszczenie. Dostaje
         # wiec to, z czego tlumaczyla — fakty, nie wlasna proze.
-        _moj_raport = (
-            raw_report_material
-            if (role_name == "BROWSER" and readable_report)
-            else report_body
-        )
+        #
+        # v404: wyjatek dla niej byl juz niepotrzebny — od v404 pod
+        # tym naglowkiem NIKT nie dostaje cudzej prozy, tylko fakty.
+        # Patrz nizej.
 
+        # v404: pod naglowkiem "Co sie wlasnie stalo" idzie to, co
+        # sie stalo. Czyjas OCENA idzie pod jego imieniem.
+        # ---------------------------------------------------------
+        # Uzytkownik: "rozdziel te relacje z wykonania, bez ciecia
+        # zdan".
+        #
+        # ZMIERZONE NA BIEGU 2026-09-21 22:11. Najpierw sprawdzilem
+        # oczywista droge — podzial po adresacie, tak jak u
+        # wszystkich innych. Nie da sie: w SIEDMIU odpowiedziach Oli
+        # nie pada ANI JEDNO zawolanie po imieniu, ani jej wlasnym
+        # kanalem (_OLA_ROLE_CALLOUT_RE), ani kanalem zespolu
+        # (_ADDRESS_RE). Nie ma czego rozdzielac po odbiorcy.
+        #
+        # Ale sekcje jej raportow mowia, co tam naprawde jest:
+        #
+        #     "main.py — voice_bot_demo"
+        #     "Kod, ktory sie nie urwie – zapisz go u siebie recznie"
+        #     "Wariant B – naprawde zero zlotych"
+        #     "Powiedz mi, ktora droge wybierasz"
+        #     "Moja ocena koncowa"
+        #
+        # To nie jest relacja z wykonania. To jest wypowiedz kolegi —
+        # z kodem, wariantami i pytaniem do czlowieka — podana
+        # czterem rolom pod naglowkiem "Co sie wlasnie stalo:",
+        # czyli jako fakt o tym, co zaszlo. Srednio 4600 znakow,
+        # najdluzsza 7437.
+        #
+        # Wiec rozdzielamy nie tekst, tylko DWIE ROZNE RZECZY, ktore
+        # dotad byly sklejone w jeden blok. Zadne zdanie nie jest
+        # ciete: fakty ida w calosci, jej slowa ida w calosci, tyle
+        # ze osobno i pod wlasciwa etykieta.
+        #
+        # Skutkiem ubocznym naprawia sie stara niezgodnosc: komentarz
+        # przy tym bloku od v269 mowi, ze Kamil "sam komunikat bledu
+        # ma juz w streszczeniu Oli" — a streszczenie siedzialo
+        # WEWNATRZ galezi wylaczonej dla Kamila, wiec nie mial go
+        # nigdy. Teraz ma, bo to ludzki tekst, nie maszynownia.
+        # Fakty to zawsze raw_report_material — tam siedzi to, co
+        # narzedzie realnie zrobilo i co zwrocilo. Wczesniej ten
+        # sam naglowek niosl albo fakty, albo (gdy Ola sie
+        # odezwala) jej esej zamiast nich.
+        #
+        # To zastepuje _moj_raport z v400: tamta poprawka pilnowala,
+        # zeby przynajmniej Oli nie oddawac jej wlasnych slow.
+        # Teraz nikt nie dostaje tu cudzej prozy, wiec wyjatek dla
+        # niej jest zbedny — a v400 zostaje sprawdzone przez to, ze
+        # BROWSER nie dostaje tez _odczyt_oli nizej.
         _co_sie_stalo = (
             ("" if _bez_maszynowni
-             else "\nCo się właśnie stało:\n" + _moj_raport)
+             else "\nCo się właśnie stało:\n" + raw_report_material)
             + success_values_block
             + ("" if _bez_maszynowni else error_details_block)
+        )
+
+        # Jej odczyt — osobno, pod jej imieniem, tym samym kanalem,
+        # co kazdy inny glos kolegi (v256: _only_if_new dotyczy takze
+        # wypowiedzi kolegow). Do niej samej nie wraca.
+        _odczyt_oli = _only_if_new(
+            role_name,
+            "odczyt_oli",
+            (
+                "\nOla tak to czyta (jej odczyt, nie sprawdzony "
+                "fakt):\n" + readable_report.strip() + "\n"
+            )
+            if (readable_report.strip() and role_name != "BROWSER")
+            else ""
         )
 
         pieces = [
@@ -30258,6 +30318,9 @@ def consult_team(
             # komunikat bledu ma juz w streszczeniu Oli. Ta sama
             # zasada, co przy checkliscie i liscie narzedzi telefonu.
             (_co_sie_stalo + "\n") if _co_sie_stalo else "",
+            # v404: odczyt Oli — osobno od faktow, pod jej imieniem.
+            # Patrz _odczyt_oli wyzej.
+            _odczyt_oli,
             _only_if_new(role_name, "tool_hint", tool_hint)
             if not _bez_maszynowni else "",
             # v321: ten kanal tez jest maszynownia.
