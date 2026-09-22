@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v418
+AEL-MINI AUTONOMOUS AGENT v419
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v418")
+    print("             AEL-MINI AUTONOMOUS AGENT v419")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -24818,6 +24818,17 @@ def _kod_na_jedna_linie(tekst):
     if "```" not in t:
         return t
 
+    # v419: najpierw kod, ktory JUZ LEZY na dysku — ten dostaje
+    # pelna sciezke (patrz _kod_ktory_juz_lezy). Glos Bartka szedl
+    # do MAIN-a z pominieciem tamtej funkcji (_engineer_for_team),
+    # wiec MAIN widzial "[build.sh — 1234 znaków]" i nie wiedzial ani
+    # gdzie ten plik jest, ani ze w ogole jest — a od v418 moze kazac
+    # go tylko uruchomic, nie wpisac.
+    t = _kod_ktory_juz_lezy(t)
+
+    if "```" not in t:
+        return t
+
     def _zwin(m):
 
         jezyk = (m.group(1) or "").strip()
@@ -24845,6 +24856,21 @@ def _kod_na_jedna_linie(tekst):
         t,
         flags=re.DOTALL
     )
+
+
+def _sciezka_od_domu(sciezka):
+    """~/autocaller/build.sh zamiast /data/data/com.termux/files/home/..."""
+
+    tekst = str(sciezka or "")
+
+    try:
+        dom = str(Path.home())
+        if tekst == dom or tekst.startswith(dom + "/"):
+            return "~" + tekst[len(dom):]
+    except Exception:
+        pass
+
+    return tekst
 
 
 def _kod_ktory_juz_lezy(tekst):
@@ -24894,7 +24920,7 @@ def _kod_ktory_juz_lezy(tekst):
         klucz = " ".join(tresc.split())
 
         if len(klucz) >= 200:
-            na_dysku[klucz] = (nazwa, len(tresc))
+            na_dysku[klucz] = (sciezka, len(tresc))
 
     if not na_dysku:
         return t
@@ -24909,8 +24935,13 @@ def _kod_ktory_juz_lezy(tekst):
         if not wpis:
             return m.group(0)
 
+        # v419: pelna sciezka, nie sama nazwa. Uzytkownik: "MAIN-owi
+        # trzeba wyslac sciezki, zeby Gemini mogl te pliki
+        # uruchamiac". Od v418 MAIN nie wpisze juz kodu do zlecenia —
+        # kaze uruchomic plik, ktory lezy na dysku, a do tego musi
+        # wiedziec, GDZIE lezy. Sama nazwa ("build.sh") tego nie mowi.
         return (
-            "[" + wpis[0] + " — " + str(wpis[1])
+            "[" + _sciezka_od_domu(wpis[0]) + " — " + str(wpis[1])
             + " znaków, na dysku]"
         )
 
@@ -27082,7 +27113,7 @@ def _co_narzedzia_naprawde_zrobily(ile=6):
     )
 
 
-def estimate_progress(goal, chrome_text=None, android_text=None):
+def estimate_progress(goal, chrome_text=None, android_text=None, last_result=None):
     """
     Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
     podstawie kilku ostatnio zakończonych zadań. Zwraca None, jeśli
@@ -27131,9 +27162,11 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
     # _chrome_relevant_now() o unikaniu "lepkiego" spamowania stanem
     # Chrome; ocena procentowa jest niższej stawki niż decyzje
     # PLANNER/ENGINEER/MAIN, więc nie potrzebuje dynamicznego wyjątku.
-    _chrome_relevant_for_progress = _goal_mentions_chrome(goal)
+    # v419: jak u wszystkich — patrz _ekran_w_grze().
+    _chrome_relevant_for_progress = _dzialalo_na(last_result, "chrome_")
+    _ekran_dla_eli = _ekran_w_grze(last_result)
 
-    if _chrome_relevant_for_progress or _goal_mentions_android(goal):
+    if _chrome_relevant_for_progress or _ekran_dla_eli:
 
         device_state_block = (
             "\nCo widać teraz na ekranie (pamiętaj o przejściowych "
@@ -27147,7 +27180,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None):
                 ) + "\n"
             )
 
-        if _goal_mentions_android(goal):
+        if _ekran_dla_eli:
             device_state_block += (
                 "- Ekran telefonu: " + _labels_only(
                     android_text if android_text is not None
@@ -28085,38 +28118,10 @@ def _condense_last_result_for_team(last_result, limit=2500):
     return short("\n".join(parts), limit)
 
 
-# ADAPTACYJNA TREŚĆ (2026-08-24, na wyraźną prośbę użytkownika —
-# "dynamiczne skracanie/rozszerzanie instrukcji zależnie od
-# sytuacji", rozszerzone stopniowo na cały zespół DeepSeek).
-# Wspólne dla consult_team() i main_decide(): czy CEL (stały przez
-# całą sesję, więc liczony raz na wywołanie, nie per-token) w ogóle
-# dotyczy Androida/telefonu albo Chrome/przeglądarki — jeśli nie,
-# nie ma sensu wysyłać do każdej roli/MAIN-a wielotysięcznych
-# zrzutów stanu, których treść jest dla tego celu kompletnie
-# nieistotna. Fałszywie ujemne dopasowanie nie jest stratą: CEL
-# nadal jest widoczny w pełni, więc rola może samodzielnie poprosić
-# o więcej stanu przez zwykły TASK, jeśli faktycznie się okaże
-# potrzebny.
-_GOAL_ANDROID_KEYWORDS = (
-    "android", "kalkulator", "zegar", "kalendarz", "aplikacj",
-    "kliknij", "klikni", "wpisz", "przycisk", "ekran", "telefon",
-    "urządzeni", "urzadzeni", "apk", "gra", "gry", "grę", "gre",
-)
-
-_GOAL_CHROME_KEYWORDS = (
-    "chrome", "przeglądark", "przegladark", "karta", "kart",
-    "stron", "url", "http", "www.", "wyszukiwark", "google",
-)
-
-
-def _goal_mentions_android(goal):
-    goal_lower = str(goal or "").lower()
-    return any(kw in goal_lower for kw in _GOAL_ANDROID_KEYWORDS)
-
-
-def _goal_mentions_chrome(goal):
-    goal_lower = str(goal or "").lower()
-    return any(kw in goal_lower for kw in _GOAL_CHROME_KEYWORDS)
+# v419: zrzuty stanu (ekran telefonu, Chrome) ida po kroku, w ktorym
+# wykonanie na nich dzialalo — patrz _ekran_w_grze(). Do v418 bramka
+# byly slowa w CELU (_GOAL_ANDROID_KEYWORDS: "apk", "telefon",
+# "ekran"...), wiec ekran szedl od pierwszej wiadomosci.
 
 
 # Zaobserwowany realny bug (log 2026-08-28, cel: integracja głosowa +
@@ -28142,10 +28147,47 @@ def _goal_mentions_chrome(goal):
 # wiadomo, że coś w Chrome mogło się właśnie zmienić z powodu akcji
 # człowieka. To samo naturalnie "wygasa": już następny krok ma inny
 # last_result, więc dodatkowy stan Chrome nie ciągnie się bez końca.
+def _dzialalo_na(last_result, przedrostek):
+    """
+    Czy ostatnie wykonanie uzylo narzedzi o tym przedrostku
+    ("android_", "chrome_") — czyli czy cos sie tam realnie dzialo.
+    """
+
+    if not isinstance(last_result, dict):
+        return False
+
+    return any(
+        isinstance(e, dict)
+        and str(e.get("tool", "")).startswith(przedrostek)
+        for e in (last_result.get("tool_trace") or [])
+    )
+
+
+def _ekran_w_grze(last_result):
+    """
+    v419: ekran telefonu jest faktem o sprawie tylko po kroku, w
+    ktorym wykonanie na nim dzialalo (klikalo, wpisywalo, otwieralo,
+    czytalo ekran).
+
+    Uzytkownik: "to jest nikomu niepotrzebne na poczatku; w trakcie,
+    jak jest potrzebne do wykonania czegos — tak; nie pokazujemy
+    nic". Do v418 bramka byly slowa w CELU ("apk", "telefon",
+    "ekran"...), wiec przy celu "zbuduj APK" ekran szedl od
+    pierwszej wiadomosci i co krok — launcher, klawiatura klawisz po
+    klawiszu, Termux. Wykonanie samo czyta ekran swoimi narzedziami,
+    gdy go potrzebuje.
+    """
+
+    return _dzialalo_na(last_result, "android_")
+
+
 def _chrome_relevant_now(goal, last_result=None):
 
+    # v419: ta sama zasada, co _ekran_w_grze(): Chrome po kroku, w
+    # ktorym wykonanie w nim dzialalo — nie dlatego, ze CEL wspomina
+    # "strone" albo "google". Wyjatek po zalogowaniu zostaje.
     return (
-        _goal_mentions_chrome(goal)
+        _dzialalo_na(last_result, "chrome_")
         or (
             isinstance(last_result, dict)
             and last_result.get("status")
@@ -30859,7 +30901,8 @@ def consult_team(
         )
     )
 
-    goal_needs_android = _goal_mentions_android(goal)
+    # v419: patrz _ekran_w_grze().
+    goal_needs_android = _ekran_w_grze(last_result)
     goal_needs_chrome = _chrome_relevant_now(goal, last_result)
 
     # v302: TU NIE MA ZADNEJ BRAMKI OD LIMITU.
@@ -32262,7 +32305,7 @@ def main_decide(
             _ekran_bez_mapy_klikania(_resolved_android_text),
             3500
         ) + "\n"
-        if (_goal_mentions_android(goal)
+        if (_ekran_w_grze(last_result)
             and _odczyt_sie_udal(_resolved_android_text)) else ""
     )
 
@@ -37163,7 +37206,8 @@ def run_agent(goal):
 
             try:
                 progress = estimate_progress(
-                    goal, step_chrome_text, step_android_text
+                    goal, step_chrome_text, step_android_text,
+                    last_result
                 )
 
                 if progress:
