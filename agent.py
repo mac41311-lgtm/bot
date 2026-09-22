@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v409
+AEL-MINI AUTONOMOUS AGENT v410
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v409")
+    print("             AEL-MINI AUTONOMOUS AGENT v410")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -27609,6 +27609,34 @@ def _bez_szumu_maszyny(tekst):
     )
 
 
+def _jeszcze_nic_sie_nie_stalo(last_result):
+    """
+    Czy to pierwszy krok celu — zanim cokolwiek sie wykonalo.
+
+    v410: run_agent() zaczyna cel od last_result = {"status":
+    "START"}. To nie jest wynik, tylko znacznik "jeszcze nic".
+    Relacja o nim ("Ostatni krok skonczyl sie tak: START") nie niesie
+    zadnej informacji — jest sama forma.
+    """
+
+    return (
+        isinstance(last_result, dict)
+        and last_result.get("status") == "START"
+    )
+
+
+def _na_wierzchu_nasz_terminal(tekst):
+    """
+    Czy ekran pokazuje tylko nasz wlasny terminal.
+
+    To ten sam warunek, co w _ekran_bez_mapy_klikania(): gdy na
+    wierzchu jest com.termux, z ekranu zostaje jedno zdanie "Na
+    wierzchu jest teraz: Termux (nasz wlasny terminal)".
+    """
+
+    return "com.termux" in str(tekst or "")
+
+
 def _condense_last_result_for_team(last_result, limit=2500):
     """
     Buduje ZWIĘZŁE, czytelne podsumowanie last_result zamiast
@@ -30294,7 +30322,9 @@ def consult_team(
         # Teraz nikt nie dostaje tu cudzej prozy, wiec wyjatek dla
         # niej jest zbedny — a v400 zostaje sprawdzone przez to, ze
         # BROWSER nie dostaje tez _odczyt_oli nizej.
-        _co_sie_stalo = (
+        # v410: na starcie celu nic sie jeszcze nie stalo — nie ma o
+        # czym mowic. Patrz _jeszcze_nic_sie_nie_stalo().
+        _co_sie_stalo = "" if _jeszcze_nic_sie_nie_stalo(last_result) else (
             ("" if _bez_maszynowni
              else "\nCo się właśnie stało:\n" + raw_report_material)
             + success_values_block
@@ -30551,7 +30581,16 @@ def consult_team(
             pieces.append(
                 _only_if_new(role_name, "chrome", chrome_block)
             )
-        if include_android:
+        # v410: "Na wierzchu jest teraz: Termux (nasz wlasny
+        # terminal)" to fakt o platformie, nie o sprawie — i dokladnie
+        # tak Tomek dostawal Termuksa mimo v409. Idzie wiec tylko do
+        # tych, ktorzy na telefonie dzialaja (_ROLE_NA_TELEFONIE).
+        # Gdy na ekranie jest cos innego (dialer, przegladarka), to
+        # jest juz fakt o sprawie i idzie jak dotad.
+        if include_android and (
+            str(role_name) in _ROLE_NA_TELEFONIE
+            or not _na_wierzchu_nasz_terminal(_android_tekst)
+        ):
             pieces.append(
                 _only_if_new(role_name, "android", android_block)
             )
@@ -31949,6 +31988,12 @@ def main_decide(
         _status_explanations[s] for s in _statuses_to_explain
     )
 
+    # v410: na starcie nic sie nie wykonalo, wiec nie ma czego
+    # objasniac. Dotad szlo tu objasnienie COMPLETED — bo START nie
+    # ma swojego, a COMPLETED dokladamy zawsze jako punkt odniesienia.
+    if _jeszcze_nic_sie_nie_stalo(last_result):
+        status_interpretation_block = ""
+
     _last_result_is_error = (
         isinstance(last_result, dict)
         and (
@@ -32323,10 +32368,14 @@ tym kroku dopytać jedną osobę:
     # Patrz _postep_blok().
     _postep_dla_maina = _only_if_new("MAIN", "postep", _postep_blok())
 
-    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
-Co się właśnie stało:
-{_facts}
+    # v410: "Co sie wlasnie stalo" tylko wtedy, gdy cos sie stalo.
+    _co_sie_stalo_main = (
+        "" if _jeszcze_nic_sie_nie_stalo(last_result)
+        else "Co się właśnie stało:\n" + _facts + "\n"
+    )
 
+    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
+{_co_sie_stalo_main}
 {status_interpretation_block}
 
 {critic_streak_block}{repair_rule_block}{team_block}
