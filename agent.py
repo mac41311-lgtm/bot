@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v422
+AEL-MINI AUTONOMOUS AGENT v423
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v422")
+    print("             AEL-MINI AUTONOMOUS AGENT v423")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -24936,10 +24936,24 @@ def _kod_na_jedna_linie(tekst):
         if not kod.strip():
             return m.group(0)
 
+        # v423: jedna linia to komenda, nie plik — zostaje, jak jest.
+        # Bieg 2026-09-22 23:24, krok 5: "bash ~/agent/
+        # build_asystent_apk.sh ..." Bartka doszlo do MAIN-a jako
+        # "[FINAL_OK.txt — 166 znaków]".
+        _linie = [l for l in kod.splitlines() if l.strip()]
+
+        if len(_linie) == 1 and "`" not in _linie[0]:
+            return "`" + _linie[0].strip() + "`"
+
         # Gdy autor nazwal plik tuz nad blokiem, mowimy KTORY to
         # plik — to jest ta jedna rzecz, ktorej MAIN faktycznie
         # potrzebuje do decyzji.
-        nad = t[max(0, m.start() - 200):m.start()]
+        #
+        # v423: nazwa tylko z tekstu PRZED tym blokiem — nie z
+        # wnetrza poprzedniego. Tamto "FINAL_OK.txt" przyszlo z konca
+        # skryptu, ktory stal tuz wyzej.
+        _poprzedni = t.rfind("```", 0, m.start())
+        nad = t[max(0, _poprzedni + 3, m.start() - 200):m.start()]
         nazwa = ""
 
         for f in _CODE_TARGET_FILENAME_RE.finditer(nad):
@@ -30494,13 +30508,9 @@ def consult_team(
         + _main_decision_for_team
         + (
             "\n\nTreść zlecenia:\n"
-            # Jednolinijkowa komenda JEST zleceniem ("cat ~/plik") —
+            # Jednolinijkowa komenda JEST zleceniem ("cat ~/plik") — od v423
             # zostaje w tekscie. Zwijamy skrypty.
-            + _kod_na_jedna_linie(re.sub(
-                r"```[a-zA-Z0-9_+-]*\n[ \t]*([^\n`]+?)[ \t]*\n```",
-                r"`\1`",
-                str(_main_task_for_team)
-            ))
+            + _kod_na_jedna_linie(str(_main_task_for_team))
             if str(_main_task_for_team or "").strip()
             and str(_main_decision_for_team).upper().startswith("TASK")
             else ""
@@ -31235,7 +31245,18 @@ def consult_team(
         # Termuxa, ani Androida — to jego cala rola), wiec dostaje
         # sam fakt, po ludzku. Dokladnie to, o co prosiles: "moga
         # dostawac komunikat, ze cos nie dziala".
-        if fresh_tool_error and not _do_wojtka.strip():
+        #
+        # v423: ...ale tylko wtedy, gdy naprawde byla proba — cos sie
+        # wykonalo i padlo. Bieg 2026-09-22 23:24, kroki 4-7: Wojtek
+        # dostawal "Ostatnia proba sie nie udala." przy
+        # ENGINEER_CODE_MISSING i WNIOSEK_ZE_SIE_NIE_DA, kiedy nic sie
+        # nie wykonywalo. Zgadywal wiec awarie, ktorej nie bylo
+        # ("blad przy budowaniu? crash? nie slyszy?").
+        _byla_proba = isinstance(last_result, dict) and bool(
+            last_result.get("tool_trace")
+        )
+
+        if fresh_tool_error and _byla_proba and not _do_wojtka.strip():
 
             _do_wojtka = "Ostatnia próba się nie udała."
 
@@ -32292,7 +32313,7 @@ def main_decide(
             '  tych dowodów.'
         ),
         "WNIOSEK_ZE_SIE_NIE_DA": (
-            'Padł wniosek, że celu się nie da — wyżej masz powód. Zespół\n'
+            'Padł Twój wniosek, że celu się nie da. Zespół\n'
             '  właśnie się do niego odniósł, ich odpowiedzi masz w tym\n'
             '  kroku. Decydujesz jeszcze raz, już z tym, co powiedzieli.'
         ),
@@ -38324,34 +38345,40 @@ Zwróć tylko JSON.
                         str(team.get("engineer_full") or "").strip()
                     )
 
+                    # v423: sam fakt, z numerem kroku, bez polecenia.
+                    #
+                    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-22
+                    # 23:24, krok 5). MAIN dostal najpierw wypowiedz
+                    # Bartka ze skryptem [build_asystent_apk.sh — 10301
+                    # znakow], a zaraz po niej: "w jego ostatniej
+                    # odpowiedzi nie znaleziono bloku kodu. Zapytaj
+                    # ENGINEER ponownie". To bylo prawda w kroku 4 —
+                    # w kroku 5 juz nie. MAIN zlozyl dwie sprzeczne
+                    # rzeczy w "petla trwa juz szosta runde" (brak kodu
+                    # byl raz) i oglosil FAILED.
+                    #
+                    # "Ostatnia odpowiedz" to zdanie, ktore sie
+                    # przedawnia, a "Zapytaj ponownie" mowi mu, co ma
+                    # robic. Zostaje to, co sie stalo i kiedy.
                     last_result = {
                         "status":
                             "ENGINEER_CODE_MISSING",
                         "message": (
                             (
-                                "MAIN poprosił o zapisanie kodu "
-                                "ENGINEER do "
+                                "W kroku " + str(step) + " MAIN "
+                                "chciał położyć kod na "
                                 + write_target
-                                + ", ale w jego ostatniej "
-                                "odpowiedzi nie znaleziono bloku "
-                                "kodu (```...```). Zapytaj ENGINEER "
-                                "ponownie o konkretny kod w bloku, "
-                                "albo utwórz zwykły TASK bez "
-                                "write_engineer_code_to."
+                                + ", ale w wypowiedzi Bartka z tego "
+                                "kroku nie było bloku kodu."
                             )
                             if _bartek_mowil else
                             (
-                                "MAIN poprosił o zapisanie kodu "
-                                "ENGINEER do "
+                                "W kroku " + str(step) + " MAIN "
+                                "chciał położyć kod na "
                                 + write_target
-                                + ", ale Bartek nie był w tym kroku "
-                                "pytany — nie ma jego wypowiedzi, "
-                                "z której można by ten kod wziąć. "
-                                "To nie jest ucięta ani pusta "
-                                "odpowiedź: on się po prostu nie "
-                                "odzywał. Zawołaj go po imieniu "
-                                "albo utwórz zwykły TASK bez "
-                                "write_engineer_code_to."
+                                + ", ale Bartek w tym kroku się nie "
+                                "odzywał — nie było jego wypowiedzi, "
+                                "z której można by ten kod wziąć."
                             )
                         )
                     }
@@ -39208,12 +39235,19 @@ Zwróć tylko JSON.
             # zeby to nie bylo krecenie w kolko.
             if not _zespol_slyszal_juz_ten_powod(reason):
 
+                # v423: w relacji z kroku — sam fakt. Uzasadnienie to
+                # slowa MAIN-a i zespol dostaje je pod jego imieniem
+                # ("MAIN: FAILED — ..."). Bieg 2026-09-22 23:24, kroki
+                # 6-7: to samo uzasadnienie ("petla trwa juz szosta
+                # runde", "Ela 0%") szlo drugi raz pod "Co sie wlasnie
+                # stalo", czyli jako wynik kroku — a zespol je
+                # "jednomyslnie" potwierdzal. Brak kodu byl raz.
                 last_result = {
                     "status": "WNIOSEK_ZE_SIE_NIE_DA",
                     "message": (
-                        "Na stole jest wniosek, że dalej się nie da. "
-                        "Powód: "
-                        + (str(reason).strip() or "(nie podano)")
+                        "W kroku " + str(step) + " MAIN uznał, że "
+                        "dalej się nie da. Nic się w tym kroku nie "
+                        "wykonało."
                     )
                 }
 
