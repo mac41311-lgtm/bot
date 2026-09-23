@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v426
+AEL-MINI AUTONOMOUS AGENT v427
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v426")
+    print("             AEL-MINI AUTONOMOUS AGENT v427")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4095,9 +4095,13 @@ def _current_topic(last_result, critic_streak):
             # pojdziemy dalej — reszta poczeka". To bylo mowienie im,
             # co maja robic. Bieg 2026-09-23 19:30: Kamil dostal tylko
             # to zdanie i sam kod bledu, i zgadywal.
+            # v427: sam kod bledu — opis stoi w relacji ponizej, przy
+            # wywolaniu, ktore padlo. Bieg 2026-09-23 21:01, krok 9: to
+            # samo zdanie odmowy szlo trzy razy w jednej wiadomosci
+            # (temat, "blad narzedzia:", slad wywolan).
             err = str(
-                _blad_z_opisem(last_result.get("tool_result") or {})
-                or _blad_z_opisem(last_result)
+                (last_result.get("tool_result") or {}).get("error")
+                or last_result.get("error")
                 or ""
             ).strip()
 
@@ -17114,9 +17118,10 @@ def _gemini_pisze_kod(command_str):
             "w wypowiedziach zespołu nie ma kodu do tego pliku"
             if not _kod_autora else
             (
-                "to nie jest " + _czyj + " — treść w komendzie jest inna"
+                "to nie jest " + _czyj + " — treść w komendzie jest "
+                "inna; " + _czyj + " kładę ja, przez termux_write_file"
                 if tresc is not None else
-                "do tego pliku jest " + _czyj + ", a ten kładę ja, "
+                "do tego pliku jest " + _czyj + "; ten kładę ja, "
                 "przez termux_write_file"
             )
         )
@@ -17159,11 +17164,14 @@ def termux_run(command):
                 "command": command_str,
                 # v425: fakt i to, jak kod trafia na dysk — bez
                 # "Bartek odzywa sie, gdy ktos go zawola".
+                # v427: jednym zdaniem. Bylo "...a do tego pliku jest
+                # kod Tomka, a ten klade ja, przez termux_write_file.
+                # Kod napisany przez zespol klade na dysk ja, przez
+                # termux_write_file, 1:1." — to samo dwa razy.
                 "message": (
                     "Nie uruchomiłem tej komendy — zapisuje "
                     + Path(_sciezka).name + " z kodem, a " + _powod
-                    + ". Kod napisany przez zespół kładę na dysk ja, "
-                    "przez termux_write_file, 1:1."
+                    + "."
                 ),
                 "duration_s": 0.0
             }
@@ -23670,6 +23678,93 @@ def _wyrownaj_blok(raw):
     return "\n".join(linie).lstrip(" ").rstrip()
 
 
+def _rozszerzenie_jezyka(sciezka):
+    """Rozszerzenie pliku, jesli jest czyimkolwiek jezykiem — albo ""."""
+
+    nazwa = str(sciezka or "").split("/")[-1].lower()
+    kropka = nazwa.rfind(".")
+
+    if kropka < 0:
+        return ""
+
+    cel = nazwa[kropka:]
+
+    return cel if cel in _ROZSZERZENIA_ZAJETE else ""
+
+
+def _jezyk_pasuje_do(sciezka, znacznik, kod):
+    """
+    v427: czy ten blok jest NA PEWNO w jezyku pliku `sciezka` —
+    znacznik po ``` albo shebang. Blok bez zadnego z nich: nie wiemy.
+    """
+
+    cel = _rozszerzenie_jezyka(sciezka)
+
+    if not cel:
+        return False
+
+    z_shebanga = _rozszerzenie_z_shebanga(str(kod or ""))
+
+    if z_shebanga:
+        return z_shebanga == cel
+
+    znacznik = str(znacznik or "").strip().lower()
+
+    return cel in _ROZSZERZENIA_JEZYKA.get(znacznik, ())
+
+
+def _nazwa_nad_blokiem(text, start, sciezka):
+    """
+    v427: autor podpisal ten blok nazwa pliku — stoi w tekscie miedzy
+    poprzednim blokiem a tym (do 400 znakow wstecz). Ten sam sygnal, co
+    w _blok_dla_pliku().
+    """
+
+    nazwa = str(sciezka or "").split("/")[-1].strip()
+
+    if not nazwa:
+        return False
+
+    przed = str(text or "")[:start]
+    koniec_poprzedniego = przed.rfind("```")
+
+    if koniec_poprzedniego >= 0:
+        przed = przed[koniec_poprzedniego + 3:]
+
+    return nazwa in przed[-400:]
+
+
+# v427: linia tuz nad blokiem zapowiada kawalek poprawki.
+_ZAPOWIEDZ_POPRAWKI_RE = re.compile(r"\b(SZUKAJ|ZAMIE[ŃN])\b", re.IGNORECASE)
+
+
+def _blok_poprawki(text, start):
+    """
+    Czy blok zaczynajacy sie na pozycji `start` to kawalek poprawki:
+    ostatnia niepusta linia przed nim mowi SZUKAJ / ZAMIEN (albo
+    "stary / nowy fragment" — patrz _STARY_FRAGMENT_RE).
+    """
+
+    przed = str(text or "")[:start]
+    koniec_poprzedniego = przed.rfind("```")
+
+    if koniec_poprzedniego >= 0:
+        przed = przed[koniec_poprzedniego + 3:]
+
+    linie = [l for l in przed.splitlines() if l.strip()]
+
+    if not linie:
+        return False
+
+    ostatnia = linie[-1]
+
+    return bool(
+        _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
+        or _STARY_FRAGMENT_RE.search(ostatnia)
+        or _NOWY_FRAGMENT_RE.search(ostatnia)
+    )
+
+
 def _obcy_jezyk_dla(sciezka, znacznik, kod):
     """
     Czy ten blok jest na pewno w innym jezyku niz plik `sciezka`.
@@ -23758,17 +23853,29 @@ def extract_code_block(text, sciezka=None):
     #   1. shebang (#!) -- najmocniejszy sygnal "to jest skrypt",
     #   2. przy remisie: blok NAJDLUZSZY.
     # Gdy blok jest tylko jeden, zachowanie jest identyczne jak dotad.
-    blocks = re.findall(
+    blocks = list(re.finditer(
         r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
         text or "",
         re.DOTALL
-    )
+    ))
 
     candidates = []
 
-    for znacznik, raw in blocks:
+    # v427: przy znanym pliku — ktore bloki SA tego pliku na pewno:
+    # jezyk zgodny z rozszerzeniem (znacznik albo shebang) albo
+    # heredoc tworzacy wlasnie ten plik. Patrz fallback na koncu.
+    _pewne = []
+
+    for _m in blocks:
+        znacznik, raw = _m.group(1), _m.group(2)
         code = _wyrownaj_blok(raw)
         if not code.strip():
+            continue
+        # v427: kawalek poprawki (SZUKAJ / ZAMIEN) nie jest trescia
+        # calego pliku. Bieg 2026-09-23 21:01, krok 3: fragment
+        # "SZUKAJ" z lataki Bartka do voicebot_setup.py (32 znaki)
+        # wyladowal jako caly ~/voicebot/run_0a.sh.
+        if sciezka and _blok_poprawki(text, _m.start()):
             continue
         # v420: blok w INNYM jezyku niz plik nie jest trescia tego
         # pliku — patrz _obcy_jezyk_dla().
@@ -23782,6 +23889,12 @@ def extract_code_block(text, sciezka=None):
         ):
             continue
         candidates.append(code)
+        if sciezka and (
+            _tresc_z_heredoc(code, sciezka)
+            or _jezyk_pasuje_do(sciezka, znacznik, code)
+            or _nazwa_nad_blokiem(text, _m.start(), sciezka)
+        ):
+            _pewne.append(code)
 
     if not candidates:
         return None
@@ -23807,9 +23920,6 @@ def extract_code_block(text, sciezka=None):
 
         return _wyrownaj_blok(z_heredoca) if z_heredoca else kod
 
-    if len(candidates) == 1:
-        return _sama_tresc_pliku(candidates[0])
-
     # v285: gdy wiemy, DO JAKIEGO pliku to leci, blok wybiera sie
     # sam — patrz _blok_dla_pliku(). Regula "shebang, potem
     # najdluzszy" zostaje dla przypadku, gdy pliku nie znamy.
@@ -23819,6 +23929,30 @@ def extract_code_block(text, sciezka=None):
 
         if trafiony is not None:
             return _sama_tresc_pliku(trafiony)
+
+        # v427: bez zgadywania. Gdy nazwa pliku nie stoi nad blokiem,
+        # bierzemy tylko blok, ktory na pewno jest w jezyku tego pliku
+        # (albo heredoc tworzacy ten plik). Dotad szedl jedyny blok
+        # albo najdluzszy — i tak:
+        #   - bieg 2026-09-23 21:01, krok 3: do run_0a.sh poszedl
+        #     32-znakowy fragment SZUKAJ (Bartek pisal o innym pliku),
+        #   - tamze, krok 8: "kodem Tomka dla server.py" byla jego
+        #     notatka do README w bloku bez jezyka (130 znakow).
+        # ZMIERZONE NA WSZYSTKICH LOGACH: z 6 zapisow kodu przez
+        # Pythona 5 mialo nazwe nad blokiem albo heredoc — te dalej
+        # przechodza. Zgadniety byl tylko run_0a.sh.
+        #
+        # Plik, ktorego rozszerzenie nie jest niczyim jezykiem (.txt,
+        # .conf, .env), przyjmuje blok jak dotad — nie ma czego
+        # sprawdzac.
+        if _rozszerzenie_jezyka(sciezka):
+            candidates = _pewne
+
+            if not candidates:
+                return None
+
+    if len(candidates) == 1:
+        return _sama_tresc_pliku(candidates[0])
 
     def _score(code):
         return (
@@ -28102,8 +28236,14 @@ def _condense_last_result_for_team(last_result, limit=2500):
     tool_result = last_result.get("tool_result")
 
     if isinstance(tool_result, dict):
+        # v427: opis bledu stoi przy wywolaniu w sladzie ponizej —
+        # tu, gdy slad jest, wystarczy sam kod.
         tr_error = (
-            _blad_z_opisem(tool_result)
+            (
+                tool_result.get("error")
+                if last_result.get("tool_trace")
+                else _blad_z_opisem(tool_result)
+            )
             or tool_result.get("stderr")
             or tool_result.get("stderr_partial")
         )
