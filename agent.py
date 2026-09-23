@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v424
+AEL-MINI AUTONOMOUS AGENT v425
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v424")
+    print("             AEL-MINI AUTONOMOUS AGENT v425")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14540,7 +14540,7 @@ def termux_write_file(path, content, append=False):
             _powod = (
                 "ten plik trzyma dane, wiec kod do niego nie wchodzi"
                 if _blokada else
-                "nikt z zespołu nie napisał jeszcze kodu do tego pliku"
+                "w wypowiedziach zespołu nie ma kodu do tego pliku"
             )
 
             log(
@@ -14565,29 +14565,15 @@ def termux_write_file(path, content, append=False):
             # To samo rozroznienie, co w v357, tylko po stronie
             # Gemini: _kod_bartka_teraz jest puste, gdy Bartka nie
             # bylo w naradzie (patrz consult_team).
-            _bartek_byl_w_kroku = bool(
-                str(_kod_bartka_teraz or "").strip()
-            )
-
+            # v425: sam fakt. Do v424 byl tu wywod o Bartku ("Bartek
+            # NIE BYL w tym kroku pytany — zawolaj go po imieniu") —
+            # nieprawdziwy, gdy autorem byl Tomek, i bedacy poleceniem.
             return {
                 "ok": False,
                 "error": "BRAK_KODU_DO_ZAPISU",
                 "path": str(p),
-                "engineer_w_tym_kroku": _bartek_byl_w_kroku,
                 "message": (
-                    "Nie zapisalem tego pliku — " + _powod + ". "
-                    "Kod do plikow pisze Bartek, a ja go klade na "
-                    "dysk."
-                    + (
-                        " Bartek NIE BYL w tym kroku pytany — nie ma "
-                        "jego wypowiedzi, z ktorej dalo by sie ten "
-                        "kod wziac. Zawolaj go po imieniu i dopiero "
-                        "potem zlec zapis."
-                        if not _bartek_byl_w_kroku else
-                        " Bartek mowil w tym kroku, ale nie o tym "
-                        "pliku — popros go o kod wlasnie do niego."
-                    )
-                    + " Napisz w raporcie, czego tu brakuje."
+                    "Nie zapisałem " + p.name + " — " + _powod + "."
                 )
             }
 
@@ -16890,6 +16876,25 @@ _PRZEKIEROWANIE_RE = re.compile(
 )
 
 
+# v425: zapis pliku z poziomu Pythona w komendzie.
+#
+# ZAOBSERWOWANE NAPRAWDE (bieg 2026-09-23 19:30, kroki 5-6). Po
+# odmowach cat/printf MAIN zlecil proby, ktora droga przejdzie, i
+# znalazl te: python3 -c "pathlib.Path('.../dialog.py').write_text(...)"
+# — w pieciu kawalkach, z doklejaniem p.write_text(p.read_text()+...).
+# Tak na dysk trafil kod, ktorego nikt z zespolu nie napisal.
+#
+# Lapiemy ZAPIS, nie Pythona: .write_text( / .write_bytes( przy
+# Path('...') oraz open('...', 'w'|'a'|'x'). Czytanie
+# (open('x').read(), Path('x').read_text()) i uruchamianie
+# (python3 plik.py) przechodza jak dotad.
+_PYTHON_ZAPIS_RE = re.compile(r"\.write_(?:text|bytes)\s*\(")
+_PYTHON_PATH_RE = re.compile(r"Path\(\s*[rRbB]?['\"]([^'\"]+)['\"]\s*\)")
+_PYTHON_OPEN_ZAPIS_RE = re.compile(
+    r"open\(\s*[rRbB]?['\"]([^'\"]+)['\"]\s*,\s*[rRbB]?['\"][^'\"]*[wax]"
+)
+
+
 def _pliki_pisane_komenda(command_str):
     """
     Sciezki, ktore ta komenda ZAPISUJE przez cat/tee.
@@ -16906,6 +16911,15 @@ def _pliki_pisane_komenda(command_str):
             if not sciezka or sciezka.startswith("/dev/"):
                 continue
             out.append((sciezka, _tresc_z_heredoc(tekst, sciezka)))
+
+    # v425: zapis z poziomu Pythona — patrz _PYTHON_ZAPIS_RE. Tresci
+    # nie znamy (None), jak przy printf.
+    if _PYTHON_ZAPIS_RE.search(tekst):
+        for m in _PYTHON_PATH_RE.finditer(tekst):
+            out.append((m.group(1), None))
+
+    for m in _PYTHON_OPEN_ZAPIS_RE.finditer(tekst):
+        out.append((m.group(1), None))
 
     # v358: przekierowanie z czegos, co wypisuje tekst.
     #
@@ -17091,12 +17105,24 @@ def _gemini_pisze_kod(command_str):
         # v421: mowimy, CZYJ to kod — nie zawsze "Bartka". Tomek,
         # Marek i Ania tez pisza pliki (v340), a do v420 kazda odmowa
         # przypisywala je Bartkowi.
+        # v425: gdy tresci w komendzie nie widac (printf, python -c),
+        # nie mowimy "tresc jest inna" — tego nie wiemy. Mowimy, czyj
+        # kod do tego pliku jest i ktora droga on trafia na dysk.
+        _czyj = (
+            _czyj_kod_to(_czyja_kopia(_kod_autora) or "ENGINEER")
+            if _kod_autora else ""
+        )
+
         return (
             str(p),
-            "nikt z zespołu nie napisał jeszcze kodu do tego pliku"
+            "w wypowiedziach zespołu nie ma kodu do tego pliku"
             if not _kod_autora else
-            "to nie jest " + _czyj_kod_to(_czyja_kopia(_kod_autora) or "ENGINEER")
-            + " — treść w komendzie jest inna"
+            (
+                "to nie jest " + _czyj + " — treść w komendzie jest inna"
+                if tresc is not None else
+                "do tego pliku jest " + _czyj + ", a ten kładę ja, "
+                "przez termux_write_file"
+            )
         )
 
     return None
@@ -17135,15 +17161,13 @@ def termux_run(command):
                 "error": "BRAK_KODU_DO_ZAPISU",
                 "path": _sciezka,
                 "command": command_str,
+                # v425: fakt i to, jak kod trafia na dysk — bez
+                # "Bartek odzywa sie, gdy ktos go zawola".
                 "message": (
-                    "Tej komendy nie uruchomilem — zapisuje "
+                    "Nie uruchomiłem tej komendy — zapisuje "
                     + Path(_sciezka).name + " z kodem, a " + _powod
-                    + ". Kod do plikow pisze Bartek, a na dysk klade "
-                    "go ja, przez termux_write_file — 1:1, bez "
-                    "literowek. Ty ten plik uruchamiasz. Bartek "
-                    "odzywa sie, gdy ktos go zawola po imieniu albo "
-                    "gdy padnie ten wlasnie brak — napisz w "
-                    "raporcie, czego tu brakuje."
+                    + ". Kod napisany przez zespół kładę na dysk ja, "
+                    "przez termux_write_file, 1:1."
                 ),
                 "duration_s": 0.0
             }
@@ -20680,6 +20704,32 @@ def _odpowiedz_narzedzia(call, name, result):
     }
 
 
+def _blad_z_opisem(result):
+    """
+    v425: "BRAK_KODU_DO_ZAPISU — Nie zapisałem dialog.py — w
+    wypowiedziach zespołu nie ma kodu do tego pliku." zamiast samego
+    kodu bledu.
+
+    Bieg 2026-09-23 19:30: zespol dostawal wylacznie
+    "BRAK_KODU_DO_ZAPISU" i pisal "nie wiemy, dlaczego write_file
+    zwrocil BRAK_KODU_DO_ZAPISU". Zdanie, ktore to mowi, lezalo w
+    "message" i nigdzie nie szlo. Dokladamy je tylko wtedy, gdy blad
+    jest samym kodem (WIELKIE_LITERY) — zwykly komunikat bledu
+    zostaje, jak jest.
+    """
+
+    if not isinstance(result, dict):
+        return ""
+
+    blad = str(result.get("error") or "").strip()
+    opis = str(result.get("message") or "").strip()
+
+    if blad and opis and re.fullmatch(r"[A-Z0-9_]+", blad):
+        return blad + " — " + opis
+
+    return blad
+
+
 def _short_tool_evidence(result):
     """
     Co to wywolanie NAPRAWDE powiedzialo.
@@ -20765,7 +20815,9 @@ def _short_tool_evidence(result):
     # Kolejnosc ma znaczenie: blad jest wazniejszy niz wyjscie.
     for key in ("error", "stderr", "stdout", "value", "content", "text"):
 
-        value = result.get(key)
+        value = (
+            _blad_z_opisem(result) if key == "error" else result.get(key)
+        )
 
         if isinstance(value, (dict, list)):
             continue
@@ -28055,7 +28107,7 @@ def _condense_last_result_for_team(last_result, limit=2500):
 
     if isinstance(tool_result, dict):
         tr_error = (
-            tool_result.get("error")
+            _blad_z_opisem(tool_result)
             or tool_result.get("stderr")
             or tool_result.get("stderr_partial")
         )
@@ -31841,6 +31893,11 @@ def consult_team(
             # kogo i co powiedzial — reszta nalezy do rozmowy.
         )
 
+        # v425: jego odpowiedz tez jest wypowiedzia z TEGO kroku —
+        # czesto z poprawionym kodem. Do notatnika autorow, tak jak
+        # jego glos z narady (patrz _kod_autorow).
+        _zapamietaj_kod_autora(_addressee, _reply)
+
         # v407: jego werdykt z poprzedniej rundy juz tu lezy.
         #
         # Na koncu kazdej rundy dopisujemy ("Marek", _verdict) i
@@ -32074,6 +32131,9 @@ def consult_team(
         _odp = str(_odp).strip()
         _imie = _ROLE_DISPLAY_NAME.get(_adresat, _adresat)
 
+        # v425: to tez wypowiedz z tego kroku — do notatnika autorow.
+        _zapamietaj_kod_autora(_adresat, _odp)
+
         # Jego odpowiedz to wypowiedz jak kazda inna: jesli kogos w
         # niej wola, trafi to tam, gdzie trzeba.
         _collect_role_messages(_adresat, _odp)
@@ -32122,17 +32182,30 @@ def consult_team(
     # v293: i to samo do pamieci dluzszej niz jeden krok — patrz
     # _kod_autorow. Kod Bartka nie ma znikac tylko dlatego, ze w
     # nastepnej naradzie rozmawiali inni.
-    if consult_engineer:
-        # v340: notatnik autorow to juz nie "Bartek i Ania".
-        #
-        # ZMIERZONE (bieg 2026-09-13 12:44): bloki kodu napisali
-        # wszyscy — Ola 41, Tomek 38, Wojtek 34, Marek 33, Kamil 17,
-        # Piotr 7, Bartek 11, Ania 8. A MAIN poprosil o zapis
-        # "skryptu Marka", ktorego w notatniku nie bylo w ogole.
-        #
-        # Nie mowimy nikomu, zeby pisal albo nie pisal kodu —
-        # czytamy to, co napisali.
-        for _kto, _co in results.items():
+    #
+    # v425: BEZ warunku "gdy pytany byl Bartek". v340 rozszerzylo
+    # notatnik na wszystkich autorow, ale zostawilo `if
+    # consult_engineer` — wiec kod Tomka z kroku, w ktorym Bartka nie
+    # pytano, nie trafial nigdzie. Bieg 2026-09-23 19:30, krok 3:
+    # Tomek napisal dialog.py (7152 znaki), a zapis dostal "nikt z
+    # zespolu nie napisal jeszcze kodu". MAIN uznal zapis za zepsuty
+    # i przez trzy kroki szukal obejscia, az polozyl na dysku wlasna
+    # przerobke przez `python3 -c write_text`.
+    #
+    # Tylko to, co padlo w TYM kroku — role, ktore milczaly, maja w
+    # `results` stara wypowiedz ("Tomek, wczesniej:"), a ta jest juz
+    # w notatniku ze swojego kroku.
+    # v340: notatnik autorow to juz nie "Bartek i Ania".
+    #
+    # ZMIERZONE (bieg 2026-09-13 12:44): bloki kodu napisali
+    # wszyscy — Ola 41, Tomek 38, Wojtek 34, Marek 33, Kamil 17,
+    # Piotr 7, Bartek 11, Ania 8. A MAIN poprosil o zapis
+    # "skryptu Marka", ktorego w notatniku nie bylo w ogole.
+    #
+    # Nie mowimy nikomu, zeby pisal albo nie pisal kodu —
+    # czytamy to, co napisali.
+    for _kto, _co in results.items():
+        if _role_response_step.get(_kto) == step:
             _zapamietaj_kod_autora(_kto, _co)
 
     if consult_engineer:
