@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v423
+AEL-MINI AUTONOMOUS AGENT v424
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v423")
+    print("             AEL-MINI AUTONOMOUS AGENT v424")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -33768,14 +33768,45 @@ def _pierwsza_wiadomosc(rola=None):
     # Piotr i Ania ten kod recenzuja i poprawiaja. Reszta zaczyna od
     # samego celu; o platformie dowie sie z wynikow narzedzi i od
     # kolegow, gdy bedzie potrzebowac.
+    # v424: kto nie dziala na telefonie, dostaje jedno zdanie o tym,
+    # jak dziala rozmowa — patrz _JAK_ROZMAWIAMY. Kamil i Wojtek nie.
     if rola is not None and str(rola) not in _ROLE_NA_TELEFONIE:
-        return ""
+        return _JAK_ROZMAWIAMY if str(rola) in _ROLE_ZNAJACE_PROGRAM else ""
 
     # v422: MAIN dostaje na poczatek, jak dziala program.
     if str(rola) == "MAIN":
         return "Termux API, ADB DEBUGOWANIE, Android\n\n" + _JAK_TO_DZIALA
 
+    if rola is not None:
+        return "Termux API, ADB DEBUGOWANIE, Android\n\n" + _JAK_ROZMAWIAMY
+
     return "Termux API, ADB DEBUGOWANIE, Android"
+
+
+# v424: jak dziala swiat, w ktorym zespol rozmawia — fakt, nie polecenie.
+#
+# Bieg 2026-09-22 23:24: Tomek pisal "Zbudowalem PWA", Bartek "Nie mam tu
+# terminala, jestem warstwa, ktora pisze kod", Wojtek "wklej mi log".
+# Kazdy dopowiadal sobie sam, jak to dziala, bo nikt im tego nie
+# powiedzial. Bartek mial racje: agenci pisza, Python czyta z ich
+# wypowiedzi kod i plany, a wykonanie idzie na telefonie.
+#
+# Uzytkownik zaakceptowal ten tekst i liste odbiorcow. Bez Kamila — on
+# szuka w sieci sam (wyszukiwanie DeepSeeka i WEB_SEARCH/WEB_FETCH w
+# Pythonie), wiec "wykonuje program na telefonie" byloby dla niego
+# nieprawda i ciagneloby go do szukania przez telefon. Bez Wojtka — on
+# patrzy na cel jak zwykly uzytkownik, bez technicznego tla (v335).
+# Bez slowa "Gemini" — v345 dalej trzyma.
+_JAK_ROZMAWIAMY = (
+    "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
+    "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
+    "dostajecie, co z tego wyszło. Kod, który napiszecie, program "
+    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje."
+)
+
+_ROLE_ZNAJACE_PROGRAM = (
+    "PLANNER", "CRITIC", "BROWSER", "PROGRESS_ESTIMATOR",
+)
 
 
 # v422: opis programu dla MAIN-a — w pierwszej wiadomosci jego
