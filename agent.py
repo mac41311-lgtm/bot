@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v427
+AEL-MINI AUTONOMOUS AGENT v428
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v427")
+    print("             AEL-MINI AUTONOMOUS AGENT v428")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -7289,6 +7289,16 @@ def deepseek(name, message):
                         name + ": " + str(len(text)) + " znaków "
                         "(JSON — czytelna decyzja pojawi się "
                         "osobno)."
+                    )
+                    # v428: kazda odpowiedz MAIN-a w calosci — takze na
+                    # glosy posrednie, ktore Python pomija (bierze
+                    # decyzje z ostatniej wiadomosci w kroku). Dotad
+                    # szla tylko dlugosc i nie bylo jak sprawdzic, co
+                    # MAIN pisze miedzy wiadomosciami. Tylko do pliku
+                    # przebiegu — terminal bez zmian.
+                    dopisz_do_przebiegu(
+                        "--- MAIN (MAIN) — ODPOWIEDŹ SUROWA ("
+                        + str(len(text)) + " znaków) ---\n" + text
                     )
                 else:
                     _speak(name, text)
@@ -17142,8 +17152,9 @@ def termux_run(command):
         #   _gemini_zmienia_cudzy_kod — zmienia w miejscu plik z
         #                               kodem, ktorego nikt nie
         #                               autoryzowal (sed -i itp.)
+        _tworzy = _gemini_pisze_kod(command_str)
         _pisze_kod = (
-            _gemini_pisze_kod(command_str)
+            _tworzy
             or _gemini_zmienia_cudzy_kod(command_str)
         )
 
@@ -17156,6 +17167,37 @@ def termux_run(command):
                 "Nie uruchomilem tej komendy — tworzy "
                 + Path(_sciezka).name + " z kodem, a " + _powod + "."
             )
+
+            # v428: gdy do tego pliku JEST kod autora, kladziemy go
+            # od razu — tak, jak zrobilby to termux_write_file. Bieg
+            # 2026-09-23 23:02, krok 2: odmowa mowila "ten kladę ja,
+            # przez termux_write_file", wykonanie uznalo, ze plik
+            # powstanie sam, i skonczylo zadanie — a nie powstal.
+            # (tylko plik z rozszerzeniem kodu: termux_write_file bierze
+            # kod autora wlasnie dla nich — plik rozpoznany po samym
+            # shebangu dostalby pusta tresc).
+            if (
+                _tworzy
+                and Path(_sciezka).suffix.lower() in _KOD_SUFIKSY
+                and _tresc_napisana_dla(Path(_sciezka))[0]
+            ):
+
+                _zapis = termux_write_file(_sciezka, "")
+
+                if isinstance(_zapis, dict) and _zapis.get("ok"):
+
+                    return {
+                        "ok": False,
+                        "error": "KOD_POLOZYL_PYTHON",
+                        "path": _sciezka,
+                        "command": command_str,
+                        "message": (
+                            "Nie uruchomiłem tej komendy — zapisywała "
+                            + Path(_sciezka).name + " z kodem. "
+                            + str(_zapis.get("message") or "")
+                        ).strip(),
+                        "duration_s": 0.0
+                    }
 
             return {
                 "ok": False,
@@ -31238,6 +31280,7 @@ def consult_team(
     # imieniu albo przez MAIN-a dalej przychodzi.
     _blad_dla_kamila = fresh_tool_error and (
         "BRAK_KODU_DO_ZAPISU" not in str(last_result)
+        and "KOD_POLOZYL_PYTHON" not in str(last_result)
     )
 
     consult_researcher = (
@@ -32299,8 +32342,20 @@ def consult_team(
                 (_imie, _kod_dla_tej_roli(_odp, _kto))
             )
 
+        # v428: MAIN dostaje sama odpowiedz i do kogo — pytanie juz
+        # ma: to wypowiedz kogos z tego kroku (poszla osobno) albo jego
+        # wlasna. Bieg 2026-09-23 23:02: Marek szedl do MAIN-a dwa razy
+        # w kazdym kroku — jako "Marek ocenia:" i drugi raz w calosci
+        # przed odpowiedzia Tomka (4,7 + 7,5 tys. znakow).
+        _do_kogo = [
+            "MAIN-a" if _kto == "MAIN"
+            else _IMIE_AUTORA.get(_kto, (_kto, _kto))[1]
+            for _kto in _wolajacy
+        ]
         _rozmowy.append(
-            _do_niego.strip() + "\n\n" + _imie + ":\n" + _odp
+            _imie
+            + (" do " + ", ".join(_do_kogo) if _do_kogo else "")
+            + ":\n" + _odp
         )
 
     # v192: zapamietujemy sciezki, o ktore zespol pytal w TEJ
@@ -37816,34 +37871,17 @@ def run_agent(goal):
             # nastepna zwykla wiadomosc znowu go przypomni.
             _role_seen_blocks.pop(("MAIN", "format"), None)
 
+            # v428: sam fakt. Do v427 szedl tu urwany wzor ("Zwroc
+            # wylacznie jeden obiekt: TASK z reason/task/
+            # success_condition albo DONE albo FAILED") — bez
+            # write_engineer_code_to, ASK i NEED_USER_LOGIN. Bieg
+            # 2026-09-23 23:02, krok 1: MAIN oddal dokladnie ten ksztalt
+            # — TASK "Uruchom ~/recon.py" bez sciezki do zapisu — i kod
+            # Bartka nie trafil na dysk. Pelny format MAIN ma w swojej
+            # tozsamosci.
             repair = deepseek(
                 "MAIN",
-                """
-Poprzednia odpowiedź nie była poprawnym JSON.
-
-Zwróć wyłącznie jeden obiekt:
-
-{
-  "type": "TASK",
-  "reason": "...",
-  "task": "...",
-  "success_condition": "..."
-}
-
-albo:
-
-{
-  "type": "DONE",
-  "reason": "..."
-}
-
-albo:
-
-{
-  "type": "FAILED",
-  "reason": "..."
-}
-"""
+                "Poprzednia odpowiedź nie była poprawnym JSON."
             )
 
             decision = parse_json(
@@ -38292,6 +38330,34 @@ Zwróć tylko JSON.
                 _skrypt_do_uruchomienia_ktorego_nie_ma(task_text)
                 if not write_target else None
             )
+
+            # v428: zadanie uruchamia plik, ktorego nie ma, a kod do
+            # niego ktos z zespolu napisal — Python kladzie go przed
+            # wykonaniem, takze gdy MAIN nie wkleil kodu do zadania.
+            # Bieg 2026-09-23 23:02, krok 1: "Uruchom ~/recon.py", kod
+            # Bartka gotowy (odpowiedz na ASK), a wykonanie dostalo
+            # "No such file". Blok wybiera extract_code_block() — od
+            # v427 tylko pewny (nazwa, heredoc albo jezyk pliku).
+            if (
+                _brakujacy_skrypt
+                and not _task_carries_engineer_code(
+                    task_text, team.get("engineer_full", "")
+                )
+                and (
+                    extract_code_block(
+                        team.get("engineer_full", ""), _brakujacy_skrypt
+                    )
+                    or _kod_autora_dla(_brakujacy_skrypt)
+                )
+            ):
+                write_target = _brakujacy_skrypt
+                log(
+                    "MAIN",
+                    "Zadanie uruchamia "
+                    + Path(str(_brakujacy_skrypt)).name
+                    + ", którego nie ma na dysku, a kod do niego jest "
+                    "— kładę go przed wykonaniem."
+                )
 
             if (
                 not write_target
