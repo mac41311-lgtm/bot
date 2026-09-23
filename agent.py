@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v425
+AEL-MINI AUTONOMOUS AGENT v426
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v425")
+    print("             AEL-MINI AUTONOMOUS AGENT v426")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4090,38 +4090,34 @@ def _current_topic(last_result, critic_streak):
         if status == "GEMINI_TOOL_ERROR":
 
             tool = str(last_result.get("tool") or "narzędzie")
+            # v426: sam fakt, z opisem bledu (patrz _blad_z_opisem),
+            # bez "Zajmijmy sie najpierw... Domknijmy to, zanim
+            # pojdziemy dalej — reszta poczeka". To bylo mowienie im,
+            # co maja robic. Bieg 2026-09-23 19:30: Kamil dostal tylko
+            # to zdanie i sam kod bledu, i zgadywal.
             err = str(
-                (last_result.get("tool_result") or {}).get("error")
-                or last_result.get("error")
+                _blad_z_opisem(last_result.get("tool_result") or {})
+                or _blad_z_opisem(last_result)
                 or ""
             ).strip()
 
-            line = (
-                "Zajmijmy się najpierw jedną rzeczą: ostatnia próba "
-                "(" + tool + ") nie wyszła"
-            )
+            line = "Ostatnia próba (" + tool + ") nie wyszła"
 
             if err:
-                line += " — " + short(err, 200).replace("\n", " ")
+                line += " — " + short(err, 300).replace("\n", " ")
 
-            return (
-                line + ". Domknijmy to, zanim pójdziemy dalej — "
-                "reszta poczeka."
-            )
+            return line.rstrip(".") + "."
 
         if status == "TOOL_LIMIT":
             return (
-                "Jedna rzecz na teraz: poprzednie zadanie było za "
-                "duże i skończyły się na nim wywołania narzędzi. "
-                "Potrzebny mniejszy, węższy krok — nie kolejny "
-                "szeroki plan."
+                "Na poprzednim zadaniu skończyły się wywołania "
+                "narzędzi, zanim dobiegło końca."
             )
 
     if critic_streak >= 2:
         return (
-            "Zanim pójdziemy dalej: Marek zgłasza zastrzeżenie już "
-            + str(critic_streak) + " raz z rzędu. Rozstrzygnijmy "
-            "najpierw JEGO wątpliwość, a nie kolejny nowy pomysł."
+            "Marek zgłasza zastrzeżenie już "
+            + str(critic_streak) + " raz z rzędu."
         )
 
     return ""
@@ -31095,8 +31091,17 @@ def consult_team(
     # MAIN nie musi znac mechaniki.
     _prosi_main = _o_kogo_prosi_main(_main_decision_for_team)
 
+    # v426: brak kodu do zapisu to sprawa autorstwa w zespole, nie
+    # szukania w sieci. Bieg 2026-09-23 19:30, kroki 4-5: Kamil byl
+    # budzony tym bledem, dostawal jedno zdanie o nim (fakty z
+    # wykonania celowo go omijaja) i zgadywal przyczyne. Zawolany po
+    # imieniu albo przez MAIN-a dalej przychodzi.
+    _blad_dla_kamila = fresh_tool_error and (
+        "BRAK_KODU_DO_ZAPISU" not in str(last_result)
+    )
+
     consult_researcher = (
-        fresh_tool_error
+        _blad_dla_kamila
         or "RESEARCHER" in _zawolani
         or _pyta_marek == "RESEARCHER"
         or "RESEARCHER" in _prosi_main
@@ -34312,6 +34317,27 @@ def _file_answer_body(p):
         size = p.stat().st_size
     except Exception:
         size = 0
+
+    # v426: katalog to katalog. Bieg 2026-09-23 19:30, krok 8: Kamil
+    # dostal "~/bot: JEST (3440 B), plik binarny." — a 3440 B to
+    # zwykly rozmiar katalogu w Termuxie. read_text() na katalogu rzuca
+    # wyjatek, a kazdy wyjatek nazywalismy "plikiem binarnym". Kamil
+    # zbudowal na tym diagnoze ("mkdir cicho polegl").
+    try:
+        if p.is_dir():
+            _w_srodku = sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir())
+            return (
+                "JEST — to katalog, "
+                + (
+                    "w środku: " + ", ".join(_w_srodku[:40])
+                    + (" (i " + str(len(_w_srodku) - 40) + " więcej)"
+                       if len(_w_srodku) > 40 else "")
+                    if _w_srodku else "pusty"
+                )
+                + "."
+            )
+    except Exception:
+        pass
 
     if size == 0:
         return "JEST, ale PUSTY (0 B)."
