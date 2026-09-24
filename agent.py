@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v431
+AEL-MINI AUTONOMOUS AGENT v432
 
 ARCHITEKTURA:
 
@@ -1956,6 +1956,115 @@ _RAMKA_WYSLANE = "=== WYSŁANA WIADOMOŚĆ DO: "
 _RAMKA_WYSLANE_KONIEC = "=== KONIEC WYSŁANEJ WIADOMOŚCI ==="
 
 
+# v432: licznik tekstu Pythona w kazdej wysylanej wiadomosci.
+#
+# Uzytkownik: "krecimy sie w kolko naprawiajac ten program". Zdania
+# Pythona w wiadomosciach do agentow wychodzily dotad dopiero wtedy,
+# gdy ktos przeczytal caly log. Teraz przy kazdej wysylce Python liczy,
+# ile w niej jest tekstu, ktorego nie napisal ani agent, ani
+# uzytkownik, ani narzedzie — i pisze to w naglowku, a same linie w
+# pliku zdarzen ("tekst_pythona"). Znane zrodla: wypowiedzi agentow,
+# cel, slowa uzytkownika, wyniki narzedzi i relacje Gemini, tresci
+# plikow, stan ekranu i Chrome. Ustalone teksty startowe (tozsamosci,
+# opis programu, formaty decyzji) i same etykiety ("Tomek:") sie nie
+# licza.
+_ZNANE_TEKSTY = []
+
+_ZNANE_TEKSTY_MAX = 800000
+
+_ETYKIETA_RE = re.compile(r"^[\w ąćęłńóśźżĄĆĘŁŃÓŚŹŻ().,-]{1,40}:$")
+
+_ZASTEPNIK_RE = re.compile(r"^(\.\.\.\[skrócono[^\]]*\]\.\.\.|\[[^\]]{1,80} — \d+ znaków[^\]]*\]|`[^`]*`)$")
+
+_dozwolone_linie = None
+
+_IMIE_PRZED_CYTATEM_RE = re.compile(r"^[A-ZĄĆĘŁŃÓŚŹŻ][\w ąćęłńóśźż]{1,25}: (.+)$")
+
+
+def _znane_dodaj(tekst):
+    """Tekst, ktorego nie napisal Python. Nigdy nie rzuca."""
+
+    try:
+        t = str(tekst or "")
+
+        if not t.strip():
+            return
+
+        _ZNANE_TEKSTY.append(t)
+
+        razem = sum(len(x) for x in _ZNANE_TEKSTY)
+
+        while razem > _ZNANE_TEKSTY_MAX and len(_ZNANE_TEKSTY) > 1:
+            razem -= len(_ZNANE_TEKSTY.pop(0))
+
+    except Exception:
+        pass
+
+
+def _ustalone_linie():
+
+    global _dozwolone_linie
+
+    if _dozwolone_linie is None:
+
+        zbior = set()
+
+        for nazwa, wartosc in list(globals().items()):
+            if (
+                isinstance(wartosc, str)
+                and (
+                    nazwa.endswith("_PROMPT")
+                    or nazwa in ("_JAK_ROZMAWIAMY", "_JAK_TO_DZIALA")
+                )
+            ):
+                for l in wartosc.splitlines():
+                    if l.strip():
+                        zbior.add(l.strip())
+
+        zbior.add("Termux API, ADB DEBUGOWANIE, Android")
+        _dozwolone_linie = zbior
+
+    return _dozwolone_linie
+
+
+def _tekst_pythona(tresc):
+    """
+    v432: (liczba znakow, linie) — tekst tej wiadomosci, ktorego nie
+    napisal agent, uzytkownik ani narzedzie. Nigdy nie rzuca.
+    """
+
+    try:
+        znane = "\n".join(_ZNANE_TEKSTY)
+        ustalone = _ustalone_linie()
+        linie = []
+
+        for l in str(tresc or "").splitlines():
+
+            t = l.strip()
+
+            if (
+                not t
+                or t in ustalone
+                or _ETYKIETA_RE.match(t)
+                or _ZASTEPNIK_RE.match(t)
+                or t in znane
+            ):
+                continue
+
+            # "Marek: <jego zdanie>" — imie przed cytatem.
+            _m = _IMIE_PRZED_CYTATEM_RE.match(t)
+
+            if _m and _m.group(1).strip() and _m.group(1).strip() in znane:
+                continue
+
+            linie.append(t)
+
+        return sum(len(x) for x in linie), linie
+
+    except Exception:
+        return 0, []
+
+
 def _wyslano(role, text):
     """
     Co wlasnie poszlo do tej osoby — W CALOSCI, i w pliku, i na
@@ -1979,9 +2088,20 @@ def _wyslano(role, text):
 
     tresc = str(text or "")
 
+    # v432: patrz _tekst_pythona().
+    _py_znaki, _py_linie = _tekst_pythona(tresc)
+
+    zapisz_zdarzenie(
+        "tekst_pythona",
+        rola=str(role),
+        znaki=_py_znaki,
+        linie=_py_linie[:40]
+    )
+
     dopisz_do_przebiegu(
         "\n" + _RAMKA_WYSLANE + speaker + " (" + str(role) + ") — "
-        + _po_ludzku_rozmiar(len(tresc)) + " ===\n"
+        + _po_ludzku_rozmiar(len(tresc))
+        + " — tekst Pythona: " + str(_py_znaki) + " znaków ===\n"
         + tresc.strip() + "\n"
         + _RAMKA_WYSLANE_KONIEC
     )
@@ -2072,9 +2192,8 @@ def short(value, limit=1000):
     # tego poznac.
     return (
         cut
-        + "\n...[skrócono — UWAGA: ostatnie słowo powyżej jest "
-        "URWANE W POŁOWIE, nie traktuj go jako pełnej nazwy/"
-        "ścieżki]..."
+        # v432: bez pouczenia o urwanym slowie.
+        + "\n...[skrócono]..."
     )
 
 
@@ -2652,7 +2771,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v431")
+    print("             AEL-MINI AUTONOMOUS AGENT v432")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3376,9 +3495,7 @@ def _current_project_file_block(tekst_bledu=""):
 
         if not p.exists():
             return (
-                "\n\nAKTUALNY STAN PLIKU " + str(p) + ": PLIKU NIE MA "
-                "na dysku (sprawdzone teraz). Jeśli miał tam być — "
-                "trzeba go utworzyć od zera, nie poprawiać.\n"
+                "\n\n" + str(p) + ": NIE MA takiego pliku.\n"
             )
 
         tresc = p.read_text(encoding="utf-8", errors="replace")
@@ -3387,17 +3504,12 @@ def _current_project_file_block(tekst_bledu=""):
         return ""
 
     naglowek = (
-        "\n\nTAK WYGLĄDA TEN PLIK TERAZ — " + str(p) + " ("
-        + str(len(tresc)) + " B, odczytane z dysku w tej chwili, nie "
-        "z czyjejś pamięci):\n"
+        "\n\n" + str(p) + " (" + str(len(tresc)) + " B, teraz na "
+        "dysku):\n"
     )
 
-    stopka = (
-        "\n[To jest STAN FAKTYCZNY pliku. Jeśli poprawiasz go przez "
-        "SZUKAJ/ZAMIEŃ — skopiuj fragment DOKŁADNIE stąd, znak w "
-        "znak, razem z wcięciami. Fragment musi występować w pliku "
-        "dokładnie raz, inaczej poprawka zostanie odrzucona.]\n"
-    )
+    # v432: bez stopki z instrukcja, jak kopiowac fragment SZUKAJ.
+    stopka = "\n"
 
     linia = _linia_bledu_w(p, tekst_bledu)
 
@@ -3406,15 +3518,11 @@ def _current_project_file_block(tekst_bledu=""):
         okolica, od, do = _okolica_linii(tresc, linia)
 
         return (
-            "\n\nTAK WYGLĄDA " + str(p) + " W MIEJSCU, KTÓRE SIĘ "
-            "WYWALIŁO — linia " + str(linia) + ", pokazuję "
-            + str(od) + "-" + str(do) + " z " + str(
-                tresc.count("\n") + 1
-            ) + " (odczytane z dysku w tej chwili):\n"
+            "\n\n" + str(p) + ", linie " + str(od) + "-" + str(do)
+            + " z " + str(tresc.count("\n") + 1)
+            + " (błąd w linii " + str(linia) + "; numery linii nie są "
+            "częścią pliku):\n"
             + okolica
-            + "\n\n[Numery linii są tylko dla orientacji — nie ma "
-            "ich w pliku. Resztę pliku możesz odczytać przez "
-            "termux_read_file.]"
             + stopka
         )
 
@@ -3428,9 +3536,7 @@ def _current_project_file_block(tekst_bledu=""):
         + tresc[:polowa]
         + "\n\n[...POMINIĘTO ŚRODEK PLIKU ("
         + str(len(tresc) - _PROJECT_FILE_MAX)
-        + " B) — jest za duży, żeby pokazać go w całości. Poniżej "
-        "koniec pliku. Jeśli poprawiasz fragment ze środka, poproś "
-        "najpierw o odczytanie tej konkretnej części...]\n\n"
+        + " B)...]\n\n"
         + tresc[-polowa:]
         + stopka
     )
@@ -3486,59 +3592,31 @@ def _engineer_feedback_block():
     if not dane:
         return ""
 
+    # v432: sam wynik uruchomienia — bez "oto co wyszlo NAPRAWDE",
+    # "to jest surowy wynik, nie czyjes streszczenie" i polecenia, jak
+    # podac poprawke.
     naglowek = (
-        "\n\nURUCHOMILISMY TWOJ KOD (" + dane["path"] + ") — oto co "
-        "z niego wyszlo NAPRAWDE"
-    )
-
-    if dane["ok"]:
-        naglowek += " (zakonczyl sie bez bledu):"
-    else:
-        naglowek += (
-            " (NIE POWIODL SIE, kod wyjscia "
-            + str(dane.get("returncode")) + "):"
+        "\n\nUruchomione: " + dane["path"]
+        + (
+            " — bez błędu."
+            if dane["ok"] else
+            " — kod wyjścia " + str(dane.get("returncode")) + "."
         )
+    )
 
     czesci = [naglowek]
 
     if dane["stdout"].strip():
-        czesci.append("\nWYJSCIE:\n" + short(dane["stdout"], 2500))
+        czesci.append("\nstdout:\n" + short(dane["stdout"], 2500))
 
     if dane["stderr"].strip():
-        czesci.append("\nBLEDY:\n" + short(dane["stderr"], 2000))
+        czesci.append("\nstderr:\n" + short(dane["stderr"], 2000))
 
-    # v383: gdy program nic nie wypisal, w to miejsce szla PROZA z
-    # wykonania — a zdanie ponizej mowilo o niej "to jest surowy
-    # wynik z urzadzenia, nie czyjes streszczenie". To bylo
-    # nieprawda dokladnie wtedy, gdy mialo najwieksze znaczenie:
-    # Bartek dostawal czyjs opis i byl zapewniany, ze to pomiar.
-    # Mowimy wiec, czym ta tresc jest naprawde.
-    _bylo_wyjscie = bool(
-        dane["stdout"].strip() or dane["stderr"].strip()
-    )
-
-    if not _bylo_wyjscie:
+    if not (dane["stdout"].strip() or dane["stderr"].strip()):
         czesci.append(
-            "\nProgram nie wypisal ANI JEDNEGO znaku — ani na "
-            "wyjscie, ani na bledy. Ponizej jest RELACJA z "
-            "wykonania, czyli opis slowami, a nie to, co wypisalo "
-            "urzadzenie:\n"
+            "\nNic nie wypisał. Gemini napisał:\n"
             + short(dane["report"], 1500)
         )
-
-    czesci.append(
-        (
-            "\nTo jest surowy wynik z urzadzenia, nie czyjes "
-            "streszczenie. "
-            if _bylo_wyjscie else
-            "\nSurowego wyjscia nie bylo, wiec powyzsze to opis, a "
-            "nie pomiar. "
-        )
-        + "Jesli cos nie zadzialalo — popraw to, ale podaj TYLKO "
-        "zmieniony fragment przez SZUKAJ/ZAMIEN albo caly plik, gdy "
-        "poprawka jest wieksza niz polowa. Nie przepisuj calosci bez "
-        "potrzeby."
-    )
 
     return "".join(czesci)
 
@@ -4157,11 +4235,8 @@ def _current_topic(last_result, critic_streak):
                 "narzędzi, zanim dobiegło końca."
             )
 
-    if critic_streak >= 2:
-        return (
-            "Marek zgłasza zastrzeżenie już "
-            + str(critic_streak) + " raz z rzędu."
-        )
+    # v432: bez "Marek zglasza zastrzezenie juz N raz z rzedu" —
+    # Python liczyl i oceniał, co mowi Marek.
 
     return ""
 
@@ -4302,6 +4377,7 @@ def _set_current_goal(goal):
     global _current_goal_text
 
     _current_goal_text = str(goal or "").strip()
+    _znane_dodaj(_current_goal_text)
     _goal_briefed.clear()
 
     # v193: nowy cel = rozmowa od zera, wiec nikt niczego jeszcze
@@ -6837,15 +6913,20 @@ def deepseek(name, message):
                         "Idzie ostatnia znana odpowiedź."
                     )
 
+                    # v432: bez "(nie byl jeszcze pytany.)" i bez
+                    # doklejania kolejnego podpisu do juz podpisanej
+                    # wypowiedzi (bieg 17:16: "Kamil, wczesniej (krok
+                    # 6): / (krok 5): / (krok 4):" jedno pod drugim).
+                    _stara = _bez_podpisow_starych(
+                        _role_response_cache.get(name, "")
+                    )
                     return (
                         _podpis_starej_wypowiedzi(
                             _ROLE_DISPLAY_NAME.get(name, str(name)),
                             name
                         )
-                        + _role_response_cache.get(
-                            name, "(nie był jeszcze pytany.)"
-                        )
-                    )
+                        + _stara
+                    ) if _stara.strip() else ""
 
                 # v354: limiter dopiero TU — juz po guardzie wyzej.
                 # Gdyby stal wczesniej, wiadomosc, ktorej nie
@@ -7415,6 +7496,13 @@ def deepseek(name, message):
                     tresc=str(text or "")
                 )
 
+                # v432: w ktorym kroku ta rola naprawde sie odezwala
+                # — patrz _podpis_starej_wypowiedzi().
+                _krok_wypowiedzi[str(name)] = _biezacy_krok
+
+                # v432: patrz _tekst_pythona().
+                _znane_dodaj(text)
+
                 health = _get_health(_account_of(name))
                 health["consecutive_failures"] = 0
                 health["trip_count"] = 0
@@ -7946,14 +8034,8 @@ def _powiedz_jak_leca_komendy(pakiet):
 
     _powiedziane_o_komendach = True
 
-    _pending_team_warnings.append(
-        "Na wierzchu ekranu jest teraz co innego niż nasz terminal, "
-        "ale komendy i tak uruchamiam sam, ze swojego procesu — nie "
-        "wpisuję ich w widoczne okno, więc nic tu nie stoi na "
-        "przeszkodzie. Z zespołem rozmawiam po sieci, nie przez "
-        "przeglądarkę. A gdy jakiś krok naprawdę potrzebuje "
-        "konkretnej aplikacji na wierzchu, sam ją tam wyciągam."
-    )
+    # v432: bez objasnienia, jak dziala program.
+    pass
 
 
 def _foreground_app():
@@ -9166,11 +9248,9 @@ def android_tap(x, y):
     )
 
     if _odmowa:
+        # v432: sam fakt, bez rady o termux_run.
         _pending_team_warnings.append(
-            "Ktoś chciał kliknąć w ekran (" + str(x) + ", " + str(y)
-            + "), a na wierzchu był Termux — czyli terminal samego "
-            "agenta. Nie kliknąłem: komenda w Termuksie i tak nie "
-            "potrzebuje ekranu, termux_run uruchamia ją wprost."
+            "Ktoś chciał kliknąć w ekran (" + str(x) + ", " + str(y) + "), a na wierzchu był Termux — nie kliknąłem."
         )
         return _odmowa
 
@@ -14607,9 +14687,8 @@ def termux_write_file(path, content, append=False):
                             if data.strip() and data.strip() != _kod.strip()
                             else ""
                         )
-                        + " — jest na dysku, w calosci. Twoja "
-                        "czesc to uruchomienie go i sprawdzenie, co "
-                        "z tego wyszlo."
+                        # v432: bez "Twoja czesc to uruchomienie go".
+                        + " — jest na dysku."
                     )
                 }
 
@@ -14741,12 +14820,8 @@ def termux_write_file(path, content, append=False):
             and new_size < previous_size * 0.5
         ):
             result["warning"] = (
-                "UWAGA: ten zapis NADPISAŁ istniejący plik (miał "
-                + str(previous_size) + " B, teraz ma " + str(new_size)
-                + " B) — jeśli zawierał dowody z wcześniejszych kroków "
-                "tego samego celu, mogły zostać właśnie SKASOWANE. "
-                "Jeśli chodziło o DOPISANIE, użyj append=true zamiast "
-                "nadpisywania całego pliku."
+                "Nadpisany: miał " + str(previous_size) + " B, teraz ma "
+                + str(new_size) + " B."
             )
 
         # Niespójność naprawiona: termux_patch_file od dawna
@@ -14784,14 +14859,8 @@ def termux_write_file(path, content, append=False):
                         1500
                     )
                     result["warning"] = (
-                        "Plik ZOSTAŁ zapisany na dysku, ale NIE "
-                        "PRZECHODZI py_compile — zawiera błąd "
-                        "składni (patrz compile_error: dokładny "
-                        "plik, numer linii i treść błędu). Plik "
-                        "NIE został cofnięty (w przeciwieństwie do "
-                        "termux_patch_file) — popraw dokładnie "
-                        "wskazaną linię, zanim spróbujesz go "
-                        "uruchomić."
+                        "Zapisany; py_compile zgłasza błąd "
+                        "(compile_error)."
                     )
 
             except Exception:
@@ -17600,12 +17669,9 @@ def termux_run(command):
                     "raz: druga kopia zaczelaby od zera."
                 )
 
+                # v432: bez "nie trzeba jej ponawiac".
                 _pending_team_warnings.append(
-                    "Komenda `" + short(command_str, 120)
-                    + "` chodzi już ponad "
-                    + str(DLUGA_ROBOTA_TIMEOUT // 60)
-                    + " min, więc przeniosłem ją w tło — leci dalej, "
-                    "nie trzeba jej ponawiać."
+                    "Komenda `" + short(command_str, 120) + "` chodzi już ponad " + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min — przeniosłem ją w tło, leci dalej."
                 )
 
                 _zglos_to_co_przybylo(_przed)
@@ -18770,6 +18836,25 @@ def _find_embedded_failure_signature(result):
                 return signature
 
     return None
+
+
+# v432: patrz _bez_ostrzezen_pythona().
+_OSTRZEZENIA_PYTHONA = (
+    "content_warning", "shell_quoting_warning", "missing_file_warning",
+    "shortcircuit_warning", "json_parse_warning", "call_audio_warning",
+    "contact_schema_warning", "placeholder_phone_warning",
+    "dom_fields_warning", "screen_unreadable_warning",
+    "fabricated_evidence_warning", "stale_warning", "foreground_warning",
+)
+
+
+def _bez_ostrzezen_pythona(result):
+    """v432: wynik narzedzia bez ocen Pythona — surowy wynik wystarcza."""
+
+    if not any(k in result for k in _OSTRZEZENIA_PYTHONA):
+        return result
+
+    return {k: v for k, v in result.items() if k not in _OSTRZEZENIA_PYTHONA}
 
 
 def dispatch_tool(
@@ -21441,15 +21526,8 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # raportu, a nie zamiast niego.
                 if tool_calls == 0:
                     collected_warnings.append(
-                        "Zadanie skończyło się NIE WYWOŁUJĄC ANI "
-                        "JEDNEGO narzędzia — nic nie dotknęło "
-                        "telefonu, dysku ani przeglądarki. Cokolwiek "
-                        "raport poniżej mówi o wykonanych "
-                        "czynnościach (zadzwoniłem, zapisałem, "
-                        "sprawdziłem, zapytałem), FIZYCZNIE się nie "
-                        "wydarzyło — to sam tekst. Jeśli zadanie "
-                        "wymagało realnego działania, potraktuj je "
-                        "jako NIEWYKONANE."
+                        "Zadanie skończyło się bez ani jednego "
+                        "wywołania narzędzia."
                     )
 
                     log(
@@ -21756,6 +21834,19 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                             "error_type": type(e).__name__
                         }
 
+                    # v432: bez ostrzezen Pythona doklejanych do wyniku
+                    # narzedzia ("NIE traktuj tego automatycznie jako
+                    # sukcesu", "numer wyglada na przykladowy"…). Zostaje
+                    # tylko ostrzezenie o powtorzonej czynnosci
+                    # nieodwracalnej.
+                    if isinstance(result, dict):
+                        result = _bez_ostrzezen_pythona(result)
+
+                        # v432: patrz _tekst_pythona().
+                        for _v in result.values():
+                            if isinstance(_v, str):
+                                _znane_dodaj(_v)
+
                     # v380: nic tego jeszcze nie dopisalo, wiec wynik
                     # narzedzia i odpowiedz dla wykonawcy to tu jedno
                     # i to samo.
@@ -21860,11 +21951,8 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "gemini [petla_czekania]: " + str(name)
                         + " wywolane " + str(_identical_streak)
                         + " razy z rzedu z tymi samymi argumentami i "
-                        "za kazdym razem z tym samym wynikiem. To "
-                        "znaczy, ze COS SIE JESZCZE NIE WYDARZYLO "
-                        "(strona nie odpowiedziala, element nie "
-                        "pojawil sie) — a nie, ze polecenie jest "
-                        "zle wykonywane. Ostatni wynik: "
+                        "za kazdym razem z tym samym wynikiem. "
+                        "Ostatni wynik: "
                         + short(json.dumps(result, ensure_ascii=False,
                                            default=str), 300)
                     )
@@ -25499,7 +25587,23 @@ def _kod_na_jedna_linie(tekst):
 
         opis = nazwa or jezyk or "kod"
 
-        return "[" + opis + " — " + str(len(kod)) + " znaków]"
+        # v432: MAIN widzi, ze pliku o tej nazwie nie ma na dysku —
+        # bieg 2026-09-24 19:06: "[diag.sh — 371 znaków]" wygladalo
+        # jak plik gotowy do uruchomienia.
+        _brak = ""
+
+        if nazwa:
+            try:
+                _jest = (
+                    nazwa in _gdzie_zapisalismy
+                    or (HOME / nazwa).exists()
+                )
+            except Exception:
+                _jest = True
+            if not _jest:
+                _brak = ", nie ma go na dysku"
+
+        return "[" + opis + " — " + str(len(kod)) + " znaków" + _brak + "]"
 
     return re.sub(
         r"```([a-zA-Z0-9_+-]*)\n(.*?)```",
@@ -26502,13 +26606,11 @@ def review_and_fix_project_file(path, run_result):
     analiza = deepseek(
         "CODE_REVIEWER",
         _wspolne_dla_wolanego("CODE_REVIEWER")
-        + "Ten plik nie zadziałał. Oto on w całości, odczytany z dysku "
-        "przed chwilą — " + str(target) + ":\n\n"
+        # v432: plik i wynik uruchomienia, bez polecen, co robic.
+        + str(target) + " (teraz na dysku):\n\n"
         + tresc
-        + "\n\nA tak to się skończyło przy uruchomieniu:\n"
+        + "\n\nUruchomienie:\n"
         + co_sie_stalo
-        + "\n\nZnajdź przyczynę i wskaż najmniejszą możliwą "
-        "poprawkę. Nie zmieniaj kodu — to robi Ania."
     )
 
     if not str(analiza or "").strip():
@@ -26519,12 +26621,10 @@ def review_and_fix_project_file(path, run_result):
     poprawka = deepseek(
         "CODE_FIXER",
         _wspolne_dla_wolanego("CODE_FIXER")
-        + "Piotr przeanalizował " + str(target) + " i mówi tak:\n\n"
+        + "Piotr o " + str(target) + ":\n\n"
         + short(analiza, 3000)
-        + "\n\nA tak wygląda ten plik TERAZ, odczytany z dysku "
-        "(kopiuj fragment SZUKAJ dokładnie stąd):\n\n"
+        + "\n\n" + str(target) + " (teraz na dysku):\n\n"
         + tresc
-        + "\n\nNapisz minimalną poprawkę."
     )
 
     # v293: poprawka Ani to tez kod autora — z nazwa pliku w tresci,
@@ -26639,16 +26739,9 @@ def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
         _record_python_written_file(przeglad["path"])
         _set_current_project_file(przeglad["path"])
 
+        # v432: bez "nastepny krok to uruchomienie go, nie pisanie od nowa".
         _pending_team_warnings.append(
-            "kod się wysypał, więc Piotr "
-            "obejrzał " + Path(przeglad["path"]).name + " niezależnie, "
-            "a Ania naniosła poprawkę (" + str(przeglad["blocks"])
-            + " x SZUKAJ/ZAMIEŃ, " + str(przeglad["size_before"])
-            + " B -> " + str(przeglad["size_after"]) + " B, backup: "
-            + Path(przeglad["backup"]).name + "). Plik jest JUŻ "
-            "poprawiony — następny krok to uruchomienie go, nie "
-            "pisanie od nowa. Co znalazł Piotr: "
-            + short(str(przeglad.get("review", "")), 700)
+            "Piotr obejrzał " + Path(przeglad["path"]).name + " po awarii, a Ania naniosła poprawkę (" + str(przeglad["blocks"]) + " x SZUKAJ/ZAMIEŃ, " + str(przeglad["size_before"]) + " B -> " + str(przeglad["size_after"]) + " B, backup: " + Path(przeglad["backup"]).name + "). Piotr: " + short(str(przeglad.get("review", "")), 700)
         )
 
     else:
@@ -27756,9 +27849,7 @@ def _co_narzedzia_naprawde_zrobily(ile=6):
             break
 
     return (
-        "\nA to wykonalo sie naprawde — Python widzial te wywolania i "
-        "ich wyniki, to nie sa niczyje deklaracje (lacznie udanych: "
-        + str(len(zrobione)) + "):\n"
+        "\nUdane wywołania narzędzi (" + str(len(zrobione)) + "):\n"
         + "\n".join("- " + w for w in reversed(widziane))
         + "\n"
     )
@@ -27792,10 +27883,6 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     # stan (te same funkcje, których używa MAIN każdy krok), żeby
     # ocena miała choć trochę oparcia w rzeczywistości, nie tylko
     # w tym, co ktoś inny zadeklarował.
-    checklist_summary = _checklist_summary_block()
-    checklist_block = (
-        "\n" + checklist_summary + "\n"
-    ) if checklist_summary else ""
 
     # Ten sam mechanizm adaptacyjnej treści co w consult_team()/
     # main_decide() (v87/v88) — świeży stan Chrome/Androida tylko
@@ -27820,8 +27907,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     if _chrome_relevant_for_progress or _ekran_dla_eli:
 
         device_state_block = (
-            "\nCo widać teraz na ekranie (pamiętaj o przejściowych "
-            "krokach — patrz Twój prompt systemowy):\n"
+            "\nTeraz na ekranie:\n"
         )
 
         if _chrome_relevant_for_progress:
@@ -27852,14 +27938,13 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     # Straznik v345 tego nie widzial, bo prompty pisane jako
     # potrojnie cytowane f-stringi byly z niego wycinane razem z
     # docstringami. Patrz bezwykonawcy.py.
+    # v432: relacje z krokow i fakty, bez komentarza Pythona do nich
+    # i bez listy punktow celu (patrz _checklist_summary_block).
     prompt = f"""
-Tak to zostało opisane, od najstarszego kroku do najnowszego — to są
-relacje z samego wykonania, słowami, nie pomiar:
+Gemini po kolejnych krokach:
 {_human_task_summary_lines(summaries)}
-{checklist_block}{narzedzia_block}
-{device_state_block}
-Ile z tego celu jest naprawdę zrobione?
-"""
+{narzedzia_block}
+{device_state_block}"""
 
     raw = deepseek(
         "PROGRESS_ESTIMATOR",
@@ -28468,6 +28553,12 @@ def _condense_last_result_for_team(last_result, limit=2500):
     Gemini).
     """
 
+    # v432: relacja Gemini i slowa uzytkownika to nie tekst Pythona —
+    # patrz _tekst_pythona().
+    if isinstance(last_result, dict):
+        _znane_dodaj(last_result.get("report"))
+        _znane_dodaj(last_result.get("user_provided_value"))
+
     if not isinstance(last_result, dict):
         return short(
             json.dumps(last_result, ensure_ascii=False),
@@ -28488,10 +28579,8 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # osiagniety. Patrz komentarz przy _dowody_z_wykonania().
     if _status == "TASK_EXECUTION_FINISHED":
         # v345: bez slowa o wykonawcy. Liczy sie, co sie stalo.
-        _sufiks = (
-            " — wykonywanie się skończyło; czy cel osiągnięty,"
-            " oceńcie z dowodów poniżej"
-        )
+        # v432: bez dopisku "czy cel osiagniety, oceńcie z dowodow".
+        _sufiks = ""
     else:
         _sufiks = (
             " (udany)" if _ok is True
@@ -28503,16 +28592,8 @@ def _condense_last_result_for_team(last_result, limit=2500):
         "Ostatni krok skończył się tak: " + _status + _sufiks
     ]
 
-    _dowody = last_result.get("dowody")
-
-    if isinstance(_dowody, dict) and _dowody:
-        parts.append(
-            "dowody z wykonania: "
-            + ", ".join(
-                str(k) + "=" + str(v)
-                for k, v in _dowody.items()
-            )
-        )
+    # v432: bez "dowody z wykonania: wywolan_narzedzi=2" — slad
+    # narzedzi nizej mowi to samo.
 
     # v413: ostrzezenia z narzedzi to FAKTY o tym, co sie wydarzylo —
     # "ten numer wyglada na przykladowy", "to juz drugi telefon do
@@ -28593,12 +28674,7 @@ def _condense_last_result_for_team(last_result, limit=2500):
     value_file = last_result.get("user_provided_value_file")
 
     if value_file:
-        parts.append(
-            "wklejona wartość jest też ZAPISANA W PLIKU "
-            + str(value_file)
-            + " — w zadaniu podawaj tę ŚCIEŻKĘ (np. "
-            "`KEY=$(cat " + str(value_file) + ")`), nie samą wartość"
-        )
+        parts.append("wklejona wartość jest w pliku " + str(value_file))
 
     tool_result = last_result.get("tool_result")
 
@@ -28659,11 +28735,9 @@ def _condense_last_result_for_team(last_result, limit=2500):
         # v345 mowilo "bez PODPISU wykonawcy" — czyli nie nazywamy,
         # KTO to napisal. To nie znaczy "bez etykiety": mozna
         # powiedziec, CZYM ta tresc jest, nie mowiac czyja jest.
-        parts.append(
-            "relacja z wykonania (opis słowami, nie pomiar — liczby "
-            "i ślad narzędzi są wyżej):\n"
-            + short(str(report), 1200)
-        )
+        # v432: "Gemini napisal:" zamiast "relacja z wykonania (opis
+        # slowami, nie pomiar…)".
+        parts.append("Gemini napisał:\n" + short(str(report), 1200))
 
     tool_calls = last_result.get("tool_calls")
 
@@ -30622,6 +30696,17 @@ def _split_ola_translation_by_role(text):
     return general, callouts
 
 
+_krok_wypowiedzi = {}
+
+_PODPIS_STAREJ_RE = re.compile(r"\A(?:[^\n,]{1,20}, wcześniej(?: \(krok \d+\))?:\n)+")
+
+
+def _bez_podpisow_starych(tekst):
+    """v432: wypowiedz bez podpisow "X, wczesniej (krok N):" na poczatku."""
+
+    return _PODPIS_STAREJ_RE.sub("", str(tekst or ""))
+
+
 def _podpis_starej_wypowiedzi(imie, rola):
     """
     "Wojtek, wcześniej:" albo "Wojtek, wcześniej (krok 3):".
@@ -30630,7 +30715,9 @@ def _podpis_starej_wypowiedzi(imie, rola):
     _role_response_step.
     """
 
-    krok = _role_response_step.get(rola)
+    # v432: krok, w ktorym ta rola naprawde sie odezwala — nie krok,
+    # w ktorym jej stara wypowiedz poszla dalej jeszcze raz.
+    krok = _krok_wypowiedzi.get(str(rola)) or _role_response_step.get(rola)
 
     return (
         str(imie) + ", wcześniej"
@@ -30739,54 +30826,17 @@ def consult_team(
     global _critic_question
     global _answer_for_critic
 
+    # v432: bez "⚠️ UWAGA: narzedzie X zawiodlo Nx… Czas na inne
+    # podejscie" i bez ramy "Przy okazji zauwazylem w narzedziach…".
+    # Ostrzezenia z wykonania i tak ida w relacji z kroku.
     tool_hint = ""
 
-    if isinstance(last_result, dict):
-        status = last_result.get("status", "")
-        attempt = last_result.get("attempt_count", 0)
-
-        if (
-            status == "GEMINI_TOOL_ERROR"
-            and attempt
-        ):
-            tool = last_result.get("tool", "?")
-            err = (
-                last_result.get("tool_result", {}) or {}
-            ).get("error", "")
-            tool_hint = (
-                f"\n\n⚠️ UWAGA: narzędzie '{tool}' zawiodło "
-                f"{attempt}x z rzędu tymi samymi argumentami."
-            )
-            if err:
-                tool_hint += f" Błąd: {err}."
-            tool_hint += (
-                " Czas na inne podejście."
-            )
-
-        tool_warnings = last_result.get("tool_warnings") or []
-
-        if tool_warnings:
-            tool_hint += (
-                "\n\nPrzy okazji zauważyłem w narzędziach to "
-                "(sprawdzone w kodzie, niezależnie od raportu):\n"
-                + "\n".join(
-                    "- " + str(w) for w in tool_warnings[:8]
-                )
-            )
-
-    # v191: fakty zauważone przez samego Pythona (poza narzędziami
-    # Gemini) — patrz _pending_team_warnings. Doklejane TĄ SAMĄ
-    # ramką co sygnały z narzędzi i opróżniane, żeby nie wracały w
-    # kolejnych krokach jako "stare rzeczy".
-    # v270: to sa zdania samego Pythona do zespolu, nie zrzut z
-    # narzedzia — a siedzialy w srodku tool_hint, ktory dla Kamila
-    # jest wylaczony. Wychodza wiec do wlasnego kanalu i docieraja
-    # do wszystkich, bo do wszystkich byly mowione.
     python_zauwazyl = ""
 
     if _pending_team_warnings:
+        # v432: same fakty, bez ramy "Zauwazylem jeszcze to:".
         python_zauwazyl = (
-            "\n\nZauważyłem jeszcze to:\n"
+            "\n\n"
             + "\n".join(
                 "- " + str(w) for w in _pending_team_warnings[:8]
             )
@@ -30797,12 +30847,9 @@ def consult_team(
     # POPRZEDNIEJ naradzie — patrz _remember_team_file_questions().
     # To jest ta "druga wiadomosc" w rozmowie: w jednej padlo
     # pytanie/blad, w tej pada odpowiedz.
-    delegacja_block = (
-        "\nUżytkownik w celu powiedział wprost, żeby to wymyślić / "
-        "wybrać samemu — na pytanie, którą wersję woli, już "
-        "odpowiedział: dowolną. Wybór należy do was.\n"
-        if _goal_delegates_decision(goal) else ""
-    )
+    # v432: bez "Uzytkownik powiedzial wprost, zeby wybrac samemu…" —
+    # zgadywane ze slow celu, a cel i tak maja wszyscy.
+    delegacja_block = ""
 
     progress_snapshot = _goal_progress_snapshot(goal)
 
@@ -30815,16 +30862,10 @@ def consult_team(
         if isinstance(last_result, dict) else None
     )
 
-    checklist_summary = _checklist_summary_block(_biezace_zadanie)
-    checklist_block = ("\n" + checklist_summary + "\n") if checklist_summary else ""
-
-    # Pamięć zespołu o już wypróbowanych podejściach — patrz
-    # APPROACHES_FILE. Doklejana do checklisty, bo to ta sama klasa
-    # informacji: twarde fakty zebrane przez Pythona, nie deklaracje.
-    _approaches_summary = _approaches_summary_block()
-
-    if _approaches_summary:
-        checklist_block += "\n" + _approaches_summary + "\n"
+    # v432: bez listy punktow celu ("Z 8 punktow: 5 zrobily sie na
+    # narzedziach…", "Do tych warto wrocic…") i bez "Tego juz
+    # probowalismy…" — Python sam dzielil cel na punkty i je oceniał.
+    checklist_block = ""
 
     # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu od
     # v116/v132 rozmawia po ludzku, ale sam OSTATNI RAPORT był
@@ -30945,22 +30986,11 @@ def consult_team(
 
     if user_value:
 
+        # v432: sama wartosc, bez polecen, co z nia zrobic.
         engineer_value_handoff = (
-            "\n\nDLA CIEBIE (Bartek) — użytkownik wkleił tę wartość "
-            "DOSŁOWNIE, użyj jej bezpośrednio (np. zapisz do "
-            "właściwego pliku), nie proś o nią ponownie:\n"
+            "\n\nWartość wklejona przez użytkownika:\n"
             + str(user_value)
         )
-
-        if "\n" in str(user_value):
-            engineer_value_handoff += (
-                "\n\nUWAGA: ta wartość ma WIELE LINII — to może być "
-                "skopiowany fragment całej strony, nie sama wartość. "
-                "PRZEJRZYJ WSZYSTKIE linie i znajdź tę, która "
-                "faktycznie wygląda jak oczekiwana wartość (długi "
-                "ciąg losowych znaków alfanumerycznych, bez spacji), "
-                "zamiast zakładać że cały tekst to jedna wartość."
-            )
 
     # Fakty wspólne dla WSZYSTKICH ról — to jedyna część, która
     # faktycznie musi być identyczna, żeby zespół "rozumiał się
@@ -31395,6 +31425,10 @@ def consult_team(
         android_text if android_text is not None else android_summary()
     )
 
+    # v432: patrz _tekst_pythona().
+    _znane_dodaj(_chrome_tekst)
+    _znane_dodaj(_android_tekst)
+
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(_ekran_bez_mapy_klikania(_android_tekst), 2000)
@@ -31826,7 +31860,7 @@ def consult_team(
 
         results["WOJTEK"] = deepseek("WOJTEK", _do_wojtka)
 
-        _role_response_cache["WOJTEK"] = results["WOJTEK"]
+        _role_response_cache["WOJTEK"] = _bez_podpisow_starych(results["WOJTEK"])
         _role_response_step["WOJTEK"] = step
         _collect_role_messages("WOJTEK", results["WOJTEK"])
 
@@ -31907,7 +31941,7 @@ def consult_team(
             researcher_context
         )
 
-        _role_response_cache["RESEARCHER"] = results["RESEARCHER"]
+        _role_response_cache["RESEARCHER"] = _bez_podpisow_starych(results["RESEARCHER"])
         _role_response_step["RESEARCHER"] = step
         _collect_role_messages("RESEARCHER", results["RESEARCHER"])
 
@@ -31973,9 +32007,8 @@ def consult_team(
     if _critic_verdict_for_planner:
 
         critic_feedback_block = (
-            "\n\nMarek zarzucił Twojemu poprzedniemu planowi to "
-            "(jeśli uważasz, że Marek się myli, napisz wprost "
-            "dlaczego):\n"
+            # v432: sama etykieta, bez podpowiedzi, jak odpowiedziec.
+            "\n\nMarek:\n"
             + _critic_verdict_for_planner
         )
 
@@ -31998,7 +32031,7 @@ def consult_team(
         # kolejnosci, a gdy nie ma zadnej — bierze poczatek
         # wypowiedzi. Kanal dziala bez rozkazywania.
         planner_question_block = (
-            "\n\nMarek pyta Cię wprost:\n"
+            "\n\nMarek:\n"
             + _critic_question.get("text", "")
         )
 
@@ -32015,10 +32048,13 @@ def consult_team(
         )
 
         results["PLANNER"] = (
-            _podpis_starej_wypowiedzi("Tomek", "PLANNER")
-            + _role_response_cache.get(
-                "PLANNER", "(Tomek nie zabierał jeszcze głosu.)"
+            # v432: bez "(Tomek nie zabieral jeszcze glosu.)" — pusto, gdy
+            # jeszcze nic nie powiedzial.
+            (
+                _podpis_starej_wypowiedzi("Tomek", "PLANNER")
+                + _bez_podpisow_starych(_role_response_cache["PLANNER"])
             )
+            if str(_role_response_cache.get("PLANNER") or "").strip() else ""
         )
 
     else:
@@ -32057,7 +32093,7 @@ def consult_team(
         )
         )
 
-        _role_response_cache["PLANNER"] = results["PLANNER"]
+        _role_response_cache["PLANNER"] = _bez_podpisow_starych(results["PLANNER"])
         _role_response_step["PLANNER"] = step
         _collect_role_messages("PLANNER", results["PLANNER"])
 
@@ -32070,7 +32106,7 @@ def consult_team(
             _team_context("BROWSER", include_chrome=True)
         )
 
-        _role_response_cache["BROWSER"] = results["BROWSER"]
+        _role_response_cache["BROWSER"] = _bez_podpisow_starych(results["BROWSER"])
         _role_response_step["BROWSER"] = step
         _collect_role_messages("BROWSER", results["BROWSER"])
 
@@ -32115,9 +32151,7 @@ def consult_team(
     if _critic_verdict_for_engineer:
 
         engineer_critic_block = (
-            "\n\nMarek zarzucił poprzedniemu krokowi to "
-            "(jeśli uważasz, że Marek się myli, napisz wprost "
-            "dlaczego):\n"
+            "\n\nMarek:\n"
             + _critic_verdict_for_engineer
         )
 
@@ -32131,7 +32165,7 @@ def consult_team(
     if _critic_question and _critic_question.get("role") == "ENGINEER":
         # v297: to samo co u Tomka — bez dyktowania napisu.
         engineer_question_block = (
-            "\n\nMarek pyta Cię wprost:\n"
+            "\n\nMarek:\n"
             + _critic_question.get("text", "")
         )
 
@@ -32148,10 +32182,13 @@ def consult_team(
         )
 
         results["ENGINEER"] = (
-            _podpis_starej_wypowiedzi("Bartek", "ENGINEER")
-            + _role_response_cache.get(
-                "ENGINEER", "(Bartek nie zabierał jeszcze głosu.)"
+            # v432: bez "(Bartek nie zabieral jeszcze glosu.)" — pusto, gdy
+            # jeszcze nic nie powiedzial.
+            (
+                _podpis_starej_wypowiedzi("Bartek", "ENGINEER")
+                + _bez_podpisow_starych(_role_response_cache["ENGINEER"])
             )
+            if str(_role_response_cache.get("ENGINEER") or "").strip() else ""
         )
 
     else:
@@ -32165,7 +32202,7 @@ def consult_team(
                 # Bartek ma wykonac, nie cudza rozmowa obok.
                 _only_if_new(
                     "ENGINEER", "od_tomka",
-                    "\nTomek proponuje:\n" + planner_out
+                    "\nTomek:\n" + planner_out
                 )
                 + _only_if_new(
                     "ENGINEER", "od_kamila",
@@ -32201,7 +32238,7 @@ def consult_team(
         )
         )
 
-        _role_response_cache["ENGINEER"] = results["ENGINEER"]
+        _role_response_cache["ENGINEER"] = _bez_podpisow_starych(results["ENGINEER"])
         _role_response_step["ENGINEER"] = step
         _collect_role_messages("ENGINEER", results["ENGINEER"])
 
@@ -32252,12 +32289,9 @@ def consult_team(
     if _main_override_for_critic:
 
         main_override_block = (
-            "\n\nMAIN poszedł dalej mimo Twojego zastrzeżenia i "
-            "tak to uzasadnił:\n"
+            # v432: uzasadnienie MAIN-a, bez polecen, co z nim zrobic.
+            "\n\nMAIN:\n"
             + _main_override_for_critic
-            + "\n\nJeśli to Cię przekonuje — powiedz wprost i zdejmij "
-            "zastrzeżenie. Jeśli nie — napisz, czego konkretnie w tym "
-            "uzasadnieniu brakuje. Nie powtarzaj samego zarzutu."
         )
 
         _main_override_for_critic = None
@@ -32303,7 +32337,7 @@ def consult_team(
             extra=(
                 _only_if_new(
                     "CRITIC", "od_tomka",
-                    "\nTomek proponuje:\n" + planner_out
+                    "\nTomek:\n" + planner_out
                 )
                 + _only_if_new(
                     "CRITIC", "project_file",
@@ -32328,7 +32362,7 @@ def consult_team(
         )
         )
 
-        _role_response_cache["CRITIC"] = results["CRITIC"]
+        _role_response_cache["CRITIC"] = _bez_podpisow_starych(results["CRITIC"])
         _role_response_step["CRITIC"] = step
 
     # Werdykt Marka czeka na Tomka do NASTĘPNEGO kroku. Przekazujemy
@@ -32362,7 +32396,6 @@ def consult_team(
         if _addressee not in ("PLANNER", "ENGINEER"):
             _addressee = "PLANNER"
 
-        _who = "Tomku" if _addressee == "PLANNER" else "Bartku"
 
         log(
             "DEEPSEEK",
@@ -32378,7 +32411,7 @@ def consult_team(
             _addressee,
             # v200: krotko i bez formulki. To jest ciag dalszy
             # rozmowy, ktora ta rola juz prowadzi — nie odprawa.
-            _who + ", Marek na to:\n\n"
+            "Marek:\n\n"
             # v206: wspolny kanal zamiast golego short() — patrz
             # LIMIT_BEZPIECZENSTWA. Polowa zarzutu to zarzut, na
             # ktory nie da sie odpowiedziec.
@@ -32443,7 +32476,7 @@ def consult_team(
         _verdict = deepseek(
             "CRITIC",
             ("Tomek" if _addressee == "PLANNER" else "Bartek")
-            + " na to:\n\n"
+            + ":\n\n"
             + _reply_for_critic
             # v414: bez "I co teraz?" — patrz wyzej.
         )
@@ -32862,122 +32895,12 @@ def main_decide(
     # mówi co, 'tool_result' dlaczego") i składało się głównie z zakazów
     # ("NIE zwracaj", "Nie powtarzaj") — a fakty i tak idą teraz wyżej
     # prozą (patrz _facts w tej funkcji).
-    _status_explanations = {
-        "GEMINI_TOOL_ERROR": (
-            'Gemini sięgnął po narzędzie i nie wyszło — wyżej masz które,\n'
-            '  z czym i co zwróciło. Skoro to samo podejście już raz\n'
-            '  zawiodło, warto pójść inną drogą.'
-        ),
-        "TOOL_LIMIT": (
-            'Gemini wyczerpał limit wywołań narzędzi — zadanie było na\n'
-            '  jeden raz za duże. Podziel je na mniejsze kroki.'
-        ),
-        "DONE_REJECTED_VERIFICATION_FAILED": (
-            'Twoje poprzednie DONE odrzuciła fizyczna weryfikacja — wyżej\n'
-            '  jest, czego zabrakło. Zleć TASK, który dokładnie to uzupełni,\n'
-            '  i wróć do DONE po kolejnym raporcie.'
-        ),
-        "TASK_DUPLICATE_OF_VERIFIED_POINT": (
-            'Ten TASK to ten sam punkt, który checklist ma już potwierdzony\n'
-            '  dowodem z dysku (wyżej który). Weź kolejny krok celu.'
-        ),
-        "TASK_ALREADY_SATISFIED_ON_DISK": (
-            'To Python już potwierdził bezpośrednio na dysku (wyżej co).\n'
-            '  Wybierz następny, jeszcze niezrobiony krok.'
-        ),
-        # v368: bez slowa o wykonawcy — patrz v345. Rola ma wiedziec,
-        # CO sie stalo, a nie KTO to zrobil.
-        "TASK_EXECUTION_FINISHED": (
-            'Wykonywanie tego TASK-a się skończyło. To mówi o WYKONANIU,\n'
-            '  nie o celu: wyżej masz raport, ślad narzędzi i "dowody"\n'
-            '  (ile wywołań, które zawiodły, czy trafiliśmy na stronę,\n'
-            '  której nie ma, czy kliknięcia były bez skutku). Czy cel\n'
-            '  użytkownika jest osiągnięty — oceniasz Ty, na podstawie\n'
-            '  tych dowodów.'
-        ),
-        "WNIOSEK_ZE_SIE_NIE_DA": (
-            'Padł Twój wniosek, że celu się nie da. Zespół\n'
-            '  właśnie się do niego odniósł, ich odpowiedzi masz w tym\n'
-            '  kroku. Decydujesz jeszcze raz, już z tym, co powiedzieli.'
-        ),
-        # v344: bylo tu "Gemini wykonal blok i napisal raport. Caly
-        # cel bywa gotowy pozniej niz pojedynczy blok — przeczytaj
-        # raport i ocen sam". Dwa zdania o tym, JAK DZIALA PROGRAM,
-        # plus polecenie. Raport i tak jest ponizej.
-        #
-        # Uzytkownik: "nie piszemy systemu, jak dziala — maja
-        # wiedziec: napisz kod, a drugi znajdz w internecie".
-    }
-
-    _current_status = (
-        last_result.get("status")
-        if isinstance(last_result, dict) else None
-    )
-
-    # v346: bierzemy TYLKO to, co naprawde jest w slowniku.
-    #
-    # BLAD, KTORY SAM ZROBILEM (v344, bieg 2026-09-13 20:29). Wycialem
-    # stad wpis "COMPLETED" — bo byl opowiescia o tym, jak dziala
-    # program ("Gemini wykonal blok i napisal raport (...) przeczytaj
-    # raport i ocen sam") — ale ponizej zostala linia, ktora ten
-    # klucz DOPISUJE do listy bezwarunkowo, a potem go indeksuje.
-    # KeyError: 'COMPLETED'.
-    #
-    # Program przewrocil sie w kroku 1, zaraz po wypowiedzi Marka:
-    # Wojtek, Kamil, Tomek i Marek napisali 65 813 znakow, MAIN nie
-    # dostal nic, zadne narzedzie sie nie uruchomilo. Caly bieg
-    # zmarnowany.
-    _statuses_to_explain = [
-        s for s in (_current_status, "COMPLETED")
-        if s in _status_explanations
-    ]
-
-    # bez powtorki, gdy status to wlasnie COMPLETED
-    _statuses_to_explain = list(dict.fromkeys(_statuses_to_explain))
-
-    status_interpretation_block = "\n\n".join(
-        _status_explanations[s] for s in _statuses_to_explain
-    )
-
-    # v410: na starcie nic sie nie wykonalo, wiec nie ma czego
-    # objasniac. Dotad szlo tu objasnienie COMPLETED — bo START nie
-    # ma swojego, a COMPLETED dokladamy zawsze jako punkt odniesienia.
-    if _jeszcze_nic_sie_nie_stalo(last_result):
-        status_interpretation_block = ""
-
-    _last_result_is_error = (
-        isinstance(last_result, dict)
-        and (
-            last_result.get("ok") is False
-            or last_result.get("status") == "GEMINI_TOOL_ERROR"
-        )
-    )
-
-    # Zastrzeżenia Marka narastają, a MAIN idzie dalej — patrz
-    # _critic_block_streak. Deterministyczna, niemożliwa do
-    # przeoczenia notatka zamiast twardej blokady (twarda blokada
-    # groziłaby drugim zakleszczeniem, po tym z v156).
-    critic_streak_block = (
-        "Marek zgłasza zastrzeżenie już "
-        + str(_critic_block_streak)
-        + " raz z rzędu, a praca za każdym razem szła dalej. Zanim "
-        "zlecisz kolejny TASK, napisz w \"reason\" jedno z dwóch: co "
-        "konkretnie zmieniasz, żeby usunąć przyczynę, albo dlaczego "
-        "uważasz jego zarzut za nietrafiony i idziesz dalej mimo "
-        "niego.\n\n"
-        if _critic_block_streak >= CRITIC_STREAK_ESCALATION else ""
-    )
-
-    repair_rule_block = (
-        "Ostatni krok skończył się błędem, więc teraz liczy się "
-        "naprawa. Przeczytaj dokładnie, co i dlaczego zawiodło, i "
-        "zleć TASK idący inną drogą, z warunkiem sukcesu, który da "
-        "się zmierzyć. Przy Timeoucie ta sama operacja zwykle "
-        "przechodzi przez termux_run_background z monitorowaniem "
-        "procesu. DONE zostaw na moment, w którym coś faktycznie "
-        "zadziała.\n\n"
-        if _last_result_is_error else ""
-    )
+    # v432: bez objasnien statusu ("Wykonywanie tego TASK-a sie
+    # skonczylo… oceniasz Ty", "Gemini siegnal po narzedzie… warto pojsc
+    # inna droga", "Podziel je na mniejsze kroki", "Padl Twoj wniosek…"),
+    # bez "Marek zglasza zastrzezenie juz N raz… napisz w reason" i bez
+    # "Ostatni krok skonczyl sie bledem, wiec teraz liczy sie naprawa…".
+    # MAIN dostaje fakty; co z nimi zrobic, decyduje sam.
 
     # Ten sam mechanizm co w consult_team()/gemini_execute_task() —
     # zrzuty stanu Chrome/Android tylko wtedy, gdy CEL faktycznie
@@ -33085,13 +33008,7 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
 
     if isinstance(last_result, dict):
 
-        _attempts = last_result.get("attempt_count")
-
-        if _attempts:
-            _facts += (
-                "\nTo samo podejście zawiodło już "
-                + str(_attempts) + " raz z rzędu."
-            )
+        # v432: bez "To samo podejscie zawiodlo juz N raz z rzedu".
 
         _review = last_result.get("code_review")
 
@@ -33143,11 +33060,11 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
     _milczeli = []
 
     for _rola, _wstep, _tekst in (
-        ("PLANNER", "Tomek zaplanował tak:",
+        ("PLANNER", "Tomek:",
          _kod_na_jedna_linie(team.get("planner", ""))),
-        ("ENGINEER", "Bartek na to:",
+        ("ENGINEER", "Bartek:",
          _kod_na_jedna_linie(team.get("engineer", ""))),
-        ("RESEARCHER", "Kamil sprawdził:",
+        ("RESEARCHER", "Kamil:",
          _kod_na_jedna_linie(team.get("researcher", ""))),
         # v401: gdy wymiana sie odbyla, Marek idzie RAZ.
         #
@@ -33157,15 +33074,15 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
         # zamknieta (patrz tam), wymiana nie odbywala sie nigdy i
         # nikt tego nie zobaczyl. Od chwili, gdy zaczyna dzialac,
         # oba wpisy staja obok siebie i MAIN czyta Marka dwa razy.
-        ("CRITIC", "Marek ocenia:",
+        ("CRITIC", "Marek:",
          "" if _exchange
          else _kod_na_jedna_linie(team.get("critic", ""))),
-        (None, "Marek zgłosił zastrzeżenie i dostał odpowiedź:",
+        (None, "",
          _kod_na_jedna_linie(_exchange)),
-        ("BROWSER", "Ola streszcza:",
+        ("BROWSER", "Ola:",
          _kod_na_jedna_linie(team.get("browser", ""))),
         # v416: do v415 szlo to do zespolu, a MAIN-owi nie.
-        (None, "Ola tak to czyta:",
+        (None, "Ola:",
          _kod_na_jedna_linie(team.get("odczyt_oli", ""))),
         ("WOJTEK", "Wojtek:",
          _kod_na_jedna_linie(team.get("wojtek", ""))),
@@ -33202,7 +33119,11 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
                 continue
 
         if str(_tekst or "").strip():
-            _glosy.append(_wstep + "\n" + str(_tekst).strip())
+            # v432: etykieta to samo imie ("Tomek:"); wymiana Marka
+            # z Tomkiem niesie imiona w sobie.
+            _glosy.append(
+                ((_wstep + "\n") if _wstep else "") + str(_tekst).strip()
+            )
 
     # v408: kazda rozmowa z tego kroku to osobny glos — i dzieki v406
     # osobna wiadomosc do MAIN-a. Pytanie i odpowiedz razem, bo
@@ -33366,9 +33287,8 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
 
     prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
 {_co_sie_stalo_main}
-{status_interpretation_block}
 
-{critic_streak_block}{repair_rule_block}{team_block}
+{team_block}
 {_chrome_dla_maina}{_android_dla_maina}
 {ask_block}{_format_block}
 {ask_contract_block}"""
@@ -33443,10 +33363,8 @@ def _handle_main_ask(
 
     answer = deepseek(
         ask_role,
-        "MAIN ma do Ciebie DODATKOWE, KONKRETNE pytanie — nie "
-        "kolejną pełną konsultację, tylko jedną, precyzyjną rzecz "
-        "do doprecyzowania. Odpowiedz krótko i wyłącznie na nie:\n\n"
-        + ask_question
+        # v432: bez "DODATKOWE, KONKRETNE pytanie… odpowiedz krotko".
+        "MAIN pyta:\n" + ask_question
     )
 
     log(
@@ -34103,6 +34021,11 @@ _WYGLADA_NA_SEKRET_RE = re.compile(
 
 
 def _zapamietaj_co_powiedzial_uzytkownik(tekst):
+    _znane_dodaj(tekst)
+    return _zapamietaj_co_powiedzial_uzytkownik_(tekst)
+
+
+def _zapamietaj_co_powiedzial_uzytkownik_(tekst):
     """
     Dopisuje zdanie uzytkownika do trwalej listy — ale tylko wtedy,
     gdy to faktycznie ZDANIE, a nie wartosc. Patrz USER_SAID_FILE.
@@ -34849,6 +34772,8 @@ def _file_answer_body(p):
         return "JEST (" + str(size) + " B), plik binarny."
 
     tresc = tresc.strip()
+
+    _znane_dodaj(tresc)
 
     if not tresc:
         return "JEST (" + str(size) + " B), same białe znaki."
@@ -37043,39 +36968,10 @@ def _need_user_login_with_contact_gate(
             credential_gate_redirects
         )
 
-    if (
-        _decision_asks_for_contact_info(decision)
-        and not _contacts_lookup_attempted()
-        and contact_gate_redirects < _CONTACT_GATE_MAX_REDIRECTS
-    ):
-
-        contact_gate_redirects += 1
-
-        log(
-            "MAIN",
-            "NEED_USER_LOGIN o dane kontaktowe odrzucone -- "
-            "kontakty na telefonie nie były jeszcze sprawdzone w tej "
-            "sesji (" + str(contact_gate_redirects) + "/"
-            + str(_CONTACT_GATE_MAX_REDIRECTS) + ")."
-        )
-
-        return (
-            {
-                "status": "TRY_CONTACTS_FIRST",
-                "message": (
-                    "Zanim poprosisz użytkownika o numer/kontakt, "
-                    "sprawdź najpierw kontakty zapisane na telefonie "
-                    "(termux-contact-list) — ta informacja może już "
-                    "tam być, tak jak wcześniej w tej samej rozmowie. "
-                    "Jeśli po faktycznym sprawdzeniu kontaktów nadal "
-                    "jej brakuje (albo brak uprawnienia), dopiero "
-                    "wtedy poproś użytkownika."
-                )
-            },
-            contact_gate_redirects,
-            credential_gate_redirects
-        )
-
+    # v432: bramka "najpierw kontakty" zdjeta. Szukala slow "numer
+    # telefonu" i w biegu 2026-09-24 19:06 zatrzymala piec pytan MAIN-a
+    # do uzytkownika ("zwykly numer telefonu (GSM) czy VoIP?"), a w
+    # ich miejsce poslala zespolowi polecenie przegladania kontaktow.
     # v430: bramka "klucz/konto bez adresu" zdjeta. Szukala slow
     # ("klucz api") i odrzucila pytanie, w ktorym MAIN pisal "nie
     # klucz API" — cztery pytania do uzytkownika nie dotarly.
@@ -37559,91 +37455,29 @@ def _handle_need_user_login(decision):
                 "dotychczasowa droga."
             )
 
+    # v432: sam fakt. Bez ocen tego, co uzytkownik napisal ("NIE
+    # zakladaj, ze to potwierdzenie sukcesu", "brzmi jak zgloszenie
+    # problemu", "PRZEJRZYJ WSZYSTKIE linie") — jego slowa ida wyzej
+    # jako "wartosc wklejona przez uzytkownika".
     if auto_found:
         note = (
-            "Użytkownik potwierdził zalogowanie i NIC nie musiał "
-            "przepisywać — Python SAM odczytał zalogowaną stronę "
-            "przez przeglądarkę i wyjął z niej "
-            + str(len(auto_found)) + " wartość/wartości wyglądające "
-            "na klucz/token (etykiety: "
+            "Python odczytał zalogowaną stronę i wyjął "
+            + str(len(auto_found)) + " wartość/wartości (etykiety: "
             + ", ".join(str(f["label"]) for f in auto_found)
-            + "). Wartości są zapisane w pliku (patrz niżej) — NIE "
-            "proś użytkownika o ich wklejenie, bo już je mamy. "
-            "Kolejny TASK ma odczytać je Z TEGO PLIKU."
+            + "); są w pliku niżej."
         )
 
     elif not user_typed:
         note = (
-            "Użytkownik nacisnął Enter bez wpisywania tekstu — to "
-            "literalny sygnał 'zrobione, kontynuuj' (dokładnie o to "
-            "proszono w pytaniu). Sprawdź aktualny stan Chrome i "
-            "kontynuuj, ale nadal zweryfikuj po stanie Chrome, czy "
-            "czynność faktycznie się udała, zamiast ślepo ufać."
+            "Użytkownik nacisnął Enter bez wpisywania tekstu."
             + (
-                " Python spróbował też sam odczytać stronę i wyjąć z "
-                "niej klucz/token, ale " + auto_error + " — jeżeli "
-                "kolejny krok potrzebuje konkretnej wartości, "
-                "najpierw spróbuj sięgnąć po nią ze strony "
-                "narzędziami Chrome, a dopiero potem pytaj "
-                "użytkownika."
+                " Python próbował sam odczytać stronę: "
+                + auto_error + "."
                 if auto_error else ""
             )
         )
-    elif looks_like_failure:
-        note = (
-            "UWAGA: to NIE jest potwierdzenie sukcesu. Odpowiedź "
-            "użytkownika (patrz \"user_provided_value\") brzmi jak "
-            "ZGŁOSZENIE PROBLEMU/BŁĘDU (np. strona się nie wczytała, "
-            "coś nie zadziałało) — użytkownik wprost mówi, że "
-            "czynność NIE została wykonana. NIE zakładaj, że "
-            "logowanie/czynność zostały ukończone. Sprawdź aktualny "
-            "stan Chrome i zaplanuj kolejny krok uwzględniający ten "
-            "problem (np. spróbuj otworzyć stronę jeszcze raz, "
-            "zaproponuj inny adres, albo zapytaj użytkownika o więcej "
-            "szczegółów) — NIE kontynuuj tak, jakby użytkownik był "
-            "już zalogowany."
-        )
     else:
-        note = (
-            "Użytkownik odpowiedział, wklejając poniższy tekst "
-            "(patrz \"user_provided_value\"). NIE zakładaj "
-            "automatycznie, że to potwierdzenie sukcesu — to może "
-            "być: (a) faktyczna wartość do wykorzystania (klucz "
-            "API/kod/numer), (b) potwierdzenie że czynność jest "
-            "zrobiona, albo (c) coś innego. Przeczytaj treść i sam "
-            "oceń, co faktycznie oznacza, zanim uznasz czynność za "
-            "zakończoną. Jeśli to wartość — użyj jej BEZPOŚREDNIO w "
-            "następnym kroku, np. każąc zapisać ją do właściwego "
-            "pliku, zamiast zakładać, że użytkownik już to gdzieś "
-            "zapisał sam."
-        )
-
-        # Zaobserwowany realny bug (log 2026-08-27, cel: Auth Token
-        # Twilio): użytkownik wkleił CAŁY fragment strony ("Live
-        # credentials\nAccount SID...\nAuth token\n...\n93a29e032a...")
-        # — prawdziwy token BYŁ w tym tekście, na ostatniej linii. Ale
-        # PLANNER/ENGINEER spojrzeli tylko na PIERWSZĄ linię ("Live
-        # credentials"), uznali to za samą etykietę interfejsu bez
-        # wartości, i odrzucili całość, proszą użytkownika ponownie —
-        # dokładnie ten sam błąd powtórzył się chwilę później z
-        # napisem "Auth token". Dodajemy jawne ostrzeżenie, gdy
-        # wklejony tekst wygląda na WIELOLINIOWY fragment strony
-        # (a nie pojedynczą, czystą wartość) — żeby zespół PRZESZUKAŁ
-        # całość zamiast oceniać po pierwszej linii.
-        if "\n" in user_typed:
-            note += (
-                " UWAGA: wklejony tekst ma WIELE LINII — to wygląda "
-                "na skopiowany fragment całej strony, nie samą "
-                "wartość. Może zawierać etykiety interfejsu (np. "
-                "\"Auth token\", \"Live credentials\", nazwy sekcji) "
-                "WYMIESZANE z faktyczną wartością w INNEJ linii. NIE "
-                "oceniaj po samej pierwszej linii i nie odrzucaj "
-                "całości jako 'to tylko opis' — PRZEJRZYJ WSZYSTKIE "
-                "linie i znajdź tę, która faktycznie wygląda jak "
-                "oczekiwana wartość (długi ciąg losowych znaków "
-                "alfanumerycznych, bez spacji), zanim uznasz że "
-                "użytkownik nie podał właściwej wartości."
-            )
+        note = ""
 
     # Zapis wklejonej wartości pod STAŁĄ ścieżkę — jedyny kanał,
     # którym GEMINI (wykonawca piszący i uruchamiający skrypt) może ją
@@ -37680,18 +37514,8 @@ def _handle_need_user_login(decision):
                 pass
 
             value_file_note = (
-                "\n\nWARTOŚĆ JEST ZAPISANA W PLIKU: "
-                + str(USER_PROVIDED_VALUE_FILE)
-                + "\nTreści tej rozmowy nie widać z drugiej strony "
-                "— jeżeli kolejny krok ma jej użyć (np. w nagłówku "
-                "Authorization), zadanie ma kazać ODCZYTAĆ ją z TEGO "
-                "pliku (np. `KEY=$(cat "
-                + str(USER_PROVIDED_VALUE_FILE)
-                + ")`), zamiast wklejać samą wartość w treść "
-                "zadania. Zaobserwowany realny przypadek: skrypt "
-                "napisany bez dostępu do wartości dostał 401 "
-                "AUTH_FAILURE, po czym szukał klucza po starych "
-                "plikach i trafił na atrapę z poprzedniej sesji."
+                "\n\nWartość jest w pliku "
+                + str(USER_PROVIDED_VALUE_FILE) + "."
             )
 
             log(
@@ -37972,6 +37796,10 @@ def run_agent(goal):
         step_chrome_text = chrome_summary()
         step_android_text = android_summary()
 
+        # v432: patrz _tekst_pythona().
+        _znane_dodaj(step_chrome_text)
+        _znane_dodaj(step_android_text)
+
         log(
             "STATE",
             "Chrome: "
@@ -38221,259 +38049,20 @@ def run_agent(goal):
         if len(signatures) > 8:
             signatures = signatures[-8:]
 
-        if (
-            signatures.count(signature)
-            >= REPEAT_LIMIT
-        ):
+        # v432: bez "Wykryto petle… Nie powtarzaj… Wymysl inna
+        # strategie" (drugie zapytanie MAIN-a z szablonem i podmiana
+        # decyzji) i bez "twardego stopu" po serii zastrzezen Marka
+        # (wymuszone pytanie do uzytkownika z gotowym tekstem).
 
-            log(
-                "MAIN",
-                "Wykryto pętlę decyzji."
-            )
+        # v432: bez podmiany TASK-a na ASK do Tomka z gotowym pytaniem
+        # "Wybierz JEDNA wersje…" (zgadywane ze slow celu "wymysl sam").
 
-            alternative = deepseek(
-                "MAIN",
-                f"""
-Wykryto pętlę.
+        # v432: decyzja MAIN-a idzie tak, jak ja napisal. Bez
+        # podmiany TASK -> NEED_USER_LOGIN (po slowach "zapytaj
+        # uzytkownika"), NEED_USER_LOGIN -> TASK (gdy w prosbie byla
+        # komenda — pytania do uzytkownika przepadaly) i bez wycinania
+        # "tekstu dla czlowieka" z zadania.
 
-Powtarzana decyzja:
-{signature}
-
-Ostatni wynik:
-{short(
-    json.dumps(
-        last_result,
-        ensure_ascii=False
-    ),
-    3500
-)}
-
-Nie powtarzaj tej samej decyzji.
-
-Wymyśl inną strategię.
-
-Zwróć tylko JSON.
-"""
-            )
-
-            alternative_decision = (
-                parse_json(
-                    alternative
-                )
-            )
-
-            if alternative_decision:
-
-                decision = (
-                    alternative_decision
-                )
-
-                dtype = str(
-                    decision.get("type") or ""
-                ).upper()
-
-                signatures = []
-
-        # ------------------------------------------------------
-        # TWARDY STOP PO SERII BLOKAD MARKA (v185)
-        # ------------------------------------------------------
-        # Zaobserwowany realny problem (log 2026-08-30, cel "Neat"):
-        # CRITIC zablokował ten sam, niepotwierdzony domysł 5-6 razy
-        # z rzędu, a CRITIC_STREAK_ESCALATION (notatka w prompcie
-        # MAIN-a, patrz main_decide()) nie miała żadnej mocy — MAIN
-        # zbywał ją jednym zdaniem i jechał dalej z tym samym planem.
-        # Zamiast kolejnej prośby w tekście, Python SAM przejmuje
-        # decyzję: DONE/FAILED/NEED_USER_LOGIN i tak kończą krążenie,
-        # więc nadpisujemy tylko żywy TASK/ASK.
-        if (
-            _critic_block_streak >= CRITIC_STREAK_HARD_STOP
-            and dtype not in ("DONE", "FAILED", "NEED_USER_LOGIN")
-        ):
-
-            log(
-                "MAIN",
-                "TWARDY STOP: Marek zablokował "
-                + str(_critic_block_streak)
-                + " razy z rzędu bez przełamania — Python wymusza "
-                "pytanie do użytkownika zamiast kolejnego TASK."
-            )
-
-            decision = {
-                "type": "NEED_USER_LOGIN",
-                "reason": (
-                    "Marek (ocena zespołu) zablokował plan "
-                    + str(_critic_block_streak)
-                    + " razy z rzędu z tego samego powodu — zespół "
-                    "sam nie potrafi dalej ustalić faktów."
-                ),
-                "url": "",
-                "instructions": (
-                    "Zespół utknął w pętli. Ostatnie zastrzeżenie "
-                    "Marka:\n\n"
-                    + short(team.get("critic", ""), 1200)
-                    + "\n\nOdpowiedz na to wprost (co jest prawdą, "
-                    "czego brakuje), żeby zespół mógł ruszyć dalej."
-                )
-            }
-
-            dtype = "NEED_USER_LOGIN"
-
-            # Reset — po wymuszonej eskalacji zespół dostaje czysty
-            # start, zamiast natychmiast wpadać w tę samą blokadę na
-            # kolejnym kroku.
-            _critic_block_streak = 0
-
-        # ------------------------------------------------------
-        # CEL MÓWI "WYMYŚL" — WIĘC NIE PYTAJ, CO WYMYŚLIĆ (v219)
-        # ------------------------------------------------------
-        # Patrz _decision_returns_delegated_choice(). Taki TASK i tak
-        # skończyłby się zerem wywołań narzędzi (Gemini nie ma jak
-        # zapytać człowieka i poczekać) — w logu 2026-09-05 zdarzyło
-        # się to DWA RAZY z rzędu i kosztowało pięć minut.
-        # Nie zamieniamy go na NEED_USER_LOGIN, bo tu nie brakuje
-        # ŻADNEJ informacji od człowieka — on ją już dał, mówiąc
-        # "wymyśl coś". Odrzucamy krok i mówimy zespołowi dlaczego.
-        _oddaje_wybor = _decision_returns_delegated_choice(
-            decision, goal
-        )
-
-        if _oddaje_wybor:
-
-            log(
-                "MAIN",
-                "TASK odsyła wybór do użytkownika, choć cel mówi "
-                "\"wymyśl sam\" — odrzucam ten krok, zanim spali "
-                "kolejny obieg na zero wywołań narzędzi."
-            )
-
-            _pending_team_warnings.append(
-                "" + _oddaje_wybor
-            )
-
-            decision = {
-                "type": "ASK",
-                "ask_role": "PLANNER",
-                "ask_question": (
-                    "Cel mówi wprost, żeby wymyślić to samemu, a "
-                    "poprzedni krok odsyłał wybór z powrotem do "
-                    "użytkownika. Wybierz JEDNĄ wersję — tę, którą "
-                    "sam uważasz za najlepszą — i powiedz, jaką "
-                    "komendą ją wykonać. Nie przedstawiaj już "
-                    "wariantów do wyboru."
-                ),
-                "reason": _oddaje_wybor,
-            }
-
-            dtype = "ASK"
-
-        # ------------------------------------------------------
-        # TASK, KTÓRY W ISTOCIE JEST PYTANIEM DO CZŁOWIEKA (v188)
-        # ------------------------------------------------------
-        # Gemini nie ma żadnego narzędzia do realnego, przerywającego
-        # pytania użytkownika — jedyne, co potrafi zrobić z takim
-        # TASK-iem, to wypisać tekst i oznaczyć go COMPLETED, mimo że
-        # nikt nie odpowiedział (patrz _decision_task_is_user_question
-        # wyżej). Podmieniamy na NEED_USER_LOGIN, jedyny mechanizm,
-        # który faktycznie zatrzymuje pętlę i czeka na człowieka.
-        if dtype == "TASK" and _decision_task_is_user_question(decision):
-
-            log(
-                "MAIN",
-                "TASK w istocie proszący użytkownika o dane -> "
-                "podmieniam na NEED_USER_LOGIN (Gemini nie ma jak "
-                "naprawdę zapytać i poczekać na odpowiedź)."
-            )
-
-            decision = {
-                "type": "NEED_USER_LOGIN",
-                "reason": str(decision.get("reason") or "").strip(),
-                "url": "",
-                "instructions": str(decision.get("task") or "").strip()
-            }
-
-            dtype = "NEED_USER_LOGIN"
-
-        # v369: TO SAMO ROZDZIELENIE, GDY MAIN OD RAZU POSZEDL DO
-        # CZLOWIEKA.
-        #
-        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-17 17:39,
-        # krok 8). MAIN oddal uzytkownikowi cale zadanie:
-        #
-        #   1. Otworz Termux
-        #   2. Wklej: cd ~/audio_chain_poc && python3 run_local.py
-        #      --dry-run
-        #   3. POWIEDZ COS GLOSNO do telefonu przez 6 sekund
-        #   4. Skopiuj CALY output
-        #
-        # Punkt 2 to zwykla komenda — wykonawca robi takie
-        # kilkadziesiat razy na bieg. Punkt 3 rzeczywiscie wymaga
-        # czlowieka. Poszlo wszystko naraz, wiec `--dry-run` nie
-        # zostalo uruchomione ANI RAZU; wczesniej padlo tylko
-        # `--local` (zly przelacznik, rc=2) i `--help`.
-        #
-        # Mechanizm rozdzielajacy istnieje od v273, ale patrzyl
-        # wylacznie na dtype == "TASK". MAIN wybral tu
-        # NEED_USER_LOGIN z pustym "url", wiec go ominal.
-        #
-        # Nie budujemy drugiego systemu i nie wykonujemy tu niczego
-        # sami: zamieniamy decyzje z powrotem na TASK z SAMA czescia
-        # maszynowa i puszczamy ja normalna droga wykonawcza. Czesc
-        # ludzka wroci w nastepnym kroku, juz sama — dokladnie tak,
-        # jak v273 to obiecuje.
-        #
-        # Tylko przy PUSTYM url. Prawdziwe logowanie na stronie
-        # (http(s)) idzie swoja droga bez zmian.
-        if dtype == "NEED_USER_LOGIN" and not str(
-            decision.get("url") or ""
-        ).strip():
-
-            _instr = str(decision.get("instructions") or "").strip()
-            _masz = _czesc_maszynowa_zadania(_instr).strip()
-
-            if _masz and _extract_commands_from_text(_masz):
-
-                log(
-                    "MAIN",
-                    "W prośbie do człowieka jest komenda, którą "
-                    "potrafimy wykonać sami — robimy ją najpierw, "
-                    "a prośba wróci, gdy zostanie już tylko ona."
-                )
-
-                decision = {
-                    "type": "TASK",
-                    "task": _masz,
-                    "reason": str(decision.get("reason") or "").strip()
-                }
-
-                dtype = "TASK"
-
-        # v273: zadanie mieszane — robota plus akapit dla czlowieka.
-        # Robote wykonujemy, akapit odcinamy: Gemini i tak umie z nim
-        # zrobic tylko echo do terminala, ktorego uzytkownik nie
-        # oglada (to byl bug z v188). MAIN powtorzy te prosbe w
-        # nastepnym kroku, juz sama, i wtedy petla stanie naprawde.
-        if dtype == "TASK":
-
-            _cale_zadanie = str(decision.get("task") or "").strip()
-            _maszynowa = _czesc_maszynowa_zadania(_cale_zadanie).strip()
-
-            if _maszynowa and _maszynowa != _cale_zadanie:
-
-                log(
-                    "MAIN",
-                    "W zadaniu jest robota i osobno tekst dla "
-                    "człowieka — wykonuję robotę, tekst zostawiam "
-                    "(wróci sam, gdy zostanie już tylko on)."
-                )
-
-                decision = dict(decision)
-                decision["task"] = _maszynowa
-
-        # Czytelne zdanie zamiast surowego JSON — patrz
-        # _main_human_line() i komentarz przy _speak(name, text)
-        # w deepseek(). Pokazywane RAZ, tu, dla każdej ostatecznej
-        # decyzji (TASK/DONE/FAILED/NEED_USER_LOGIN) — ASK ma już
-        # własny, czytelny log w _handle_main_ask().
         _speak("MAIN", _main_human_line(decision, dtype))
 
         # ------------------------------------------------------
@@ -38713,11 +38302,9 @@ Zwróć tylko JSON.
                         "zespołowi."
                     )
 
+                    # v432: bez "wystarczy, ze ktos powie".
                     _pending_team_warnings.append(
-                        "W zadaniu jest gotowy kod, ale nigdzie "
-                        "nie pada nazwa pliku, do którego ma trafić "
-                        "— więc nie mam go gdzie położyć. Wystarczy, "
-                        "że ktoś powie, jak ten plik ma się nazywać."
+                        "W zadaniu jest kod, ale nie pada nazwa pliku, do którego ma trafić — nie położyłem go."
                     )
 
             # v325: MAIN wskazal plik, o ktorym Bartek w tym kroku
@@ -38829,29 +38416,18 @@ Zwróć tylko JSON.
 
                     _record_python_written_file(_patch_wynik["path"])
 
+                    # v432: jedno zdanie faktu zamiast "AUTOMATYCZNA
+                    # NOTATKA — PRZECZYTAJ… NIE twórz go ponownie…".
                     task_text += (
-                        "\n\n[AUTOMATYCZNA NOTATKA — PRZECZYTAJ]: "
-                        "plik " + _patch_wynik["path"] + " ZOSTAŁ JUŻ "
-                        "POPRAWIONY przed tym zadaniem (naniesiono "
-                        + str(_patch_wynik["blocks"]) + " zmianę/zmiany "
-                        "w konkretnych fragmentach, reszta pliku "
-                        "nietknięta). NIE twórz go ponownie i nie "
-                        "nadpisuj — to zadanie dotyczy WYŁĄCZNIE "
-                        "uruchomienia i sprawdzenia poprawionego pliku."
+                        "\n\n" + _sciezka_od_domu(_patch_wynik["path"])
+                        + " jest już poprawiony na dysku ("
+                        + str(_patch_wynik["size_before"]) + " B -> "
+                        + str(_patch_wynik["size_after"]) + " B)."
                     )
 
+                    # v432: bez "Nikt nie musi przepisywac calosci".
                     _pending_team_warnings.append(
-                        _ROLE_DISPLAY_NAME.get(
-                            _patch_wynik.get("autor"), "Ktoś"
-                        )
-                        + " podał "
-                        "poprawkę przez SZUKAJ/ZAMIEŃ i Python naniósł "
-                        "ją na " + _patch_wynik["path"] + " ("
-                        + str(_patch_wynik["size_before"]) + " B -> "
-                        + str(_patch_wynik["size_after"]) + " B). "
-                        "Reszta pliku została nietknięta, backup: "
-                        + Path(_patch_wynik["backup"]).name + ". "
-                        "Nikt nie musi przepisywać całości."
+                        _ROLE_DISPLAY_NAME.get(_patch_wynik.get("autor"), "Ktoś") + ": poprawka SZUKAJ/ZAMIEŃ naniesiona na " + _patch_wynik["path"] + " (" + str(_patch_wynik["size_before"]) + " B -> " + str(_patch_wynik["size_after"]) + " B, backup: " + Path(_patch_wynik["backup"]).name + ")."
                     )
 
                 elif any(
@@ -39160,91 +38736,10 @@ Zwróć tylko JSON.
                 # "treść pliku" .py.
                 # --------------------------------------------------
 
-                if target_path.suffix.lower() == ".py":
-
-                    syntax_error = _python_syntax_error(
-                        engineer_code
-                    )
-
-                    if syntax_error:
-
-                        last_result = {
-                            "status":
-                                "ENGINEER_CODE_INVALID_PYTHON_SYNTAX",
-                            "message": (
-                                "Nie położyłem tego do "
-                                + str(target_path) + ", bo Python "
-                                "się na tym wykłada: " + syntax_error
-                                + ". Zwykle znaczy to, że w bloku "
-                                "jest komenda uruchamiająca, a nie "
-                                "treść samego pliku — Bartku, podaj "
-                                "samą treść, uruchomienie zrobimy "
-                                "osobnym krokiem."
-                            )
-                        }
-
-                        continue
-
-                    # ------------------------------------------
-                    # BEZPIECZEŃSTWO: skladnia moze byc idealna, a
-                    # kod i tak nie byc PLIKIEM — tylko fragmentem
-                    # wyjetym ze srodka innego pliku. Patrz
-                    # _nazwy_znikad(): to sie naprawde zdarzylo i
-                    # kosztowalo osiem krokow.
-                    # ------------------------------------------
-
-                    _znikad = _nazwy_znikad(engineer_code)
-
-                    if _znikad:
-
-                        _lista = ", ".join(
-                            nazwa + " (linia " + str(linia) + ")"
-                            for linia, nazwa in _znikad[:6]
-                        )
-
-                        last_result = {
-                            "status":
-                                "ENGINEER_CODE_IS_ONLY_A_FRAGMENT",
-                            "message": (
-                                "Nie położyłem tego do "
-                                + str(target_path) + ", bo to nie "
-                                "jest cały plik, tylko kawałek "
-                                "czegoś większego: używa " + _lista
-                                + ", a nigdzie tutaj tego nie ma. "
-                                "Uruchomiony osobno wywali "
-                                "NameError w pierwszej linii, która "
-                                "tego dotknie. Jeżeli to miała być "
-                                "poprawka istniejącego pliku — "
-                                "powiedz, którego, a nałożę sam "
-                                "ten fragment. Jeżeli nowy plik — "
-                                "potrzebuję go w całości, razem z "
-                                "importami i stałymi."
-                            )
-                        }
-
-                        _pending_team_warnings.append(
-                            "Blok, który miał być całym plikiem "
-                            + target_path.name + ", używa " + _lista
-                            + " — a tego w nim nie ma. To wygląda "
-                            "na fragment wyjęty ze środka innego "
-                            "pliku, więc go nie zapisałem; sam z "
-                            "siebie i tak by się nie uruchomił."
-                        )
-
-                        continue
-
-                # --------------------------------------------------
-                # BEZPIECZEŃSTWO: write_engineer_code_to NADPISUJE
-                # cały plik. Jeżeli plik już istnieje i jest sporo
-                # większy niż nowy blok kodu, to prawie na pewno
-                # oznacza, że ENGINEER podał tylko
-                # FRAGMENT/poprawkę, a nie cały plik od nowa —
-                # nadpisanie zniszczyłoby resztę. Odmawiamy zamiast
-                # zgadywać; prompt sam w sobie to tylko sugestia dla
-                # modelu, ta blokada obowiązuje niezależnie od tego,
-                # czy MAIN się do niej zastosuje.
-                # --------------------------------------------------
-
+                # v432: bez odmowy zapisu z powodu skladni Pythona i
+                # "to tylko fragment". Kod autora laduje na dysku; czy
+                # dziala, pokaze uruchomienie. Zostaje tylko ochrona
+                # istniejacego pliku przed nadpisaniem duzo krotszym.
                 if target_path.exists():
 
                     try:
@@ -39265,17 +38760,10 @@ Zwróć tylko JSON.
                             "status":
                                 "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
                             "message": (
-                                "Plik " + str(target_path)
-                                + " ma już " + str(existing_size)
-                                + "B, a nowy blok ma "
-                                + str(new_size) + "B — to wygląda "
-                                "na fragment, nie na cały plik, "
-                                "więc nie nadpisałem, żeby nie "
-                                "zgubić reszty. Bartku: albo "
-                                "potwierdź, że plik ma być krótszy, "
-                                "albo daj samą poprawkę przez "
-                                "SZUKAJ/ZAMIEŃ — nałożę ją na "
-                                "istniejącą treść."
+                                "Nie nadpisałem " + str(target_path)
+                                + " — na dysku ma " + str(existing_size)
+                                + " B, nowy blok " + str(new_size)
+                                + " B."
                             )
                         }
 
@@ -39399,10 +38887,8 @@ Zwróć tylko JSON.
                             "grepem — mówię o tym zespołowi."
                         )
 
-                        _pending_team_warnings.append(
-                            "W zapisanym przed chwilą "
-                            + str(target_path) + ": " + _kruche
-                        )
+                        # v432: bez pouczenia, jak parsowac JSON.
+                        pass
 
                     # v331: czego temu plikowi brakuje, zanim
                     # ktokolwiek go uruchomi.
@@ -39475,16 +38961,13 @@ Zwróć tylko JSON.
                     # nie gwarancja, więc dopisujemy JEDNOZNACZNĄ,
                     # deterministyczną notatkę do treści zadania,
                     # niezależnie od tego, co MAIN faktycznie napisał.
+                    # v432: jedno zdanie faktu zamiast "AUTOMATYCZNA
+                    # NOTATKA — PRZECZYTAJ… NIE twórz go ponownie…".
                     task_text += (
-                        "\n\n[AUTOMATYCZNA NOTATKA — PRZECZYTAJ]: "
-                        "plik " + str(target_path) + " ZOSTAŁ JUŻ "
-                        "ZAPISANY (gotowy kod ENGINEER, "
-                        + str(len(engineer_code)) + " znaków) PRZED "
-                        "tym zadaniem, bez Twojego udziału. NIE twórz "
-                        "go ponownie i nie nadpisuj (termux_write_file"
-                        "/cat/echo > itp.) — to zadanie dotyczy "
-                        "WYŁĄCZNIE uruchomienia i przetestowania "
-                        "pliku, który już tam jest."
+                        "\n\n" + _sciezka_od_domu(str(target_path))
+                        + " leży już na dysku ("
+                        + str(len(engineer_code.encode("utf-8")))
+                        + " B, kod Bartka)."
                     )
 
                 except Exception as e:
@@ -39636,81 +39119,11 @@ Zwróć tylko JSON.
 
             reason = decision.get("reason") or ""
 
-            # v229: zanim uznamy cel za zamkniety — czy przypadkiem
-            # nie zgubilismy po drodze kawalka tego, o co prosil
-            # uzytkownik? Patrz _czego_nikt_nie_tknal(). To GLOS W
-            # NARADZIE, nie blokada: mowimy zespolowi i uzytkownikowi,
-            # a decyzja zostaje po ich stronie.
-            _nietkniete = _czego_nikt_nie_tknal(
-                goal,
-                _load_progress_checklist()
-            )
-
-            if _nietkniete:
-
-                _glos = (
-                    "W celu pada jeszcze: "
-                    + ", ".join("„" + s + "”" for s in _nietkniete)
-                    + " — a nie widzę tego w żadnym z wykonanych "
-                    "zadań. Robimy to jeszcze, czy świadomie "
-                    "odpuszczamy?"
-                )
-
-                log("MAIN", _glos)
-
-                _pending_team_warnings.append(_glos)
-
-            # ----------------------------------------------------
-            # MAIN mówi DONE. Nie wierzymy mu na słowo — sprawdzamy
-            # fizyczne dowody, dokładnie jak w oryginalnym poleceniu:
-            # "na końcu fizycznie zweryfikuj projekt, APK,
-            # instalację i plik FINAL_OK".
-            # ----------------------------------------------------
-
+            # v432: DONE nalezy do MAIN-a. Bez "W celu pada jeszcze…"
+            # (zgadywane po slowach celu) i bez odrzucania DONE przez
+            # "weryfikacje fizyczna" (szukala FINAL_OK i plikow z celu).
+            # Wynik sprawdzenia zostaje tylko w zapisie konca celu.
             verification = verify_final(goal)
-
-            if not verification.get("ok"):
-
-                log(
-                    "MAIN",
-                    "DONE odrzucone — weryfikacja fizyczna "
-                    "nie przeszła."
-                )
-
-                missing = "\n".join(
-                    "- " + c["check"] + ": " + c["detail"]
-                    for c in verification["checks"]
-                    if not c["ok"]
-                )
-
-                last_result = {
-                    "status":
-                        "DONE_REJECTED_VERIFICATION_FAILED",
-                    "checks":
-                        verification["checks"],
-                    "message": (
-                        "MAIN zgłosiło DONE, ale fizyczna "
-                        "weryfikacja NIE potwierdziła realizacji "
-                        "celu. Brakuje:\n"
-                        + missing
-                        + "\n\nUtwórz TASK, który faktycznie "
-                        "uzupełni brakujące dowody — nie zgłaszaj "
-                        "DONE ponownie, dopóki wszystkie wymagane "
-                        "sprawdzenia nie przejdą."
-                    )
-                }
-
-                write_json(
-                    LAST_RESULT_FILE,
-                    last_result
-                )
-
-                log_event(
-                    "done_rejected",
-                    {"checks": verification["checks"]}
-                )
-
-                continue
 
             print()
             print("=" * 72)
