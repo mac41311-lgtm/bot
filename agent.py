@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v428
+AEL-MINI AUTONOMOUS AGENT v429
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v428")
+    print("             AEL-MINI AUTONOMOUS AGENT v429")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6608,6 +6608,20 @@ def _length_notice_for(name):
     )
 
 
+# v429: od 2026-09-23 strona DeepSeek dokleja do odpowiedzi zdanie
+# "This response is AI-generated, for reference only." — trafialo do
+# wypowiedzi wszystkich rol i dalej do innych (14 razy w jednym biegu).
+_STOPKA_DEEPSEEKA_RE = re.compile(
+    r"\s*This response is AI-generated, for reference only\.?\s*$"
+)
+
+
+def _bez_stopki_deepseeka(text):
+    """Odpowiedz bez stopki strony DeepSeek na koncu."""
+
+    return _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
+
+
 def deepseek(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
@@ -7283,6 +7297,9 @@ def deepseek(name, message):
                 # _main_human_line() — sam kontrakt JSON między MAIN
                 # a Pythonem się nie zmienia, znika tylko jego
                 # surowy podgląd w terminalu.
+                # v429: stopka strony, nie slowa roli.
+                text = _bez_stopki_deepseeka(text)
+
                 if name == "MAIN":
                     log(
                         "DEEPSEEK",
@@ -22048,10 +22065,10 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "tool": name,
                         "arguments": args,
                         "tool_result": result,
-                        "message": (
-                            "Narzędzie zakończyło się błędem."
-                            + benign_exit_hint
-                        ),
+                        # v429: bez "Narzedzie zakonczylo sie bledem." —
+                        # to nic nie mowi; zostaje tylko podpowiedz przy
+                        # grep/test z kodem 1, gdy jest.
+                        "message": benign_exit_hint.strip(),
                         "interaction_id": interaction_id,
                         "tool_warnings": collected_warnings,
                         "tool_trace": collected_tool_trace,
@@ -24568,6 +24585,148 @@ def _run_script_directly(path, task_text):
         "tool_warnings": warnings,
         "confirmed_texts": [],
     }
+
+
+def _pliki_kodu_bez_autora(task_text, team):
+    """
+    v429: pliki z kodem, ktore zadanie kaze utworzyc, a ktorych nie ma
+    ani na dysku, ani w wypowiedziach zespolu.
+    """
+
+    out = []
+
+    for m in _CODE_TARGET_FILENAME_RE.finditer(str(task_text or "")):
+
+        sciezka = m.group(0).strip().strip("`'\"")
+
+        if sciezka in out:
+            continue
+
+        try:
+            p = _resolve_home_relative_path(sciezka)
+        except Exception:
+            continue
+
+        if p.suffix.lower() not in _KOD_SUFIKSY or p.exists():
+            continue
+
+        if (
+            extract_code_block((team or {}).get("engineer_full", ""), sciezka)
+            or _kod_autora_dla(sciezka)
+        ):
+            continue
+
+        out.append(sciezka)
+
+    # Sama nazwa ("dialog.py") obok pelnej sciezki tego samego pliku
+    # ("~/meeting-bot/dialog.py") to ten sam plik — nie drugi w ~/.
+    return [
+        x for x in out
+        if "/" in x or not any(
+            y != x and "/" in y and y.split("/")[-1] == x for y in out
+        )
+    ]
+
+
+def _blok_dokladnie_dla(text, sciezka):
+    """
+    v429: blok, ktory autor jednoznacznie przypisal temu plikowi —
+    nazwa tuz nad nim albo heredoc tworzacy ten plik. Bez zgadywania po
+    jezyku: przy kilku plikach .py w jednej odpowiedzi jezyk nie mowi,
+    ktory jest ktory.
+    """
+
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL):
+
+        kod = _wyrownaj_blok(m.group(2))
+
+        if not kod.strip() or _blok_poprawki(text, m.start()):
+            continue
+
+        z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        if z_heredoca:
+            return _wyrownaj_blok(z_heredoca)
+
+        if (
+            _nazwa_nad_blokiem(text, m.start(), sciezka)
+            and not _obcy_jezyk_dla(sciezka, m.group(1), kod)
+        ):
+            return kod
+
+    return None
+
+
+def _zlec_kod_bartkowi(task_text, pliki, team, step):
+    """
+    v429: Bartek dostaje zlecenie MAIN-a jego wlasnymi slowami — bez
+    dopiskow od Pythona. Pliki, ktore w odpowiedzi jednoznacznie
+    przypisal (nazwa nad blokiem, heredoc), Python kladzie od razu.
+    """
+
+    log(
+        "MAIN",
+        "Zadanie tworzy " + ", ".join(Path(x).name for x in pliki)
+        + ", a nikt z zespołu nie napisał do nich kodu — najpierw "
+        "Bartek, potem wykonanie."
+    )
+
+    odp = deepseek("ENGINEER", task_text)
+
+    if not str(odp or "").strip():
+        return []
+
+    team["engineer_full"] = odp
+    globals()["_kod_bartka_teraz"] = odp
+    _zapamietaj_kod_autora("ENGINEER", odp)
+    _role_response_cache["ENGINEER"] = odp
+    _role_response_step["ENGINEER"] = step
+    _collect_role_messages("ENGINEER", odp)
+
+    polozone = []
+
+    for sciezka in pliki:
+
+        kod = _blok_dokladnie_dla(odp, sciezka)
+
+        if not kod:
+            continue
+
+        p = _resolve_home_relative_path(sciezka)
+
+        if _code_target_rejection(str(p), kod):
+            continue
+
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(kod, encoding="utf-8")
+        except Exception as e:
+            log("MAIN", "Nie położyłem " + p.name + ": " + str(e))
+            continue
+
+        _zapisz_autoryzacje_kodu(p, "ENGINEER")
+        _zapamietaj_gdzie(p)
+        _track_project_path(p)
+        _autor_pliku[p.name] = "ENGINEER"
+        polozone.append(p.name + " (" + str(len(kod.encode("utf-8"))) + " B)")
+
+    nie = [Path(x).name for x in pliki if not any(y.startswith(Path(x).name + " ") for y in polozone)]
+
+    _pending_team_warnings.append(
+        "Zadanie tworzyło " + ", ".join(Path(x).name for x in pliki)
+        + ", do których nikt nie napisał kodu; Bartek dostał to zlecenie."
+        + (" Położone z jego odpowiedzi: " + ", ".join(polozone) + "." if polozone else "")
+        + (" Bez kodu przypisanego do pliku: " + ", ".join(nie) + "." if nie else "")
+    )
+
+    log(
+        "MAIN",
+        "Bartek odpowiedział; położone: "
+        + (", ".join(polozone) if polozone else "nic")
+        + (" | bez kodu: " + ", ".join(nie) if nie else "")
+    )
+
+    return polozone
 
 
 def _task_wants_code_saved(task_text, success_condition=""):
@@ -28228,6 +28387,17 @@ def _condense_last_result_for_team(last_result, limit=2500):
         parts.append("narzędzie: " + str(tool))
         args = last_result.get("arguments")
         if args:
+            # v429: przy zapisie pliku — sciezka i rozmiar, bez tresci.
+            # Bieg 2026-09-23 23:45: wszyscy dostawali pod
+            # "argumenty:" poczatek install.sh, ktory wymyslil
+            # wykonawca i ktorego Python NIE zapisal — podany tak,
+            # jakby byl prawdziwy.
+            if isinstance(args, dict) and "content" in args:
+                args = dict(args)
+                args["content"] = (
+                    "(" + str(len(str(args.get("content") or "")))
+                    + " znaków)"
+                )
             parts.append(
                 "argumenty: "
                 + short(json.dumps(args, ensure_ascii=False), 300)
@@ -28342,7 +28512,9 @@ def _condense_last_result_for_team(last_result, limit=2500):
 
     tool_calls = last_result.get("tool_calls")
 
-    if tool_calls:
+    # v429: gdy jest slad wywolan, liczba stoi w nim ("wywołań
+    # narzędzi: N, nieudanych: M") — tu byla druga raz.
+    if tool_calls and not last_result.get("tool_trace"):
         parts.append("liczba wywołań narzędzi: " + str(tool_calls))
 
     # CO GEMINI FAKTYCZNIE WYWOŁAŁO — zapis zbierany przez Pythona,
@@ -31473,32 +31645,12 @@ def consult_team(
         # brak kanału, który naprawiamy.
         _do_wojtka = _role_inbox_block("WOJTEK") + wojtek_context
 
-        # v351: "cos sie wlasnie wysypalo" bylo dla Wojtka martwym
-        # powodem od v335.
-        #
-        # fresh_tool_error otwieral mu bramke wyzej, ale zawezenie
-        # tuz ponizej i tak ja zamykalo: gdy nikt do niego nie pisal
-        # i Kamil nie mial dla niego odpowiedzi, _do_wojtka bylo
-        # puste. Czyli po awarii Wojtek milczal tak samo jak zawsze.
-        #
-        # Nie dostaje technicznego tla (zadnych nazw narzedzi, ani
-        # Termuxa, ani Androida — to jego cala rola), wiec dostaje
-        # sam fakt, po ludzku. Dokladnie to, o co prosiles: "moga
-        # dostawac komunikat, ze cos nie dziala".
-        #
-        # v423: ...ale tylko wtedy, gdy naprawde byla proba — cos sie
-        # wykonalo i padlo. Bieg 2026-09-22 23:24, kroki 4-7: Wojtek
-        # dostawal "Ostatnia proba sie nie udala." przy
-        # ENGINEER_CODE_MISSING i WNIOSEK_ZE_SIE_NIE_DA, kiedy nic sie
-        # nie wykonywalo. Zgadywal wiec awarie, ktorej nie bylo
-        # ("blad przy budowaniu? crash? nie slyszy?").
-        _byla_proba = isinstance(last_result, dict) and bool(
-            last_result.get("tool_trace")
-        )
-
-        if fresh_tool_error and _byla_proba and not _do_wojtka.strip():
-
-            _do_wojtka = "Ostatnia próba się nie udała."
+        # v429: bez "Ostatnia proba sie nie udala." (v351/v423). To
+        # bylo gotowe zdanie Pythona, a Wojtek — bez technicznego tla —
+        # nie dostawal nic poza nim i zaczynal wypytywac uzytkownika
+        # ("napisz mi, co probowales, jaki masz sprzet"; bieg
+        # 2026-09-23 23:45). Odzywa sie, gdy ktos go zawola, albo na
+        # starcie celu.
 
         # v335: skoro zniknela zaczepka bez tresci, moze sie zdarzyc,
         # ze nie mamy do niego nic. Wtedy do niego nie piszemy — tak
@@ -32715,13 +32867,13 @@ def main_decide(
     # asked_followup != None sygnalizuje, że limit już wykorzystany.
     if asked_followup:
 
+        # v429: bez "To bylo Twoje jedno pytanie w tym kroku — teraz
+        # zdecyduj: TASK, DONE albo FAILED." — polecenie, ktore do tego
+        # pomijalo ASK i NEED_USER_LOGIN. Zostaje pytanie i odpowiedz.
         ask_block = f"""
 Zapytałeś {asked_followup['role']}: {asked_followup['question']}
 
 Odpowiedź: {short(str(asked_followup['answer']), 2000)}
-
-To było Twoje jedno pytanie w tym kroku — teraz zdecyduj: TASK, DONE
-albo FAILED.
 """
         ask_contract_block = ""
 
@@ -32737,15 +32889,10 @@ albo FAILED.
         # siedzi juz w historii tej rozmowy, a powtarzany zaglusza to,
         # co naprawde nowe. _only_if_new poda go ponownie, gdyby
         # kiedykolwiek sie zmienil.
-        ask_contract_block = _only_if_new("MAIN", "kontrakt_ask", f"""
-Gdyby do decyzji brakowało Ci jednej konkretnej rzeczy, możesz raz w
-tym kroku dopytać jedną osobę:
-{{
-  "type": "ASK",
-  "ask_role": "jedna z: {", ".join(_MAIN_ASK_ALLOWED_ROLES)}",
-  "ask_question": "konkretne pytanie"
-}}
-""")
+        # v429: bez osobnego "Gdyby do decyzji brakowalo Ci jednej
+        # konkretnej rzeczy, mozesz raz w tym kroku dopytac..." — ASK
+        # MAIN zna ze swojego formatu i z opisu programu (v422).
+        ask_contract_block = ""
 
     # v193: MAIN tez zaczyna od JEDNEJ rzeczy, ktora teraz blokuje
     # postep -- to on podejmuje decyzje, wiec najbardziej potrzebuje
@@ -32940,17 +33087,14 @@ tym kroku dopytać jedną osobę:
     # Koszt: jedno wywolanie na glos zamiast jednego na cala narade.
     # Uzytkownik zgodzil sie na to wprost. Gorny limit i tak trzyma
     # _czekaj_na_budzet().
-    if _glosy and not asked_followup:
-
-        for _glos in _glosy:
-
-            # Odpowiedzi nie uzywamy — to jest przekazanie glosu, nie
-            # pytanie. MAIN odpowie, jak odpowiada czlowiek, ktoremu
-            # ktos wlasnie cos powiedzial; liczy sie, ze ma to w
-            # swojej rozmowie, gdy przyjdzie decydowac.
-            deepseek("MAIN", _glos)
-
-        team_block = ""
+    # v429: JEDNA wiadomosc na krok — glosy z tego kroku (v422), kazdy
+    # pod swoim imieniem, w tej samej wiadomosci, na ktora MAIN
+    # odpowiada decyzja. Do v428 (od v406) kazdy glos szedl osobno, a
+    # MAIN odpisywal na kazdy pelna decyzja, z ktorej Python bral
+    # tylko ostatnia. Bieg 2026-09-23 23:45 (pierwszy z zapisem tych
+    # odpowiedzi): na Tomka — TASK, na Marka i na Wojtka —
+    # NEED_USER_LOGIN z pytaniami do uzytkownika. Wszystkie trzy
+    # przepadly, a w historii MAIN-a wygladaja, jakby padly.
 
     # v422: kto w tym kroku nie odpowiedzial — jednym zdaniem, w tej
     # samej wiadomosci co decyzja. Patrz _milczeli wyzej.
@@ -34122,9 +34266,8 @@ _JAK_TO_DZIALA = (
     "kładzie Python — dokładnie ten, który napisał ktoś z zespołu. "
     "Gdy podasz write_engineer_code_to, ten kod ląduje pod tą "
     "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia.\n\n"
-    "W każdym kroku wypowiedzi zespołu przychodzą do Ciebie po kolei, "
-    "każda osobno. Python bierze Twoją decyzję z ostatniej wiadomości "
-    "w kroku — tej, która przychodzi po nich. ASK to pytanie do "
+    "W każdym kroku dostajesz jedną wiadomość: co powiedział zespół i "
+    "co się stało. Odpowiadasz na nią decyzją. ASK to pytanie do "
     "jednej osoby z zespołu; odpowiedź wraca w tym samym kroku. "
     "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
     "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
@@ -38306,6 +38449,21 @@ Zwróć tylko JSON.
             # poprosil o kod — patrz consult_team().
             global _main_chcial_kod
             _main_chcial_kod = bool(write_target)
+
+            # v429: zadanie tworzy pliki z kodem, do ktorych nikt z
+            # zespolu nie napisal kodu -> najpierw Bartek, potem
+            # wykonanie. Bieg 2026-09-23 23:45: MAIN zlecil "zapisz w
+            # ~/meeting-bot/ install.sh, config.yaml, dialog.py..." z
+            # samego opisu, Bartka nikt nie pytal, wykonanie samo
+            # napisalo install.sh, a Python go (slusznie) nie przyjal.
+            _bez_kodu = (
+                _pliki_kodu_bez_autora(task_text, team)
+                if not write_target and _task_wants_code_saved(task_text)
+                else []
+            )
+
+            if _bez_kodu:
+                _zlec_kod_bartkowi(task_text, _bez_kodu, team, step)
 
             # v203: sciezka pliku, ktory JEST gotowy do uruchomienia —
             # niezaleznie od tego, czy powstal z calego zapisu, czy z
