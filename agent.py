@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v430
+AEL-MINI AUTONOMOUS AGENT v431
 
 ARCHITEKTURA:
 
@@ -2530,6 +2530,45 @@ def _track_project_path(path):
         pass
 
 
+# v431: co lezalo w $HOME, zanim bieg ruszyl. Wszystko, co pojawi sie
+# obok, zrobil ten bieg — takze to, czego nie zapisal termux_write_file:
+# wyniki komend i skryptow (probe_gap.log, probe_rec.m4a), logi komend
+# w tle (agent_background_*.log), kopie .bak_ przed poprawka. Do v430
+# sprzatanie ich nie widzialo, wiec zostawaly na kolejne cele, a zespol
+# trafial na nie jak na czesc swojej pracy (bieg 2026-09-24 17:16:
+# probe_rec.m4a z 13 wrzesnia).
+_home_przed_biegiem = None
+
+
+def _zapamietaj_home_przed_biegiem():
+
+    global _home_przed_biegiem
+
+    try:
+        _home_przed_biegiem = {p.name for p in HOME.iterdir()}
+    except Exception:
+        _home_przed_biegiem = None
+
+
+def _sledz_nowe_w_home():
+    """v431: nowe pozycje w $HOME -> lista do sprzatania. Nigdy nie rzuca."""
+
+    if _home_przed_biegiem is None:
+        return
+
+    try:
+        nowe = [p for p in HOME.iterdir() if p.name not in _home_przed_biegiem]
+    except Exception:
+        return
+
+    for p in nowe:
+        _track_project_path(p)
+        _home_przed_biegiem.add(p.name)
+
+
+atexit.register(_sledz_nowe_w_home)
+
+
 def append_memory(path, timestamp, content):
     """
     Dopisuje wpis do pliku pamięci (Markdown).
@@ -2613,7 +2652,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v430")
+    print("             AEL-MINI AUTONOMOUS AGENT v431")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -35493,34 +35532,14 @@ def _policz_odpowiedzi_dla_zespolu(pary):
         except Exception:
             continue
 
-        # Pliku nie ma — ale moze ktos mial na mysli podobny?
-        hint = ""
-
-        try:
-            stem = p.name
-            siblings = [
-                f.name for f in p.parent.iterdir()
-                if f.is_file()
-                and f.name != stem
-                and (
-                    f.name.startswith(stem[:5])
-                    or stem.startswith(f.name[:5])
-                )
-            ]
-            if siblings:
-                hint = (
-                    " Ale w tym samym katalogu JEST plik o bardzo "
-                    "podobnej nazwie: "
-                    + ", ".join(sorted(siblings)[:3])
-                    + " — prawdopodobnie chodzilo o niego (nazwa "
-                    "mogla zostac gdzies urwana)."
-                )
-        except Exception:
-            pass
-
+        # v431: bez podpowiedzi "plik o bardzo podobnej nazwie —
+        # prawdopodobnie chodzilo o niego". Zgadywala po 5 pierwszych
+        # literach i wprowadzila do rozmowy probe_rec.m4a z
+        # poprzedniego biegu (bieg 2026-09-24 17:16, krok 5). Zostaje
+        # sam fakt.
         odpowiedzi.append((
             rola,
-            "- " + candidate + ": NIE MA takiego pliku." + hint
+            "- " + candidate + ": NIE MA takiego pliku."
         ))
 
     return odpowiedzi
@@ -37734,6 +37753,9 @@ def run_agent(goal):
     # odtworzy kontekst w innym czacie.
     write_text(GOAL_FILE, goal)
 
+    # v431: patrz _sledz_nowe_w_home().
+    _zapamietaj_home_przed_biegiem()
+
     # v190: nowy cel = czysta karta. Pliki zapisane przez Pythona
     # przy POPRZEDNIM celu nie są stanem faktycznym TEGO celu (ta
     # sama zasada, co znaczniki "sprzed tego celu" niżej).
@@ -37878,6 +37900,8 @@ def run_agent(goal):
         step += 1
 
         ustaw_krok(step)
+
+        _sledz_nowe_w_home()
 
         print()
         print(
