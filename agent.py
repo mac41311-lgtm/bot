@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v433
+AEL-MINI AUTONOMOUS AGENT v434
 
 ARCHITEKTURA:
 
@@ -2771,7 +2771,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v433")
+    print("             AEL-MINI AUTONOMOUS AGENT v434")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -38072,6 +38072,15 @@ def run_agent(goal):
             ),
             1200
         )
+
+        # v434: decyzja MAIN-a to jego slowa, nie tekst Pythona — patrz
+        # _tekst_pythona(). Bieg 2026-09-24 20:54: linia "TASK — <powod>"
+        # przekazana zespolowi liczyla sie jako tekst Pythona.
+        _znane_dodaj(globals()["_main_decision_for_team"])
+
+        for _pole in (decision or {}).values():
+            if isinstance(_pole, str):
+                _znane_dodaj(_pole)
 
         # v214: jesli Marek ma ZYWE zastrzezenie, a MAIN mimo to
         # zleca prace — to jego "reason" jest odpowiedzia NA TO
