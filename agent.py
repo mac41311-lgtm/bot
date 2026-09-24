@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v432
+AEL-MINI AUTONOMOUS AGENT v433
 
 ARCHITEKTURA:
 
@@ -2771,7 +2771,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v432")
+    print("             AEL-MINI AUTONOMOUS AGENT v433")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -18412,6 +18412,28 @@ def termux_patch_file(path, search, replace):
             "error": "Plik nie istnieje: " + str(target)
         }
 
+    # v432b: autorstwo takze przy poprawce fragmentu. Bieg 2026-09-24
+    # 20:54, krok 1: MAIN opisal slowami, jak ma wygladac app.py, a
+    # wykonanie samo napisalo zmiane i nioslo ja termux_patch_file —
+    # jedynym narzedziem zapisu bez tej zasady. Zmiana w pliku z kodem
+    # przechodzi tylko wtedy, gdy jej tresc padla w wypowiedzi kogos z
+    # zespolu (to samo sprawdzenie, co kopia kodu w zleceniu).
+    if (
+        target.suffix.lower() in _KOD_SUFIKSY
+        and not _kopia_kodu_zespolu(str(replace if replace is not None else ""))
+    ):
+        _msg = (
+            "Nie naniosłem zmiany w " + target.name + " — w wypowiedziach "
+            "zespołu nie ma tego fragmentu."
+        )
+        log("GEMINI", _msg)
+        return {
+            "ok": False,
+            "error": "BRAK_KODU_DO_ZAPISU",
+            "path": str(target),
+            "message": _msg
+        }
+
     try:
         source = target.read_text(
             encoding="utf-8",
@@ -22078,7 +22100,13 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     # W co konkretnie kliknelismy / co otworzylismy.
                     # Sluzy _zauwaz_powtarzane_ruchy() do zobaczenia,
                     # ze chodzimy w kolko po tym samym przycisku.
-                    "cel_akcji": _cel_akcji_narzedzia(name, args, result)
+                    "cel_akcji": _cel_akcji_narzedzia(name, args, result),
+                    # v432b: jaka komenda — patrz _plik_uruchomiono().
+                    "komenda": (
+                        str((args or {}).get("command") or "")
+                        if str(name).startswith("termux_run")
+                        and isinstance(args, dict) else ""
+                    )
                 })
 
                 # Patrz komentarz przy _decision_asks_for_contact_info()
@@ -24751,7 +24779,7 @@ def _pliki_kodu_bez_autora(task_text, team):
             continue
 
         if (
-            extract_code_block((team or {}).get("engineer_full", ""), sciezka)
+            _kod_z_wypowiedzi((team or {}).get("engineer_full", ""), sciezka)
             or _kod_autora_dla(sciezka)
         ):
             continue
@@ -26694,12 +26722,50 @@ def _failing_script_from_result(wynik):
     return match.group(1), match.group(2)
 
 
+def _plik_uruchomiono(sciezka, wynik):
+    """
+    v432b: czy w tym zadaniu ten plik naprawde uruchomiono — komenda w
+    sladzie wykonania wymienia jego nazwe albo uruchomil go sam Python.
+    """
+
+    if not isinstance(wynik, dict):
+        return False
+
+    if isinstance(wynik.get("shell_result"), dict):
+        return True
+
+    nazwa = Path(str(sciezka or "")).name
+
+    if not nazwa:
+        return False
+
+    if (
+        str(wynik.get("tool") or "").startswith("termux_run")
+        and nazwa in str(wynik.get("arguments") or "")
+    ):
+        return True
+
+    return any(
+        isinstance(w, dict)
+        and str(w.get("tool") or "").startswith("termux_run")
+        and nazwa in str(w.get("komenda") or "")
+        for w in (wynik.get("tool_trace") or [])
+    )
+
+
 def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
     """
     v205: kod Bartka wlasnie sie wykonal. Wynik wraca do niego (v202),
     a gdy sie WYSYPAL — Piotr oglada plik i Ania pisze poprawke.
     Autor najtrudniej widzi wlasny blad, wiec patrzy ktos inny.
     """
+
+    # v432b: tylko gdy plik naprawde uruchomiono. Bieg 2026-09-24
+    # 20:54, krok 1: nie wyszedl patch wykonania, app.py nie ruszyl ani
+    # razu — a Piotr i Ania dostali "kod sie wysypal", Bartek zas
+    # "Uruchomione: app.py — kod wyjscia None".
+    if not _plik_uruchomiono(sciezka, wynik):
+        return
 
     _remember_engineer_code_result(sciezka, wynik)
 
@@ -26797,29 +26863,14 @@ def _opis_awarii(run_result):
     #
     # Mial racje i przeglad poszedl na marne. Python MIAL ten wynik
     # w reku — tyle ze w polach, ktorych ta funkcja nie znala.
-    if not czesci:
-
-        try:
-            surowe = json.dumps(
-                run_result, ensure_ascii=False, default=str
-            )
-        except Exception:
-            surowe = str(run_result)
-
-        if surowe.strip() not in ("", "{}", "null", "None"):
-            czesci.append(
-                "Znanych pol (kod wyjscia, stdout, stderr, raport) "
-                "tu nie ma, wiec oddaje caly wynik tak, jak go mam:\n"
-                + short(surowe, 2000)
-            )
+    # v432b: bez "Znanych pol… oddaje caly wynik tak, jak go mam" i
+    # surowego JSON-a.
 
     if not czesci:
         # Nawet to jest fakt, ktory Piotr musi znac: nie ukrywamy
         # bledu, tylko go nie ma. Inaczej szuka po omacku.
         return (
-            "Uruchomienie nie zostawilo po sobie ZADNEGO sladu — ani "
-            "kodu wyjscia, ani wyjscia, ani bledu. To tez jest trop: "
-            "moze proces w ogole nie wystartowal."
+            "Uruchomienie nie zostawiło kodu wyjścia, wyjścia ani błędu."
         )
 
     return "\n".join(czesci)
@@ -38217,7 +38268,7 @@ def run_agent(goal):
                     task_text, team.get("engineer_full", "")
                 )
                 and (
-                    extract_code_block(
+                    _kod_z_wypowiedzi(
                         team.get("engineer_full", ""), _brakujacy_skrypt
                     )
                     or _kod_autora_dla(_brakujacy_skrypt)
@@ -38473,10 +38524,16 @@ def run_agent(goal):
                     _code_ready_path = target_path
                     _set_current_project_file(target_path)
 
+                # v432b: ten sam wybor bloku, co przy zapisie przez
+                # narzedzie (_kod_z_wypowiedzi): blok podpisany nazwa
+                # pliku wygrywa. Bieg 2026-09-24 20:54, krok 2: z
+                # wypowiedzi Bartka szedl pierwszy blok Pythona — 147 B
+                # cytatu blednej linii — zamiast jego app.py (3222 B,
+                # "# ~/bot/app.py — prototyp…"), i krok przepadl.
                 engineer_code = (
                     None
                     if _patch_wynik.get("applied")
-                    else extract_code_block(
+                    else _kod_z_wypowiedzi(
                         team.get("engineer_full", ""),
                         write_target
                     )
@@ -38520,7 +38577,7 @@ def run_agent(goal):
 
                 _zlec_kod_bartkowi(task_text, [write_target], team, step)
 
-                engineer_code = extract_code_block(
+                engineer_code = _kod_z_wypowiedzi(
                     team.get("engineer_full", ""), write_target
                 )
 
