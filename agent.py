@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v429
+AEL-MINI AUTONOMOUS AGENT v430
 
 ARCHITEKTURA:
 
@@ -2613,7 +2613,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v429")
+    print("             AEL-MINI AUTONOMOUS AGENT v430")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3106,7 +3106,7 @@ def _kod_autora_dla(sciezka, rola=None):
         if nazwa not in wpis["tekst"]:
             continue
 
-        kod = extract_code_block(wpis["tekst"], nazwa)
+        kod = _kod_z_wypowiedzi(wpis["tekst"], nazwa)
 
         if kod and kod.strip():
             return (kod, wpis["rola"], wpis["krok"])
@@ -14258,7 +14258,7 @@ def _tresc_napisana_dla(p):
     # w notatniku autorow, wiec _kopia_kodu_zespolu() ja rozpozna.
     kod = (
         (u_wskazanego[0] if u_wskazanego else None)
-        or extract_code_block(_kod_bartka_teraz or "", p)
+        or _kod_z_wypowiedzi(_kod_bartka_teraz or "", p)
         or (z_pamieci[0] if z_pamieci else None)
         or _kopia_kodu_zespolu(
             extract_code_block(_tresc_zadania_teraz or "", p)
@@ -14486,8 +14486,10 @@ def termux_write_file(path, content, append=False):
                         "path": str(p)
                     }
 
-                _wprost_od_bartka = bool(
-                    extract_code_block(_kod_bartka_teraz or "", p)
+                # v430: od Bartka z tego kroku jest dokladnie ten kod,
+                # ktory polozylismy — nie jakikolwiek jego blok.
+                _wprost_od_bartka = (
+                    _kod == _kod_z_wypowiedzi(_kod_bartka_teraz or "", p)
                 )
 
                 # v293: mowimy dokladnie, czyj to kod i z ktorego
@@ -14555,6 +14557,17 @@ def termux_write_file(path, content, append=False):
                     "written_by": "python",
                     "message": (
                         "Ten plik zapisalem ja, " + _skad
+                        + " (" + str(len(_kod.encode("utf-8"))) + " B)"
+                        # v430: mowimy wprost, ze tresc z wywolania nie
+                        # poszla. Bieg 17:16, krok 4: wykonanie trzy
+                        # razy zapisywalo probe_env.sh od nowa, bo nie
+                        # wiedzialo, ze jego tresc zostala zastapiona.
+                        + (
+                            ", nie treść z wywołania ("
+                            + str(len(data.encode("utf-8"))) + " B)"
+                            if data.strip() and data.strip() != _kod.strip()
+                            else ""
+                        )
                         + " — jest na dysku, w calosci. Twoja "
                         "czesc to uruchomienie go i sprawdzenie, co "
                         "z tego wyszlo."
@@ -24649,12 +24662,115 @@ def _blok_dokladnie_dla(text, sciezka):
             return _wyrownaj_blok(z_heredoca)
 
         if (
-            _nazwa_nad_blokiem(text, m.start(), sciezka)
+            (
+                _nazwa_nad_blokiem(text, m.start(), sciezka)
+                or _podpis_w_naglowku(kod, sciezka)
+            )
             and not _obcy_jezyk_dla(sciezka, m.group(1), kod)
         ):
             return kod
 
     return None
+
+
+def _blok_podpisany(text, sciezka):
+    """
+    v430: blok, ktory sam mowi, ze jest tym plikiem — heredoc tworzacy
+    ten plik albo nazwa w pierwszym komentarzu. Nazwa w prozie nad
+    blokiem tu nie wystarcza: "grep media_count server.py" tez ma
+    server.py nad soba (bieg 2026-09-21 21:01).
+    """
+
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL):
+
+        kod = _wyrownaj_blok(m.group(2))
+
+        if not kod.strip() or _blok_poprawki(text, m.start()):
+            continue
+
+        z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        if z_heredoca:
+            return _wyrownaj_blok(z_heredoca)
+
+        if (
+            _podpis_w_naglowku(kod, sciezka)
+            and not _obcy_jezyk_dla(sciezka, m.group(1), kod)
+        ):
+            return kod
+
+    return None
+
+
+def _kod_z_wypowiedzi(text, sciezka):
+    """
+    v430: kod tego pliku z jednej wypowiedzi. Blok, ktory sam mowi, ze
+    jest tym plikiem, wygrywa z blokiem wybranym po jezyku; blok
+    podpisany INNYM plikiem nie jest tym plikiem. Bieg 2026-09-24
+    17:16, krok 4: do probe_env.sh poszedl blok Bartka zaczynajacy sie
+    od "# probe.sh — read-only diagnoza" (1271 B).
+    """
+
+    kod = _blok_podpisany(text, sciezka)
+
+    if kod:
+        return kod
+
+    kod = extract_code_block(text or "", sciezka)
+
+    if kod and _podpisany_innym(kod, sciezka):
+        return None
+
+    return kod
+
+
+def _podpisany_innym(kod, sciezka):
+    """v430: pierwszy komentarz bloku nazywa inny plik tego rodzaju."""
+
+    nazwa = str(sciezka or "").split("/")[-1].strip()
+    sufiks = Path(nazwa).suffix.lower()
+
+    if not nazwa or not sufiks or _podpis_w_naglowku(kod, sciezka):
+        return False
+
+    linie = [
+        l.strip() for l in str(kod or "").splitlines()
+        if l.strip() and not l.startswith("#!")
+    ][:2]
+
+    for l in linie:
+        if not l.startswith(("#", "//")):
+            continue
+        for inna in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", l):
+            if inna.lower().endswith(sufiks) and inna != nazwa:
+                return True
+
+    return False
+
+
+def _podpis_w_naglowku(kod, sciezka):
+    """
+    v430: autor podpisal plik w jego pierwszym komentarzu —
+    "# probe_env.sh — read-only spis faktow". Bieg 2026-09-24 17:16,
+    krok 4: odpowiedz Bartka na ASK zaczynala sie od razu blokiem, a
+    nazwa stala tylko tam.
+    """
+
+    nazwa = str(sciezka or "").split("/")[-1].strip()
+
+    if not nazwa:
+        return False
+
+    wzor = re.compile(r"(?<![\w.-])" + re.escape(nazwa) + r"(?![\w-])")
+
+    linie = [
+        l.strip() for l in str(kod or "").splitlines()
+        if l.strip() and not l.startswith("#!")
+    ][:2]
+
+    return any(
+        l.startswith(("#", "//")) and wzor.search(l) for l in linie
+    )
 
 
 def _zlec_kod_bartkowi(task_text, pliki, team, step):
@@ -28707,6 +28823,9 @@ def _chrome_relevant_now(goal, last_result=None):
             isinstance(last_result, dict)
             and last_result.get("status")
             == "USER_RESPONDED_TO_LOGIN_PROMPT"
+            # v430: tylko po prawdziwym logowaniu — prosba miala adres
+            # strony. Bez adresu Chrome pokazywal karty uzytkownika.
+            and bool(last_result.get("url"))
         )
     )
 
@@ -33327,6 +33446,9 @@ def _handle_main_ask(
     # tym samym kroku.
     if ask_role == "ENGINEER":
         team["engineer_full"] = answer
+        # v430: odpowiedz Bartka na ASK to jego biezacy kod — tak
+        # samo, jak wypowiedz z narady (patrz _tresc_napisana_dla).
+        globals()["_kod_bartka_teraz"] = answer
 
     if isinstance(team.get("kod_full"), dict):
         team["kod_full"][ask_role] = answer
@@ -36935,44 +37057,10 @@ def _need_user_login_with_contact_gate(
             credential_gate_redirects
         )
 
-    if (
-        _decision_asks_for_web_credential_without_url(decision)
-        and credential_gate_redirects < _WEB_CREDENTIAL_GATE_MAX_REDIRECTS
-    ):
-
-        credential_gate_redirects += 1
-
-        log(
-            "MAIN",
-            "NEED_USER_LOGIN o klucz/konto w serwisie zewnętrznym "
-            "odrzucone -- brak adresu strony do zalogowania (" +
-            str(credential_gate_redirects) + "/"
-            + str(_WEB_CREDENTIAL_GATE_MAX_REDIRECTS) + ")."
-        )
-
-        return (
-            {
-                "status": "MISSING_LOGIN_URL",
-                "message": (
-                    "Prośba dotyczy klucza/konta w serwisie "
-                    "zewnętrznym (np. klucz API), ale \"url\" było "
-                    "puste, więc przeglądarka NIE otworzyła się na "
-                    "stronie tego serwisu — użytkownik nie miał gdzie "
-                    "się zalogować, żeby stamtąd przekazać wartość. "
-                    "Podaj prawdziwy adres http(s) strony "
-                    "logowania/panelu tego serwisu w polu \"url\" — "
-                    "dopiero wtedy Chrome się otworzy i użytkownik "
-                    "będzie mógł się zalogować, zamiast wklejać klucz "
-                    "z pamięci. Dane czysto osobiste (np. numer "
-                    "telefonu), które nie mają żadnej strony do "
-                    "otwarcia, mogą zostać w \"instructions\" bez "
-                    "zmian."
-                )
-            },
-            contact_gate_redirects,
-            credential_gate_redirects
-        )
-
+    # v430: bramka "klucz/konto bez adresu" zdjeta. Szukala slow
+    # ("klucz api") i odrzucila pytanie, w ktorym MAIN pisal "nie
+    # klucz API" — cztery pytania do uzytkownika nie dotarly.
+    # Pytanie MAIN-a idzie do uzytkownika takie, jakie jest.
     return (
         _handle_need_user_login(decision),
         contact_gate_redirects,
@@ -38445,6 +38533,20 @@ Zwróć tylko JSON.
             if write_target.lower() in ("none", "null", "-", "brak"):
                 write_target = ""
 
+            # v430: w polu sciezki stoi kod, nie sciezka. Bieg
+            # 2026-09-24 17:16, kroki 4-6: MAIN wkleil tam caly skrypt
+            # i log mowil "MAIN wskazał do zapisu null | tee…". Pole
+            # jest puste; plik kladzie droga z v428/v429 — zadanie
+            # uruchamia plik, ktorego nie ma.
+            if "\n" in write_target:
+                log(
+                    "MAIN",
+                    "W polu write_engineer_code_to był kod ("
+                    + str(len(write_target)) + " znaków), nie ścieżka "
+                    "— traktuję pole jako puste."
+                )
+                write_target = ""
+
             # Bartek odzywa sie w nastepnym kroku, gdy MAIN wlasnie
             # poprosil o kod — patrz consult_team().
             global _main_chcial_kod
@@ -38809,6 +38911,18 @@ Zwróć tylko JSON.
                         + " — kładę na dysk jego wersję, nie "
                         "przepisaną."
                     )
+
+            # v430: MAIN podal sciezke, a kodu do niej nikt nie napisal
+            # — najpierw Bartek, tak jak w v429, zamiast od razu "brak
+            # kodu". Bieg 2026-09-24 17:16, krok 3: probe.sh, Bartek w
+            # tym kroku nie pisal kodu, krok przepadl.
+            if write_target and not engineer_code:
+
+                _zlec_kod_bartkowi(task_text, [write_target], team, step)
+
+                engineer_code = extract_code_block(
+                    team.get("engineer_full", ""), write_target
+                )
 
             if write_target:
 
@@ -39452,32 +39566,12 @@ Zwróć tylko JSON.
             # NOWY TASK
             # --------------------------------------------------
 
-            duplicate_msg = _checklist_duplicate_message(task_text)
-
-            if duplicate_msg:
-
-                last_result = {
-                    "status": "TASK_DUPLICATE_OF_VERIFIED_POINT",
-                    "message": duplicate_msg
-                }
-
-                continue
-
-            already_satisfied_msg = (
-                _success_condition_already_satisfied_message(
-                    task_text, success_condition
-                )
-            )
-
-            if already_satisfied_msg:
-
-                last_result = {
-                    "status": "TASK_ALREADY_SATISFIED_ON_DISK",
-                    "message": already_satisfied_msg
-                }
-
-                continue
-
+            # v430: bez bramek "duplikat zweryfikowanego punktu" i
+            # "zadanie juz spelnione na dysku". Zgadywaly po nazwach
+            # plikow; bieg 2026-09-24 17:16, krok 5: probe_gap.sh nie
+            # ruszyl, bo warunek sukcesu wymienial `ls -la
+            # ~/probe_rec.m4a`, a ten plik juz byl. Decyzja nalezy do
+            # MAIN-a — zadanie idzie do wykonania.
             task_id = create_task(
                 task=task_text,
                 success_condition=
