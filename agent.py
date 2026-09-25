@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v436
+AEL-MINI AUTONOMOUS AGENT v437
 
 ARCHITEKTURA:
 
@@ -2591,6 +2591,19 @@ def _track_project_path(path):
         if top_level_name.startswith("."):
             return
 
+        # v437: katalog, ktory byl w $HOME, zanim bieg ruszyl, nie jest
+        # "wygenerowany" — nawet gdy bieg cos w nim zapisal. Bieg
+        # 2026-09-24 20:54: zespol polozyl app.py w ~/bot, a ~/bot to
+        # byl klon repozytorium uzytkownika (z niego update_agent.sh
+        # bierze nowy agent.py). Sprzatanie na starcie zaproponowalo
+        # caly ~/bot do skasowania i aktualizacja przestala dzialac.
+        if (
+            _home_przed_biegiem is not None
+            and top_level_name in _home_przed_biegiem
+            and top_level_name not in _home_nowe_w_biegu
+        ):
+            return
+
         if top_level_name == AGENT_DIR.name:
 
             if len(relative.parts) < 2:
@@ -2658,10 +2671,16 @@ def _track_project_path(path):
 # probe_rec.m4a z 13 wrzesnia).
 _home_przed_biegiem = None
 
+# v437: co bieg dodal w $HOME — te pozycje sa jego, wiec pliki w nich
+# dalej sa sledzone (patrz _track_project_path).
+_home_nowe_w_biegu = set()
+
 
 def _zapamietaj_home_przed_biegiem():
 
     global _home_przed_biegiem
+
+    _home_nowe_w_biegu.clear()
 
     try:
         _home_przed_biegiem = {p.name for p in HOME.iterdir()}
@@ -2681,6 +2700,7 @@ def _sledz_nowe_w_home():
         return
 
     for p in nowe:
+        _home_nowe_w_biegu.add(p.name)
         _track_project_path(p)
         _home_przed_biegiem.add(p.name)
 
@@ -2771,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v436")
+    print("             AEL-MINI AUTONOMOUS AGENT v437")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
