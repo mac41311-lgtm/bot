@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v435
+AEL-MINI AUTONOMOUS AGENT v436
 
 ARCHITEKTURA:
 
@@ -2771,7 +2771,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v435")
+    print("             AEL-MINI AUTONOMOUS AGENT v436")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -34287,6 +34287,76 @@ def _brakujace_komendy():
     return []
 
 
+# v436: kilka faktow o telefonie, ktore Python mierzy sam przy starcie
+# programu — getprop i obecnosc plikow, bez uruchamiania czegokolwiek,
+# co mogloby o cos pytac (su). Bieg 2026-09-24 19:06: nowy bieg
+# zaczynal od zera i zespol znowu pytal uzytkownika o model telefonu i
+# root, choc bieg 17:16 to zmierzyl (realme RMX5078, Android 16, bez
+# roota). Mierzone przy kazdym starcie — zawsze stan dzisiejszy, nie
+# zapamietany. Dostaja to ci, ktorzy dzialaja na telefonie (v409).
+_fakty_o_telefonie_cache = None
+
+_SCIEZKI_SU = ("/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su")
+
+
+def _getprop(klucz):
+
+    try:
+        r = subprocess.run(
+            ["getprop", klucz], capture_output=True, text=True, timeout=3
+        )
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _fakty_o_telefonie():
+    """v436: jedna linia faktow o telefonie albo "" poza Androidem."""
+
+    global _fakty_o_telefonie_cache
+
+    if _fakty_o_telefonie_cache is not None:
+        return _fakty_o_telefonie_cache
+
+    marka = _getprop("ro.product.manufacturer")
+    model = _getprop("ro.product.model")
+    wersja = _getprop("ro.build.version.release")
+    sdk = _getprop("ro.build.version.sdk")
+    uklad = _getprop("ro.board.platform") or _getprop("ro.hardware")
+
+    if not (model or wersja):
+        _fakty_o_telefonie_cache = ""
+        return ""
+
+    czesci = [" ".join(x for x in (marka, model) if x)]
+
+    if uklad:
+        czesci.append("układ " + uklad)
+
+    if wersja:
+        czesci.append(
+            "Android " + wersja + (" (SDK " + sdk + ")" if sdk else "")
+        )
+
+    su = [p for p in _SCIEZKI_SU if os.path.exists(p)]
+
+    linia = (
+        "Telefon (sprawdzone przy starcie programu): "
+        + ", ".join(c for c in czesci if c) + ". "
+        + (
+            "Plik su jest: " + ", ".join(su) + "."
+            if su else
+            "Pliku su nie ma w " + ", ".join(_SCIEZKI_SU) + "."
+        )
+        + " Termux:API: "
+        + ("jest." if shutil.which("termux-battery-status") else "brak.")
+    )
+
+    _fakty_o_telefonie_cache = linia
+    _znane_dodaj(linia)
+    return linia
+
+
 def _pierwsza_wiadomosc(rola=None):
     """
     Pierwsza wiadomosc w kazdej rozmowie: co to za maszyna. Tyle.
@@ -34334,11 +34404,18 @@ def _pierwsza_wiadomosc(rola=None):
         return _JAK_ROZMAWIAMY if str(rola) in _ROLE_ZNAJACE_PROGRAM else ""
 
     # v422: MAIN dostaje na poczatek, jak dziala program.
+    # v436: fakty o telefonie pod linia o platformie.
+    _tel = _fakty_o_telefonie()
+    _platforma = (
+        "Termux API, ADB DEBUGOWANIE, Android"
+        + (("\n\n" + _tel) if _tel else "")
+    )
+
     if str(rola) == "MAIN":
-        return "Termux API, ADB DEBUGOWANIE, Android\n\n" + _JAK_TO_DZIALA
+        return _platforma + "\n\n" + _JAK_TO_DZIALA
 
     if rola is not None:
-        return "Termux API, ADB DEBUGOWANIE, Android\n\n" + _JAK_ROZMAWIAMY
+        return _platforma + "\n\n" + _JAK_ROZMAWIAMY
 
     return "Termux API, ADB DEBUGOWANIE, Android"
 
