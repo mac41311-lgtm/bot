@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v439
+AEL-MINI AUTONOMOUS AGENT v440
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v439")
+    print("             AEL-MINI AUTONOMOUS AGENT v440")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -24340,6 +24340,41 @@ _NOT_SIMPLE_RUN_RE = re.compile(
 )
 
 
+_SCIEZKA_W_ZADANIU_RE = re.compile(
+    r"(?<![\w/.:])(?:~|\$HOME|/data/data/com\.termux/files/home|/sdcard"
+    r"|/storage/emulated/0)(?:/[^\s`'\"()<>,;|&]+)+"
+)
+
+_KOD_W_ZADANIU_RE = re.compile(r"`([^`\n]+)`")
+
+
+def _zadanie_mowi_o_czyms_jeszcze(text, written_path):
+    """
+    Czy zadanie wymienia inny plik albo polecenie niz samo
+    uruchomienie written_path (bez argumentow).
+    """
+
+    nazwa = written_path.name
+
+    def _to_ten_plik(slowo):
+        return slowo.rstrip(".:!?").rsplit("/", 1)[-1] == nazwa
+
+    for m in _SCIEZKA_W_ZADANIU_RE.finditer(text):
+        if not _to_ten_plik(m.group(0)):
+            return True
+
+    for kod in _KOD_W_ZADANIU_RE.findall(text):
+        reszta = [
+            s for s in kod.split()
+            if not _to_ten_plik(s)
+            and s not in ("bash", "sh", "python", "python3", "chmod", "+x")
+        ]
+        if reszta:
+            return True
+
+    return False
+
+
 def _task_is_simple_run(task_text, success_condition, written_path):
     """
     Czy cale zadanie to "uruchom plik, ktory Python wlasnie zapisal"?
@@ -24357,6 +24392,18 @@ def _task_is_simple_run(task_text, success_condition, written_path):
         return None
 
     if _NOT_SIMPLE_RUN_RE.search(text):
+        return None
+
+    # v440: zadanie, ktore mowi o czyms wiecej niz ten jeden plik, to
+    # nie jest "uruchom go".
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-25 18:23, krok 1).
+    # MAIN zlecil: zapisz ~/olx_A.txt, ~/olx_B.txt, ~/useme.txt,
+    # ~/plan.md i ~/kasa.sh, potem `bash ~/kasa.sh suma`, `bash
+    # ~/kasa.sh 0 test 'init'`, `ls -la ...`, `head -5 ...`. Python
+    # zobaczyl "uruchom", zrobil samo `bash ~/kasa.sh` i oddal
+    # COMPLETED. Czterech plikow nie bylo — wyszlo dopiero krok pozniej.
+    if _zadanie_mowi_o_czyms_jeszcze(text, written_path):
         return None
 
     try:
@@ -32284,6 +32331,15 @@ def consult_team(
         LIMIT_BEZPIECZENSTWA, "PLANNER"
     )
 
+    # v440: Tomka nikt nie pytal i jeszcze nic nie powiedzial — nie ma
+    # czego przekazac. Do v439 szlo wtedy do Marka i Bartka "Tomek nie
+    # odpowiedzial — sesja oddala pusty tekst, ponowienie tez", czyli
+    # nieprawda (bieg 2026-09-25 18:23, krok 1: MAIN pytal tylko
+    # Marka, a Marek pisal "Tomek nie odpowiedzial — pierwsza
+    # czerwona flaga").
+    if not consult_planner and not str(results.get("PLANNER") or "").strip():
+        planner_out = ""
+
     # Zarzut Marka do POPRZEDNIEJ propozycji Bartka — ta sama zasada
     # co przy Tomku (v159): recenzowany ma usłyszeć recenzję.
     if _critic_verdict_for_engineer:
@@ -32342,7 +32398,7 @@ def consult_team(
                 # Bartek ma wykonac, nie cudza rozmowa obok.
                 _only_if_new(
                     "ENGINEER", "od_tomka",
-                    "\nTomek:\n" + planner_out
+                    ("\nTomek:\n" + planner_out) if planner_out else ""
                 )
                 + _only_if_new(
                     "ENGINEER", "od_kamila",
@@ -32479,7 +32535,7 @@ def consult_team(
             extra=(
                 _only_if_new(
                     "CRITIC", "od_tomka",
-                    "\nTomek:\n" + planner_out
+                    ("\nTomek:\n" + planner_out) if planner_out else ""
                 )
                 + _only_if_new(
                     "CRITIC", "project_file",
@@ -33100,14 +33156,23 @@ def main_decide(
         # v435: tylko to, co nowe — odpowiedz na ostatnie pytanie,
         # pod imieniem. Pytanie i wczesniejsze odpowiedzi MAIN ma w
         # swojej rozmowie.
-        _kto_odp = _ROLE_DISPLAY_NAME.get(
-            asked_followup['role'], asked_followup['role']
-        )
-        ask_block = (
-            _kto_odp + ":\n" + str(asked_followup['answer']).strip() + "\n"
-            if str(asked_followup['answer'] or "").strip() else
-            _kto_odp + " nie odpowiedział — sesja oddała pusty tekst.\n"
-        )
+        # v440: gdy MAIN zapytal kilka osob naraz — wszystkie
+        # odpowiedzi, kazda pod imieniem.
+        _czesci = []
+        for _odp in (asked_followup.get("odpowiedzi") or [asked_followup]):
+            _kto_odp = _ROLE_DISPLAY_NAME.get(_odp['role'], _odp['role'])
+            _czesci.append(
+                (_kto_odp + ":\n" + str(_odp['answer']).strip())
+                if str(_odp['answer'] or "").strip() else
+                (_kto_odp + " nie odpowiedział — sesja oddała pusty tekst.")
+            )
+        ask_block = "\n\n".join(_czesci) + "\n"
+        if asked_followup.get("niewyslane"):
+            ask_block += (
+                "\nPytań w tym kroku było już " + str(_MAIN_ASK_MAX)
+                + " — " + str(asked_followup["niewyslane"])
+                + " nie wysłałem.\n"
+            )
         ask_contract_block = ""
 
     else:
@@ -33464,6 +33529,38 @@ def main_decide(
 _MAIN_ASK_MAX = 4
 
 
+def _pytania_ask(raw):
+    """
+    v440: wszystkie ASK z jednej odpowiedzi MAIN-a, w kolejnosci.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-25 18:23, krok 1).
+    MAIN odpisal trzema obiektami ASK naraz — do Tomka, Kamila i
+    Marka. parse_json() bierze ostatni obiekt, wiec pytanie poszlo
+    tylko do Marka; Tomek i Kamil nigdy go nie dostali, a MAIN
+    napisal potem "Tomek i Kamil znowu milcza".
+    """
+
+    tekst = str(raw or "")
+    dekoder = json.JSONDecoder()
+    pytania = []
+    i = tekst.find("{")
+
+    while i != -1:
+
+        try:
+            obj, koniec = dekoder.raw_decode(tekst, i)
+        except Exception:
+            i = tekst.find("{", i + 1)
+            continue
+
+        if isinstance(obj, dict) and obj.get("type") == "ASK":
+            pytania.append(obj)
+
+        i = tekst.find("{", koniec)
+
+    return pytania
+
+
 def _handle_main_ask(
     decision,
     goal,
@@ -33471,7 +33568,8 @@ def _handle_main_ask(
     team,
     last_result,
     chrome_text,
-    android_text
+    android_text,
+    raw=None
 ):
     """
     v435: MAIN prowadzi rozmowe. ASK to pytanie do jednej osoby z
@@ -33488,6 +33586,10 @@ def _handle_main_ask(
     zadane = 0
 
     while isinstance(decision, dict) and decision.get("type") == "ASK":
+
+        # v440: wszystkie pytania z tej odpowiedzi, po kolei — kazde
+        # do swojej osoby, a MAIN dostaje odpowiedzi razem.
+        pytania = _pytania_ask(raw) or [decision]
 
         if zadane >= _MAIN_ASK_MAX:
 
@@ -33510,59 +33612,85 @@ def _handle_main_ask(
 
             return decision
 
-        ask_role = str(decision.get("ask_role") or "").strip().upper()
-        ask_question = str(decision.get("ask_question") or "").strip()
+        odpowiedzi = []
+        niewyslane = 0
 
-        if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
+        for pytanie in pytania:
+
+            ask_role = str(pytanie.get("ask_role") or "").strip().upper()
+            ask_question = str(pytanie.get("ask_question") or "").strip()
+
+            if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
+                log(
+                    "MAIN",
+                    "ASK odrzucone (nieprawidłowa rola '" + ask_role
+                    + "' lub puste pytanie)."
+                )
+                continue
+
+            if zadane >= _MAIN_ASK_MAX:
+                niewyslane += 1
+                continue
+
+            zadane += 1
+
             log(
                 "MAIN",
-                "ASK odrzucone (nieprawidłowa rola '" + ask_role
-                + "' lub puste pytanie) — traktuję jak brak decyzji."
+                "ASK " + str(zadane) + " -> " + ask_role + ": "
+                + short(ask_question, 300)
+            )
+
+            _speak(
+                "MAIN",
+                "Pytanie do "
+                + _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
+                + ":\n" + ask_question
+            )
+
+            # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie je w
+            # swojej zwyklej wiadomosci, pod "MAIN:".
+            _role_inbox.setdefault(ask_role, []).append(("MAIN", ask_question))
+
+            _odp_team = consult_team(
+                goal, last_result, step, chrome_text, android_text,
+                wolani={ask_role}
+            )
+
+            answer = str(
+                ((_odp_team or {}).get("kod_full") or {}).get(ask_role) or ""
+            )
+
+            log(
+                "MAIN",
+                ask_role + " ODPOWIEDŹ NA PYTANIE MAIN: "
+                + short(answer, 300)
+            )
+
+            # Odpowiedz jest normalna wypowiedzia tej osoby — takze jako
+            # zrodlo kodu do zapisu (v355, v430).
+            if ask_role == "ENGINEER" and answer.strip():
+                team["engineer_full"] = answer
+                globals()["_kod_bartka_teraz"] = answer
+
+            if isinstance(team.get("kod_full"), dict):
+                team["kod_full"][ask_role] = answer
+
+            odpowiedzi.append({
+                "role": ask_role,
+                "question": ask_question,
+                "answer": answer
+            })
+
+        if not odpowiedzi:
+            log(
+                "MAIN",
+                "Żadne ASK nie poszło — traktuję jak brak decyzji."
             )
             return None
 
-        zadane += 1
-
-        log(
-            "MAIN",
-            "ASK " + str(zadane) + " -> " + ask_role + ": "
-            + short(ask_question, 300)
-        )
-
-        _speak(
-            "MAIN",
-            "Pytanie do "
-            + _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
-            + ":\n" + ask_question
-        )
-
-        # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie je w
-        # swojej zwyklej wiadomosci, pod "MAIN:".
-        _role_inbox.setdefault(ask_role, []).append(("MAIN", ask_question))
-
-        _odp_team = consult_team(
-            goal, last_result, step, chrome_text, android_text,
-            wolani={ask_role}
-        )
-
-        answer = str(
-            ((_odp_team or {}).get("kod_full") or {}).get(ask_role) or ""
-        )
-
-        log(
-            "MAIN",
-            ask_role + " ODPOWIEDŹ NA PYTANIE MAIN: "
-            + short(answer, 300)
-        )
-
-        # Odpowiedz jest normalna wypowiedzia tej osoby — takze jako
-        # zrodlo kodu do zapisu (v355, v430).
-        if ask_role == "ENGINEER" and answer.strip():
-            team["engineer_full"] = answer
-            globals()["_kod_bartka_teraz"] = answer
-
-        if isinstance(team.get("kod_full"), dict):
-            team["kod_full"][ask_role] = answer
+        _followup = dict(odpowiedzi[-1])
+        _followup["odpowiedzi"] = odpowiedzi
+        _followup["niewyslane"] = niewyslane
 
         raw = main_decide(
             goal,
@@ -33571,11 +33699,7 @@ def _handle_main_ask(
             last_result,
             chrome_text,
             android_text,
-            asked_followup={
-                "role": ask_role,
-                "question": ask_question,
-                "answer": answer
-            }
+            asked_followup=_followup
         )
 
         decision = parse_json(raw)
@@ -38127,7 +38251,8 @@ def run_agent(goal):
                 team,
                 last_result,
                 step_chrome_text,
-                step_android_text
+                step_android_text,
+                raw=raw
             )
 
         if decision is not None:
