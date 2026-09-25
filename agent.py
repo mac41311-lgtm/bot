@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v437
+AEL-MINI AUTONOMOUS AGENT v438
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v437")
+    print("             AEL-MINI AUTONOMOUS AGENT v438")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -30906,6 +30906,12 @@ def consult_team(
     def _wybor(rola, dotad):
         return (rola in wolani) if wolani is not None else dotad
 
+    # v438: gdy rozmowe prowadzi MAIN, "X pominiety w tym kroku" to
+    # norma, nie wiadomosc — nie piszemy tego do logu co krok.
+    def _log_kroku(*a):
+        if wolani is None:
+            log(*a)
+
     # v432: bez "⚠️ UWAGA: narzedzie X zawiodlo Nx… Czas na inne
     # podejscie" i bez ramy "Przy okazji zauwazylem w narzedziach…".
     # Ostrzezenia z wykonania i tak ida w relacji z kroku.
@@ -31037,7 +31043,7 @@ def consult_team(
 
         human_report = ""
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "BROWSER pominięta — z ostatniego kroku został sam "
             "wiersz stanu, nie ma czego streszczać."
@@ -31942,7 +31948,7 @@ def consult_team(
 
     else:
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "WOJTEK pominięty w tym kroku "
             "(oszczędzanie limitu/sesji) — "
@@ -32048,7 +32054,7 @@ def consult_team(
 
     else:
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "RESEARCHER pominięty w tym kroku "
             "(oszczędzanie limitu/sesji) — "
@@ -32121,7 +32127,7 @@ def consult_team(
 
     if not consult_planner:
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "Tomek nie odzywa sie w tym kroku — nikt go nie zawolal. "
             "MAIN ma jego ostatni plan."
@@ -32194,7 +32200,7 @@ def consult_team(
 
     else:
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "BROWSER pominięty w tym kroku "
             "(oszczędzanie limitu/sesji) — "
@@ -32259,7 +32265,7 @@ def consult_team(
 
     if not consult_engineer:
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "Bartek nie odzywa sie w tym kroku — nikt nie prosil go "
             "o kod ani nie zawolal go po imieniu."
@@ -32386,7 +32392,7 @@ def consult_team(
 
     if not consult_critic:
 
-        log(
+        _log_kroku(
             "DEEPSEEK",
             "Marek nie odzywa sie w tym kroku — nie padla nowa "
             "propozycja do oceny."
@@ -37402,11 +37408,10 @@ def _co_widac_w_chrome_teraz():
         return ""
 
     return (
-        "Zajrzalem do przegladarki po tym, jak uzytkownik wrocil. "
-        "Otwarte jest teraz to:\n"
+        # v438: sam fakt, bez "jesli ktoras z tych stron ma to, czego
+        # szukamy…".
+        "Po powrocie użytkownika w Chrome otwarte jest:\n"
         + "\n".join(linie)
-        + "\nJesli ktoras z tych stron ma to, czego szukamy, jest "
-        "tam do wziecia — te same karty widac z wykonania."
     )
 
 
@@ -37538,7 +37543,11 @@ def _handle_need_user_login(decision):
     # z niej nie wyjdzie", a MAIN poszedl prosic o zalozenie JESZCZE
     # jednego konta, tym razem w Bland. Uzytkownik na to: "patrze na
     # strone, zalogowalem sie sam, wszystko by znalazl bez problemu".
-    _po_powrocie = _co_widac_w_chrome_teraz()
+    # v438: tylko po prawdziwym logowaniu (prosba miala adres strony).
+    # Bieg 2026-09-25 12:48: po odpowiedzi bez strony MAIN dostawal
+    # prywatne karty uzytkownika (sklep, wyszukiwanie), niezwiazane z
+    # celem.
+    _po_powrocie = _co_widac_w_chrome_teraz() if login_url else ""
 
     if _po_powrocie:
         _pending_team_warnings.append(_po_powrocie)
@@ -37720,7 +37729,9 @@ def _handle_need_user_login(decision):
         "user_provided_value_file": (
             str(USER_PROVIDED_VALUE_FILE) if value_file_note else None
         ),
-        "note": note + value_file_note
+        # v438: plik z wartoscia raz — "wklejona wartosc jest w pliku"
+        # w relacji; bez pustego "uwaga:".
+        "note": note
     }
 
 
