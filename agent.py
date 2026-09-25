@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v438
+AEL-MINI AUTONOMOUS AGENT v439
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v438")
+    print("             AEL-MINI AUTONOMOUS AGENT v439")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11543,6 +11543,12 @@ def _poczekaj_az_strona_dojdzie(tab, budzet_s=CHROME_LOAD_BUDGET_S):
     koniec = time.time() + max(0.0, float(budzet_s))
     start = time.time()
 
+    # v439: do tego tresc przestala przybywac — dwa odczyty pod rzad
+    # tej samej dlugosci. Bieg 2026-09-25 16:15: strony ladujace tresc
+    # skryptem oddawaly poczatek ("Skip to Content"), zanim doszla
+    # reszta, a wykonanie zgadywalo adresy.
+    poprzednia = None
+
     while True:
 
         stan = chrome_eval(tab, sonda)
@@ -11550,11 +11556,15 @@ def _poczekaj_az_strona_dojdzie(tab, budzet_s=CHROME_LOAD_BUDGET_S):
         if not isinstance(stan, dict):
             break
 
+        dlugosc = int(stan.get("tresc") or 0)
+
         # Gotowa i cos juz na niej jest. Sama flaga readyState nie
         # wystarcza: panele w Reakcie melduja "complete", majac na
         # ekranie samo "Loading..." (13 znakow).
-        if stan.get("gotowa") and int(stan.get("tresc") or 0) > 40:
+        if stan.get("gotowa") and dlugosc > 40 and dlugosc == poprzednia:
             break
+
+        poprzednia = dlugosc
 
         if time.time() >= koniec:
             break
@@ -12676,8 +12686,25 @@ def chrome_click(
 def chrome_type(
     text,
     tab_id=None,
-    contains=None
+    contains=None,
+    pole=None
 ):
+    """
+    Wpisuje tekst do pola w Chrome — jak z klawiatury.
+
+    v439: bieg 2026-09-25 16:15. Formularze OLX i Useme (React) nie
+    przyjmowaly tekstu wpisanego przez el.value = ...: tytul bylo widac
+    ("77/150"), a strona dalej mowila "Wpisz przynajmniej 16 znakow" i
+    "Dodaj ogloszenie" nic nie robilo. Do tego chrome_type umialo pisac
+    tylko tam, gdzie akurat byl kursor, wiec wykonanie siegalo po wlasny
+    JavaScript (56 z 95 wywolan) — z tym samym skutkiem.
+
+    Teraz: `pole` wskazuje pole (etykieta, placeholder, name, id albo
+    aria-label); Python je zaznacza i wpisuje tekst przez CDP
+    Input.insertText, czyli tak, jak robi to klawiatura — strona dostaje
+    zwykle zdarzenia i je przyjmuje. Stara tresc pola jest zastepowana.
+    Bez `pole` — pole, w ktorym jest kursor.
+    """
 
     tab = find_tab(
         tab_id,
@@ -12685,102 +12712,94 @@ def chrome_type(
     )
 
     if tab is None:
-
         return {
             "ok": False,
-            "error":
-                "Brak istniejącej karty"
+            "error": "Brak istniejącej karty"
         }
 
-    value = json.dumps(
-        str(text),
-        ensure_ascii=False
-    )
+    szukane = json.dumps(str(pole or ""), ensure_ascii=False)
 
-    javascript = f"""
+    wybierz = f"""
 (() => {{
-
-    const value =
-        {value};
-
-    const el =
-        document.activeElement;
-
-    if (!el) {{
-        return {{
-            ok: false,
-            error:
-                "Brak aktywnego elementu"
-        }};
-    }}
-
-    const tag =
-        el.tagName.toLowerCase();
-
-    if (
-        tag !== "input" &&
-        tag !== "textarea" &&
-        !el.isContentEditable
-    ) {{
-
-        return {{
-            ok: false,
-            error:
-                "Aktywny element nie jest polem"
-        }};
-
-    }}
-
-    if (
-        el.isContentEditable
-    ) {{
-
-        el.textContent =
-            value;
-
+    const szukane = {szukane};
+    const q = szukane.trim().toLowerCase();
+    const widoczny = (el) => !!(el.offsetParent || el.getClientRects().length);
+    const pola = Array.from(document.querySelectorAll(
+        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable=""], [contenteditable="true"]'
+    )).filter(widoczny);
+    const opis = (el) => [
+        el.id, el.name, el.getAttribute('placeholder'),
+        el.getAttribute('aria-label'),
+        ...(el.labels ? Array.from(el.labels).map(l => l.innerText) : []),
+        (el.getAttribute('aria-labelledby') || '').split(' ')
+            .map(i => (document.getElementById(i) || {{}}).innerText || '').join(' ')
+    ].filter(Boolean).join(' | ');
+    let el = null;
+    if (q) {{
+        el = pola.find(e => (e.id || '').toLowerCase() === q || (e.name || '').toLowerCase() === q)
+          || pola.find(e => opis(e).toLowerCase().includes(q));
+        if (!el) {{
+            return {{ok: false, error: 'Nie znalazłem pola: ' + szukane,
+                     pola: pola.slice(0, 15).map(opis)}};
+        }}
     }} else {{
-
-        el.focus();
-        el.value =
-            value;
-
+        el = document.activeElement;
+        const tag = el ? el.tagName.toLowerCase() : '';
+        if (!el || !(tag === 'input' || tag === 'textarea' || el.isContentEditable)) {{
+            return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
+                     pola: pola.slice(0, 15).map(opis)}};
+        }}
     }}
-
-    el.dispatchEvent(
-        new Event(
-            "input",
-            {{
-                bubbles: true
-            }}
-        )
-    );
-
-    el.dispatchEvent(
-        new Event(
-            "change",
-            {{
-                bubbles: true
-            }}
-        )
-    );
-
-    return {{
-        ok: true
-    }};
-
+    el.scrollIntoView({{block: 'center'}});
+    el.focus();
+    if (el.isContentEditable) {{
+        const r = document.createRange();
+        r.selectNodeContents(el);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+    }} else if (typeof el.select === 'function') {{
+        el.select();
+    }}
+    return {{ok: true, pole: opis(el) || el.tagName.toLowerCase()}};
 }})()
 """
 
-    return (
-        chrome_eval(
-            tab,
-            javascript
-        )
-        or {
+    wybor = chrome_eval(tab, wybierz)
+
+    if not isinstance(wybor, dict) or not wybor.get("ok"):
+        return wybor if isinstance(wybor, dict) else {
             "ok": False,
             "error": "Brak wyniku"
         }
+
+    ws = cdp_connect(tab)
+
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+
+    try:
+        wpis = cdp_call(ws, 1, "Input.insertText", {"text": str(text)})
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    if not wpis.get("ok"):
+        return {"ok": False, "error": wpis.get("error"), "pole": wybor.get("pole")}
+
+    teraz = chrome_eval(
+        tab,
+        "(() => { const el = document.activeElement; if (!el) return ''; "
+        "return (el.isContentEditable ? el.innerText : el.value) || ''; })()"
     )
+
+    return {
+        "ok": True,
+        "pole": wybor.get("pole"),
+        "w_polu_jest": short(str(teraz or ""), 200)
+    }
 
 
 # ============================================================
@@ -13555,11 +13574,17 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "chrome_type",
-            "description": "Wpisz tekst do aktywnego pola Chrome.",
+            "description": (
+                "Wpisz tekst do pola w Chrome — jak z klawiatury; stara "
+                "treść pola jest zastępowana. pole: etykieta, placeholder, "
+                "name, id albo aria-label pola; bez pola — pole, w którym "
+                "jest kursor. Wynik mówi, co jest w polu po wpisaniu."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"},
+                    "pole": {"type": "string"},
                     "tab_id": {"type": "string"},
                     "contains": {"type": "string"}
                 },
@@ -21656,6 +21681,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     ""
                 )
 
+                # v439: "default_api:termux_run" to termux_run — Gemini
+                # czasem dokleja przedrostek przestrzeni nazw. Bieg
+                # 2026-09-25 16:15, krok 15: cale zadanie padlo na
+                # "Nieznane narzedzie".
+                name = str(name or "").split(":")[-1].strip()
+
                 args = getattr(
                     call,
                     "arguments",
@@ -22105,10 +22136,14 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         + short(str(_cel), 60)
                     )
 
-                    collected_warnings.append(
-                        "gemini [" + _sygnal_celu.lower() + "]: "
-                        + _zdanie_celu
-                    )
+                    # v439: z serii ("3… 4… 5… operacji pod rzad")
+                    # zostaje ostatnia linia.
+                    _prefiks = "gemini [" + _sygnal_celu.lower() + "]: "
+                    collected_warnings[:] = [
+                        w for w in collected_warnings
+                        if not str(w).startswith(_prefiks)
+                    ]
+                    collected_warnings.append(_prefiks + _zdanie_celu)
 
                 collected_tool_trace.append({
                     "tool": name,
@@ -24783,11 +24818,26 @@ def _pliki_kodu_bez_autora(task_text, team):
 
     out = []
 
-    for m in _CODE_TARGET_FILENAME_RE.finditer(str(task_text or "")):
+    _tekst = str(task_text or "")
+
+    for m in _CODE_TARGET_FILENAME_RE.finditer(_tekst):
 
         sciezka = m.group(0).strip().strip("`'\"")
 
         if sciezka in out:
+            continue
+
+        # v439: tylko prawdziwe sciezki plikow (z "/" albo "~/"), nie
+        # adresy stron i nie kawalki kodu. Bieg 2026-09-25 16:15:
+        # "m.olx.pl" z adresu i "x.h" z JavaScriptu w zadaniu wziete za
+        # pliki z kodem — Bartek dostal dwa razy zlecenie bez sensu.
+        _przed = _tekst[max(0, m.start() - 8):m.start()]
+        if (
+            "/" not in sciezka
+            or sciezka.startswith("//")
+            or "://" in _przed + sciezka[:3]
+            or _tekst[m.end():m.end() + 1] == "/"
+        ):
             continue
 
         try:
