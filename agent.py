@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v434
+AEL-MINI AUTONOMOUS AGENT v435
 
 ARCHITEKTURA:
 
@@ -2771,7 +2771,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v434")
+    print("             AEL-MINI AUTONOMOUS AGENT v435")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -30408,7 +30408,9 @@ _answer_for_critic = None
 # odpala sie WYLACZNIE przy realnym zastrzezeniu -- gdy Marek puszcza
 # plan dalej, nie kosztuje nic. Przerywamy natychmiast, gdy Marek
 # przyjmie wyjasnienie, wiec czesto wystarcza jedna runda.
-TEAM_EXCHANGE_MAX_ROUNDS = 2
+# v435: bez wymuszonych rund Marek <-> Tomek/Bartek. Zastrzezenie Marka
+# idzie do MAIN-a, a MAIN pyta, kogo chce (ASK).
+TEAM_EXCHANGE_MAX_ROUNDS = 0
 
 
 # v200 -- zaobserwowany realny bug (log 2026-09-04, v195, KROK 3).
@@ -30816,7 +30818,8 @@ def consult_team(
     last_result,
     step=1,
     chrome_text=None,
-    android_text=None
+    android_text=None,
+    wolani=None
 ):
     """
     Konsultuje role SEKWENCYJNIE, nie na każdym kroku wszystkie.
@@ -30877,22 +30880,20 @@ def consult_team(
     global _critic_question
     global _answer_for_critic
 
+    # v435: rozmowe prowadzi MAIN. wolani = kogo MAIN zapytal (ASK);
+    # pusty zbior na poczatku kroku — z automatu nikt z zespolu sie
+    # nie odzywa. None = dawna kolejnosc (zostaje dla testow).
+    def _wybor(rola, dotad):
+        return (rola in wolani) if wolani is not None else dotad
+
     # v432: bez "⚠️ UWAGA: narzedzie X zawiodlo Nx… Czas na inne
     # podejscie" i bez ramy "Przy okazji zauwazylem w narzedziach…".
     # Ostrzezenia z wykonania i tak ida w relacji z kroku.
     tool_hint = ""
 
-    python_zauwazyl = ""
-
-    if _pending_team_warnings:
-        # v432: same fakty, bez ramy "Zauwazylem jeszcze to:".
-        python_zauwazyl = (
-            "\n\n"
-            + "\n".join(
-                "- " + str(w) for w in _pending_team_warnings[:8]
-            )
-        )
-        del _pending_team_warnings[:]
+    # v435: fakty z _pending_team_warnings ida do MAIN-a (patrz
+    # main_decide). Od v413 byly tu zbierane i wyrzucane — nie
+    # docieraly do nikogo ("Nie zapisalem X…", "Piotr obejrzal…").
 
     # v192: odpowiedzi na pytania o pliki, ktore zespol zadal w
     # POPRZEDNIEJ naradzie — patrz _remember_team_file_questions().
@@ -31004,7 +31005,9 @@ def consult_team(
         ]
     ) > 1
 
-    if _jest_co_streszczac:
+    # v435: Ola streszcza z automatu tylko w dawnej kolejnosci; teraz
+    # odzywa sie, gdy MAIN ja zapyta.
+    if _jest_co_streszczac and wolani is None:
 
         # v335: sam material. "Streść to:" bylo poleceniem obok
         # tozsamosci, ktora juz mowi, co Ola robi.
@@ -31811,6 +31814,8 @@ def consult_team(
         or "CRITIC" in _prosi_main
     )
 
+    consult_wojtek = _wybor("WOJTEK", consult_wojtek)
+
     if consult_wojtek:
 
         # UWAGA (zaobserwowany realny problem, log 2026-08-26): Wojtek
@@ -31944,6 +31949,8 @@ def consult_team(
     consult_researcher = (
         consult_researcher or _zawolany_teraz("RESEARCHER")
     )
+
+    consult_researcher = _wybor("RESEARCHER", consult_researcher)
 
     if consult_researcher:
 
@@ -32090,6 +32097,8 @@ def consult_team(
         consult_planner or _zawolany_teraz("PLANNER")
     )
 
+    consult_planner = _wybor("PLANNER", consult_planner)
+
     if not consult_planner:
 
         log(
@@ -32148,7 +32157,9 @@ def consult_team(
         _role_response_step["PLANNER"] = step
         _collect_role_messages("PLANNER", results["PLANNER"])
 
-    consult_browser = consult_browser or _zawolany_teraz("BROWSER")
+    consult_browser = _wybor(
+        "BROWSER", consult_browser or _zawolany_teraz("BROWSER")
+    )
 
     if consult_browser:
 
@@ -32223,6 +32234,8 @@ def consult_team(
     consult_engineer = (
         consult_engineer or _zawolany_teraz("ENGINEER")
     )
+
+    consult_engineer = _wybor("ENGINEER", consult_engineer)
 
     if not consult_engineer:
 
@@ -32347,7 +32360,9 @@ def consult_team(
 
         _main_override_for_critic = None
 
-    consult_critic = consult_critic or _zawolany_teraz("CRITIC")
+    consult_critic = _wybor(
+        "CRITIC", consult_critic or _zawolany_teraz("CRITIC")
+    )
 
     if not consult_critic:
 
@@ -32681,7 +32696,7 @@ def consult_team(
 
     for _adresat in [
         r for r in list(_role_inbox.keys())
-        if r in _ROLE_DO_ROZMOWY
+        if r in _ROLE_DO_ROZMOWY and wolani is None
     ]:
 
         # Kto czekal na odpowiedz — zanim _collect_role_messages()
@@ -32769,9 +32784,13 @@ def consult_team(
     # zostaje — ale kiedy siega po zapis, Python ma czym ten plik
     # zapisac od reki, zamiast oddawac zespolowi odmowe.
     global _kod_bartka_teraz
-    _kod_bartka_teraz = (
-        results.get("ENGINEER", "") if consult_engineer else ""
-    )
+
+    # v435: pytanie MAIN-a do kogos innego niz Bartek nie kasuje kodu,
+    # ktory Bartek dal w tym kroku.
+    if not wolani or consult_engineer:
+        _kod_bartka_teraz = (
+            results.get("ENGINEER", "") if consult_engineer else ""
+        )
 
     # v293: i to samo do pamieci dluzszej niz jeden krok — patrz
     # _kod_autorow. Kod Bartka nie ma znikac tylko dlatego, ze w
@@ -32888,7 +32907,7 @@ def consult_team(
 # ============================================================
 
 _MAIN_ASK_ALLOWED_ROLES = (
-    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER"
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK"
 )
 
 
@@ -33002,11 +33021,17 @@ def main_decide(
         # v429: bez "To bylo Twoje jedno pytanie w tym kroku — teraz
         # zdecyduj: TASK, DONE albo FAILED." — polecenie, ktore do tego
         # pomijalo ASK i NEED_USER_LOGIN. Zostaje pytanie i odpowiedz.
-        ask_block = f"""
-Zapytałeś {asked_followup['role']}: {asked_followup['question']}
-
-Odpowiedź: {short(str(asked_followup['answer']), 2000)}
-"""
+        # v435: tylko to, co nowe — odpowiedz na ostatnie pytanie,
+        # pod imieniem. Pytanie i wczesniejsze odpowiedzi MAIN ma w
+        # swojej rozmowie.
+        _kto_odp = _ROLE_DISPLAY_NAME.get(
+            asked_followup['role'], asked_followup['role']
+        )
+        ask_block = (
+            _kto_odp + ":\n" + str(asked_followup['answer']).strip() + "\n"
+            if str(asked_followup['answer'] or "").strip() else
+            _kto_odp + " nie odpowiedział — sesja oddała pusty tekst.\n"
+        )
         ask_contract_block = ""
 
     else:
@@ -33056,6 +33081,14 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
     # code_review/checks/attempt_count dokładamy osobno — kondensator
     # ich nie zna, a to na nie wskazują wyjaśnienia statusów wyżej.
     _facts = _condense_last_result_for_team(last_result, 3000)
+
+    # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
+    # poprawki Ani) — raz, do MAIN-a.
+    if _pending_team_warnings:
+        _facts += "\n" + "\n".join(
+            str(w) for w in _pending_team_warnings[:8]
+        )
+        del _pending_team_warnings[:]
 
     if isinstance(last_result, dict):
 
@@ -33331,8 +33364,10 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
     _postep_dla_maina = _only_if_new("MAIN", "postep", _postep_blok())
 
     # v410: "Co sie wlasnie stalo" tylko wtedy, gdy cos sie stalo.
+    # v435: po odpowiedzi na ASK bez powtorki tego, co sie stalo —
+    # MAIN dostal to na poczatku kroku.
     _co_sie_stalo_main = (
-        "" if _jeszcze_nic_sie_nie_stalo(last_result)
+        "" if (_jeszcze_nic_sie_nie_stalo(last_result) or asked_followup)
         else "Co się właśnie stało:\n" + _facts + "\n"
     )
 
@@ -33350,6 +33385,9 @@ Odpowiedź: {short(str(asked_followup['answer']), 2000)}
     )
 
 
+_MAIN_ASK_MAX = 4
+
+
 def _handle_main_ask(
     decision,
     goal,
@@ -33360,143 +33398,113 @@ def _handle_main_ask(
     android_text
 ):
     """
-    Obsługuje decyzję MAIN typu ASK (patrz komentarz przy
-    ask_contract_block w main_decide()) — wysyła pytanie do
-    JEDNEJ, konkretnej roli, wraca z odpowiedzią do MAIN i wymusza
-    kolejną decyzję (z asked_followup ustawionym — ASK jest w niej
-    zablokowane, patrz main_decide()).
+    v435: MAIN prowadzi rozmowe. ASK to pytanie do jednej osoby z
+    zespolu; pytanie trafia do jej zwyklej wiadomosci (z tym, co sie
+    stalo od jej ostatniej wypowiedzi — przez consult_team), odpowiedz
+    wraca do MAIN-a od razu, a MAIN moze pytac dalej, do _MAIN_ASK_MAX
+    razy w kroku.
 
-    Zwraca sparsowaną, ostateczną decyzję (TASK/DONE/FAILED) albo
-    None, gdy pytanie było nieprawidłowe (zła rola / puste pytanie)
-    albo MAIN spróbował zapytać DRUGI raz w tym samym kroku mimo
-    limitu — w obu przypadkach wywołujący potraktuje to dokładnie
-    tak samo jak niepoprawny JSON (istniejący mechanizm naprawy).
+    Zwraca decyzje MAIN-a po ostatniej odpowiedzi albo None (zla rola,
+    puste pytanie, ponad limit) — wywolujacy traktuje to jak
+    niepoprawna odpowiedz.
     """
 
-    ask_role = str(decision.get("ask_role") or "").strip().upper()
-    ask_question = str(decision.get("ask_question") or "").strip()
+    zadane = 0
 
-    if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
+    while isinstance(decision, dict) and decision.get("type") == "ASK":
 
-        log(
-            "MAIN",
-            "ASK odrzucone (nieprawidłowa rola '" + ask_role
-            + "' lub puste pytanie) — traktuję jak brak decyzji."
-        )
+        if zadane >= _MAIN_ASK_MAX:
 
-        return None
+            # Sam fakt o limicie — nie "niepoprawny JSON", bo JSON byl
+            # poprawny.
+            log(
+                "MAIN",
+                "ASK ponad " + str(_MAIN_ASK_MAX) + " pytania w tym "
+                "kroku — nie wysyłam, mówię o tym MAIN-owi."
+            )
 
-    log(
-        "MAIN",
-        "ASK -> " + ask_role + ": " + short(ask_question, 300)
-    )
+            decision = parse_json(deepseek(
+                "MAIN",
+                "Pytań w tym kroku było już " + str(_MAIN_ASK_MAX)
+                + " — tego nie wysłałem."
+            ))
 
-    # v383: PYTANIE MAIN-a TO TEZ WYPOWIEDZ.
-    #
-    # ZMIERZONE (bieg 2026-09-18 21:16, krok 1). MAIN dostal prompt,
-    # odpowiedzial 1241 znakami (ASK do Bartka) — i w zapisie
-    # rozmowy nie ma po tym sladu. W .jsonl MAIN ma szesc rekordow
-    # "odpowiedz" i tylko piec "wypowiedz"; w przebiegu nie ma
-    # naglowka "--- MAIN (MAIN) ---", tylko jedna linia logu, uciata
-    # po 300 znakach. Nastepnym naglowkiem jest od razu Bartek — jak
-    # gdyby odpowiadal na nic.
-    #
-    # A to jest zdanie, na ktore odpowiada cala reszta kroku.
-    # Komentarz przy _speak("MAIN", ...) mowil "ASK ma juz wlasny,
-    # czytelny log" — ma, ale log to indeks, nie zapis rozmowy.
-    # Jedna droga dla wypowiedzi, tak jak dla kazdej innej roli.
-    _speak(
-        "MAIN",
-        "Pytanie do "
-        + _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
-        + ":\n" + ask_question
-    )
+            if isinstance(decision, dict) and decision.get("type") == "ASK":
+                return None
 
-    answer = deepseek(
-        ask_role,
-        # v432: bez "DODATKOWE, KONKRETNE pytanie… odpowiedz krotko".
-        "MAIN pyta:\n" + ask_question
-    )
+            return decision
 
-    log(
-        "MAIN",
-        ask_role + " ODPOWIEDŹ NA PYTANIE MAIN: "
-        + short(str(answer), 300)
-    )
+        ask_role = str(decision.get("ask_role") or "").strip().upper()
+        ask_question = str(decision.get("ask_question") or "").strip()
 
-    # v355: odpowiedz na ASK to normalna wypowiedz tej roli.
-    #
-    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-15 21:20, krok 1).
-    # Bartka nie bylo w zwyklej naradzie tego kroku. MAIN zapytal go
-    # przez ASK, Bartek odpowiedzial 9664 znakami z kompletnym
-    # blokiem ```python (9650 znakow kodu, sprawdzone: prawdziwa
-    # extract_code_block wyciaga go bez problemu). MAIN od razu
-    # zlecil TASK z write_engineer_code_to="~/assistant.py" — i
-    # dostal ENGINEER_CODE_MISSING.
-    #
-    # Bo odpowiedz szla WYLACZNIE do prompta MAIN-a, jako
-    # asked_followup. team zostawalo nietkniete, wiec
-    # team["engineer_full"] bylo puste. Rezerwa _kod_autora_dla()
-    # tez nie pomagala: _zapamietaj_kod_autora bylo wolane tylko w
-    # consult_team, a ta funkcja i tak wymaga, zeby wypowiedz
-    # WYMIENIALA nazwe pliku — a odpowiedz Bartka zaczynala sie od
-    # razu od bloku, bez ani jednego slowa nad nim.
-    #
-    # Efekt: MAIN pyta o kod, dostaje kod, mowi "zapisz", slyszy
-    # "nie mam kodu Bartka". Przeczytal to jako uciecie odpowiedzi,
-    # zapytal drugi i trzeci raz, po czym slusznie stwierdzil, ze
-    # powtarzanie nic nie da — WNIOSEK_ZE_SIE_NIE_DA, cztery kroki,
-    # zero dotkniec telefonu. To samo stalo za BRAK_KODU_DO_ZAPISU w
-    # biegu 20:03.
-    #
-    # team to ten sam obiekt, ktory trzyma run_agent (przekazywany
-    # przez referencje), wiec zapis widzi te wypowiedz od razu, w
-    # tym samym kroku.
-    if ask_role == "ENGINEER":
-        team["engineer_full"] = answer
-        # v430: odpowiedz Bartka na ASK to jego biezacy kod — tak
-        # samo, jak wypowiedz z narady (patrz _tresc_napisana_dla).
-        globals()["_kod_bartka_teraz"] = answer
+        if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
+            log(
+                "MAIN",
+                "ASK odrzucone (nieprawidłowa rola '" + ask_role
+                + "' lub puste pytanie) — traktuję jak brak decyzji."
+            )
+            return None
 
-    if isinstance(team.get("kod_full"), dict):
-        team["kod_full"][ask_role] = answer
-
-    # ...i zeby przetrwala do nastepnych krokow, tak samo jak kazda
-    # inna wypowiedz z narady (patrz _zapamietaj_kod_autora).
-    _zapamietaj_kod_autora(ask_role, answer)
-
-    raw = main_decide(
-        goal,
-        step,
-        team,
-        last_result,
-        chrome_text,
-        android_text,
-        asked_followup={
-            "role": ask_role,
-            "question": ask_question,
-            "answer": answer
-        }
-    )
-
-    decision = parse_json(raw)
-
-    if isinstance(decision, dict) and decision.get("type") == "ASK":
+        zadane += 1
 
         log(
             "MAIN",
-            "ASK ponownie mimo wykorzystanego limitu 1/krok — "
-            "ignoruję, wymuszam standardową naprawę JSON."
+            "ASK " + str(zadane) + " -> " + ask_role + ": "
+            + short(ask_question, 300)
         )
 
-        return None
+        _speak(
+            "MAIN",
+            "Pytanie do "
+            + _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
+            + ":\n" + ask_question
+        )
+
+        # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie je w
+        # swojej zwyklej wiadomosci, pod "MAIN:".
+        _role_inbox.setdefault(ask_role, []).append(("MAIN", ask_question))
+
+        _odp_team = consult_team(
+            goal, last_result, step, chrome_text, android_text,
+            wolani={ask_role}
+        )
+
+        answer = str(
+            ((_odp_team or {}).get("kod_full") or {}).get(ask_role) or ""
+        )
+
+        log(
+            "MAIN",
+            ask_role + " ODPOWIEDŹ NA PYTANIE MAIN: "
+            + short(answer, 300)
+        )
+
+        # Odpowiedz jest normalna wypowiedzia tej osoby — takze jako
+        # zrodlo kodu do zapisu (v355, v430).
+        if ask_role == "ENGINEER" and answer.strip():
+            team["engineer_full"] = answer
+            globals()["_kod_bartka_teraz"] = answer
+
+        if isinstance(team.get("kod_full"), dict):
+            team["kod_full"][ask_role] = answer
+
+        raw = main_decide(
+            goal,
+            step,
+            team,
+            last_result,
+            chrome_text,
+            android_text,
+            asked_followup={
+                "role": ask_role,
+                "question": ask_question,
+                "answer": answer
+            }
+        )
+
+        decision = parse_json(raw)
 
     return decision
-
-
-# ============================================================
-# PARSE JSON
-# ============================================================
 
 def _extract_last_balanced_json_object(text):
     """
@@ -34401,9 +34409,11 @@ _JAK_TO_DZIALA = (
     "kładzie Python — dokładnie ten, który napisał ktoś z zespołu. "
     "Gdy podasz write_engineer_code_to, ten kod ląduje pod tą "
     "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia.\n\n"
-    "W każdym kroku dostajesz jedną wiadomość: co powiedział zespół i "
-    "co się stało. Odpowiadasz na nią decyzją. ASK to pytanie do "
-    "jednej osoby z zespołu; odpowiedź wraca w tym samym kroku. "
+    "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
+    "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
+    "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
+    "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu. W jednym "
+    "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. "
     "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
     "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
     "cel.\n\n"
@@ -37924,12 +37934,15 @@ def run_agent(goal):
         # TEAM
         # ------------------------------------------------------
 
+        # v435: z automatu nikt z zespolu sie nie odzywa — MAIN dostaje
+        # to, co sie stalo, i sam pyta, kogo potrzebuje (ASK).
         team = consult_team(
             goal,
             last_result,
             step,
             step_chrome_text,
-            step_android_text
+            step_android_text,
+            wolani=set()
         )
 
         # ------------------------------------------------------
