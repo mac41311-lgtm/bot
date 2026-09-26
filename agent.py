@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v445
+AEL-MINI AUTONOMOUS AGENT v446
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v445")
+    print("             AEL-MINI AUTONOMOUS AGENT v446")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21675,6 +21675,47 @@ def _raport_po_limicie(client, interaction, interaction_id, tools):
     return _tekst_interakcji(ostatnia).strip()
 
 
+def _stan_telefonu_dla_wykonawcy():
+    """
+    v446: co jest na telefonie w chwili startu zadania — aplikacja na
+    wierzchu i otwarte karty Chrome — jako fakty w tresci zadania.
+
+    ZMIERZONE NA 76 ZADANIACH: w 14 pierwszym albo drugim ruchem
+    Gemini bylo chrome_tabs, czyli pytanie, co jest otwarte. Kazde
+    zadanie zaczyna sie od nowej rozmowy, wiec Gemini nie wie, gdzie
+    skonczylo poprzednie; Python wie to od razu.
+
+    Pusty napis, gdy niczego nie da sie ustalic — wtedy nic nie
+    dopisujemy.
+    """
+
+    linie = []
+
+    try:
+        _pakiet, _etykieta = _foreground_app()
+        if _etykieta:
+            linie.append("- na wierzchu: " + str(_etykieta))
+    except Exception:
+        pass
+
+    try:
+        karty = chrome_tabs()
+    except Exception:
+        karty = []
+
+    for karta in (karty or [])[:8]:
+        linie.append(
+            "- karta Chrome " + str(karta.get("id")) + ": "
+            + short(str(karta.get("title") or ""), 60) + " — "
+            + short(str(karta.get("url") or ""), 100)
+        )
+
+    if not linie:
+        return ""
+
+    return "TERAZ NA TELEFONIE:\n" + "\n".join(linie)
+
+
 def gemini_execute_task(task_id, task, success_condition=''):
     """
     Gemini executor — Interactions API.
@@ -21852,6 +21893,11 @@ def gemini_execute_task(task_id, task, success_condition=''):
         rule_7_block = """7. Proces w tle (gdyby był potrzebny) sprawdzasz 2-3 razy w tym
    zadaniu, potem zostawiasz PID i log_file kolejnemu TASK-owi."""
 
+    _stan_telefonu = _stan_telefonu_dla_wykonawcy()
+
+    if _stan_telefonu:
+        _stan_telefonu += "\n\n"
+
     prompt = f"""
 Jesteś wykonawcą autonomicznego agenta. DeepSeek to mózg, Ty
 wykonujesz REALNIE jego zadania dostępnymi narzędziami (Termux,
@@ -21904,7 +21950,7 @@ Jak się tu pracuje:
     operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
     operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
 
-WARUNEK SUKCESU:
+{_stan_telefonu}WARUNEK SUKCESU:
 {success_condition}
 
 TASK ID:
