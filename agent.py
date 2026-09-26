@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v447
+AEL-MINI AUTONOMOUS AGENT v448
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v447")
+    print("             AEL-MINI AUTONOMOUS AGENT v448")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13822,28 +13822,6 @@ def _gemini_tools_legacy():
             }
         },
 
-        {
-            "type": "function",
-            "name": "ask_deepseek",
-            "description": (
-                "Zapytaj o KRÓTKĄ podpowiedź, jeśli utknąłeś W "
-                "TRAKCIE tego zadania i nie jesteś pewien jak "
-                "kontynuować (np. nie wiesz dokładnie jaki "
-                "fragment podać jako 'search' do "
-                "termux_patch_file, bo zgubiłeś kontekst pliku). "
-                "Odpowiedź wraca od razu jako wynik tego narzędzia, "
-                "więc zadanie idzie dalej bez kończenia go błędem. "
-                "Masz to kilka razy na zadanie; zwykle szybciej "
-                "odpowiada sam plik (termux_read_file)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string"}
-                },
-                "required": ["question"]
-            }
-        },
 
         {
             "type": "function",
@@ -14392,19 +14370,6 @@ def _gemini_tools_legacy():
                     "package": {"type": "string"},
                     "lines": {"type": "integer"}
                 }
-            }
-        },
-
-        {
-            "type": "function",
-            "name": "shell",
-            "description": "Wykonaj komendę w Termuxie.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"}
-                },
-                "required": ["command"]
             }
         }
     ]
@@ -21882,7 +21847,7 @@ def gemini_execute_task(task_id, task, success_condition=''):
     )
 
     if _android_task_relevant:
-        rule_6_block = """6. android_type wymaga, żeby na ekranie było FAKTYCZNIE skupione
+        rule_6_block = """5. android_type wymaga, żeby na ekranie było FAKTYCZNIE skupione
    EDYTOWALNE pole tekstowe — działa dobrze w wyszukiwarkach,
    formularzach, notatkach. Wiele kalkulatorów i klawiatur
    numerycznych to zwykłe PRZYCISKI bez żadnego pola tekstowego —
@@ -21928,7 +21893,7 @@ def gemini_execute_task(task_id, task, success_condition=''):
    wyszukiwania/wysyłania przez android_click) i dopiero POTEM
    sprawdzaj rezultat."""
     else:
-        rule_6_block = """6. Ekran/aplikacje Android (gdyby jednak okazały się potrzebne w
+        rule_6_block = """5. Ekran/aplikacje Android (gdyby jednak okazały się potrzebne w
    tym zadaniu): android_type działa tylko z prawdziwym, skupionym
    polem tekstowym, a samo wpisanie/kliknięcie NIE zatwierdza akcji
    (potrzeba Enter/"="/przycisku). Pełne szczegóły, znane pułapki i
@@ -21937,12 +21902,12 @@ def gemini_execute_task(task_id, task, success_condition=''):
    korzystasz."""
 
     if _background_task_relevant:
-        rule_7_block = """7. Proces w tle (termux_check_process / termux_read_file na
+        rule_7_block = """6. Proces w tle (termux_check_process / termux_read_file na
    log_file) sprawdzasz 2-3 razy w tym zadaniu. Gdy nadal chodzi,
    kończysz i zostawiasz PID oraz ścieżkę do log_file — MAIN zrobi
    z tego kolejny TASK i sprawdzi ten sam proces później."""
     else:
-        rule_7_block = """7. Proces w tle (gdyby był potrzebny) sprawdzasz 2-3 razy w tym
+        rule_7_block = """6. Proces w tle (gdyby był potrzebny) sprawdzasz 2-3 razy w tym
    zadaniu, potem zostawiasz PID i log_file kolejnemu TASK-owi."""
 
     _stan_telefonu = _stan_telefonu_dla_wykonawcy()
@@ -21974,33 +21939,25 @@ Jak się tu pracuje:
 
 2. Krótka komenda: termux_run. Długi proces: termux_run_background.
 
-3. Po uruchomieniu programu, serwera albo aplikacji sprawdzasz, czy
-   to faktycznie działa.
+3. Po każdym działaniu — uruchomieniu programu, serwera, aplikacji,
+   zapisie, kliknięciu — sprawdzasz faktyczny rezultat.
 
-4. Gdy narzędzie zwróci błąd, zatrzymujesz zadanie i oddajesz
-   dokładną treść błędu MAIN-owi — to on zmienia strategię i
-   przygotowuje następne polecenie. Kolejne podejście ma sens
-   dopiero z tym nowym poleceniem.
-
-5. Po każdym udanym działaniu sprawdzasz faktyczny rezultat.
+4. Gdy narzędzie zwróci błąd, zadanie się kończy i MAIN dostaje jego
+   dokładną treść — to on zmienia strategię. Gdy czegoś po prostu
+   nie ma (elementu na stronie, pliku, fragmentu w pliku, strony),
+   dostajesz to jako zwykły wynik i działasz dalej.
 
 {rule_6_block}
 
 {rule_7_block}
 
-8. Pliki zapisujesz w $HOME (~) albo $PREFIX/tmp, np.
+7. Pliki zapisujesz w $HOME (~) albo $PREFIX/tmp, np.
    "echo OK > ~/x.txt". /tmp należy do systemu Android i Termux
    jako zwykła aplikacja dostaje tam "Permission denied".
 
-9. Gdy utkniesz (typowo: nie wiesz, jaki fragment podać jako
-   'search' w termux_patch_file), zacznij od termux_read_file. Gdy
-   to nie wystarczy, ask_deepseek da Ci krótką podpowiedź i wracasz
-   do TEGO SAMEGO zadania — to kilka razy na zadanie, obok zwykłego
-   czytania plików.
-
-10. Do usuwania plików i katalogów służy termux_delete: pokazuje
-    operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
-    operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
+8. Do usuwania plików i katalogów służy termux_delete: pokazuje
+   operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
+   operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
 
 {_stan_telefonu}WARUNEK SUKCESU:
 {success_condition}
