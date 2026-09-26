@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v444
+AEL-MINI AUTONOMOUS AGENT v445
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v444")
+    print("             AEL-MINI AUTONOMOUS AGENT v445")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13983,7 +13983,11 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "android_state",
-            "description": "Sprawdź aktualny interfejs Androida.",
+            "description": (
+                "Co jest teraz na ekranie telefonu: aplikacja na "
+                "wierzchu i drzewo ekranu — teksty, opisy, czy "
+                "element jest klikalny, położenie (bounds)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -21534,8 +21538,8 @@ def _tekst_interakcji(interaction):
 
 def _brak_to_odpowiedz(name, args, result):
     """
-    Czy ten "blad" to po prostu wiadomosc, ze czegos tu nie ma — a nie
-    awaria. Wtedy zadanie idzie dalej: Gemini dostaje wynik i robi
+    Czy ten "blad" to po prostu wiadomosc, ze czegos tu nie ma (albo
+    ze cos tu nie dziala i czym to zastapic) — a nie awaria. Wtedy zadanie idzie dalej: Gemini dostaje wynik i robi
     nastepny ruch, zamiast konczyc zadanie i czekac na MAIN-a.
 
     Granica (v443): blad w KODZIE — skladnia, wysypany skrypt, kod bez
@@ -21578,6 +21582,22 @@ def _brak_to_odpowiedz(name, args, result):
     if name == "termux_patch_file" and (
         "nie występuje w pliku" in blad or "razy — patch odrzucony" in blad
     ):
+        return True
+
+    # v445: `adb shell uiautomator dump` jest na tym telefonie ubijany
+    # (kod 137, po 0,4-0,7 s) — dwa zadania skonczyly sie na tym
+    # (biegi 2026-09-22 19:44 i 2026-09-26 14:04, krok 6). Drzewo
+    # ekranu daje android_state, przez uiautomator2, ktory tu dziala.
+    if (
+        str(name).startswith("termux_run")
+        and "uiautomator dump" in str((args or {}).get("command") or "")
+        and result.get("returncode") in (137, -9)
+    ):
+        result["na_tym_telefonie"] = (
+            "`uiautomator dump` jest tu ubijany (kod 137). Drzewo "
+            "ekranu — teksty, opisy, czy klikalne, położenie — daje "
+            "android_state."
+        )
         return True
 
     # Pod ta sciezka nie da sie zapisac (system tylko do odczytu, brak
