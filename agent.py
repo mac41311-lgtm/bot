@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v440
+AEL-MINI AUTONOMOUS AGENT v441
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v440")
+    print("             AEL-MINI AUTONOMOUS AGENT v441")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -5836,11 +5836,35 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                 elif (
                     isinstance(val, list)
                     and current_patch_target
-                    == "response/fragments"
+                    in ("response/fragments", "response")
                 ):
+                    # v440: dopisanie fragmentow przychodzi tez w
+                    # paczce: {"p":"response","o":"BATCH","v":[{"p":
+                    # "fragments","v":[{"type":"THINK",...}]}, ...]}.
+                    #
+                    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-26
+                    # 14:04, krok 9). Tomek najpierw czytal link
+                    # (fragment READ_LINK), a myslenie doszlo wlasnie
+                    # taka paczka. Nie rozpakowywalismy jej, wiec
+                    # ostatnim fragmentem zostal READ_LINK i cale
+                    # myslenie ("user wants a concrete Plan B...",
+                    # ok. 10 tys. znakow po angielsku) poszlo do
+                    # MAIN-a jako odpowiedz Tomka, z "myslenie: 0".
+                    if current_patch_target == "response/fragments":
+                        _nowe = val
+                    else:
+                        _nowe = [
+                            _f
+                            for _it in val
+                            if isinstance(_it, dict)
+                            and _it.get("p") == "fragments"
+                            and isinstance(_it.get("v"), list)
+                            for _f in _it["v"]
+                        ]
+
                     # v303: to jest DOPISANIE fragmentow na koniec
                     # listy — numerujemy je dalej, nie od zera.
-                    for frag in val:
+                    for frag in _nowe:
 
                         if not isinstance(frag, dict):
                             continue
@@ -5849,10 +5873,14 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
                         typ_fragmentu[len(typ_fragmentu)] = frag_type
 
-                        if frag_type != "THINK":
-                            _c = frag.get("content", "")
+                        _c = frag.get("content", "")
+
+                        if frag_type == "THINK":
                             if isinstance(_c, str):
-                                content += _c
+                                znakow_myslenia[0] += len(_c)
+                                tekst_myslenia.append(_c)
+                        elif isinstance(_c, str):
+                            content += _c
 
                         current_fragment_type = frag_type
 
@@ -22260,6 +22288,20 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "termux_run: kod != 0, ale to tylko 'brak "
                         "pliku' — traktuje jako ODPOWIEDZ, nie awarie."
                     )
+
+                # v440: "nie ma takiego pola" z lista pol, ktore sa, to
+                # tez ODPOWIEDZ. Bieg 2026-09-26 14:04, krok 4: Gemini
+                # podal jako pole napis pod nim ("Wpisz przynajmniej 16
+                # znakow"), chrome_type odpowiedzialo, ze na stronie jest
+                # jedno pole: "title" — i zadanie sie skonczylo, zanim
+                # Gemini zdazyl wpisac tam jeszcze raz.
+                if (
+                    tool_failed
+                    and name == "chrome_type"
+                    and isinstance(result, dict)
+                    and result.get("pola")
+                ):
+                    tool_failed = False
 
                 if tool_failed:
 
