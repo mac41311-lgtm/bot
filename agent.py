@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v448
+AEL-MINI AUTONOMOUS AGENT v449
 
 ARCHITEKTURA:
 
@@ -325,7 +325,7 @@ if len(sys.argv) > 2 and sys.argv[1] == "--wykonane":
 
 
 from web_search import web_search
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Opcjonalna, czysto-pythonowa biblioteka (żadnych skompilowanych
 # zależności — bezpieczna na Termux, w odróżnieniu od np. pydantic,
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v448")
+    print("             AEL-MINI AUTONOMOUS AGENT v449")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13501,6 +13501,354 @@ def key_disabled(key_name):
     return (time.time() - kiedy) < czekaj
 
 
+# ============================================================
+# v449: NAJLEPSZY DARMOWY MODEL I DRABINKA MODELI
+# ============================================================
+#
+# Uzytkownik: "model moze byc najlepszy dostepny w darmowej wersji,
+# no i zeby wszystko bylo stabilne". Nie wpisujemy nazwy modelu z
+# glowy — co jest dzis w darmowej wersji, sprawdzamy Twoim kluczem.
+#
+# 1. Raz dziennie: lista modeli z API, od najnowszej generacji, w niej
+#    pro > flash > flash-lite; kazdy kandydat dostaje jedno male
+#    zapytanie probne. Kto odpowiada (albo ma tylko chwilowo wyczerpany
+#    limit), wchodzi na drabinke.
+# 2. Kazde zadanie bierze najwyzszy stopien, ktorego para klucz+model
+#    nie jest odstawiona. Limit (429) odstawia tylko te pare — do
+#    chwili odnowienia (patrz _czas_odnowienia). Dotad wyczerpanie
+#    kluczy wylaczalo wykonawce do konca biegu, a petla czekala w
+#    nieskonczonosc (gemini_disabled nikt nie zdejmowal).
+#
+# GEMINI_MODEL w srodowisku wymusza jeden model — bez sprawdzania.
+
+GEMINI_MODELE_FILE = STATE_DIR / "gemini_modele.json"
+
+_GEMINI_MODEL_WYMUSZONY = os.environ.get("GEMINI_MODEL", "").strip()
+
+# Ilu kandydatow sprawdzamy raz dziennie (kazdy = jedno zapytanie).
+_GEMINI_ILU_KANDYDATOW = 6
+
+_NIE_DO_ZADAN = (
+    "embedding", "image", "imagen", "veo", "tts", "audio", "live",
+    "native", "vision", "aqa", "exp", "computer-use", "robotics",
+    "learnlm", "gemma",
+)
+
+
+def _stan_modeli():
+    stan = read_json(GEMINI_MODELE_FILE, {})
+    if not isinstance(stan, dict):
+        stan = {}
+    stan.setdefault("odstawione", {})
+    return stan
+
+
+def _zapisz_stan_modeli(stan):
+    write_json(GEMINI_MODELE_FILE, stan)
+
+
+def _ranga_modelu(nazwa):
+    """
+    Klucz sortowania (wieksze = lepsze) albo None, gdy to nie jest
+    model do prowadzenia zadan. Najnowsza generacja, w niej pro >
+    flash > flash-lite, wersja stabilna przed "preview".
+    """
+
+    n = str(nazwa or "").split("/")[-1].strip().lower()
+
+    if not n.startswith("gemini-"):
+        return None
+
+    if any(slowo in n for slowo in _NIE_DO_ZADAN):
+        return None
+
+    m = re.match(r"gemini-(\d+(?:\.\d+)?)", n)
+
+    if not m:
+        return None
+
+    if "flash-lite" in n:
+        wariant = 1
+    elif "flash" in n:
+        wariant = 2
+    elif "pro" in n:
+        wariant = 3
+    elif "ultra" in n:
+        wariant = 4
+    else:
+        wariant = 0
+
+    return (float(m.group(1)), wariant, "preview" not in n)
+
+
+def _kandydaci_modeli(client):
+    """Modele z API, od najlepszego. Pusta lista, gdy API nie odpowie."""
+
+    try:
+        modele = list(client.models.list())
+    except Exception as e:
+        log("GEMINI", "Lista modeli niedostępna: " + short(str(e), 200))
+        return []
+
+    wynik = {}
+
+    for model in modele:
+
+        nazwa = str(getattr(model, "name", "") or "").split("/")[-1]
+        akcje = (
+            getattr(model, "supported_actions", None)
+            or getattr(model, "supported_generation_methods", None)
+        )
+
+        if akcje and "generateContent" not in list(akcje):
+            continue
+
+        ranga = _ranga_modelu(nazwa)
+
+        if ranga is not None:
+            wynik[nazwa] = ranga
+
+    return sorted(wynik, key=lambda n: wynik[n], reverse=True)
+
+
+def _to_limit(blad):
+    tekst = str(blad or "")
+    return (
+        "429" in tekst
+        or "RESOURCE_EXHAUSTED" in tekst
+        or "quota" in tekst.lower()
+    )
+
+
+def _poza_darmowa_wersja(blad):
+    """Limit ustawiony na zero — tego modelu nie ma w darmowej wersji."""
+
+    return bool(re.search(r"limit['\"]?\s*[:=]\s*0\b", str(blad or "")))
+
+
+def _sprawdz_model(client, model):
+    """ok / limit / zajety / brak — co ten model odpowiada temu kluczowi."""
+
+    try:
+        client.interactions.create(
+            model=model,
+            input="Odpowiedz jednym słowem: ok"
+        )
+        return "ok", ""
+    except Exception as e:
+        blad = str(e)
+
+    if _gemini_przeciazony(blad):
+        return "zajety", blad
+
+    if _to_limit(blad):
+        return ("brak" if _poza_darmowa_wersja(blad) else "limit"), blad
+
+    return "brak", blad
+
+
+def _polnoc_pacyfik_po(teraz):
+    """
+    Najblizsza polnoc czasu kalifornijskiego (wtedy Google odnawia
+    dzienne limity) jako znacznik czasu. Czas letni USA liczymy sami:
+    od 2. niedzieli marca do 1. niedzieli listopada — bez bazy stref,
+    ktorej na telefonie moze nie byc.
+    """
+
+    def _niedziela(rok, miesiac, ktora):
+        d = datetime(rok, miesiac, 1)
+        d += timedelta(days=(6 - d.weekday()) % 7)
+        return d + timedelta(weeks=ktora - 1)
+
+    utc = datetime.utcfromtimestamp(teraz)
+
+    def _przesuniecie(chwila_utc):
+        rok = chwila_utc.year
+        start = _niedziela(rok, 3, 2) + timedelta(hours=10)
+        koniec = _niedziela(rok, 11, 1) + timedelta(hours=9)
+        return -7 if start <= chwila_utc < koniec else -8
+
+    lokalnie = utc + timedelta(hours=_przesuniecie(utc))
+    polnoc_lok = datetime(lokalnie.year, lokalnie.month, lokalnie.day) + timedelta(days=1)
+    polnoc_utc = polnoc_lok - timedelta(hours=_przesuniecie(polnoc_lok + timedelta(hours=8)))
+
+    return (polnoc_utc - datetime(1970, 1, 1)).total_seconds()
+
+
+def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
+    """
+    (do_kiedy, powod, odstep) po odpowiedzi 429.
+
+    Najpierw to, co Google mowi sam: ktory limit (PerDay / PerMinute)
+    i retryDelay. Limit dzienny — do polnocy czasu kalifornijskiego (u
+    nas ok. 9:00). Gdy nic nie wiadomo — jak dotad: 1 min, 2, 4... do
+    6 godzin.
+    """
+
+    teraz = time.time() if teraz is None else teraz
+    tekst = str(blad or "")
+
+    if re.search(r"PerDay", tekst):
+        return _polnoc_pacyfik_po(teraz) + 60, "limit dzienny", 0.0
+
+    m = re.search(
+        r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
+        tekst, re.IGNORECASE
+    )
+
+    if m:
+        sekund = float(m.group(1) or m.group(2))
+        return teraz + sekund + 1, "Google: spróbuj za " + str(int(sekund)) + " s", 0.0
+
+    if re.search(r"PerMinute", tekst):
+        return teraz + 60, "limit na minutę", 0.0
+
+    odstep = (
+        min(float(poprzedni_odstep) * 2, _GEMINI_COOLDOWN_MAX)
+        if poprzedni_odstep else _GEMINI_COOLDOWN_START
+    )
+
+    return teraz + odstep, "nieznany limit", odstep
+
+
+def _odstaw_pare(klucz, model, blad, sekund=None, powod=None):
+    """Odstawia pare klucz+model do chwili odnowienia i to loguje."""
+
+    stan = _stan_modeli()
+    para = str(klucz) + "|" + str(model)
+    poprzedni = (stan["odstawione"].get(para) or {}).get("odstep") or 0.0
+
+    if sekund is not None:
+        do, odstep = time.time() + sekund, 0.0
+    else:
+        do, powod, odstep = _czas_odnowienia(blad, poprzedni)
+
+    stan["odstawione"][para] = {"do": do, "powod": powod, "odstep": odstep}
+    _zapisz_stan_modeli(stan)
+
+    log(
+        "GEMINI",
+        "Model " + str(model) + " (klucz " + str(klucz) + ") odstawiony do "
+        + datetime.fromtimestamp(do).strftime("%H:%M") + " — " + str(powod) + "."
+    )
+
+
+def _para_dziala(klucz, model):
+    stan = _stan_modeli()
+    if stan["odstawione"].pop(str(klucz) + "|" + str(model), None) is not None:
+        _zapisz_stan_modeli(stan)
+        log("GEMINI", "Model " + str(model) + " (klucz " + str(klucz) + ") znowu odpowiada.")
+
+
+def _para_odstawiona(klucz, model, teraz=None):
+    info = _stan_modeli()["odstawione"].get(str(klucz) + "|" + str(model))
+    teraz = time.time() if teraz is None else teraz
+    return bool(info) and float(info.get("do") or 0) > teraz
+
+
+def _drabinka_modeli():
+    """Modele od najlepszego. Raz dziennie sprawdzane, potem z pliku."""
+
+    if _GEMINI_MODEL_WYMUSZONY:
+        return [_GEMINI_MODEL_WYMUSZONY]
+
+    stan = _stan_modeli()
+    dzis = datetime.now().strftime("%Y-%m-%d")
+
+    if stan.get("dzien") == dzis and stan.get("drabinka"):
+        return list(stan["drabinka"])
+
+    if not gemini_clients:
+        return [GEMINI_MODEL]
+
+    klucz, client = next(iter(gemini_clients.items()))
+    kandydaci = _kandydaci_modeli(client)[:_GEMINI_ILU_KANDYDATOW]
+
+    if GEMINI_MODEL not in kandydaci:
+        kandydaci.append(GEMINI_MODEL)
+
+    drabinka = []
+
+    for model in kandydaci:
+
+        wynik, blad = _sprawdz_model(client, model)
+
+        log("GEMINI", "Sprawdzam model " + model + ": " + {
+            "ok": "odpowiada",
+            "limit": "jest w darmowej wersji, limit chwilowo wyczerpany",
+            "zajety": "jest, serwer chwilowo przeciążony",
+            "brak": "niedostępny dla tego klucza",
+        }[wynik] + ".")
+
+        if wynik == "brak":
+            continue
+
+        drabinka.append(model)
+
+        if wynik == "limit":
+            _odstaw_pare(klucz, model, blad)
+
+    if not drabinka:
+        drabinka = [GEMINI_MODEL]
+
+    stan = _stan_modeli()
+    stan["dzien"] = dzis
+    stan["drabinka"] = drabinka
+    _zapisz_stan_modeli(stan)
+
+    log("GEMINI", "Drabinka modeli: " + " > ".join(drabinka))
+
+    return drabinka
+
+
+def _wybierz_pare():
+    """
+    (klucz, client, model) dla nastepnego zadania: najwyzszy stopien
+    drabinki, na pierwszym kluczu, na ktorym ta para nie jest
+    odstawiona. None, gdy wszystko odstawione.
+    """
+
+    for model in _drabinka_modeli():
+        for klucz, _ in load_gemini_keys():
+            client = gemini_clients.get(klucz)
+            if client is not None and not _para_odstawiona(klucz, model):
+                return klucz, client, model
+
+    return None
+
+
+def _najblizsze_odnowienie():
+    """(do_kiedy, klucz, model) dla pary, ktora wroci najwczesniej."""
+
+    stan = _stan_modeli()["odstawione"]
+    najblizsze = None
+
+    for para, info in stan.items():
+        klucz, _, model = para.partition("|")
+        if klucz not in gemini_clients or model not in _drabinka_modeli():
+            continue
+        do = float(info.get("do") or 0)
+        if najblizsze is None or do < najblizsze[0]:
+            najblizsze = (do, klucz, model)
+
+    return najblizsze
+
+
+def _gemini_zablokowany():
+    """
+    Czy wykonawca jest teraz zablokowany. Gdy byl, a jakas para klucz+
+    model juz odnowila limit — zdejmuje blokade.
+    """
+
+    global gemini_disabled
+
+    if gemini_disabled and _wybierz_pare() is not None:
+        gemini_disabled = False
+        log("GEMINI", "Limit się odnowił — wykonawca wraca.")
+
+    return gemini_disabled
+
+
 def init_gemini():
 
     global gemini_clients
@@ -13519,10 +13867,10 @@ def init_gemini():
 
         return False
 
+    # v449: klient dla KAZDEGO klucza — o tym, czy go uzyc, decyduje
+    # _wybierz_pare() przy kazdym zadaniu (limit odnawia sie w trakcie
+    # biegu, a klucz bez klienta nie wrocilby do gry do restartu).
     for name, key in keys:
-
-        if key_disabled(name):
-            continue
 
         try:
 
@@ -13551,8 +13899,7 @@ def init_gemini():
 
         log(
             "GEMINI",
-            "API OK — "
-            + GEMINI_MODEL
+            "API OK — modele: " + " > ".join(_drabinka_modeli())
         )
 
         return True
@@ -21632,7 +21979,7 @@ def _gemini_create(client, **kwargs):
             time.sleep(przerwa)
 
 
-def _raport_po_limicie(client, interaction, interaction_id, tools):
+def _raport_po_limicie(client, model, interaction, interaction_id, tools):
     """
     v443: co Gemini ustalil, zanim skonczyl mu sie limit narzedzi.
 
@@ -21680,7 +22027,7 @@ def _raport_po_limicie(client, interaction, interaction_id, tools):
 
     try:
         ostatnia = _gemini_create(client,
-            model=GEMINI_MODEL,
+            model=model,
             input=odpowiedzi,
             previous_interaction_id=interaction_id,
             tools=tools
@@ -21777,14 +22124,40 @@ def gemini_execute_task(task_id, task, success_condition=''):
             "error": "Nie ma czym tego wykonać — wykonawca wyłączony."
         }
 
-    key_name, client = get_gemini_client()
-
-    if client is None:
+    if not gemini_clients:
         return {
             "ok": False,
             "status": "NO_GEMINI_CLIENT",
             "error": "Nie ma czym tego wykonać."
         }
+
+    # v449: najwyzszy stopien drabinki modeli, ktory ma teraz limit.
+    _para = _wybierz_pare()
+
+    if _para is None:
+
+        gemini_disabled = True
+        _najbl = _najblizsze_odnowienie()
+
+        return {
+            "ok": False,
+            "status": "GEMINI_LIMITY",
+            "error": (
+                "Wszystkie modele wykonawcy mają teraz wyczerpany limit"
+                + (
+                    " — najbliższy wraca o "
+                    + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+                    + " (" + _najbl[2] + ")"
+                    if _najbl else ""
+                )
+                + "."
+            )
+        }
+
+    key_name, client, _model = _para
+
+    log("GEMINI", "model: " + _model + " (klucz " + key_name + ")")
+    zapisz_zdarzenie("gemini_model", model=_model, klucz=key_name)
 
     # ========================================================
     # PROMPT
@@ -21992,6 +22365,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
     # (np. ścieżka QUOTA_EXHAUSTED).
     collected_warnings = []
 
+    # v449: potrzebne tez w obsludze bledu — czy cokolwiek juz sie wykonalo.
+    tool_calls = 0
+
     # PEŁNA lista wywołanych narzędzi w TYM zadaniu (nazwa + ok) —
     # wcześniej zapisywana była tylko ICH LICZBA (tool_calls), więc
     # nie dało się sprawdzić, CZY konkretne narzędzie weryfikujące
@@ -22011,13 +22387,14 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 
     try:
         interaction = _gemini_create(client,
-            model=GEMINI_MODEL,
+            model=_model,
             input=prompt,
             tools=gemini_tools(_task_haystack)
         )
 
         # Klucz odpowiedzial — jesli byl odstawiony, wraca.
         mark_key_ok(key_name)
+        _para_dziala(key_name, _model)
 
         interaction_id = getattr(
             interaction,
@@ -23038,7 +23415,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 }
 
             interaction = _gemini_create(client,
-                model=GEMINI_MODEL,
+                model=_model,
                 input=responses,
                 previous_interaction_id=interaction_id,
                 tools=gemini_tools(_task_haystack)
@@ -23067,7 +23444,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
         # ====================================================
 
         _raport = _raport_po_limicie(
-            client, interaction, interaction_id,
+            client, _model, interaction, interaction_id,
             gemini_tools(_task_haystack)
         )
 
@@ -23104,38 +23481,30 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
         # QUOTA
         # ----------------------------------------------------
 
-        if (
-            "429" in error_text
-            or "RESOURCE_EXHAUSTED" in error_text
-            or "quota" in error_text.lower()
-        ):
+        # v449: limit albo przeciazenie dotyczy PARY klucz+model —
+        # odstawiamy tylko ja. Zanim cokolwiek sie wykonalo, zadanie
+        # idzie od nowa na nastepnej parze z drabinki. Gdy juz cos sie
+        # wykonalo, NIE powtarzamy calego zadania (klikniecia, wyslane
+        # formularze poszlyby drugi raz) — MAIN dostaje slad i decyduje.
+        _limit = _to_limit(error_text)
+        _przeciazony = _gemini_przeciazony(error_text)
 
-            log(
-                "GEMINI",
-                f"QUOTA dla klucza {key_name}"
-            )
+        if _limit or _przeciazony:
 
-            try:
-                mark_quota(
-                    key_name
+            if _limit:
+                _odstaw_pare(key_name, _model, error_text)
+            else:
+                _odstaw_pare(
+                    key_name, _model, error_text,
+                    sekund=120, powod="serwer przeciążony"
                 )
 
-            except Exception:
-                pass
-
-            next_name, next_client = (
-                get_gemini_client()
-            )
-
-            if (
-                next_client is not None
-                and next_name != key_name
-            ):
+            if tool_calls == 0 and _wybierz_pare() is not None:
 
                 log(
                     "GEMINI",
-                    f"Przełączam klucz "
-                    f"{key_name} -> {next_name}"
+                    "Nic jeszcze nie wykonane — zadanie idzie na następny "
+                    "model/klucz z drabinki."
                 )
 
                 return gemini_execute_task(
@@ -23144,16 +23513,23 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     success_condition
                 )
 
-            gemini_disabled = True
+            if _wybierz_pare() is None:
+                gemini_disabled = True
 
             return {
                 "ok": False,
-                "status": "QUOTA_EXHAUSTED",
+                "status": (
+                    "GEMINI_EXECUTOR_ERROR" if not _limit
+                    else "GEMINI_LIMIT_W_TRAKCIE" if tool_calls
+                    else "QUOTA_EXHAUSTED"
+                ),
                 "key": key_name,
+                "model": _model,
                 "error": short(
                     error_text,
                     3000
                 ),
+                "tool_calls": tool_calls,
                 "tool_warnings": collected_warnings,
                 "tool_trace": collected_tool_trace,
                 "confirmed_texts": collected_confirmed_texts
@@ -23973,7 +24349,7 @@ def run_next_task():
     if task is None:
         return None
 
-    if gemini_disabled:
+    if _gemini_zablokowany():
 
         return {
             "ok": False,
@@ -28465,6 +28841,8 @@ _HUMAN_STATUS_LABELS = {
     "COMPLETED": "ukończono",
     "GEMINI_TOOL_ERROR": "błąd narzędzia",
     "TOOL_LIMIT": "przekroczony limit narzędzi",
+    "GEMINI_LIMIT_W_TRAKCIE": "wykonawcy skończył się limit API w trakcie zadania",
+    "GEMINI_LIMITY": "wszystkie modele wykonawcy mają wyczerpany limit API",
     "DONE_REJECTED_VERIFICATION_FAILED": "zgłoszony DONE odrzucony (brak dowodu)",
     "TASK_DUPLICATE_OF_VERIFIED_POINT": "powtórka już zweryfikowanego punktu",
     "TASK_ALREADY_SATISFIED_ON_DISK": "już spełnione na dysku",
@@ -38613,23 +38991,30 @@ def run_agent(goal):
         # jest krokiem agenta i nie ma zużywać budżetu MAX_STEPS.
         # ------------------------------------------------------
 
-        if gemini_disabled:
+        if _gemini_zablokowany():
+
+            # v449: kiedy naprawde wroci — z odpowiedzi Google albo z
+            # zegara (patrz _czas_odnowienia), nie "zwykle 24h".
+            _najbl = _najblizsze_odnowienie()
+            _kiedy = (
+                "najbliższy model wraca o "
+                + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+                + " (" + _najbl[2] + ", klucz " + _najbl[1] + ")"
+                if _najbl else "czas odnowienia nieznany"
+            )
 
             log(
                 "GEMINI",
-                "WYKONAWCA ZABLOKOWANY — "
-                "czekam na reset limitu API."
+                "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
             )
 
             last_result = {
                 "status":
                     "GEMINI_QUOTA_EXHAUSTED",
                 "message":
-                    "Limit wykonawcy wyczerpany. "
-                    "Poczekaj na reset (zwykle 24h) "
-                    "lub dodaj nowy klucz API do "
-                    + str(GEMINI_KEYS_DIR)
-                    + " i zrestartuj agenta."
+                    "Limit wykonawcy wyczerpany — " + _kiedy
+                    + ". Nowy klucz API można dodać do "
+                    + str(GEMINI_KEYS_DIR) + "."
             }
 
             import time
@@ -40043,7 +40428,7 @@ def run_agent(goal):
             # GEMINI ZABLOKOWANY
             # --------------------------------------------------
 
-            if gemini_disabled:
+            if _gemini_zablokowany():
 
                 log(
                     "MAIN",
@@ -40199,7 +40584,7 @@ def run_agent(goal):
             # Jeżeli Gemini jest zablokowany,
             # nie twórz kolejnych tasków.
 
-            if gemini_disabled:
+            if _gemini_zablokowany():
 
                 print(
                     "Brak wykonawcy Gemini — "
