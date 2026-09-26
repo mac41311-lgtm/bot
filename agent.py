@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v446
+AEL-MINI AUTONOMOUS AGENT v447
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v446")
+    print("             AEL-MINI AUTONOMOUS AGENT v447")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21615,6 +21615,58 @@ def _brak_to_odpowiedz(name, args, result):
     return False
 
 
+# v447: odstepy miedzy ponowieniami, gdy Gemini jest chwilowo przeciazony.
+_GEMINI_PRZECIAZONY_PONOW_S = (5, 10)
+
+
+def _gemini_przeciazony(blad):
+    """Czy to chwilowe przeciazenie serwera (503), a nie prawdziwy blad."""
+
+    tekst = str(blad or "")
+
+    return (
+        "503" in tekst
+        or "service_unavailable" in tekst
+        or "UNAVAILABLE" in tekst
+        or "high demand" in tekst
+        or "overloaded" in tekst.lower()
+    )
+
+
+def _gemini_create(client, **kwargs):
+    """
+    client.interactions.create z ponowieniem przy chwilowym
+    przeciazeniu serwera.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-23 18:04, krok 3):
+    "503 — gemini-3.5-flash-lite is currently experiencing high demand,
+    spikes in demand are usually temporary. Please try again later."
+    Program oddal od razu GEMINI_EXECUTOR_ERROR i caly krok przepadl,
+    choc serwer mowil wprost: sprobuj za chwile. Ponawiamy dwa razy (po
+    5 i po 10 s); inne bledy — takze 429, limit klucza — ida dalej bez
+    zmian, bo tam czekanie nie pomaga.
+    """
+
+    for proba, przerwa in enumerate(_GEMINI_PRZECIAZONY_PONOW_S + (None,)):
+
+        try:
+            return client.interactions.create(**kwargs)
+
+        except Exception as e:
+
+            if przerwa is None or not _gemini_przeciazony(e):
+                raise
+
+            log(
+                "GEMINI",
+                "Serwer Gemini chwilowo przeciążony (503) — ponawiam za "
+                + str(przerwa) + " s (" + str(proba + 1) + "/"
+                + str(len(_GEMINI_PRZECIAZONY_PONOW_S)) + ")."
+            )
+
+            time.sleep(przerwa)
+
+
 def _raport_po_limicie(client, interaction, interaction_id, tools):
     """
     v443: co Gemini ustalil, zanim skonczyl mu sie limit narzedzi.
@@ -21662,7 +21714,7 @@ def _raport_po_limicie(client, interaction, interaction_id, tools):
     ]
 
     try:
-        ostatnia = client.interactions.create(
+        ostatnia = _gemini_create(client,
             model=GEMINI_MODEL,
             input=odpowiedzi,
             previous_interaction_id=interaction_id,
@@ -22001,7 +22053,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
     collected_confirmed_texts = []
 
     try:
-        interaction = client.interactions.create(
+        interaction = _gemini_create(client,
             model=GEMINI_MODEL,
             input=prompt,
             tools=gemini_tools(_task_haystack)
@@ -23028,7 +23080,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     )
                 }
 
-            interaction = client.interactions.create(
+            interaction = _gemini_create(client,
                 model=GEMINI_MODEL,
                 input=responses,
                 previous_interaction_id=interaction_id,
