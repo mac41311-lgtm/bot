@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v441
+AEL-MINI AUTONOMOUS AGENT v442
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v441")
+    print("             AEL-MINI AUTONOMOUS AGENT v442")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10762,7 +10762,7 @@ _GEMINI_ONLY_TOOL_NAMES = [
     "termux_delete", "termux_check_apk", "termux_patch_file",
     "ask_deepseek",
     "chrome_tabs", "chrome_inspect", "chrome_open", "chrome_click",
-    "chrome_type", "chrome_execute_js",
+    "chrome_type", "chrome_back", "chrome_execute_js",
     "android_state", "android_click", "android_click_resource",
     "android_tap", "android_type", "android_press", "android_swipe",
     "android_long_click", "android_set_clipboard", "android_paste_text",
@@ -11576,6 +11576,7 @@ def _poczekaj_az_strona_dojdzie(tab, budzet_s=CHROME_LOAD_BUDGET_S):
     # skryptem oddawaly poczatek ("Skip to Content"), zanim doszla
     # reszta, a wykonanie zgadywalo adresy.
     poprzednia = None
+    bez_zmian = 0
 
     while True:
 
@@ -11586,10 +11587,20 @@ def _poczekaj_az_strona_dojdzie(tab, budzet_s=CHROME_LOAD_BUDGET_S):
 
         dlugosc = int(stan.get("tresc") or 0)
 
+        bez_zmian = bez_zmian + 1 if dlugosc == poprzednia else 0
+
         # Gotowa i cos juz na niej jest. Sama flaga readyState nie
         # wystarcza: panele w Reakcie melduja "complete", majac na
         # ekranie samo "Loading..." (13 znakow).
-        if stan.get("gotowa") and dlugosc > 40 and dlugosc == poprzednia:
+        if stan.get("gotowa") and dlugosc > 40 and bez_zmian >= 1:
+            break
+
+        # v442: strona, ktora po prostu MA malo tekstu, tez sie konczy
+        # — gdy przez ok. 2 s nic na niej nie przybywa. Do v441 czekala
+        # zawsze caly budzet: pulpit Useme ("Skip to Content Pulpit",
+        # 22 znaki) — 8,2 s przy kazdym z trzech wywolan (bieg
+        # 2026-09-26 14:53).
+        if stan.get("gotowa") and bez_zmian >= 6:
             break
 
         poprzednia = dlugosc
@@ -11606,6 +11617,11 @@ def chrome_inspect(
     tab_id=None,
     contains=None
 ):
+    """
+    Cala strona: adres, tytul, tekst (do CHROME_TEXT_LIMIT) i ponumerowane
+    linki, przyciski i pola — te same numery, co w wyniku chrome_open,
+    chrome_click i chrome_type (v442, patrz _widok_strony).
+    """
 
     tab = find_tab(
         tab_id,
@@ -11622,98 +11638,9 @@ def chrome_inspect(
 
     _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
-    javascript = r"""
-(() => {
+    widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
 
-    const clean = (v) =>
-        (v || "")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    const controls = [];
-
-    document.querySelectorAll(
-        'a,button,input,textarea,select,' +
-        '[role="button"],' +
-        '[contenteditable="true"]'
-    ).forEach((el, index) => {
-
-        const r =
-            el.getBoundingClientRect();
-
-        if (
-            r.width <= 0 ||
-            r.height <= 0
-        ) {
-            return;
-        }
-
-        controls.push({
-            i: index,
-            tag: el.tagName,
-            text: clean(
-                el.innerText ||
-                el.value ||
-                el.getAttribute(
-                    "aria-label"
-                )
-            ),
-            id: el.id || "",
-            role:
-                el.getAttribute(
-                    "role"
-                ) || "",
-            href:
-                el.href || "",
-            type:
-                el.getAttribute(
-                    "type"
-                ) || "",
-            x:
-                Math.round(r.x),
-            y:
-                Math.round(r.y),
-            width:
-                Math.round(r.width),
-            height:
-                Math.round(r.height)
-        });
-
-    });
-
-    return {
-        title:
-            document.title,
-
-        url:
-            location.href,
-
-        text:
-            clean(
-                document.body
-                    ? document.body.innerText
-                    : ""
-            ).slice(
-                0,
-                10000
-            ),
-
-        controls:
-            controls.slice(
-                0,
-                120
-            )
-    };
-
-})()
-"""
-
-    value = chrome_eval(
-        tab,
-        javascript
-    )
-
-    if not isinstance(value, dict):
+    if not widok:
 
         return {
             "ok": False,
@@ -11725,28 +11652,17 @@ def chrome_inspect(
         "tab_id":
             tab["id"],
         "title":
-            value.get(
-                "title",
-                ""
-            ),
+            widok.get("tytul", ""),
         "url":
-            value.get(
-                "url",
-                ""
-            ),
+            widok.get("adres", ""),
         "text":
-            short(
-                value.get(
-                    "text",
-                    ""
-                ),
-                CHROME_TEXT_LIMIT
-            ),
-        "controls":
-            value.get(
-                "controls",
-                []
-            ),
+            widok.get("tekst", ""),
+        "elementy":
+            widok.get("elementy", []),
+        **(
+            {"elementow_na_stronie": widok["elementow_na_stronie"]}
+            if widok.get("elementow_na_stronie") else {}
+        ),
         # Mowimy o tym tylko wtedy, gdy naprawde trzeba bylo poczekac
         # — inaczej byloby to pole-szum w kazdym wyniku.
         **(
@@ -12004,7 +11920,28 @@ def _tresc_strony(tab, limit=4000):
 _SLADY_BRAKU_STRONY = (
     "404", "not found", "page not found", "nie znaleziono",
     "strona nie istnieje", "nie ma takiej strony",
+    # v442: Useme — tytul "Strona nie znaleziona | useme.com" (bieg
+    # 2026-09-26 14:53, trzy razy) przechodzil jako zwykla strona.
+    "nie znaleziona",
 )
+
+
+def _adres_do_porownania(adres):
+    """
+    Adres bez tego, czym strony roznia sie tylko z wygladu: schemat,
+    www./m., koncowy ukosnik, kodowanie znakow.
+    """
+
+    try:
+        from urllib.parse import unquote
+        u = urlparse(unquote(str(adres or "")).strip())
+        host = u.netloc.lower()
+        for przedrostek in ("www.", "m."):
+            if host.startswith(przedrostek):
+                host = host[len(przedrostek):]
+        return host + u.path.rstrip("/") + (("?" + u.query) if u.query else "")
+    except Exception:
+        return str(adres or "")
 
 
 def _strona_nie_istnieje(stan, tresc=None):
@@ -12208,6 +12145,26 @@ def _chrome_open_wynik(
         nowa_karta=nowa_karta,
         brak_strony=_brak
     )
+
+    # v442: strona przeniosla gdzie indziej — fakt, w pierwszej linii.
+    # Bieg 2026-09-26 14:53: /jobs/category/programowanie-i-it,3/
+    # otworzylo sie jako /jobs/category/design,38/ ("Grafik
+    # Komputerowy"), a wynik mowil tylko ok: true.
+    if (
+        wynik.get("url")
+        and _adres_do_porownania(wynik["url"])
+        != _adres_do_porownania(url)
+    ):
+        wynik = {
+            "przekierowanie": (
+                "otwierałem " + short(str(url), 150)
+                + ", strona przeniosła na " + short(str(wynik["url"]), 150)
+            ),
+            **wynik
+        }
+
+    # v442: co na tej stronie jest — patrz _widok_strony().
+    _dolacz_widok(wynik, tab)
 
     return wynik
 
@@ -12494,10 +12451,251 @@ def _stan_strony(tab):
     return None
 
 
+# ============================================================
+# v442: CO JEST NA STRONIE — PONUMEROWANE
+# ============================================================
+#
+# ZMIERZONE NA TRZECH BIEGACH (2026-09-25 16:15, 2026-09-26 14:04 i
+# 14:53): Gemini napisal 103 wlasne skrypty chrome_execute_js, a
+# chrome_inspect nie uzyl ani razu. Po chrome_open dostawal adres i
+# tytul — nic z tego, co na stronie jest — wiec kazdy ruch zaczynal
+# od wlasnej sondy JS ("pokaz linki ze slowem 'loguj'") albo od
+# zgadywania adresu: /accounts/login/, /users/profile/,
+# /jobs/query:spolek/ — trzy razy "Strona nie znaleziona" w jednym
+# zadaniu, choc link "Wyloguj" byl na stronie od poczatku.
+#
+# Teraz po kazdym ruchu w Chrome Python mowi, co widac: poczatek
+# tekstu i ponumerowana liste linkow, przyciskow i pol. Numer
+# zostaje na elemencie (data-ael-nr), wiec chrome_click(nr=7) i
+# chrome_type(pole="3") trafiaja dokladnie w to, co bylo na liscie.
+
+_WIDOK_JS = r"""
+(() => {
+    const ILE = __ILE__, ZNAKOW = __ZNAKOW__;
+    const clean = (v) => (v || "").replace(/\s+/g, " ").trim();
+    document.querySelectorAll("[data-ael-nr]").forEach(
+        e => e.removeAttribute("data-ael-nr"));
+    const sel = 'a[href],button,input:not([type=hidden]),textarea,select,' +
+        '[role=button],[role=link],[role=tab],[role=menuitem],' +
+        '[role=checkbox],[role=radio],[contenteditable=""],' +
+        '[contenteditable="true"],summary';
+    const origin = location.origin;
+    const out = [];
+    const seen = new Set();
+    let nr = 0, wszystkich = 0;
+    for (const el of document.querySelectorAll(sel)) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        const st = getComputedStyle(el);
+        if (st.visibility === "hidden" || st.display === "none") continue;
+        const tag = el.tagName.toLowerCase();
+        const typ = (el.getAttribute("type") || "").toLowerCase();
+        let rodzaj = "przycisk";
+        if (tag === "a" || el.getAttribute("role") === "link") rodzaj = "link";
+        if (tag === "textarea" || el.isContentEditable ||
+            (tag === "input" && !["submit", "button", "reset", "image",
+                                  "checkbox", "radio"].includes(typ)))
+            rodzaj = "pole";
+        if (tag === "select") rodzaj = "lista";
+        if (typ === "checkbox" || el.getAttribute("role") === "checkbox")
+            rodzaj = "pole wyboru";
+        if (typ === "radio" || el.getAttribute("role") === "radio")
+            rodzaj = "opcja";
+        let opis;
+        if (rodzaj === "pole") {
+            opis = clean([
+                ...(el.labels ? Array.from(el.labels).map(l => l.innerText) : []),
+                el.getAttribute("aria-label"), el.getAttribute("placeholder"),
+                el.name, el.id
+            ].filter(Boolean)[0] || "");
+        } else {
+            opis = clean(el.innerText || el.value || el.getAttribute("aria-label")
+                || el.getAttribute("title") || el.getAttribute("alt") || "");
+            if (!opis) {
+                const img = el.querySelector("img[alt]");
+                if (img) opis = clean(img.getAttribute("alt"));
+            }
+        }
+        let dokad = "";
+        if (rodzaj === "link" && el.href) {
+            dokad = el.href.startsWith(origin)
+                ? el.href.slice(origin.length) || "/" : el.href;
+        }
+        if (!opis && !dokad && rodzaj !== "pole") continue;
+        const klucz = rodzaj + "|" + opis + "|" + dokad;
+        if (seen.has(klucz)) continue;
+        seen.add(klucz);
+        wszystkich++;
+        if (nr >= ILE) continue;
+        nr++;
+        el.setAttribute("data-ael-nr", String(nr));
+        let linia = "[" + nr + "] " + rodzaj + ": " + opis.slice(0, 90);
+        if (dokad) linia += " -> " + dokad.slice(0, 120);
+        if (rodzaj === "pole") {
+            const jest = clean(el.isContentEditable ? el.innerText : el.value);
+            if (jest) linia += " (jest: " + jest.slice(0, 60) + ")";
+        }
+        if (rodzaj === "lista" && el.selectedOptions && el.selectedOptions[0])
+            linia += " (wybrane: " + clean(el.selectedOptions[0].innerText).slice(0, 40) + ")";
+        if ((rodzaj === "pole wyboru" || rodzaj === "opcja") && el.checked)
+            linia += " (zaznaczone)";
+        if (el.disabled) linia += " (nieaktywne)";
+        out.push(linia);
+    }
+    const tekst = clean(document.body ? document.body.innerText : "");
+    return {
+        adres: location.href,
+        tytul: document.title,
+        tekst: tekst.slice(0, ZNAKOW),
+        tekstu_razem: tekst.length,
+        elementy: out,
+        elementow_razem: wszystkich
+    };
+})()
+"""
+
+
+# v442: to samo zdanie w opisie kazdego narzedzia Chrome, ktore
+# zwraca pole "strona".
+_OPIS_STRONY = (
+    "Wynik ma pole strona: adres, tytuł, początek tekstu i "
+    "ponumerowane linki, przyciski i pola, np. "
+    "\"[7] link: Tworzenie plików EXCEL -> /pl/jobs/...\". "
+    "Numery są z tej strony, do chrome_click(nr) i "
+    "chrome_type(pole)."
+)
+
+
+def _widok_strony(tab, ile=80, znakow=3000):
+    """
+    Co jest teraz na stronie w tej karcie: adres, tytul, poczatek tekstu
+    i ponumerowane linki, przyciski i pola. None, gdy nie da sie odczytac.
+    """
+
+    try:
+        widok = chrome_eval(
+            tab,
+            _WIDOK_JS.replace("__ILE__", str(int(ile)))
+            .replace("__ZNAKOW__", str(int(znakow)))
+        )
+    except Exception:
+        return None
+
+    if not isinstance(widok, dict) or not widok.get("adres"):
+        return None
+
+    wynik = {
+        "adres": widok.get("adres"),
+        "tytul": widok.get("tytul"),
+        "tekst": widok.get("tekst") or "",
+        "elementy": widok.get("elementy") or [],
+    }
+
+    if int(widok.get("tekstu_razem") or 0) > len(wynik["tekst"]):
+        wynik["tekst_ucięty"] = (
+            "to pierwsze " + str(len(wynik["tekst"])) + " z "
+            + str(widok.get("tekstu_razem")) + " znaków; całość: "
+            "chrome_inspect"
+        )
+
+    _razem = int(widok.get("elementow_razem") or 0)
+
+    if _razem > len(wynik["elementy"]):
+        wynik["elementow_na_stronie"] = _razem
+
+    return wynik
+
+
+def _dolacz_widok(wynik, tab):
+    """
+    Dokleja do wyniku ruchu w Chrome pole "strona" (patrz
+    _widok_strony) i zdejmuje ze "snapshot" to, co "strona" mowi
+    lepiej: tekst i liste kontrolek (bez adresow, bez numerow, tylko
+    pierwsze 40 — na liscie zlecen Useme same menu zajmowaly cala
+    czterdziestke i linkow do zlecen nie bylo na niej wcale).
+    """
+
+    if not isinstance(wynik, dict):
+        return wynik
+
+    _strona = _widok_strony(tab)
+
+    if not _strona:
+        return wynik
+
+    wynik["strona"] = _strona
+
+    _snap = wynik.get("snapshot")
+
+    if isinstance(_snap, dict):
+        _snap.pop("page_content", None)
+        _snap.pop("controls", None)
+
+    return wynik
+
+
+def _kliknij_nr(tab, nr):
+    """
+    Klika element o numerze z listy _widok_strony — prawdziwym
+    kliknieciem myszy przez CDP w srodek elementu, tak jak palec.
+    Zwraca {"ok": True, "clicked": opis} albo {"ok": False, ...}.
+    """
+
+    polozenie = chrome_eval(
+        tab,
+        "(() => { const el = document.querySelector('[data-ael-nr=\""
+        + str(int(nr)) + "\"]'); if (!el) return null;"
+        " el.scrollIntoView({block: 'center'});"
+        " const r = el.getBoundingClientRect();"
+        " return {x: r.x + r.width / 2, y: r.y + r.height / 2,"
+        " opis: (el.innerText || el.value || el.getAttribute('aria-label')"
+        " || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim()"
+        ".slice(0, 120)}; })()"
+    )
+
+    if isinstance(polozenie, dict) and polozenie.get("ok") is False:
+        return polozenie
+
+    if not isinstance(polozenie, dict) or "x" not in polozenie:
+        return {
+            "ok": False,
+            "error": (
+                "Na stronie nie ma już elementu nr " + str(nr)
+                + " — numery są z ostatniej listy tej strony; po "
+                "przejściu na inną stronę lista jest nowa."
+            )
+        }
+
+    ws = cdp_connect(tab)
+
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+
+    try:
+        for i, typ in enumerate(("mousePressed", "mouseReleased")):
+            odp = cdp_call(ws, 10 + i, "Input.dispatchMouseEvent", {
+                "type": typ,
+                "x": polozenie["x"],
+                "y": polozenie["y"],
+                "button": "left",
+                "clickCount": 1
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    return {"ok": True, "clicked": polozenie.get("opis") or ("nr " + str(nr))}
+
+
 def chrome_click(
-    text,
+    text=None,
     tab_id=None,
-    contains=None
+    contains=None,
+    nr=None
 ):
 
     tab = find_tab(
@@ -12611,10 +12809,29 @@ def chrome_click(
     # wprost — jednym zdaniem, zamiast zostawiac "ok: true".
     _przed = _stan_strony(tab)
 
-    wynik = chrome_eval(
-        tab,
-        javascript
-    )
+    # v442: numer z listy strony (patrz _widok_strony) — klik w
+    # dokladnie ten element, prawdziwa myszka przez CDP.
+    if nr is not None and str(nr).strip():
+
+        try:
+            _nr = int(str(nr).strip())
+        except ValueError:
+            return {"ok": False, "error": "nr to numer z listy strony, np. 7"}
+
+        wynik = _kliknij_nr(tab, _nr)
+        text = wynik.get("clicked") or ("nr " + str(_nr))
+
+    elif not str(text or "").strip():
+        return {
+            "ok": False,
+            "error": "Podaj nr elementu z listy strony albo jego tekst."
+        }
+
+    else:
+        wynik = chrome_eval(
+            tab,
+            javascript
+        )
 
     if not isinstance(wynik, dict) or not wynik.get("clicked"):
         return wynik
@@ -12666,9 +12883,8 @@ def chrome_click(
         wynik["po_klknieciu"] = (
             "Kliknalem w ten element, ale strona sie nie ruszyla: "
             "adres, tytul i dlugosc tresci sa takie same jak przed "
-            "kliknieciem. Samo powtorzenie tego kliknięcia nic nie "
-            "zmieni. Zobacz chrome_inspect — pokazuje, co na tej "
-            "stronie da sie kliknac i wypelnic."
+            "kliknieciem. Co jest teraz na stronie — w polu "
+            "\"strona\"."
         )
 
     # v377: STAN STRONY PO KLIKNIECIU — tak samo, jak
@@ -12704,18 +12920,62 @@ def chrome_click(
         _zmienilo
     )
 
-    return wynik
+    return _dolacz_widok(wynik, tab)
 
 
 # ============================================================
 # CHROME TYPE
 # ============================================================
 
+def chrome_back(
+    tab_id=None,
+    contains=None
+):
+    """
+    v442: wstecz, jak przycisk w przegladarce. Zwraca, gdzie jestesmy
+    i co na tej stronie jest.
+    """
+
+    tab = find_tab(tab_id, contains)
+
+    if tab is None:
+        return {"ok": False, "error": "Brak istniejącej karty"}
+
+    _przed = _stan_strony(tab)
+
+    chrome_eval(tab, "history.back()")
+
+    time.sleep(0.5)
+
+    _poczekaj_az_strona_dojdzie(tab)
+
+    _po = _stan_strony(tab)
+
+    wynik = {
+        "ok": True,
+        "tab_id": tab.get("id"),
+        "url": (_po or {}).get("href"),
+        "title": (_po or {}).get("title")
+    }
+
+    if _przed and _po and _przed.get("href") == _po.get("href"):
+        wynik["bez_skutku"] = "Adres się nie zmienił — w tej karcie nie było dokąd wrócić."
+
+    _dolacz_widok(wynik, tab)
+
+    _zaloguj_operacje_chrome(
+        "back", _przed, _po, _chrome_stan_sie_zmienil(_przed, _po)
+    )
+
+    return wynik
+
+
 def chrome_type(
     text,
     tab_id=None,
     contains=None,
-    pole=None
+    pole=None,
+    enter=False
 ):
     """
     Wpisuje tekst do pola w Chrome — jak z klawiatury.
@@ -12763,7 +13023,14 @@ def chrome_type(
             .map(i => (document.getElementById(i) || {{}}).innerText || '').join(' ')
     ].filter(Boolean).join(' | ');
     let el = null;
-    if (q) {{
+    if (/^\d+$/.test(q)) {{
+        el = document.querySelector('[data-ael-nr="' + q + '"]');
+        if (!el) {{
+            return {{ok: false, error: 'Na stronie nie ma już elementu nr ' + q
+                     + ' — numery są z ostatniej listy tej strony.',
+                     pola: pola.slice(0, 15).map(opis)}};
+        }}
+    }} else if (q) {{
         el = pola.find(e => (e.id || '').toLowerCase() === q || (e.name || '').toLowerCase() === q)
           || pola.find(e => opis(e).toLowerCase().includes(q));
         if (!el) {{
@@ -12808,6 +13075,21 @@ def chrome_type(
 
     try:
         wpis = cdp_call(ws, 1, "Input.insertText", {"text": str(text)})
+
+        # v442: Enter jak z klawiatury — zatwierdza wyszukiwarke albo
+        # formularz. Bieg 2026-09-26 14:53: po wpisaniu "spolek" w
+        # wyszukiwarke Useme wlasny JS Gemini kliknal nie ten przycisk,
+        # wyszukiwanie nie ruszylo i poszlo zgadywanie adresu.
+        if wpis.get("ok") and enter:
+            for i, typ in enumerate(("keyDown", "keyUp")):
+                cdp_call(ws, 2 + i, "Input.dispatchKeyEvent", {
+                    "type": typ,
+                    "key": "Enter",
+                    "code": "Enter",
+                    "windowsVirtualKeyCode": 13,
+                    "nativeVirtualKeyCode": 13,
+                    **({"text": "\r"} if typ == "keyDown" else {})
+                })
     finally:
         try:
             ws.close()
@@ -12817,17 +13099,32 @@ def chrome_type(
     if not wpis.get("ok"):
         return {"ok": False, "error": wpis.get("error"), "pole": wybor.get("pole")}
 
-    teraz = chrome_eval(
-        tab,
-        "(() => { const el = document.activeElement; if (!el) return ''; "
-        "return (el.isContentEditable ? el.innerText : el.value) || ''; })()"
-    )
+    if enter:
 
-    return {
-        "ok": True,
-        "pole": wybor.get("pole"),
-        "w_polu_jest": short(str(teraz or ""), 200)
-    }
+        _poczekaj_az_strona_dojdzie(tab)
+
+        wynik = {
+            "ok": True,
+            "pole": wybor.get("pole"),
+            "wpisano": short(str(text), 200),
+            "enter": True
+        }
+
+    else:
+
+        teraz = chrome_eval(
+            tab,
+            "(() => { const el = document.activeElement; if (!el) return ''; "
+            "return (el.isContentEditable ? el.innerText : el.value) || ''; })()"
+        )
+
+        wynik = {
+            "ok": True,
+            "pole": wybor.get("pole"),
+            "w_polu_jest": short(str(teraz or ""), 200)
+        }
+
+    return _dolacz_widok(wynik, tab)
 
 
 # ============================================================
@@ -13559,7 +13856,11 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "chrome_inspect",
-            "description": "Sprawdź stan istniejącej karty Chrome.",
+            "description": (
+                "Cała strona w karcie: adres, tytuł, tekst i "
+                "ponumerowane linki, przyciski i pola (te same numery "
+                "co w polu strona innych narzędzi Chrome)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -13572,7 +13873,9 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "chrome_open",
-            "description": "Otwórz URL w istniejącej karcie Chrome.",
+            "description": (
+                "Otwórz URL w istniejącej karcie Chrome. " + _OPIS_STRONY
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -13587,11 +13890,39 @@ def _gemini_tools_legacy():
         {
             "type": "function",
             "name": "chrome_click",
-            "description": "Kliknij element Chrome po tekście.",
+            "description": (
+                "Kliknij na stronie: nr — numer z listy strony, albo "
+                "text — tekst elementu. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nr": {"type": "integer"},
+                    "text": {"type": "string"},
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                }
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "chrome_type",
+            "description": (
+                "Wpisz tekst do pola w Chrome — jak z klawiatury; stara "
+                "treść pola jest zastępowana. pole: numer z listy "
+                "strony, etykieta, placeholder, name, id albo "
+                "aria-label pola; bez pola — pole, w którym jest "
+                "kursor. enter: true — po wpisaniu Enter, jak z "
+                "klawiatury. Wynik mówi, co jest w polu po wpisaniu. "
+                + _OPIS_STRONY
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"},
+                    "pole": {"type": "string"},
+                    "enter": {"type": "boolean"},
                     "tab_id": {"type": "string"},
                     "contains": {"type": "string"}
                 },
@@ -13601,22 +13932,16 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
-            "name": "chrome_type",
+            "name": "chrome_back",
             "description": (
-                "Wpisz tekst do pola w Chrome — jak z klawiatury; stara "
-                "treść pola jest zastępowana. pole: etykieta, placeholder, "
-                "name, id albo aria-label pola; bez pola — pole, w którym "
-                "jest kursor. Wynik mówi, co jest w polu po wpisaniu."
+                "Wstecz w karcie, jak przycisk w przeglądarce. " + _OPIS_STRONY
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string"},
-                    "pole": {"type": "string"},
                     "tab_id": {"type": "string"},
                     "contains": {"type": "string"}
-                },
-                "required": ["text"]
+                }
             }
         },
 
@@ -19777,6 +20102,10 @@ def _dispatch_tool_inner(
                 args
             )
 
+        if name == "chrome_back":
+
+            return _call_tool_function(chrome_back, args)
+
         if name == "chrome_execute_js":
 
             fn = globals().get(
@@ -20290,7 +20619,8 @@ def _shell_failure_is_just_missing_file(tool_name, result):
 # Narzedzia, ktore RUSZAJA interfejsem — klikaja, otwieraja, wpisuja.
 # Tylko one moga chodzic w kolko po tym samym przycisku.
 _NARZEDZIA_RUCHU = (
-    "chrome_click", "chrome_open", "android_click", "android_click_desc",
+    "chrome_click", "chrome_open", "chrome_back",
+    "android_click", "android_click_desc",
     "android_launch_app", "android_type", "android_paste_text",
 )
 
@@ -21877,6 +22207,31 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     _klucz_wywolania = None
                     _bylo, _stary_wynik = 0, None
 
+                # v442: chrome_open z pamieci tylko wtedy, gdy karta
+                # NADAL stoi pod tym adresem. Bieg 2026-09-26 14:53,
+                # wywolanie #22: Gemini wracal na liste zlecen, karta
+                # byla na stronie jednego zlecenia, a dostal zapamietany
+                # wynik "url: /jobs/" z dopiskiem "nic sie nie zmienilo".
+                if (
+                    _klucz_wywolania and _bylo >= 2
+                    and name == "chrome_open"
+                ):
+                    try:
+                        _karta = find_tab(
+                            (args or {}).get("tab_id"),
+                            (args or {}).get("contains")
+                        )
+                        _tam_jest = _adres_do_porownania(
+                            (_karta or {}).get("url")
+                        ) == _adres_do_porownania(
+                            (_stary_wynik or {}).get("url")
+                        ) if _karta else False
+                    except Exception:
+                        _tam_jest = False
+
+                    if not _tam_jest:
+                        _bylo, _stary_wynik = 0, None
+
                 if _klucz_wywolania and _bylo >= 2:
 
                     log(
@@ -22300,6 +22655,17 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     and name == "chrome_type"
                     and isinstance(result, dict)
                     and result.get("pola")
+                ):
+                    tool_failed = False
+
+                # v442: "tej strony nie ma" razem z tym, co na niej jest
+                # (linki, przyciski) to tez odpowiedz — z tej strony da
+                # sie przejsc dalej, zadanie nie musi sie konczyc.
+                if (
+                    tool_failed
+                    and name == "chrome_open"
+                    and isinstance(result, dict)
+                    and result.get("error") == "page_not_found"
                 ):
                     tool_failed = False
 
