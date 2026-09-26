@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v442
+AEL-MINI AUTONOMOUS AGENT v443
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v442")
+    print("             AEL-MINI AUTONOMOUS AGENT v443")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21492,6 +21492,104 @@ def _short_tool_evidence(result):
     return ""
 
 
+def _wywolania_w_interakcji(interaction):
+    """Wywolania narzedzi, o ktore Gemini prosi w tej odpowiedzi."""
+
+    wynik = []
+
+    for step in getattr(interaction, "steps", None) or []:
+
+        typ = getattr(step, "type", "")
+        name = getattr(step, "name", None)
+        arguments = getattr(step, "arguments", None)
+
+        if typ in ("function_call", "tool_call") or (
+            name and arguments is not None
+        ):
+            wynik.append(step)
+
+    return wynik
+
+
+def _tekst_interakcji(interaction):
+    """Tekst, ktory Gemini napisal w tej odpowiedzi ("" gdy nic)."""
+
+    text = getattr(interaction, "output_text", None)
+
+    if text:
+        return str(text)
+
+    pieces = []
+
+    for step in getattr(interaction, "steps", None) or []:
+        for item in getattr(step, "content", None) or []:
+            item_text = getattr(item, "text", None)
+            if item_text:
+                pieces.append(str(item_text))
+
+    return "\n".join(pieces)
+
+
+def _raport_po_limicie(client, interaction, interaction_id, tools):
+    """
+    v443: co Gemini ustalil, zanim skonczyl mu sie limit narzedzi.
+
+    ZAOBSERWOWANE WE WSZYSTKICH TRZECH ZADANIACH Z LIMITEM (biegi
+    2026-09-26 14:04 krok 9 i 14:53 krok 2, 2026-09-25 16:15). Po
+    25. wywolaniu petla odsylala Gemini wyniki i konczyla sie od razu
+    — odpowiedzi, w ktorej pisal, co znalazl, nikt juz nie czytal.
+    MAIN dostawal "Limit wywolan narzedzi wyczerpany" i sam slad, bez
+    wnioskow: ktore zlecenia sa, dokad prowadzi formularz, co zostalo.
+
+    Gdy ta ostatnia odpowiedz jest tekstem — to jest raport. Gdy
+    Gemini prosi w niej o kolejne narzedzia, dostaje na kazde "limit
+    wyczerpany, nie uruchomilem" i jeszcze jedna odpowiedz — juz bez
+    narzedzi do wyboru. To jedno zapytanie do Gemini, nie wywolanie
+    narzedzia.
+    """
+
+    if interaction is None:
+        return ""
+
+    wywolania = _wywolania_w_interakcji(interaction)
+
+    if not wywolania:
+        return _tekst_interakcji(interaction).strip()
+
+    if not interaction_id:
+        return ""
+
+    odpowiedzi = [
+        _odpowiedz_narzedzia(
+            call,
+            str(getattr(call, "name", "") or "?"),
+            {
+                "ok": False,
+                "error": "TOOL_LIMIT",
+                "message": (
+                    "Limit wywolan narzedzi na to zadanie ("
+                    + str(GEMINI_MAX_TOOL_CALLS)
+                    + ") jest wyczerpany — tego nie uruchomilem."
+                )
+            }
+        )
+        for call in wywolania
+    ]
+
+    try:
+        ostatnia = client.interactions.create(
+            model=GEMINI_MODEL,
+            input=odpowiedzi,
+            previous_interaction_id=interaction_id,
+            tools=tools
+        )
+    except Exception as e:
+        log("GEMINI", "Raport po limicie: " + short(str(e), 200))
+        return ""
+
+    return _tekst_interakcji(ostatnia).strip()
+
+
 def gemini_execute_task(task_id, task, success_condition=''):
     """
     Gemini executor — Interactions API.
@@ -22029,7 +22127,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         )
                     )
 
-                    break
+                    continue
 
                 tool_calls += 1
 
@@ -22848,6 +22946,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
         # LIMIT NARZĘDZI
         # ====================================================
 
+        _raport = _raport_po_limicie(
+            client, interaction, interaction_id,
+            gemini_tools(_task_haystack)
+        )
+
         return {
             "ok": False,
             "status": "TOOL_LIMIT",
@@ -22855,6 +22958,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             "error": (
                 "Limit wywołań narzędzi wyczerpany."
             ),
+            **({"report": short(_raport, RESULT_LIMIT)} if _raport else {}),
             "tool_calls": tool_calls,
             "interaction_id": interaction_id,
             "tool_warnings": collected_warnings,
