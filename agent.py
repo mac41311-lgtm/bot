@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v443
+AEL-MINI AUTONOMOUS AGENT v444
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v443")
+    print("             AEL-MINI AUTONOMOUS AGENT v444")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12834,7 +12834,9 @@ def chrome_click(
         )
 
     if not isinstance(wynik, dict) or not wynik.get("clicked"):
-        return wynik
+        # v443: nie ma takiego elementu — razem z tym, co na stronie
+        # jest, zeby nastepny ruch mogl trafic po numerze.
+        return _dolacz_widok(wynik, tab) if isinstance(wynik, dict) else wynik
 
     # Reakcja strony nie jest natychmiastowa — to samo czekanie, co
     # przed kliknieciem (patrz _poczekaj_az_strona_dojdzie).
@@ -21530,6 +21532,69 @@ def _tekst_interakcji(interaction):
     return "\n".join(pieces)
 
 
+def _brak_to_odpowiedz(name, args, result):
+    """
+    Czy ten "blad" to po prostu wiadomosc, ze czegos tu nie ma — a nie
+    awaria. Wtedy zadanie idzie dalej: Gemini dostaje wynik i robi
+    nastepny ruch, zamiast konczyc zadanie i czekac na MAIN-a.
+
+    Granica (v443): blad w KODZIE — skladnia, wysypany skrypt, kod bez
+    autora — konczy zadanie i idzie do zespolu, jak dotad. BRAK
+    czegos w swiecie — elementu, pola, strony, fragmentu w pliku,
+    miejsca do zapisu — to fakt, z ktorym da sie pracowac dalej.
+
+    ZMIERZONE NA 76 ZADANIACH (biegi 2026-09-21 .. 2026-09-26): 27
+    skonczylo sie bledem narzedzia, z tego kilka to byly wlasnie braki:
+    chrome_type bez takiego pola (14:04 krok 4), chrome_click
+    "Nie znaleziono" (2026-09-25 16:15), termux_patch_file "fragment
+    nie wystepuje 1:1" (2026-09-24 20:54), zrzut ekranu pod zmyslona
+    sciezka /home/u1_0/... (14:04 krok 11). Kazdy = stracony krok i
+    1-3 minuty czekania na MAIN-a.
+    """
+
+    if not isinstance(result, dict):
+        return False
+
+    blad = str(result.get("error") or "")
+
+    # v440: lista pol, ktore sa.
+    if name == "chrome_type" and result.get("pola"):
+        return True
+
+    # v442: strona "nie znaleziona" — z widokiem, dokad z niej przejsc.
+    if name == "chrome_open" and blad == "page_not_found":
+        return True
+
+    # Nie ma elementu o tym tekscie / numerze — wynik niesie widok
+    # strony (patrz chrome_click).
+    if name == "chrome_click" and (
+        blad.startswith("Nie znaleziono")
+        or blad.startswith("Na stronie nie ma już elementu")
+    ):
+        return True
+
+    # Fragmentu do podmiany nie ma (albo jest kilka razy) — plik mozna
+    # przeczytac i podac wlasciwy.
+    if name == "termux_patch_file" and (
+        "nie występuje w pliku" in blad or "razy — patch odrzucony" in blad
+    ):
+        return True
+
+    # Pod ta sciezka nie da sie zapisac (system tylko do odczytu, brak
+    # uprawnien) — fakt o miejscu, nie o kodzie.
+    if (
+        isinstance(args, dict) and args.get("path")
+        and not str(name).startswith("termux_run")
+        and ("[Errno 30]" in blad or "[Errno 13]" in blad)
+    ):
+        result["gdzie_mozna_zapisac"] = (
+            "katalog domowy Termuksa: ~ (" + str(HOME) + ")"
+        )
+        return True
+
+    return False
+
+
 def _raport_po_limicie(client, interaction, interaction_id, tools):
     """
     v443: co Gemini ustalil, zanim skonczyl mu sie limit narzedzi.
@@ -22742,29 +22807,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "pliku' — traktuje jako ODPOWIEDZ, nie awarie."
                     )
 
-                # v440: "nie ma takiego pola" z lista pol, ktore sa, to
-                # tez ODPOWIEDZ. Bieg 2026-09-26 14:04, krok 4: Gemini
-                # podal jako pole napis pod nim ("Wpisz przynajmniej 16
-                # znakow"), chrome_type odpowiedzialo, ze na stronie jest
-                # jedno pole: "title" — i zadanie sie skonczylo, zanim
-                # Gemini zdazyl wpisac tam jeszcze raz.
-                if (
-                    tool_failed
-                    and name == "chrome_type"
-                    and isinstance(result, dict)
-                    and result.get("pola")
-                ):
-                    tool_failed = False
-
-                # v442: "tej strony nie ma" razem z tym, co na niej jest
-                # (linki, przyciski) to tez odpowiedz — z tej strony da
-                # sie przejsc dalej, zadanie nie musi sie konczyc.
-                if (
-                    tool_failed
-                    and name == "chrome_open"
-                    and isinstance(result, dict)
-                    and result.get("error") == "page_not_found"
-                ):
+                # v440/v442/v443: "czegos tu nie ma" to ODPOWIEDZ, nie
+                # awaria — patrz _brak_to_odpowiedz().
+                if tool_failed and _brak_to_odpowiedz(name, args, result):
                     tool_failed = False
 
                 if tool_failed:
