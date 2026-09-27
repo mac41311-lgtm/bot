@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v455
+AEL-MINI AUTONOMOUS AGENT v456
 
-ARCHITEKTURA (stan na v455 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v456 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v455")
+    print("             AEL-MINI AUTONOMOUS AGENT v456")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -13974,6 +13974,151 @@ def _zapamietaj_limit_dzienny(model, blad):
     _zapisz_stan_modeli(stan)
 
 
+def _dzien_pt(teraz=None):
+    """Znacznik doby kalifornijskiej (wtedy Google odnawia limity dzienne)."""
+
+    teraz = time.time() if teraz is None else teraz
+
+    return str(int(_polnoc_pacyfik_po(teraz) // 86400))
+
+
+# Para, ktora wlasnie pracuje — zeby _gemini_create moglo liczyc jej
+# zapytania bez przekazywania klucza przez wszystkie wywolania.
+_para_w_uzyciu = [None, None]
+
+
+def _policz_zapytanie(klucz=None, model=None):
+    """Jedno zapytanie do Gemini wiecej dla tej pary w tej dobie PT."""
+
+    klucz = klucz if klucz is not None else _para_w_uzyciu[0]
+    model = model if model is not None else _para_w_uzyciu[1]
+
+    if not klucz or not model:
+        return
+
+    try:
+        stan = _stan_modeli()
+        dzis = _dzien_pt()
+        uzycie = stan.setdefault("uzycie", {})
+
+        # Zostaje tylko dzisiejsza doba — stare wpisy nie sa nikomu
+        # potrzebne.
+        for stary in [d for d in uzycie if d != dzis]:
+            uzycie.pop(stary, None)
+
+        para = str(klucz) + "|" + str(model)
+        uzycie.setdefault(dzis, {})[para] = int(
+            uzycie.get(dzis, {}).get(para, 0)
+        ) + 1
+        _zapisz_stan_modeli(stan)
+    except Exception:
+        pass
+
+
+def _zapytan_dzis(klucz, model, stan=None):
+    stan = _stan_modeli() if stan is None else stan
+
+    try:
+        return int(
+            (stan.get("uzycie") or {}).get(_dzien_pt(), {}).get(
+                str(klucz) + "|" + str(model), 0
+            )
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _zostalo_na_zadanie(klucz, model, stan=None):
+    """
+    Czy na tej parze zostalo dzis dosc zapytan na jedno zadanie. True
+    takze wtedy, gdy limitu dziennego modelu nie znamy.
+    """
+
+    stan = _stan_modeli() if stan is None else stan
+    ile = (stan.get("limity_dzienne") or {}).get(str(model))
+
+    try:
+        ile = int(ile) if ile else 0
+    except (TypeError, ValueError):
+        return True
+
+    if not ile:
+        return True
+
+    zostalo = ile - _zapytan_dzis(klucz, model, stan)
+
+    if zostalo < GEMINI_MAX_TOOL_CALLS + 2:
+        log(
+            "GEMINI",
+            "Model " + str(model) + " (klucz " + str(klucz) + "): zostało "
+            + str(max(zostalo, 0)) + " z " + str(ile) + " zapytań na dziś "
+            "— za mało na całe zadanie, pomijam do jutra."
+        )
+        return False
+
+    return True
+
+
+def _wyczerpany_dzis(klucz, model, blad):
+    """Po 429 dziennym: licznik tej pary staje na limicie (co najmniej)."""
+
+    ile = _ile_na_dzien(blad)
+
+    if not ile:
+        return
+
+    try:
+        stan = _stan_modeli()
+        para = str(klucz) + "|" + str(model)
+        dzis = _dzien_pt()
+        uzycie = stan.setdefault("uzycie", {}).setdefault(dzis, {})
+        uzycie[para] = max(int(uzycie.get(para, 0)), ile)
+        _zapisz_stan_modeli(stan)
+    except Exception:
+        pass
+
+
+def _kolejnosc_modeli(drabinka, stan):
+    """
+    Modele w kolejnosci, w jakiej maja sens dla TEGO programu.
+
+    v456: drabinka z v449 szla po samej randze (najnowsze, pro > flash
+    > flash-lite). Biegi 2026-09-27 20:18 i 20:49: gemini-3.8-flash i
+    gemini-3.7-flash maja w darmowej wersji po 20 zapytan na dzien —
+    kazdy z nich zjadl jedno zadanie i padl w polowie. Zadanie to do 25
+    wywolan, wiec liczy sie najpierw limit, potem ranga:
+      1. modele ze ZNANYM limitem, ktory starcza na zadanie (po randze),
+      2. modele o nieznanym limicie — flash-lite przed flash przed pro,
+         bo w darmowej wersji limity rosna w te strone,
+      3. modele za male — wcale (patrz _model_za_maly).
+    """
+
+    limity = stan.get("limity_dzienne") or {}
+
+    def _znany_ok(m):
+        try:
+            return int(limity.get(str(m)) or 0) >= _MODEL_ZA_MALY_NA_ZADANIE
+        except (TypeError, ValueError):
+            return False
+
+    def _wariant(m):
+        n = str(m).lower()
+        if "flash-lite" in n:
+            return 0
+        if "flash" in n:
+            return 1
+        return 2
+
+    znane = [m for m in drabinka if _znany_ok(m)]
+    nieznane = [
+        m for m in drabinka
+        if str(m) not in limity and m not in znane
+    ]
+    nieznane.sort(key=_wariant)
+
+    return znane + nieznane
+
+
 def _model_za_maly(model, stan=None):
     stan = _stan_modeli() if stan is None else stan
     ile = (stan.get("limity_dzienne") or {}).get(str(model))
@@ -14065,6 +14210,8 @@ def _odstaw_pare(klucz, model, blad, sekund=None, powod=None):
     # zostalby nadpisany.
     if sekund is None:
         _zapamietaj_limit_dzienny(model, blad)
+        if _limit_dzienny(blad):
+            _wyczerpany_dzis(klucz, model, blad)
 
     log(
         "GEMINI",
@@ -14150,12 +14297,16 @@ def _wybierz_pare():
 
     _stan = _stan_modeli()
 
-    for model in _drabinka_modeli():
+    for model in _kolejnosc_modeli(_drabinka_modeli(), _stan):
         if _model_za_maly(model, _stan):
             continue
         for klucz, _ in load_gemini_keys():
             client = gemini_clients.get(klucz)
-            if client is not None and not _para_odstawiona(klucz, model):
+            if (
+                client is not None
+                and not _para_odstawiona(klucz, model)
+                and _zostalo_na_zadanie(klucz, model, _stan)
+            ):
                 return klucz, client, model
 
     return None
@@ -22318,6 +22469,8 @@ def _gemini_create(client, **kwargs):
 
     for proba, przerwa in enumerate(_GEMINI_PRZECIAZONY_PONOW_S + (None,)):
 
+        _policz_zapytanie()
+
         try:
             return client.interactions.create(**kwargs)
 
@@ -22717,7 +22870,13 @@ def gemini_execute_task(task_id, task, success_condition=''):
 
     key_name, client, _model = _para
 
-    log("GEMINI", "model: " + _model + " (klucz " + key_name + ")")
+    _para_w_uzyciu[0], _para_w_uzyciu[1] = key_name, _model
+
+    log(
+        "GEMINI",
+        "model: " + _model + " (klucz " + key_name + ", dziś "
+        + str(_zapytan_dzis(key_name, _model)) + " zapytań)"
+    )
     zapisz_zdarzenie("gemini_model", model=_model, klucz=key_name)
 
     # ========================================================
@@ -24147,8 +24306,34 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     success_condition
                 )
 
-            if _wybierz_pare() is None:
+            _nastepna = _wybierz_pare()
+
+            if _nastepna is None:
                 gemini_disabled = True
+
+            # v456: MAIN czytal surowe "limit: 20 requests per day" jako
+            # "wykonawca na dzis skonczony" i zlecal robote uzytkownikowi
+            # (bieg 2026-09-27 20:49, krok 3) — a program mial jeszcze
+            # inne modele. Idzie fakt: na czym pojdzie nastepne zadanie.
+            if _nastepna is not None:
+                _co_dalej = (
+                    "Limit dotyczy tylko modelu " + str(_model)
+                    + " na kluczu " + str(key_name)
+                    + "; następne zadanie pójdzie na " + str(_nastepna[2])
+                    + " (klucz " + str(_nastepna[0]) + ")."
+                )
+            else:
+                _najbl = _najblizsze_odnowienie()
+                _co_dalej = (
+                    "Wszystkie modele wykonawcy mają teraz wyczerpany limit"
+                    + (
+                        " — najbliższy wraca o "
+                        + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+                        + " (" + _najbl[2] + ")"
+                        if _najbl else ""
+                    )
+                    + "; program czeka sam i wraca, gdy limit się odnowi."
+                )
 
             return {
                 "ok": False,
@@ -24161,8 +24346,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 "model": _model,
                 "error": short(
                     error_text,
-                    3000
+                    600
                 ),
+                "message": _co_dalej,
                 "tool_calls": tool_calls,
                 "tool_warnings": collected_warnings,
                 "tool_trace": collected_tool_trace,
@@ -36012,7 +36198,10 @@ _JAK_TO_DZIALA = (
     "zapytany zwróci się w odpowiedzi do kogoś po imieniu, ten ktoś "
     "odpowiada mu od razu i dostajesz obie odpowiedzi. "
     "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
-    "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
+    "albo o wartość, której nikt z nas nie ma. Formularze, profile i "
+    "ustawienia na stronach wypełnia Gemini (chrome_type, "
+    "chrome_click); użytkownik loguje się i podaje to, czego nikt z "
+    "nas nie wie — hasła, kody, dane osobowe. DONE i FAILED kończą "
     "cel.\n\n"
     "Po wykonaniu dostajesz fakty z narzędzi: co wypisały, co się "
     "udało, co padło. Kod, który leży już na dysku, widzisz jako "

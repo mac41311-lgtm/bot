@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v455
+JAK TO DZIALA — AEL-MINI v456
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -423,5 +423,39 @@ CZESC 15. CO ZMIENILO v455 (z biegu 2026-09-27 20:18)
     elementu (jak po numerze); szuka takze [role=link/tab/option/
     menuitem/radio/checkbox], [tabindex], label; przy kilku
     trafieniach bierze dokladny napis, potem najmniejszy element
+
+=========================================================================
+
+
+=========================================================================
+CZESC 16. CO ZMIENILO v456 (z biegu 2026-09-27 20:49, juz na v455)
+=========================================================================
+
+  CO POKAZAL LOG:
+  - v455 zadzialalo: 3.8-flash (20/dzien) rozpoznany i pominiety od
+    razu, zadanie poszlo na 3.7-flash i sie skonczylo; w kroku 2
+    3.7-flash okazal sie takim samym modelem (20/dzien) i padl po 16
+    wywolaniach — o tym program dowiedzial sie dopiero z 429
+  - MAIN dostal surowe "limit: 20 requests per day", uznal, ze
+    wykonawcy dzis juz nie ma, i zlecil uzytkownikowi wypelnienie
+    profilu Useme i odpowiedz na 6 pytan — a program mial jeszcze
+    inne modele
+
+  CO ZMIENIONE:
+  - licznik zapytan na dobe (kalifornijska) per para klucz+model
+    (state/gemini_modele.json, "uzycie"); para, ktorej zostalo mniej
+    niz 25+2 zapytan, nie dostaje zadania do jutra; po 429 dziennym
+    licznik staje na limicie
+  - kolejnosc modeli: najpierw te ze znanym limitem, ktory starcza na
+    zadanie (po randze), potem nieznane — flash-lite przed flash przed
+    pro (w darmowej wersji limity rosna w te strone), za male wcale.
+    Kazdy nowy model kosztuje najwyzej jedno zadanie, potem jest
+    zapamietany na stale
+  - po limicie w trakcie zadania MAIN dostaje fakt: "limit dotyczy
+    modelu X na kluczu Y; nastepne zadanie pojdzie na Z" albo "wszystkie
+    modele wyczerpane, najblizszy wraca o HH:MM, program czeka sam"
+  - opis programu dla MAIN-a: formularze, profile i ustawienia na
+    stronach wypelnia Gemini; uzytkownik loguje sie i podaje to, czego
+    nikt z nas nie wie (hasla, kody, dane osobowe)
 
 =========================================================================
