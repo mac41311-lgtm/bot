@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v458
+JAK TO DZIALA — AEL-MINI v459
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -7,9 +7,10 @@ W JEDNYM ZDANIU
 -------------------------------------------------------------------------
 
 Zespol na DeepSeeku rozmawia o Twoim celu, MAIN decyduje, co robimy,
-Gemini to wykonuje na telefonie, a Python jest rekami i oczami:
-kladzie kod, ktory ktos z zespolu napisal, i mowi wszystkim, co
-naprawde wyszlo.
+i od v459 sam wykonuje akcje przez Pythona (RUN); Gemini zostaje jako
+wykonawca do zadan, ktore wymagaja patrzenia i probowania (TASK).
+Python jest rekami i oczami: kladzie kod, ktory ktos z zespolu
+napisal, wykonuje akcje MAIN-a i mowi wszystkim, co naprawde wyszlo.
 
 
 =========================================================================
@@ -23,11 +24,12 @@ CZESC 1. TRZY WARSTWY
      |  mysla i pisza — nie wykonuja niczego
      v
     PYTHON (agent.py)                    <-- RECE I OCZY
-     |  kladzie kod autora na dysk, uruchamia proste rzeczy sam,
-     |  pokazuje strone i ekran, pilnuje autorstwa i limitow
+     |  wykonuje akcje z RUN MAIN-a (te same 41 narzedzi, do 12
+     |  akcji na jedno RUN), kladzie kod autora na dysk, pokazuje
+     |  strone i ekran, pilnuje autorstwa i limitow
      v
-    GEMINI (wykonawca, przez API)        <-- PALEC
-     |  41 narzedzi, do 25 wywolan na zadanie
+    GEMINI (wykonawca, przez API)        <-- PALEC, gdy trzeba patrzec
+     |  41 narzedzi, do 25 wywolan na zadanie (TASK)
      v
     TERMUX + ANDROID + CHROME            <-- TELEFON
 
@@ -36,7 +38,7 @@ CZESC 1. TRZY WARSTWY
 CZESC 2. KTO JEST KIM
 =========================================================================
 
-  MAIN     decyduje: TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+  MAIN     decyduje: RUN / TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
   Tomek    szuka sensownego nastepnego kroku
   Kamil    sprawdza fakty, szuka w sieci
   Marek    ocenia plany i szuka slabych punktow
@@ -528,5 +530,48 @@ CZESC 18. CO ZMIENILO v458 (z biegu 2026-09-27 22:11, na v457)
     jego krok, wiec drobne decyzje wykonawcy ida w te sama strone
   - MAIN wie, ze zrzut ekranu to PNG, ktorego nikt nie oglada; tekst
     daja chrome_inspect i android_state
+
+=========================================================================
+
+=========================================================================
+CZESC 19. CO ZMIENILO v459 — RUN: MAIN WYKONUJE SAM
+=========================================================================
+
+  PYTANIE UZYTKOWNIKA: czy MAIN (DeepSeek) nie moglby wykonywac sam,
+  bez Gemini, skoro Python i tak ma rece?
+
+  ODPOWIEDZ W KODZIE — hybryda, nie zamiana:
+  - nowa decyzja RUN: {"type":"RUN","reason":"...","actions":[
+    {"tool":"termux_run","args":{"command":"ls"}}, ...]}
+    Python wykonuje akcje po kolei tymi samymi narzedziami, ktore
+    ma Gemini (dispatch_tool). Do 12 akcji na jedno RUN
+    (RUN_MAX_AKCJI w srodowisku). Przy bledzie narzedzia Python
+    zatrzymuje sie i mowi, ile akcji nie wykonal — poza "nie ma
+    pliku" i podobnymi, ktore sa odpowiedzia, nie awaria.
+  - MAIN dostaje na starcie liste narzedzi z argumentami (41 sztuk),
+    a po RUN pelne wyniki kazdej akcji ("Wyniki akcji RUN:", do
+    3500 znakow na akcje, 14 000 razem) — na nich pracuje w
+    nastepnym kroku. Wyniki nie sa nadpisywane komunikatem o
+    blokadzie Gemini.
+  - TASK zostaje: to Gemini patrzy na strone po kazdym kliknieciu
+    i sam wybiera nastepny ruch (do 25 wywolan w jednym zadaniu).
+    MAIN w RUN widzi wynik dopiero po zakonczeniu calej listy —
+    dlatego RUN do rzeczy przewidywalnych (komendy, pliki, git,
+    pip, otwarcie strony i odczyt), TASK do klikania po stronach.
+  - blokada Gemini (limity dnia) nie zatrzymuje programu: MAIN
+    dostaje fakt "RUN wykonuje akcje bez Gemini" i dziala dalej.
+    Program czeka dopiero wtedy, gdy MAIN mimo to dwa razy z rzedu
+    zlecil TASK.
+  - status RUN_TOOL_ERROR liczy sie jak klopot (pomiar Eli, ruchy
+    w kolko) tak samo jak bledy wykonania Gemini.
+
+  DLACZEGO NIE "WSZYSTKO PRZEZ MAIN-a":
+  - DeepSeek przez przegladarke to ok. 90 wiadomosci na godzine na
+    konto; kazde klikniecie jako osobna runda MAIN-a zjadloby ten
+    budzet w kwadrans. Gemini w TASK robi 25 ruchow za jedna
+    wiadomosc MAIN-a.
+  - MAIN z myśleniem odpowiada 30-120 s; petla "kliknij, spojrz,
+    kliknij" na tym tempie to minuty na kazdy formularz.
+  - RUN nie widzi ekranu miedzy akcjami — Gemini widzi.
 
 =========================================================================

@@ -3,16 +3,17 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v458
+AEL-MINI AUTONOMOUS AGENT v459
 
-ARCHITEKTURA (stan na v458 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v459 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
                         v
         MAIN + ZESPOL (DeepSeek, chat.deepseek.com przez token
         przegladarkowy — opendeep; kazda rola we wlasnej rozmowie)
-           MAIN decyduje: TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+           MAIN decyduje: RUN / TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+           RUN = MAIN wykonuje sam, Python jest rekami (v459)
            Tomek plan, Kamil fakty (szukanie w sieci), Marek krytyka,
            Bartek KOD, Ola relacja, Wojtek uzytkownik, Ela postep,
            Piotr przeglad kodu, Ania poprawka
@@ -2794,7 +2795,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v458")
+    print("             AEL-MINI AUTONOMOUS AGENT v459")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3057,7 +3058,7 @@ def init_deepseek():
 # ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
 # oddac decyzje; bez nich kazdy krok konczylby sie
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
-MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK",\n  "ask_question": ""\n}"""
+MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -6610,6 +6611,7 @@ _STATUSY_KLOPOTU = tuple(sorted(set(
         "FAILED",
         "BRAK_KODU_DO_ZAPISU",
         "DONE_REJECTED_VERIFICATION_FAILED",
+        "RUN_TOOL_ERROR",
     )
 )))
 
@@ -23175,7 +23177,8 @@ def gemini_execute_task(task_id, task, success_condition=''):
         return {
             "ok": False,
             "status": "NO_GEMINI_CLIENT",
-            "error": "Nie ma czym tego wykonać."
+            "error": "Brak klucza Gemini — zadanie nie poszło.",
+            "message": "RUN wykonuje akcje bez Gemini."
         }
 
     # v449: najwyzszy stopien drabinki modeli, ktory ma teraz limit.
@@ -26756,6 +26759,200 @@ def _uruchom_jako_usluge(path, command, powod):
         "tool_warnings": [],
         "confirmed_texts": [],
     }
+
+
+# ============================================================
+# RUN — MAIN WYKONUJE SAM, PYTHON JEST REKAMI (v459)
+# ============================================================
+#
+# Uzytkownik: "czy lepiej, jak MAIN bedzie sam wykonywal? dalo by sie
+# tak napisac program, by Python z wszystkim sobie radzil sam, przez
+# MAIN-a?". Da sie — i to nie zamiast Gemini, tylko obok.
+#
+# MAIN (DeepSeek) rozumuje lepiej niz Gemini flash-lite i widzi caly
+# cel, ale kazda jego wiadomosc to 6-60 s i jedna z ~90 na godzine na
+# konto. Gemini jest szybszy na pojedynczym wywolaniu, ale gubi sie na
+# stronach i ma limity. Wiec MAIN dostaje wybor: RUN = lista do
+# _RUN_MAX_AKCJI akcji, wykonana tu, od razu, tymi samymi narzedziami
+# co u Gemini (dispatch_tool), z pelnymi wynikami z powrotem — w tym
+# numerowana lista elementow strony, po ktorej klika chrome_click(nr).
+# TASK zostaje dla dluzszej roboty. Bez klucza Gemini program dziala
+# dalej — przez RUN.
+
+_RUN_MAX_AKCJI = int(os.environ.get("RUN_MAX_AKCJI", "12"))
+
+
+def _wykonaj_akcje_maina(decision, step):
+    """Wykonuje akcje z decyzji RUN po kolei; zatrzymuje sie na bledzie."""
+
+    akcje = decision.get("actions")
+    if akcje is None:
+        akcje = decision.get("akcje")
+    if isinstance(akcje, dict):
+        akcje = [akcje]
+    if not isinstance(akcje, list) or not akcje:
+        return {
+            "ok": False,
+            "status": "RUN_BEZ_AKCJI",
+            "executed_by": "main_run",
+            "message": "RUN bez listy actions — nic nie wykonałem.",
+            "tool_calls": 0, "tool_trace": [], "tool_warnings": [],
+            "confirmed_texts": [], "wyniki_run": []
+        }
+
+    trace, wyniki, warnings = [], [], []
+    ok_all, status, pominiete = True, "RUN_FINISHED", 0
+
+    for i, akcja in enumerate(akcje[:_RUN_MAX_AKCJI]):
+
+        if not isinstance(akcja, dict):
+            continue
+
+        name = str(
+            akcja.get("tool") or akcja.get("narzedzie") or akcja.get("name") or ""
+        ).split(":")[-1].strip()
+
+        args = akcja.get("args")
+        if args is None:
+            args = akcja.get("arguments", akcja.get("argumenty", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+
+        if not name:
+            continue
+
+        log("MAIN", "RUN #" + str(i + 1) + ": " + name)
+        zapisz_zdarzenie("narzedzie", nazwa=name, argumenty=args)
+
+        try:
+            result = dispatch_tool(name, args)
+        except Exception as e:
+            result = {"ok": False, "error": str(e), "error_type": type(e).__name__}
+
+        if isinstance(result, dict):
+            result = _bez_ostrzezen_pythona(result)
+            for _v in result.values():
+                if isinstance(_v, str):
+                    _znane_dodaj(_v)
+
+        _zapisz_uruchomienie(name, args, result)
+
+        log(
+            "MAIN",
+            "wynik: " + short(json.dumps(result, ensure_ascii=False, default=str), 1000)
+        )
+
+        zapisz_zdarzenie(
+            "wynik", nazwa=name,
+            ok=bool(result.get("ok", True) if isinstance(result, dict) else True),
+            wynik=result
+        )
+
+        trace.append({
+            "tool": name,
+            "ok": result.get("ok") if isinstance(result, dict) else None,
+            "evidence": _short_tool_evidence(result),
+            "cel_akcji": _cel_akcji_narzedzia(name, args, result),
+            "komenda": (
+                str(args.get("command") or "")
+                if name.startswith("termux_run") else ""
+            )
+        })
+
+        wyniki.append({"tool": name, "args": args, "wynik": result})
+
+        padlo = isinstance(result, dict) and result.get("ok") is False
+
+        if padlo and (
+            _shell_failure_is_just_missing_file(name, result)
+            or _brak_to_odpowiedz(name, args, result)
+        ):
+            padlo = False
+
+        if padlo:
+            ok_all, status = False, "RUN_TOOL_ERROR"
+            pominiete = len(akcje) - (i + 1)
+            break
+
+    if len(akcje) > _RUN_MAX_AKCJI and status == "RUN_FINISHED":
+        warnings.append(
+            "RUN miał " + str(len(akcje)) + " akcji; wykonałem "
+            + str(_RUN_MAX_AKCJI) + " (limit na jedno RUN)."
+        )
+        pominiete = len(akcje) - _RUN_MAX_AKCJI
+
+    wynik = {
+        "ok": ok_all,
+        "status": status,
+        "executed_by": "main_run",
+        "tool_calls": len(wyniki),
+        "tool_trace": trace,
+        "wyniki_run": wyniki,
+        "tool_warnings": warnings,
+        "confirmed_texts": [],
+        "pominiete_akcje": pominiete,
+        "dowody": _dowody_z_wykonania(trace, warnings),
+        "report": (
+            "MAIN wykonał " + str(len(wyniki)) + " z " + str(len(akcje))
+            + " akcji" + (" — zatrzymał się na błędzie " + str(wyniki[-1]["tool"])
+                          if status == "RUN_TOOL_ERROR" and wyniki else "")
+            + "."
+        )
+    }
+
+    try:
+        write_json(
+            RESULTS_DIR / (
+                "run_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_"
+                + uuid.uuid4().hex[:6] + ".json"
+            ),
+            dict(wynik, task=str(decision.get("reason") or ""))
+        )
+        write_json(LAST_RESULT_FILE, wynik)
+    except Exception:
+        pass
+
+    try:
+        skopiuj_przebieg_na_telefon()
+    except Exception:
+        pass
+
+    return wynik
+
+
+def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
+    """Pelne wyniki akcji RUN dla MAIN-a — to on na nich pracuje."""
+
+    wyniki = (last_result or {}).get("wyniki_run") or []
+    czesci = []
+    ile = 0
+
+    for i, w in enumerate(wyniki):
+        tekst = (
+            str(i + 1) + ". " + str(w.get("tool")) + " "
+            + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
+            + "\n" + short(json.dumps(w.get("wynik"), ensure_ascii=False, default=str), na_akcje)
+        )
+        ile += len(tekst)
+        if ile > razem:
+            czesci.append("(dalsze wyniki pominięte — za długie)")
+            break
+        czesci.append(tekst)
+
+    if not czesci:
+        return ""
+
+    pominiete = int(last_result.get("pominiete_akcje") or 0)
+
+    return (
+        "Wyniki akcji RUN:\n" + "\n\n".join(czesci)
+        + ("\nNie wykonałem " + str(pominiete) + " kolejnych akcji." if pominiete else "")
+    )
 
 
 def _run_script_directly(path, task_text):
@@ -34842,6 +35039,17 @@ def _main_human_line(decision, dtype):
         instructions = str(decision.get("instructions") or "").strip()
         return instructions or reason or "Potrzebna Twoja pomoc."
 
+    if dtype == "RUN":
+        akcje = decision.get("actions") or decision.get("akcje") or []
+        nazwy = [
+            str((a or {}).get("tool") or (a or {}).get("narzedzie") or "?")
+            for a in (akcje if isinstance(akcje, list) else [akcje])
+        ]
+        return (
+            "Wykonuję sam (" + str(len(nazwy)) + "): " + ", ".join(nazwy[:12])
+            + (" — " + reason if reason else "")
+        )
+
     return reason or (dtype or "(brak decyzji)")
 
 
@@ -35000,6 +35208,12 @@ def main_decide(
     # code_review/checks/attempt_count dokładamy osobno — kondensator
     # ich nie zna, a to na nie wskazują wyjaśnienia statusów wyżej.
     _facts = _condense_last_result_for_team(last_result, 3000)
+
+    # v459: po RUN MAIN pracuje na pelnych wynikach, nie na skrocie.
+    if isinstance(last_result, dict) and last_result.get("executed_by") == "main_run":
+        _blok_run = _wyniki_run_blok(last_result)
+        if _blok_run:
+            _facts += "\n" + _blok_run
 
     # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
     # poprawki Ani) — raz, do MAIN-a.
@@ -36498,6 +36712,19 @@ _ROLE_ZNAJACE_PROGRAM = (
 #   - glosy po kolei: v406; ASK w tym samym kroku: v363,
 #   - sciezki kodu na dysku: v419; ekran po dzialaniu na nim: v419.
 # Tylko MAIN: v345 dalej trzyma zespol z dala od tego, kto wykonuje.
+def _lista_narzedzi_dla_maina():
+    """41 narzedzi z nazwami argumentow — raz, w pierwszej wiadomosci."""
+
+    try:
+        czesci = []
+        for t in _gemini_tools_legacy():
+            props = list((t.get("parameters") or {}).get("properties", {}).keys())
+            czesci.append(str(t.get("name")) + "(" + ", ".join(props) + ")")
+        return "; ".join(czesci)
+    except Exception:
+        return ""
+
+
 _JAK_TO_DZIALA = (
     "Kilka słów o tym, jak to wszystko działa.\n\n"
     "Program chodzi na telefonie z Androidem, w Termuxie. To zwykły "
@@ -36526,6 +36753,15 @@ _JAK_TO_DZIALA = (
     "pamięta poprzednie zadania z tego celu — to jedna rozmowa na "
     "cały cel — więc w zadaniu nie trzeba powtarzać tego, co już "
     "widział i robił.\n\n"
+    "RUN to wykonanie bez Gemini: podajesz listę akcji (do "
+    + str(_RUN_MAX_AKCJI) + "), a program wykonuje je po kolei tymi "
+    "samymi narzędziami i oddaje Ci pełne wyniki — także numerowaną "
+    "listę elementów strony, po której działa chrome_click(nr) i "
+    "chrome_type(pole). Na błędzie narzędzia zatrzymuje się i mówi, "
+    "które akcje pominął. RUN działa zawsze, także gdy Gemini ma "
+    "wyczerpany limit. TASK zostaje, gdy chcesz oddać Gemini dłuższą "
+    "robotę na własną rękę. Narzędzia (te same dla RUN i Gemini): "
+    + _lista_narzedzi_dla_maina() + ".\n\n"
     "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
     "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
     "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
@@ -39841,27 +40077,62 @@ def run_agent(goal):
                 if _najbl else "czas odnowienia nieznany"
             )
 
-            log(
-                "GEMINI",
-                "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
-            )
+            # v459: MAIN moze wykonywac sam (RUN), wiec blokada Gemini
+            # nie zatrzymuje programu. Czekamy dopiero wtedy, gdy MAIN
+            # mimo faktu dwa razy z rzedu zlecil TASK.
+            if globals().get("_taski_przy_blokadzie", 0) < 2:
 
-            last_result = {
-                "status":
-                    "GEMINI_QUOTA_EXHAUSTED",
-                "message":
-                    "Limit wykonawcy wyczerpany — " + _kiedy
-                    + ". Nowy klucz API można dodać do "
-                    + str(GEMINI_KEYS_DIR) + "."
-            }
+                # Po RUN MAIN pracuje na wynikach swoich akcji — nie
+                # zastepujemy ich komunikatem o blokadzie (o niej juz wie).
+                if (
+                    isinstance(last_result, dict)
+                    and last_result.get("executed_by") == "main_run"
+                ):
+                    pass
+
+                elif (
+                    not isinstance(last_result, dict)
+                    or last_result.get("status") != "GEMINI_QUOTA_EXHAUSTED"
+                ):
+                    log(
+                        "GEMINI",
+                        "WYKONAWCA ZABLOKOWANY — " + _kiedy
+                        + ". MAIN może wykonywać sam (RUN)."
+                    )
+
+                    last_result = {
+                        "status": "GEMINI_QUOTA_EXHAUSTED",
+                        "message": (
+                            "Limit wykonawcy wyczerpany — " + _kiedy
+                            + ". RUN wykonuje akcje bez Gemini. Nowy "
+                            "klucz API można dodać do "
+                            + str(GEMINI_KEYS_DIR) + "."
+                        )
+                    }
+
+            else:
+
+                log(
+                    "GEMINI",
+                    "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
+                )
+
+                last_result = {
+                    "status":
+                        "GEMINI_QUOTA_EXHAUSTED",
+                    "message":
+                        "Limit wykonawcy wyczerpany — " + _kiedy
+                        + ". Nowy klucz API można dodać do "
+                        + str(GEMINI_KEYS_DIR) + "."
+                }
 
             # v450: bez lokalnego "import time" — robilo z `time`
             # zmienna lokalna CALEGO run_agent, wiec time.sleep(1) nizej
             # (Gemini zablokowany przy nowym zadaniu) rzucilby
             # UnboundLocalError, gdyby ta galaz nie przeszla wczesniej.
-            time.sleep(30)
+                time.sleep(30)
 
-            continue
+                continue
 
         # v266: to samo dla awarii KONTA DeepSeek. Bezpiecznik juz
         # istnial i dzialal poprawnie, ale odczekiwal DOPIERO przy
@@ -41334,11 +41605,16 @@ def run_agent(goal):
                     "Nie tworzę nowego taska."
                 )
 
+                globals()["_taski_przy_blokadzie"] = (
+                    globals().get("_taski_przy_blokadzie", 0) + 1
+                )
+
                 last_result = {
                     "status":
                         "GEMINI_QUOTA_EXHAUSTED",
                     "message":
-                        "Brak wykonawcy."
+                        "Brak wykonawcy — to zadanie nie poszło. RUN "
+                        "wykonuje akcje bez Gemini."
                 }
 
                 # Nie wpadaj w pętlę.
@@ -41385,6 +41661,31 @@ def run_agent(goal):
                     _po_uruchomieniu_kodu_bartka(
                         _code_ready_path, result
                     )
+
+            continue
+
+        # ------------------------------------------------------
+        # RUN — MAIN wykonuje sam (v459)
+        # ------------------------------------------------------
+
+        if dtype == "RUN":
+
+            last_result = _wykonaj_akcje_maina(decision, step)
+            globals()["_taski_przy_blokadzie"] = 0
+
+            _w_kolko = _zauwaz_powtarzane_ruchy(last_result)
+
+            if _w_kolko:
+                log("MAIN", _w_kolko)
+                _pending_team_warnings.append(_w_kolko)
+
+            sep = "─" * 60
+            print()
+            print(sep)
+            print("  WYKONAŁ: Python na polecenie MAIN-a (RUN)")
+            print("  AKCJE: " + str(last_result.get("tool_calls")) + "  STATUS: " + str(last_result.get("status")))
+            print(sep)
+            print()
 
             continue
 

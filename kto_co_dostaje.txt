@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v458
+KTO CO DOSTAJE I KIEDY — AEL-MINI v459
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -15,9 +15,10 @@ Kazda rola ma wlasna rozmowe na DeepSeeku. Pierwsza wiadomosc:
 
   MAIN dodatkowo  (v422)
       "Kilka słów o tym, jak to wszystko działa": kto jest w
-      zespole, ze TASK wykonuje Gemini (do 25 wywolan narzedzi), ze
-      kod kladzie Python, jak dziala ASK (do 4 pytan na krok),
-      NEED_USER_LOGIN, DONE i FAILED
+      zespole, ze RUN wykonuje Python (v459: lista 41 narzedzi z
+      argumentami, do 12 akcji na RUN), ze TASK wykonuje Gemini
+      (do 25 wywolan narzedzi), ze kod kladzie Python, jak dziala
+      ASK (do 5 pytan na krok), NEED_USER_LOGIN, DONE i FAILED
       + ksztalty JSON-a decyzji
 
   Bartek, Piotr, Ania, Tomek, Marek, Ola, Ela  (v424)
@@ -56,6 +57,9 @@ CZESC 2. CO DOSTAJE MAIN W KAZDYM KROKU
 
   "Co się właśnie stało:"
     - jak sie skonczyl ostatni krok (status)
+    - po RUN (v459): "Wyniki akcji RUN:" — pelny wynik kazdej
+      akcji (do 3500 znakow na akcje, 14 000 razem) i ile akcji
+      Python nie wykonal po bledzie
     - "Gemini napisał:" — raport wykonawcy, oznaczony jako jego
       slowa, nie pomiar
     - slad narzedzi: ile wywolan, ktore sie nie udaly, co zwrocily
