@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v452
+AEL-MINI AUTONOMOUS AGENT v453
 
-ARCHITEKTURA (stan na v452 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v453 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v452")
+    print("             AEL-MINI AUTONOMOUS AGENT v453")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2876,6 +2876,116 @@ def _activate_account_for_role(name):
         opendeep.configure(api_key=token)
 
 
+# ============================================================
+# STYK Z BIBLIOTEKA OPENDEEP (v453)
+# ============================================================
+#
+# opendeep to cienka warstwa nad strona chat.deepseek.com: tworzy
+# rozmowe (/chat_session/create), rozwiazuje proof-of-work
+# (/chat/create_pow_challenge, WebAssembly przez wasmtime+numpy) i
+# czyta strumien SSE z /chat/completion. Token to userToken z
+# localStorage przegladarki. Program nie uzywa jej send_message()
+# — ma wlasna kopie czytnika strumienia (_deepseek_raw_post_with_action),
+# bo biblioteka wyrzuca status odpowiedzi, myslenie i pole
+# search_enabled, na ktorych opiera sie polowa obslugi rozmow
+# (v189-v440). Naglowki i sesje HTTP bierze z biblioteki, wiec jej
+# aktualizacja przechodzi na program bez zmian w kodzie.
+#
+# Trzy rzeczy, ktorych brakowalo na tym styku:
+#   1. LIMIT CZASU. Zadne zadanie HTTP biblioteki ani nasza kopia nie
+#      mialy timeoutu: zerwane WiFi w trakcie strumienia wieszalo caly
+#      program w nieskonczonosc, bez jednej linii w logu. Teraz kazde
+#      zadanie ma limit (_DEEPSEEK_HTTP_TIMEOUT), takze tworzenie
+#      rozmowy w bibliotece — patrz _zaloz_limit_czasu_http().
+#   2. TRESC BLEDU. raise_for_status() i "Unexpected Content-Type"
+#      gubily cialo odpowiedzi — a to w nim serwer mowi "invalid
+#      message id" albo "Messages too frequent", po ktorych program
+#      rozpoznaje zerwana rozmowe i przeciazenie. Cialo idzie do tekstu
+#      wyjatku, jak w bibliotece.
+#   3. BEZ PODWOJNEJ WYSYLKI. Awaryjny powrot do send_message()
+#      biblioteki wysylal te sama wiadomosc drugi raz po KAZDYM bledzie
+#      naszej sciezki (takze po HTTP 4xx/5xx) — dwie wiadomosci w
+#      rozmowie, jedna odpowiedz. Powrot zostaje tylko dla zmiany
+#      ksztaltu biblioteki (brak metody/pola), nie dla bledu serwera.
+#
+# Fakty, ktore program mowi na starcie: czym rozmawia (curl_cffi
+# udajacy Chrome — tego biblioteka chce przy Cloudflare — albo zwykle
+# requests) i czy umie rozwiazac proof-of-work. Bez POW serwer moze
+# odrzucac wiadomosci; dotad ta proba byla polykana po cichu.
+
+# (polaczenie, czytanie miedzy porcjami strumienia) — myslenie i
+# szukanie w sieci potrafia milczec dlugo, ale nie w nieskonczonosc.
+_DEEPSEEK_HTTP_TIMEOUT = (
+    float(os.environ.get("DEEPSEEK_CONNECT_TIMEOUT", "20")),
+    float(os.environ.get("DEEPSEEK_READ_TIMEOUT", "300")),
+)
+
+
+def _limit_dla_sesji(sesja_http):
+    """requests bierze pare (polaczenie, czytanie); inne — jedna liczbe."""
+
+    modul = str(type(sesja_http).__module__ or "")
+
+    if modul.startswith("requests"):
+        return _DEEPSEEK_HTTP_TIMEOUT
+
+    return max(_DEEPSEEK_HTTP_TIMEOUT)
+
+
+def _zaloz_limit_czasu_http(model):
+    """
+    Kazde zadanie sesji HTTP biblioteki dostaje limit czasu, o ile
+    wywolujacy nie podal wlasnego. Obejmuje to tworzenie rozmowy
+    (/chat_session/create), ktore biblioteka robi bez limitu.
+    """
+
+    sesja = getattr(model, "session", None)
+    oryginal = getattr(sesja, "request", None)
+
+    if sesja is None or not callable(oryginal):
+        return
+
+    limit = _limit_dla_sesji(sesja)
+
+    def _z_limitem(*args, **kwargs):
+        kwargs.setdefault("timeout", limit)
+        return oryginal(*args, **kwargs)
+
+    try:
+        sesja.request = _z_limitem
+    except Exception:
+        pass
+
+
+def _pow_dostepny():
+    try:
+        import wasmtime  # noqa: F401
+        import numpy  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _fakty_o_transporcie_deepseek():
+    """Czym program rozmawia ze strona i czy umie rozwiazac POW."""
+
+    try:
+        import opendeep.models as _om
+        curl = bool(getattr(_om, "HAS_CURL_CFFI", False))
+    except Exception:
+        curl = False
+
+    return (
+        ("transport: curl_cffi (jak Chrome)" if curl
+         else "transport: requests (bez curl_cffi — przy blokadzie "
+              "Cloudflare: pip install curl_cffi)")
+        + " | proof-of-work: "
+        + ("jest" if _pow_dostepny()
+           else "BRAK (pip install wasmtime numpy) — serwer może "
+                "odrzucać wiadomości")
+    )
+
+
 def init_deepseek():
 
     global deepseek_model
@@ -2919,10 +3029,12 @@ def init_deepseek():
             )
         )
 
+        _zaloz_limit_czasu_http(deepseek_model)
+
         log(
             "DEEPSEEK",
-            "OpenDeep OK — "
-            + DEEPSEEK_MODEL
+            "OpenDeep OK — " + DEEPSEEK_MODEL + " | "
+            + _fakty_o_transporcie_deepseek()
         )
 
         return True
@@ -4598,6 +4710,24 @@ def _clear_session_state(name):
         pass
 
 
+# v453: role, ktore rozmawiaja BEZ myslenia (tryb szybki strony).
+#
+# ZMIERZONE (zdarzenia biegu 2026-09-26 14:04): Ela oddala 228 znakow
+# JSON-a po 49 s i 1322 po 22 s; Ola streszcza cudzy tekst. Zadna z
+# nich nie rozumuje nad celem — czeka sie na myslenie, z ktorego nic
+# nie wchodzi do odpowiedzi. MAIN, Tomek, Marek, Bartek, Piotr, Ania
+# i Wojtek mysla jak dotad; Kamil — patrz _szukanie_bez_myslenia().
+# DEEPSEEK_BEZ_MYSLENIA="BROWSER,PROGRESS_ESTIMATOR" zmienia liste;
+# pusta wartosc = wszyscy z mysleniem.
+_ROLE_BEZ_MYSLENIA = tuple(
+    r.strip().upper()
+    for r in os.environ.get(
+        "DEEPSEEK_BEZ_MYSLENIA", "BROWSER,PROGRESS_ESTIMATOR"
+    ).split(",")
+    if r.strip()
+)
+
+
 def start_session(name, system_prompt):
 
     try:
@@ -4607,6 +4737,14 @@ def start_session(name, system_prompt):
         session = (
             deepseek_model.start_chat()
         )
+
+        # v453: Ola (streszcza) i Ela (procent) bez myslenia — patrz
+        # _ROLE_BEZ_MYSLENIA.
+        if name in _ROLE_BEZ_MYSLENIA:
+            try:
+                session.thinking_enabled = False
+            except Exception:
+                pass
 
         # v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil
         # (RESEARCHER) dostaje NATYWNĄ zdolność szukania w sieci
@@ -5553,6 +5691,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             _ods_config.base_url + "/chat/create_pow_challenge",
             headers=headers,
             json={"target_path": "/api/v0/chat/completion"},
+            timeout=_limit_dla_sesji(model.session),
         )
 
         if pow_resp.ok:
@@ -5574,8 +5713,25 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         headers=headers,
         json=payload,
         stream=True,
+        timeout=_limit_dla_sesji(model.session),
     )
-    response.raise_for_status()
+
+    # v453: cialo odpowiedzi idzie do wyjatku — to w nim serwer mowi
+    # "invalid message id" / "Messages too frequent" (patrz
+    # _ZERWANA_ROZMOWA_RE, _PRZECIAZENIE_RE).
+    def _cialo():
+        try:
+            return short(str(response.text or ""), 600)
+        except Exception:
+            return ""
+
+    try:
+        response.raise_for_status()
+    except Exception as e:
+        raise RuntimeError(
+            "HTTP " + str(getattr(response, "status_code", "?"))
+            + ": " + str(e) + " | " + _cialo()
+        ) from None
 
     if "text/event-stream" not in response.headers.get(
         "Content-Type", ""
@@ -5583,6 +5739,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         raise RuntimeError(
             "Unexpected Content-Type: "
             + response.headers.get("Content-Type", "")
+            + " | " + _cialo()
         )
 
     full_text = ""
@@ -6579,8 +6736,13 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
         return _deepseek_raw_post_with_action(
             session, prompt, action
         )
-    except Exception as e:
+    except (AttributeError, TypeError, ImportError, KeyError) as e:
 
+        # v453: powrot do send_message() biblioteki TYLKO, gdy nasza
+        # kopia nie pasuje juz do jej ksztaltu (brak metody, pola,
+        # modulu). Blad serwera i sieci idzie w gore — deepseek() ma
+        # na to restart i ponowienie; wysylanie tej samej wiadomosci
+        # drugi raz od razu tutaj dawalo dwie wiadomosci w rozmowie.
         # v260: gdy prosilismy o action='continue', awaryjne
         # session.send_message() NIE jest tym samym — wysyla nowa
         # wiadomosc (jedna spacje) i dostaje SWIEZY tekst, ktory
