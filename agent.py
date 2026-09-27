@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v457
+AEL-MINI AUTONOMOUS AGENT v458
 
-ARCHITEKTURA (stan na v457 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v458 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v457")
+    print("             AEL-MINI AUTONOMOUS AGENT v458")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6583,6 +6583,7 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "WNIOSEK_ZE_SIE_NIE_DA",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
+    "ASK_PRZENIESIONE",
 )
 
 
@@ -11696,6 +11697,37 @@ def _aktywuj_karte(tab):
     return ok
 
 
+def _obudz_karte(tab):
+    """
+    v458: karta, ktora CDP nie odpowiada, dostaje swoj adres od nowa
+    przez Android (`am start`); zwraca karte, ktora ten adres pokazuje
+    (te sama albo nowa), albo None.
+    """
+
+    adres = str((tab or {}).get("url") or "")
+
+    if not adres.lower().startswith(("http://", "https://")):
+        return None
+
+    wynik = execute_shell(
+        "am start -a android.intent.action.VIEW -p com.android.chrome -d "
+        + shlex.quote(adres),
+        timeout=20
+    )
+
+    if not wynik.get("ok"):
+        return None
+
+    time.sleep(1.5)
+
+    nowa = _karta_z_tym_adresem(adres)
+
+    if nowa is not None and _stan_strony(nowa) is not None:
+        return nowa
+
+    return None
+
+
 def find_tab(
     tab_id=None,
     contains=None
@@ -11947,11 +11979,25 @@ def chrome_inspect(
 
     widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
 
+    # v458: karta wyladowana przez Chrome — Android laduje jej adres od
+    # nowa, my bierzemy karte, ktora go pokazuje.
+    if not widok:
+        _nowa = _obudz_karte(tab)
+        if _nowa is not None:
+            tab = _nowa
+            widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
+
     if not widok:
 
         return {
             "ok": False,
-            "error": "Brak danych strony"
+            "error": "Brak danych strony",
+            "message": (
+                "Karta " + str(tab.get("id")) + " nie odpowiada mimo "
+                "wyciągnięcia na wierzch i ponownego otwarcia adresu. "
+                "chrome_close ją zamyka; chrome_open bez tab_id otwiera "
+                "adres w karcie, która działa."
+            )
         }
 
     return {
@@ -12743,6 +12789,46 @@ def chrome_open(
                 except Exception:
                     pass
 
+    # v458: karta wciaz nie odpowiada (bieg 2026-09-27 22:11, kroki 3-4:
+    # karta 1504 sprzed restartu — Chrome ja wyladowal i CDP milczy
+    # mimo aktywacji). Adres otwiera wtedy sam Android (`am start`),
+    # a my bierzemy karte, ktora go pokazuje — nawet gdy to nowa.
+    if not result.get("ok", False):
+
+        _stara = str(tab.get("id") or "")
+
+        _zapas = execute_shell(
+            "am start -a android.intent.action.VIEW -p "
+            "com.android.chrome -d " + shlex.quote(str(url)),
+            timeout=20
+        )
+
+        if _zapas.get("ok"):
+
+            time.sleep(1.5)
+
+            _nowa = _karta_z_tym_adresem(url)
+
+            if _nowa is not None:
+
+                if str(_nowa.get("id")) != _stara:
+                    log(
+                        "CHROME",
+                        "Karta " + _stara + " nie odpowiada (zamrożona) — "
+                        "adres otworzył Android w karcie "
+                        + str(_nowa.get("id")) + "."
+                    )
+
+                _czekalismy = _poczekaj_az_strona_dojdzie(_nowa)
+
+                return _chrome_open_wynik(
+                    _nowa,
+                    url,
+                    czekalismy=_czekalismy,
+                    metoda="am_start_po_zamrozonej_karcie",
+                    nowa_karta=str(_nowa.get("id")) != _stara
+                )
+
     _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
     if not result.get("ok", False):
@@ -12754,7 +12840,8 @@ def chrome_open(
             "error": "Page.navigate nie powiodlo sie",
             "message": (
                 "Karta " + str(tab["id"]) + " nie odpowiada mimo "
-                "wyciągnięcia na wierzch — " + short(str(result.get("error") or ""), 120)
+                "wyciągnięcia na wierzch i otwarcia adresu przez Android — "
+                + short(str(result.get("error") or ""), 120)
                 + ". chrome_tabs pokazuje karty; chrome_close zamyka "
                 "zbędne, a chrome_open bez tab_id otwiera adres w karcie, "
                 "która działa."
@@ -23320,6 +23407,10 @@ Jak się tu pracuje:
 8. Do usuwania plików i katalogów służy termux_delete: pokazuje
    operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
    operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
+
+CEL, do którego zmierza cały zespół (Twoje zadania to jego kolejne
+kroki):
+{short(str(_current_goal_text or ""), 1200)}
 
 {_stan_telefonu}WARUNEK SUKCESU:
 {success_condition}
@@ -35213,7 +35304,11 @@ def main_decide(
     )
 
 
-_MAIN_ASK_MAX = 4
+_MAIN_ASK_MAX = 5
+
+# v458: pytania MAIN-a, ktore nie zmiescily sie w kroku — ida jako
+# pierwsze w nastepnym (patrz _handle_main_ask i run_agent).
+_ask_przeniesione = []
 
 # v454: gdy zapytany zwroci sie w odpowiedzi do kolegi po imieniu
 # ("Bartku, napisz…"), kolega odpowiada OD RAZU, w tym samym kroku —
@@ -35291,24 +35386,19 @@ def _handle_main_ask(
 
         if zadane >= _MAIN_ASK_MAX:
 
-            # Sam fakt o limicie — nie "niepoprawny JSON", bo JSON byl
-            # poprawny.
+            # v458: pytanie ponad limit NIE przepada i nie konczy kroku
+            # "niepoprawnym JSON-em". Bieg 2026-09-27 22:11, krok 1:
+            # MAIN po czterech pytaniach chcial jeszcze kodu od Bartka,
+            # Python trzy razy odmowil, MAIN trzy razy powtorzyl to samo
+            # i osiem minut rozmowy skonczylo sie UNKNOWN_DECISION.
+            # Pytanie idzie na poczatek nastepnego kroku.
             log(
                 "MAIN",
                 "ASK ponad " + str(_MAIN_ASK_MAX) + " pytania w tym "
-                "kroku — nie wysyłam, mówię o tym MAIN-owi."
+                "kroku — to pytanie idzie na początek następnego kroku."
             )
 
-            decision = parse_json(deepseek(
-                "MAIN",
-                "Pytań w tym kroku było już " + str(_MAIN_ASK_MAX)
-                + " — tego nie wysłałem."
-            ))
-
-            if isinstance(decision, dict) and decision.get("type") == "ASK":
-                return None
-
-            return decision
+            return {"type": "ASK_DALEJ", "pytania": pytania}
 
         odpowiedzi = []
         niewyslane = 0
@@ -36449,6 +36539,9 @@ _JAK_TO_DZIALA = (
     "chrome_click); użytkownik loguje się i podaje to, czego nikt z "
     "nas nie wie — hasła, kody, dane osobowe. DONE i FAILED kończą "
     "cel.\n\n"
+    "Zrzut ekranu (android_screenshot) to plik PNG — nikt z zespołu "
+    "ani Gemini go nie ogląda; co widać na stronie, mówi chrome_inspect, "
+    "a co na ekranie — android_state, oba tekstem. "
     "Po wykonaniu dostajesz fakty z narzędzi: co wypisały, co się "
     "udało, co padło. Kod, który leży już na dysku, widzisz jako "
     "ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na dysku] — "
@@ -39996,16 +40089,28 @@ def run_agent(goal):
         # MAIN
         # ------------------------------------------------------
 
-        raw = main_decide(
-            goal,
-            step,
-            team,
-            last_result,
-            step_chrome_text,
-            step_android_text
-        )
+        if _ask_przeniesione:
 
-        decision = parse_json(raw)
+            # v458: najpierw pytania z poprzedniego kroku — MAIN dostaje
+            # odpowiedzi razem z tym, co sie stalo, i wtedy decyduje.
+            _pyt = list(_ask_przeniesione)
+            del _ask_przeniesione[:]
+
+            raw = json.dumps(_pyt, ensure_ascii=False)
+            decision = dict(_pyt[0])
+
+        else:
+
+            raw = main_decide(
+                goal,
+                step,
+                team,
+                last_result,
+                step_chrome_text,
+                step_android_text
+            )
+
+            decision = parse_json(raw)
 
         if isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -40019,6 +40124,30 @@ def run_agent(goal):
                 step_android_text,
                 raw=raw
             )
+
+        # v458: pytania ponad limit — na poczatek nastepnego kroku.
+        if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
+
+            _ask_przeniesione[:] = list(decision.get("pytania") or [])
+
+            _kogo = ", ".join(
+                _ROLE_DISPLAY_NAME.get(
+                    str(q.get("ask_role") or "").upper(),
+                    str(q.get("ask_role") or "")
+                )
+                for q in _ask_przeniesione
+            )
+
+            last_result = {
+                "status": "ASK_PRZENIESIONE",
+                "message": (
+                    "W kroku " + str(step) + " MAIN zadał już "
+                    + str(_MAIN_ASK_MAX) + " pytań; pytanie do " + _kogo
+                    + " poszło na początek kroku " + str(step + 1) + "."
+                )
+            }
+
+            continue
 
         if decision is not None:
 

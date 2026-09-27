@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v457
+JAK TO DZIALA — AEL-MINI v458
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -203,7 +203,7 @@ CZESC 8. LICZBY, KTORE RZADZA
 =========================================================================
 
   40        krokow na cel (AGENT_MAX_STEPS)
-  4         pytania ASK MAIN-a na krok
+  5         pytania ASK MAIN-a na krok (nadmiar idzie na nastepny krok)
   25        wywolan narzedzi na jedno zadanie Gemini (GEMINI_MAX_TOOL_CALLS)
   4         ten sam wynik z tego samego wywolania pod rzad = czekanie
   2         to samo wywolanie juz bylo = od trzeciego wynik z pamieci
@@ -498,5 +498,35 @@ CZESC 17. CO ZMIENILO v457 (z biegu 2026-09-27 21:19, na v456)
   polozeniem) zostaje jako druga droga obok Chrome przez CDP — obie sa
   do wyboru wykonawcy; CDP daje numerowane elementy i tresc strony,
   ekran daje to, co widac.
+
+=========================================================================
+
+
+=========================================================================
+CZESC 18. CO ZMIENILO v458 (z biegu 2026-09-27 22:11, na v457)
+=========================================================================
+
+  OCENA BIEGU (9 krokow, 23 min, przerwany przez uzytkownika):
+  - krok 1 (8 min): MAIN zapytal Tomka, Kamila, Marka, znow Kamila, a
+    piate pytanie (kod od Bartka) Python odrzucil jako "ponad limit";
+    MAIN powtorzyl je trzy razy i krok skonczyl sie bez decyzji
+  - kroki 3-4: karta 1504 sprzed restartu nie odpowiadala na CDP
+    nawet po wyciagnieciu na wierzch (Chrome ja wyladowal)
+  - 11 z 40 wywolan to android_screenshot — MAIN kazal robic zrzut po
+    kazdym etapie, a zrzutu nikt nie oglada
+  - realny postep: 1 aktywne ogloszenie OLX (z poprzedniego biegu),
+    "O mnie" wpisane na Useme (zapis niepewny), 0 zl
+
+  CO ZMIENIONE:
+  - pytanie ponad limit ASK nie przepada: idzie na poczatek
+    nastepnego kroku, MAIN dostaje odpowiedz razem z tym, co sie stalo
+    (limit 4 -> 5)
+  - karta, ktora nie odpowiada mimo aktywacji: adres otwiera Android
+    (`am start`), program bierze karte, ktora go pokazuje — takze w
+    chrome_inspect
+  - Gemini dostaje na poczatku rozmowy CEL zespolu — kazde zadanie to
+    jego krok, wiec drobne decyzje wykonawcy ida w te sama strone
+  - MAIN wie, ze zrzut ekranu to PNG, ktorego nikt nie oglada; tekst
+    daja chrome_inspect i android_state
 
 =========================================================================
