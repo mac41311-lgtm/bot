@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v454
+JAK TO DZIALA — AEL-MINI v455
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -388,5 +388,40 @@ CO ZOSTAJE JAKO GRANICA (i dlaczego):
     razy zamazany numer telefonu
   - 25 wywolan na zadanie, 40 krokow na cel, 90 wiadomosci na godzine
     na konto — limity strony i API, nie programu
+
+=========================================================================
+
+
+=========================================================================
+CZESC 15. CO ZMIENILO v455 (z biegu 2026-09-27 20:18)
+=========================================================================
+
+  CO POKAZAL LOG:
+  - rozmowa z DeepSeekiem szla normalnie: MAIN pytal Tomka, Marka i
+    Kamila po kolei, kazdy osobna wiadomoscia, Kamil szukal w sieci
+    (search_enabled=true); zadnego bledu po stronie DeepSeeka
+  - Gemini: dwa zadania z rzedu padly w polowie na 429 "limit: 20
+    requests per day" (gemini-3.8-flash), bo program czytal z tego
+    tylko "retry in 29s" i po 29 s wracal do modelu, ktory odnawia sie
+    o polnocy; drugi klucz spalil sie tak samo
+  - Gemini "gubilo sie" na OLX, bo chrome_click po tekscie klikalo
+    przez el.click() ze strony, a przyciski OLX (react-aria) na to nie
+    reaguja: "Nie, zaczynam od nowa", "Dalej", "Zmien" bez skutku,
+    dopiero wlasny JS Gemini ze zdarzeniami myszy ruszal strone
+
+  CO ZMIENIONE:
+  - limity Google w nowym brzmieniu ("per day", "per minute", "daily")
+    - dzienny odstawia pare do polnocy PT, tak jak "PerDay"
+  - program zapamietuje limit dzienny modelu (state/gemini_modele.json,
+    "limity_dzienne") i pomija modele, ktorych limit nie starcza na
+    jedno zadanie (< 25 + 5 zapytan) - 3.8-flash z 20/dzien nie wraca
+    jutro na szczyt drabinki
+  - limit minutowy w trakcie zadania: ta sama wiadomosc idzie jeszcze
+    raz po podanym czasie (do 90 s, najwyzej dwa razy) - nic nie
+    uruchamia sie drugi raz, ponawia sie tylko wysylka wynikow
+  - chrome_click po tekscie klika prawdziwa myszka przez CDP w srodek
+    elementu (jak po numerze); szuka takze [role=link/tab/option/
+    menuitem/radio/checkbox], [tabindex], label; przy kilku
+    trafieniach bierze dokladny napis, potem najmniejszy element
 
 =========================================================================

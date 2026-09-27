@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v454
+AEL-MINI AUTONOMOUS AGENT v455
 
-ARCHITEKTURA (stan na v454 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v455 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v454")
+    print("             AEL-MINI AUTONOMOUS AGENT v455")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12901,6 +12901,34 @@ def _dolacz_widok(wynik, tab):
     return wynik
 
 
+def _kliknij_w_punkt(tab, x, y):
+    """Prawdziwe klikniecie myszy przez CDP w punkt (x, y) karty."""
+
+    ws = cdp_connect(tab)
+
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+
+    try:
+        for i, typ in enumerate(("mouseMoved", "mousePressed", "mouseReleased")):
+            odp = cdp_call(ws, 10 + i, "Input.dispatchMouseEvent", {
+                "type": typ,
+                "x": float(x),
+                "y": float(y),
+                "button": "none" if typ == "mouseMoved" else "left",
+                "clickCount": 0 if typ == "mouseMoved" else 1
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    return {"ok": True}
+
+
 def _kliknij_nr(tab, nr):
     """
     Klika element o numerze z listy _widok_strony — prawdziwym
@@ -13001,24 +13029,34 @@ def chrome_click(
     const elements =
         Array.from(
             document.querySelectorAll(
-                'a,button,input,' +
-                '[role="button"]'
+                'a,button,input,select,label,summary,' +
+                '[role="button"],[role="link"],[role="tab"],' +
+                '[role="option"],[role="menuitem"],[role="radio"],' +
+                '[role="checkbox"],[tabindex],[onclick]'
             )
-        );
+        ).filter(e => !!(e.offsetParent || e.getClientRects().length));
 
-    const el =
-        elements.find(
-            e =>
-                clean(
-                    e.innerText ||
-                    e.value ||
-                    e.getAttribute(
-                        "aria-label"
-                    )
-                )
-                .toLowerCase()
-                .includes(target)
-        );
+    const opis = (e) =>
+        clean(
+            e.innerText ||
+            e.value ||
+            e.getAttribute("aria-label") ||
+            e.getAttribute("title")
+        ).toLowerCase();
+
+    // v455: najpierw dokladnie ten napis, potem poczatek, potem
+    // fragment — a przy remisie NAJMNIEJSZY element (sam przycisk,
+    // nie jego pojemnik: "Zmień" zamiast "Pozostałe Elektronika Zmień").
+    const kandydaci = elements
+        .map(e => ({{ e, t: opis(e) }}))
+        .filter(k => k.t && k.t.includes(target))
+        .sort((a, b) => {{
+            const ra = a.t === target ? 0 : a.t.startsWith(target) ? 1 : 2;
+            const rb = b.t === target ? 0 : b.t.startsWith(target) ? 1 : 2;
+            return ra - rb || a.t.length - b.t.length;
+        }});
+
+    const el = kandydaci.length ? kandydaci[0].e : null;
 
     if (!el) {{
 
@@ -13035,10 +13073,12 @@ def chrome_click(
         block: "center"
     }});
 
-    el.click();
+    const r = el.getBoundingClientRect();
 
     return {{
         ok: true,
+        x: r.x + r.width / 2,
+        y: r.y + r.height / 2,
         clicked:
             clean(
                 el.innerText ||
@@ -13099,6 +13139,23 @@ def chrome_click(
             tab,
             javascript
         )
+
+        # v455: prawdziwe klikniecie myszy w srodek elementu — tak jak
+        # przy numerze (_kliknij_nr). `el.click()` z JS strony w React/
+        # react-aria czesto nie robi nic: bieg 2026-09-27 20:18, OLX —
+        # "Nie, zaczynam od nowa", "Dalej", "Zmień" bez skutku, a te
+        # same przyciski ruszaly od zdarzen myszy. Gdy myszka sie nie
+        # uda (CDP), zostaje el.click() jak dotad.
+        if isinstance(wynik, dict) and wynik.get("clicked") and "x" in wynik:
+            _mysz = _kliknij_w_punkt(tab, wynik["x"], wynik["y"])
+            if not _mysz.get("ok"):
+                chrome_eval(
+                    tab,
+                    "(() => { const el = document.elementFromPoint("
+                    + str(float(wynik["x"])) + ", " + str(float(wynik["y"]))
+                    + "); if (el) el.click(); return !!el; })()"
+                )
+            wynik = {"ok": True, "clicked": wynik["clicked"]}
 
     if not isinstance(wynik, dict) or not wynik.get("clicked"):
         # v443: nie ma takiego elementu — razem z tym, co na stronie
@@ -13863,6 +13920,81 @@ def _polnoc_pacyfik_po(teraz):
     return (polnoc_utc - datetime(1970, 1, 1)).total_seconds()
 
 
+def _limit_dzienny(blad):
+    """Czy ten 429 to limit na DZIEN (odnawia sie o polnocy PT)."""
+
+    tekst = str(blad or "")
+
+    return bool(
+        re.search(r"PerDay", tekst)
+        or re.search(r"per\s+day", tekst, re.IGNORECASE)
+        or re.search(r"daily", tekst, re.IGNORECASE)
+    )
+
+
+def _ile_na_dzien(blad):
+    """Ile zapytan na dzien ma ten model wedlug tresci 429 (0 = nie wiadomo)."""
+
+    m = re.search(
+        r"limit\W{0,5}(\d+)\s*requests?\s*per\s*day",
+        str(blad or ""), re.IGNORECASE
+    )
+
+    return int(m.group(1)) if m else 0
+
+
+def _sekundy_ponowienia(blad):
+    """Po ilu sekundach Google kaze sprobowac (0 = nie podal)."""
+
+    m = re.search(
+        r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
+        str(blad or ""), re.IGNORECASE
+    )
+
+    return float(m.group(1) or m.group(2)) if m else 0.0
+
+
+# v455: model, ktorego dzienny limit nie starcza na jedno zadanie, nie
+# wchodzi do drabinki — inaczej kazdego dnia pierwsze dwa zadania
+# przepadaja w polowie (gemini-3.8-flash: 20 zapytan/dzien przy 25
+# wywolaniach na zadanie, bieg 2026-09-27 20:18).
+_MODEL_ZA_MALY_NA_ZADANIE = GEMINI_MAX_TOOL_CALLS + 5
+
+_powiedziane_o_malym_limicie = set()
+
+
+def _zapamietaj_limit_dzienny(model, blad):
+    ile = _ile_na_dzien(blad)
+
+    if not ile:
+        return
+
+    stan = _stan_modeli()
+    stan.setdefault("limity_dzienne", {})[str(model)] = ile
+    _zapisz_stan_modeli(stan)
+
+
+def _model_za_maly(model, stan=None):
+    stan = _stan_modeli() if stan is None else stan
+    ile = (stan.get("limity_dzienne") or {}).get(str(model))
+
+    try:
+        za_maly = bool(ile) and int(ile) < _MODEL_ZA_MALY_NA_ZADANIE
+    except (TypeError, ValueError):
+        return False
+
+    if za_maly and str(model) not in _powiedziane_o_malym_limicie:
+        _powiedziane_o_malym_limicie.add(str(model))
+        log(
+            "GEMINI",
+            "Model " + str(model) + " ma " + str(ile) + " zapytań na "
+            "dzień w darmowej wersji — za mało na jedno zadanie ("
+            + str(GEMINI_MAX_TOOL_CALLS) + " wywołań); pomijam go."
+        )
+
+    return za_maly
+
+
 def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
     """
     (do_kiedy, powod, odstep) po odpowiedzi 429.
@@ -13876,8 +14008,22 @@ def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
     teraz = time.time() if teraz is None else teraz
     tekst = str(blad or "")
 
-    if re.search(r"PerDay", tekst):
-        return _polnoc_pacyfik_po(teraz) + 60, "limit dzienny", 0.0
+    # v455: Google mowi to dzis po ludzku — "Rate limit exceeded for
+    # model gemini-3.8-flash (limit: 20 requests per day on Free Tier).
+    # Please retry in 29s" (bieg 2026-09-27 20:18). "PerDay" nie
+    # padalo, "retry in 29s" tak — wiec para wracala po 29 s do limitu,
+    # ktory odnawia sie o polnocy, i dwa zadania z rzedu padly w
+    # polowie roboty.
+    if _limit_dzienny(tekst):
+        return (
+            _polnoc_pacyfik_po(teraz) + 60,
+            "limit dzienny"
+            + (
+                " (" + str(_ile_na_dzien(tekst)) + " zapytań/dzień)"
+                if _ile_na_dzien(tekst) else ""
+            ),
+            0.0
+        )
 
     m = re.search(
         r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
@@ -13913,6 +14059,12 @@ def _odstaw_pare(klucz, model, blad, sekund=None, powod=None):
 
     stan["odstawione"][para] = {"do": do, "powod": powod, "odstep": odstep}
     _zapisz_stan_modeli(stan)
+
+    # v455: po zapisie odstawienia — ta funkcja czyta stan z pliku od
+    # nowa, wiec musi isc PO _zapisz_stan_modeli, inaczej jej wpis
+    # zostalby nadpisany.
+    if sekund is None:
+        _zapamietaj_limit_dzienny(model, blad)
 
     log(
         "GEMINI",
@@ -13996,7 +14148,11 @@ def _wybierz_pare():
     odstawiona. None, gdy wszystko odstawione.
     """
 
+    _stan = _stan_modeli()
+
     for model in _drabinka_modeli():
+        if _model_za_maly(model, _stan):
+            continue
         for klucz, _ in load_gemini_keys():
             client = gemini_clients.get(klucz)
             if client is not None and not _para_odstawiona(klucz, model):
@@ -22153,12 +22309,36 @@ def _gemini_create(client, **kwargs):
     zmian, bo tam czekanie nie pomaga.
     """
 
+    # v455: 429 z limitem NA MINUTE tez sie ponawia — te sama wiadomosc,
+    # po tylu sekundach, ile Google podal (do 90 s), najwyzej dwa razy.
+    # Zadne narzedzie nie uruchamia sie przy tym drugi raz: ponawiamy
+    # WYSLANIE wynikow, ktore nie doszlo. Limit dzienny idzie w gore od
+    # razu — czekanie 29 s na polnoc nie ma sensu.
+    _ponowien_429 = 0
+
     for proba, przerwa in enumerate(_GEMINI_PRZECIAZONY_PONOW_S + (None,)):
 
         try:
             return client.interactions.create(**kwargs)
 
         except Exception as e:
+
+            if (
+                _to_limit(e)
+                and not _limit_dzienny(e)
+                and _ponowien_429 < 2
+                and 0 < _sekundy_ponowienia(e) <= 90
+            ):
+                _ponowien_429 += 1
+                _czekaj = _sekundy_ponowienia(e) + 1
+                log(
+                    "GEMINI",
+                    "Limit na minutę (429) — ponawiam tę samą wiadomość "
+                    "za " + str(int(_czekaj)) + " s (" + str(_ponowien_429)
+                    + "/2), nic nie uruchamia się drugi raz."
+                )
+                time.sleep(_czekaj)
+                continue
 
             if przerwa is None or not _gemini_przeciazony(e):
                 raise
