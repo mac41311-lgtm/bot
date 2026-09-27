@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v453
+AEL-MINI AUTONOMOUS AGENT v454
 
-ARCHITEKTURA (stan na v453 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v454 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v453")
+    print("             AEL-MINI AUTONOMOUS AGENT v454")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6992,14 +6992,10 @@ def _length_notice_for(name):
     ile = _role_last_cut_len.get(name, 0)
 
     return (
-        "Uwaga ode mnie: Twoja poprzednia odpowiedź została "
-        "ucięta po " + str(ile) + " znakach — to limit długości "
-        "odpowiedzi w tej sesji, nie Twój błąd i nie niedbalstwo. "
-        "Nie przepraszaj za to i nie zaczynaj od nowa. Po prostu "
-        "zmieść się krócej: jeden krok albo jedna sprawa na "
-        "wiadomość, bez powtarzania tego, co już ustalone. Jeśli "
-        "masz do przekazania więcej, powiedz na końcu, że ciąg "
-        "dalszy podasz w następnej wiadomości.)\n\n"
+        "Twoja poprzednia odpowiedź została ucięta po " + str(ile)
+        + " znakach — to limit długości odpowiedzi w tej sesji. "
+        "Krótsze wiadomości dochodzą w całości; ciąg dalszy można "
+        "podać w następnej.\n\n"
     )
 
 
@@ -24902,70 +24898,24 @@ def run_next_task():
 
         result["generic_failure_streak"] = generic_streak
 
+        # v454: same fakty — ile razy ta czynnosc juz padla. Co z tym
+        # zrobic, decyduje MAIN; agent.py nie lata sie sam.
         if attempt_count >= TOOL_REPEAT_LIMIT:
-
-            log(
-                "MAIN",
-                "To samo narzędzie zawiodło "
-                + str(attempt_count)
-                + "x z tymi samymi argumentami -> "
-                "CODE_REVIEWER / CODE_FIXER"
-            )
-
-            review = review_code({
-                "task_id": result.get("task_id"),
-                "tool": result.get("tool"),
-                "arguments": result.get("arguments"),
-                "tool_result": result.get("tool_result"),
-                "interaction_id": result.get("interaction_id"),
-                "attempt_count": attempt_count
-            })
-
-            result["code_review"] = review
-
-            log_event(
-                "code_review_triggered",
-                {
-                    "tool": result.get("tool"),
-                    "attempt_count": attempt_count,
-                    "patch_applied": (
-                        review.get("patch_result", {}).get("applied")
-                        if isinstance(review, dict) else None
-                    )
-                }
-            )
-
-        else:
-
             result["hint"] = (
-                "To próba nr " + str(attempt_count) + " tej "
-                "dokładnej czynności (to samo narzędzie + te same "
-                "argumenty). MAIN: spróbuj innego podejścia w "
-                "zwykłym TASKu. Dopiero po " + str(TOOL_REPEAT_LIMIT)
-                + ". identycznej porażce agent automatycznie "
-                "konsultuje CODE_REVIEWERA."
+                "To samo wywołanie (narzędzie + te same argumenty) "
+                "zawiodło już " + str(attempt_count) + " razy."
             )
 
-            if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
-
-                result["hint"] += (
-                    " DODATKOWO: narzędzie '" + str(result.get("tool"))
-                    + "' zawiodło już " + str(generic_streak) + "x z "
-                    "rzędu w tym celu — za każdym razem z INNYMI "
-                    "argumentami (dlatego to NIE jest jeszcze "
-                    "automatyczna eskalacja do CODE_REVIEWERA powyżej). "
-                    "Jeśli ta robota wymaga prawdziwej logiki "
-                    "(parsowanie, dopasowywanie danych, obsługa "
-                    "wariantów), zamiast kolejnej komendy powłoki "
-                    "opłaca się napisać własne narzędzie: zwykły plik "
-                    ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME "
-                    "(nazwa), TOOL_DESCRIPTION (co robi), "
-                    "TOOL_PARAMETERS (JSON Schema, jak przy "
-                    "pozostałych narzędziach) i funkcją run(...) "
-                    "zwracającą słownik. Python wczytuje taki plik "
-                    "sam, raz na krok, bez restartu — od tej chwili "
-                    "jest na liście narzędzi jak każde inne."
-                )
+        if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
+            result["hint"] = (
+                (result.get("hint", "") + " ").strip() + " Narzędzie "
+                + str(result.get("tool")) + " zawiodło " + str(generic_streak)
+                + " razy z rzędu w tym celu, za każdym razem z innymi "
+                "argumentami. Zespół może dopisać własne narzędzie: plik "
+                ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME, "
+                "TOOL_DESCRIPTION, TOOL_PARAMETERS (JSON Schema) i run(...) "
+                "zwracającym słownik — program wczytuje go sam, co krok."
+            ).strip()
 
     elif result.get("ok"):
 
@@ -25087,50 +25037,6 @@ def run_next_task():
 # ============================================================
 # DEEPSEEK TEAM
 # ============================================================
-
-
-def extract_function_source(source, function_name):
-    """
-    Wyciąga kod jednej funkcji top-level po nazwie — od
-    'def <nazwa>(' do kolejnego 'def '/'class ' na poziomie
-    wcięcia 0. Plik nie ma klas i funkcje top-level nie są
-    zagnieżdżane w sobie na tym poziomie, więc to wystarczy —
-    dzięki temu CODE_REVIEWER dostaje RZECZYWIŚCIE potrzebny
-    fragment zamiast przypadkowej końcówki pliku (poprzednio
-    source[-16000:] — dla pliku >120KB to ostatnie ~12%; błąd w
-    execute_shell() czy termux_run(), które leżą znacznie
-    wcześniej w pliku, w ogóle nie trafiał do CODE_REVIEWERA).
-    """
-
-    if not function_name:
-        return ""
-
-    pattern = re.compile(
-        r"^def "
-        + re.escape(str(function_name))
-        + r"\(",
-        re.MULTILINE
-    )
-
-    match = pattern.search(source)
-
-    if not match:
-        return ""
-
-    start = match.start()
-
-    next_def = re.search(
-        r"^(?:def |class )",
-        source[match.end():],
-        re.MULTILINE
-    )
-
-    if next_def:
-        end = match.end() + next_def.start()
-    else:
-        end = len(source)
-
-    return source[start:end].rstrip()
 
 
 # Shebang mowi o jezyku pliku dokladniej niz znacznik po ```.
@@ -28584,337 +28490,20 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
     }
 
 
-def apply_patch_from_fixer_text(fixer_text):
-    """
-    Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
-    NAPRAWDĘ nakłada go na agent.py:
-
-        1. backup z znacznikiem czasu (agent.py.bak_YYYYMMDD_HHMMSS),
-        2. dokładna, jednoznaczna podmiana tekstu (musi wystąpić
-           w pliku dokładnie raz — inaczej patch jest odrzucany),
-        3. python -m py_compile na wynikowym pliku,
-        4. jeżeli kompilacja się nie powiedzie — automatyczny
-           rollback z backupu.
-
-    To jest właśnie ten mechanizm, który wcześniej istniał
-    WYŁĄCZNIE jako punkty w CODE_FIXER_PROMPT ("1. backup,
-    2. patch, 3. py_compile, 4. rollback") — bez żadnego kodu,
-    który by to faktycznie robił. CODE_FIXER pisał, że to zrobi;
-    nic tego nie wykonywało.
-
-    WAŻNE OGRANICZENIE: modyfikuje plik NA DYSKU. Już uruchomiony
-    proces Pythona ma stary kod załadowany w pamięci i będzie go
-    używać do końca bieżącej sesji — nowa wersja zacznie
-    obowiązywać dopiero przy KOLEJNYM uruchomieniu agent.py. To
-    świadoma decyzja: bezpieczne, przewidywalne "napraw plik,
-    zrestartuj" jest dużo pewniejsze niż próba podmiany kodu
-    żywego procesu w trakcie działania (otwarte sesje ADB/CDP,
-    kolejka, stan Gemini).
-    """
-
-    match = re.search(
-        r"<<<<<<<\s*SZUKAJ\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>>\s*ZAMIEŃ",
-        fixer_text or "",
-        re.DOTALL
-    )
-
-    if not match:
-        return {
-            "applied": False,
-            "reason": (
-                "Nie znaleziono bloku <<<<<<< SZUKAJ / ======= / "
-                ">>>>>>> ZAMIEŃ w odpowiedzi CODE_FIXERA — patch "
-                "nienałożony."
-            )
-        }
-
-    old_block = match.group(1)
-    new_block = match.group(2)
-
-    target = Path(__file__)
-
-    try:
-        source = target.read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się odczytać pliku: " + str(e)
-        }
-
-    occurrences = source.count(old_block)
-
-    if occurrences == 0:
-        return {
-            "applied": False,
-            "reason": (
-                "Fragment SZUKAJ nie występuje w pliku dokładnie "
-                "(CODE_FIXER prawdopodobnie nie skopiował go "
-                "1:1, np. inne wcięcia)."
-            )
-        }
-
-    if occurrences > 1:
-        return {
-            "applied": False,
-            "reason": (
-                "Fragment SZUKAJ występuje w pliku "
-                + str(occurrences)
-                + " razy — patch odrzucony dla bezpieczeństwa "
-                "(musi być jednoznaczny)."
-            )
-        }
-
-    backup_path = target.with_name(
-        target.name
-        + ".bak_"
-        + datetime.now().strftime("%Y%m%d_%H%M%S")
-    )
-
-    try:
-        backup_path.write_text(
-            source,
-            encoding="utf-8"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się utworzyć backupu: " + str(e)
-        }
-
-    new_source = source.replace(old_block, new_block, 1)
-
-    try:
-        target.write_text(
-            new_source,
-            encoding="utf-8"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się zapisać patcha: " + str(e),
-            "backup": str(backup_path)
-        }
-
-    try:
-        compile_check = subprocess.run(
-            [sys.executable, "-m", "py_compile", str(target)],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-    except Exception as e:
-        compile_check = None
-        compile_error = str(e)
-    else:
-        compile_error = compile_check.stderr
-
-    compile_ok = bool(
-        compile_check is not None
-        and compile_check.returncode == 0
-    )
-
-    if not compile_ok:
-
-        # ROLLBACK — nigdy nie zostawiamy uszkodzonego pliku.
-        target.write_text(
-            source,
-            encoding="utf-8"
-        )
-
-        log(
-            "CODE_FIXER",
-            "py_compile nie przeszedł — rollback z "
-            + str(backup_path)
-        )
-
-        return {
-            "applied": False,
-            "rolled_back": True,
-            "reason": "py_compile nie przeszedł — przywrócono backup.",
-            "compile_error": short(compile_error or "", 2000),
-            "backup": str(backup_path)
-        }
-
-    log(
-        "CODE_FIXER",
-        "Patch nałożony i zweryfikowany (py_compile OK). "
-        "Backup: " + str(backup_path)
-        + " — zacznie obowiązywać po restarcie agenta."
-    )
-
-    log_event(
-        "patch_applied",
-        {
-            "backup": str(backup_path),
-            "old_block_preview": short(old_block, 300),
-            "new_block_preview": short(new_block, 300)
-        }
-    )
-
-    return {
-        "applied": True,
-        "backup": str(backup_path),
-        "note": (
-            "Plik na dysku jest naprawiony i przechodzi "
-            "py_compile. Bieżący, już uruchomiony proces nadal "
-            "działa na starym kodzie w pamięci — zrestartuj "
-            "agent.py, żeby poprawka zaczęła obowiązywać."
-        )
-    }
-
-
-def review_code(context=None):
-    """
-    CODE_REVIEWER analizuje RZECZYWIŚCIE relewantny fragment
-    agent.py (konkretne funkcje, nie przypadkową końcówkę pliku).
-    CODE_FIXER przygotowuje patch w formacie SZUKAJ/ZAMIEŃ, a
-    apply_patch_from_fixer_text() nakłada go naprawdę: backup ->
-    patch -> py_compile -> rollback przy błędzie.
-
-    `context` to słownik, najczęściej dokładnie ten error_report,
-    jaki gemini_execute_task() już i tak buduje przy
-    GEMINI_TOOL_ERROR: task_id, tool, arguments, tool_result,
-    interaction_id, attempt_count.
-    """
-
-    context = context or {}
-
-    try:
-
-        source = Path(__file__).read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-
-        tool = context.get("tool", "")
-
-        # Zawsze patrzymy na miejsca statystycznie najbardziej
-        # prawdopodobne przy błędach narzędzi Gemini, plus
-        # konkretną funkcję zgłoszonego narzędzia, jeśli istnieje
-        # pod tą samą nazwą w pliku.
-        candidate_names = [
-            tool,
-            "dispatch_tool",
-            "_dispatch_tool_inner",
-            "execute_shell",
-            "termux_run",
-        ]
-
-        code_context = []
-        seen = set()
-
-        for fn_name in candidate_names:
-
-            if not fn_name or fn_name in seen:
-                continue
-
-            seen.add(fn_name)
-
-            snippet = extract_function_source(
-                source,
-                fn_name
-            )
-
-            if snippet:
-                code_context.append(
-                    "### " + fn_name + "()\n\n" + snippet
-                )
-
-        if not code_context:
-            # Fallback — nic nie rozpoznaliśmy po nazwie,
-            # lepszy przypadkowy kontekst niż żaden.
-            code_context = [source[-16000:]]
-
-        joined_context = short(
-            "\n\n".join(code_context),
-            16000
-        )
-
-        # v349: Piotr dostaje fakty i kod, bez formatki.
-        #
-        # Bylo tu "Zwroc: PLIK / PROBLEM / DOKLADNE MIEJSCE / PRZYCZYNA
-        # / PROPONOWANA ZMIANA / RYZYKO / TEST" plus "Nie wykonuj
-        # zmian" — czyli formularz do wypelnienia i zakaz. Dokladnie
-        # to, czego pozbylismy sie wszedzie indziej; przetrwalo
-        # tylko dlatego, ze Piotr stoi poza glownym obiegiem.
-        #
-        # Zmian i tak nie wykonuje — nie ma czym. Poprawke nanosi
-        # Python z tego, co napisze Ania.
-        reviewer_message = f"""
-Ta sama czynność zawiodła {context.get('attempt_count', '?')} razy
-z rzędu.
-
-Narzędzie: {tool}
-Argumenty: {short(json.dumps(context.get('arguments', {}), ensure_ascii=False, default=str), 1500)}
-Co zwróciło: {short(json.dumps(context.get('tool_result', {}), ensure_ascii=False, default=str), 3000)}
-
-Plik: {Path(__file__)}
-
-{joined_context}
-"""
-
-        review = deepseek(
-            "CODE_REVIEWER",
-            _wspolne_dla_wolanego("CODE_REVIEWER") + reviewer_message
-        )
-
-        append_memory(
-            MEMORY_DIR / "code_reviewer.md",
-            datetime.now().isoformat(),
-            review
-        )
-
-        fixer_message = f"""
-MAIN potrzebuje przygotowania poprawki.
-
-ANALIZA CODE_REVIEWERA:
-{short(review, 9000)}
-
-KONTEKST BŁĘDU:
-{short(json.dumps(context, ensure_ascii=False, default=str), 3000)}
-
-Napisz patch. Gdy bezpiecznej poprawki nie ma, powiedz to.
-"""
-
-        fixer = deepseek(
-            "CODE_FIXER",
-            _wspolne_dla_wolanego("CODE_FIXER") + fixer_message
-        )
-
-        append_memory(
-            MEMORY_DIR / "code_fixer.md",
-            datetime.now().isoformat(),
-            fixer
-        )
-
-        patch_result = {
-            "applied": False,
-            "reason": "CODE_FIXER nie zaproponował patcha."
-        }
-
-        # v330: nie ma juz hasla do wklepania. Gdy Ania nie dala
-        # zadnej poprawki, po prostu nie bedzie z czego jej wyjac —
-        # extract_search_replace_blocks() zwroci pusto i
-        # apply_patch_from_fixer_text() powie to wprost. Haslo
-        # zostaje obslugiwane dla starszych sesji, ktore maja je
-        # jeszcze w historii.
-        patch_result = apply_patch_from_fixer_text(fixer)
-
-        return {
-            "review": short(review, 4000),
-            "fixer": short(fixer, 4000),
-            "patch_result": patch_result
-        }
-
-    except Exception as e:
-
-        return {
-            "error": str(e)
-        }
-
+# ============================================================
+# v454: BEZ LATANIA agent.py W TRAKCIE BIEGU
+# ============================================================
+#
+# Do v453 druga identyczna porazka narzedzia wolala Piotra i Anie do
+# PRZEGLADU SAMEGO agent.py: Ania pisala patch, Python nakladal go na
+# wlasny plik (backup, py_compile, rollback) i mial obowiazywac po
+# restarcie. To przeczylo dwom zasadom z jak_to_dziala.txt: "zmiana w
+# programie tylko z konkretnego problemu w logach" i "Python jest
+# rekami" — a kosztowalo dwie wiadomosci DeepSeeka i ryzyko, ze
+# program po restarcie wstanie inny, niz go zostawiono. Piotr i Ania
+# zostaja przy kodzie ZESPOLU (review_and_fix_project_file); MAIN
+# dostaje fakt o powtorzonej porazce i sam decyduje o innej drodze.
+# ============================================================
 
 
 # ============================================================
@@ -34642,6 +34231,11 @@ def main_decide(
         _czesci = []
         for _odp in (asked_followup.get("odpowiedzi") or [asked_followup]):
             _kto_odp = _ROLE_DISPLAY_NAME.get(_odp['role'], _odp['role'])
+            # v454: odpowiedz koledze, nie MAIN-owi — widac, na co.
+            if _odp.get("na_slowa"):
+                _kto_odp += " (na słowa " + _ROLE_DISPLAY_NAME.get(
+                    _odp["na_slowa"], _odp["na_slowa"]
+                ) + ")"
             _czesci.append(
                 (_kto_odp + ":\n" + str(_odp['answer']).strip())
                 if str(_odp['answer'] or "").strip() else
@@ -35009,6 +34603,15 @@ def main_decide(
 
 _MAIN_ASK_MAX = 4
 
+# v454: gdy zapytany zwroci sie w odpowiedzi do kolegi po imieniu
+# ("Bartku, napisz…"), kolega odpowiada OD RAZU, w tym samym kroku —
+# najwyzej tylu na krok. Do v453 taka wiadomosc lezala w skrzynce do
+# chwili, az MAIN sam zapytal adresata (osobne ASK, osobny obieg), a w
+# trybie MAIN-a nikt inny nie budzil adresata. Bieg 2026-09-25 16:15,
+# krok 10-11: Bartek prosil o wynik `ls`, dostal go dopiero po
+# kolejnym pytaniu MAIN-a.
+_ROZMOWA_HOP_MAX = 2
+
 
 def _pytania_ask(raw):
     """
@@ -35065,6 +34668,8 @@ def _handle_main_ask(
     """
 
     zadane = 0
+    _hopy = 0
+    _juz_hop = set()
 
     while isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -35161,6 +34766,54 @@ def _handle_main_ask(
                 "question": ask_question,
                 "answer": answer
             })
+
+            # v454: adresat odpowiada od razu — patrz _ROZMOWA_HOP_MAX.
+            for _kogo, _co in _zawolania(answer):
+
+                if _hopy >= _ROZMOWA_HOP_MAX:
+                    break
+
+                if (
+                    _kogo == ask_role
+                    or _kogo not in _MAIN_ASK_ALLOWED_ROLES
+                    or _kogo in _juz_hop
+                    or not str(_co or "").strip()
+                ):
+                    continue
+
+                _hopy += 1
+                _juz_hop.add(_kogo)
+
+                log(
+                    "MAIN",
+                    _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
+                    + " zwrócił się do "
+                    + _ROLE_DISPLAY_NAME.get(_kogo, _kogo)
+                    + " — pytam go od razu."
+                )
+
+                _t2 = consult_team(
+                    goal, last_result, step, chrome_text, android_text,
+                    wolani={_kogo}
+                )
+
+                _odp2 = str(
+                    ((_t2 or {}).get("kod_full") or {}).get(_kogo) or ""
+                )
+
+                if _kogo == "ENGINEER" and _odp2.strip():
+                    team["engineer_full"] = _odp2
+                    globals()["_kod_bartka_teraz"] = _odp2
+
+                if isinstance(team.get("kod_full"), dict):
+                    team["kod_full"][_kogo] = _odp2
+
+                odpowiedzi.append({
+                    "role": _kogo,
+                    "question": str(_co),
+                    "answer": _odp2,
+                    "na_slowa": ask_role
+                })
 
         if not odpowiedzi:
             log(
@@ -36119,7 +35772,8 @@ _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
     "dostajecie, co z tego wyszło. Kod, który napiszecie, program "
-    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje."
+    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje. Gdy "
+    "zwrócicie się do kogoś po imieniu, dostanie to i odpowie."
 )
 
 _ROLE_ZNAJACE_PROGRAM = (
@@ -36174,7 +35828,9 @@ _JAK_TO_DZIALA = (
     "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
     "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
     "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu. W jednym "
-    "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. "
+    "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. Gdy "
+    "zapytany zwróci się w odpowiedzi do kogoś po imieniu, ten ktoś "
+    "odpowiada mu od razu i dostajesz obie odpowiedzi. "
     "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
     "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
     "cel.\n\n"
@@ -40607,23 +40263,44 @@ def run_agent(goal):
                         engineer_code.encode("utf-8")
                     )
 
+                    # v454: bylo "nie nadpisalem, krok przepada". Autor
+                    # ma prawo skrocic wlasny plik; Python jest rekami.
+                    # Stara wersja zostaje obok jako kopia, a zespol
+                    # dostaje liczby — z nich widac, czy to skrot, czy
+                    # urwany fragment.
                     if (
                         existing_size > 200
                         and new_size < existing_size * 0.4
                     ):
 
-                        last_result = {
-                            "status":
-                                "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
-                            "message": (
-                                "Nie nadpisałem " + str(target_path)
-                                + " — na dysku ma " + str(existing_size)
-                                + " B, nowy blok " + str(new_size)
-                                + " B."
-                            )
-                        }
+                        _kopia = target_path.with_name(
+                            target_path.name + ".bak_"
+                            + datetime.now().strftime("%Y%m%d_%H%M%S")
+                        )
 
-                        continue
+                        try:
+                            shutil.copy2(str(target_path), str(_kopia))
+                        except Exception:
+                            _kopia = None
+
+                        log(
+                            "MAIN",
+                            target_path.name + ": nowy kod ma "
+                            + str(new_size) + " B, na dysku było "
+                            + str(existing_size) + " B — zapisuję, "
+                            + ("stara wersja: " + _kopia.name
+                               if _kopia else "bez kopii (nie udało się)")
+                            + "."
+                        )
+
+                        _pending_team_warnings.append(
+                            _sciezka_od_domu(str(target_path))
+                            + ": nowa wersja ma " + str(new_size)
+                            + " B, poprzednia miała " + str(existing_size)
+                            + " B"
+                            + (" (kopia: " + _kopia.name + ")" if _kopia else "")
+                            + "."
+                        )
 
                 # v358: sciezka wskazujaca KATALOG, nie plik.
                 #

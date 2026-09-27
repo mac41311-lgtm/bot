@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v453
+JAK TO DZIALA — AEL-MINI v454
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -209,6 +209,7 @@ CZESC 8. LICZBY, KTORE RZADZA
   2         to samo wywolanie juz bylo = od trzeciego wynik z pamieci
             (chrome_open tylko gdy karta nadal stoi pod tym adresem)
   1800 s    najdluzsza robota w tle (DLUGA_ROBOTA_TIMEOUT)
+  2         odpowiedzi kolegow na zawolanie po imieniu na krok (v454)
   3         przeglady kodu Piotra na jeden cel
   5         co ile krokow Ela ocenia postep
   0         rund wymiany Marek <-> Tomek
@@ -346,5 +347,46 @@ CZESC 13. STYK Z DEEPSEEKIEM (opendeep) — co jest i co zmienilo v453
   bieg zostawia do 10 czatow) — biblioteka nie zna tego endpointu, a
   zgadywanie go na koncie uzytkownika to ryzyko; wysylania plikow do
   rozmowy (ref_file_ids zawsze puste) — z tego samego powodu.
+
+=========================================================================
+
+
+=========================================================================
+CZESC 14. PRZEGLAD SPOJNOSCI (v454)
+=========================================================================
+
+SPRAWDZONE I DZIALA (testy bez telefonu, z zaslepionym DeepSeekiem):
+  - kod Bartka trafia na dysk 1:1 (nazwa nad blokiem, heredoc, jezyk
+    pliku), Python sam uruchamia "uruchom ten plik", wynik wraca do
+    autora, po awarii Piotr oglada, Ania poprawia
+  - poprawki w trzech ksztaltach: SZUKAJ/ZAMIEN, unified diff, "stary
+    fragment / nowy fragment" — z kopia, sprawdzeniem skladni i
+    wycofaniem, gdy skladnia nie przejdzie
+  - Gemini nie kladzie i nie zmienia kodu (termux_write_file,
+    termux_run z cat/tee, termux_patch_file) — kod idzie od autora
+  - do DeepSeeka ida tylko nowe rzeczy: kazdy blok przechodzi przez
+    "czy juz to czytal" (_only_if_new, skrzynka), cel raz na rozmowe,
+    stare wypowiedzi nie wracaja do MAIN-a
+
+ZMIENIONE, BO OGRANICZALO:
+  - druga identyczna porazka narzedzia wolala Piotra i Anie do
+    LATANIA agent.py (patch na wlasny plik, po restarcie) — usuniete;
+    MAIN dostaje sam fakt o powtorzonej porazce
+  - "za krotki kod" (nowy blok < 40% starego pliku) konczyl krok bez
+    zapisu — teraz zapis z kopia .bak i liczbami dla zespolu; autor ma
+    prawo skrocic wlasny plik
+  - zawolanie kolegi po imieniu ("Bartku, napisz…") czekalo w
+    skrzynce, az MAIN sam go zapyta — teraz adresat odpowiada od razu,
+    do 2 takich odpowiedzi na krok, MAIN dostaje obie
+  - notka o ucietej odpowiedzi bez polecen ("nie przepraszaj",
+    "zmiesc sie") — sam fakt o limicie
+
+CO ZOSTAJE JAKO GRANICA (i dlaczego):
+  - usuwanie plikow i zmiany nieodwracalne (SMS, polaczenie) pytaja
+    uzytkownika — to jego telefon
+  - kod nie wchodzi do pliku z danymi (numer, klucz) — v207: cztery
+    razy zamazany numer telefonu
+  - 25 wywolan na zadanie, 40 krokow na cel, 90 wiadomosci na godzine
+    na konto — limity strony i API, nie programu
 
 =========================================================================
