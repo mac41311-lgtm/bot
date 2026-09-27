@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v459
+KTO CO DOSTAJE I KIEDY — AEL-MINI v460
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -14,7 +14,9 @@ Kazda rola ma wlasna rozmowe na DeepSeeku. Pierwsza wiadomosc:
         (model, uklad, wersja Androida, czy jest su, czy Termux:API)
 
   MAIN dodatkowo  (v422)
-      "Kilka słów o tym, jak to wszystko działa": kto jest w
+      "Kilka słów o tym, jak to wszystko działa" (v460: + fakt o
+      uzytkowniku — loguje sie, daje dostepy i dane, reszte ustala
+      zespol): kto jest w
       zespole, ze RUN wykonuje Python (v459: lista 41 narzedzi z
       argumentami, do 12 akcji na RUN), ze TASK wykonuje Gemini
       (do 25 wywolan narzedzi), ze kod kladzie Python, jak dziala
@@ -24,7 +26,9 @@ Kazda rola ma wlasna rozmowe na DeepSeeku. Pierwsza wiadomosc:
   Bartek, Piotr, Ania, Tomek, Marek, Ola, Ela  (v424)
       jedno zdanie, jak dziala rozmowa: nikt nie ma terminala, to,
       co zespol ustali, wykonuje program; kod program kladzie na
-      dysk i uruchamia, gdy MAIN tak zdecyduje
+      dysk i uruchamia, gdy MAIN tak zdecyduje; v460: + uzytkownik
+      chce, zeby program dzialal sam — daje logowanie, dostepy i
+      dane, reszte ustala zespol
 
   Kamil i Wojtek
       nic — zaczynaja od samego celu
@@ -59,7 +63,8 @@ CZESC 2. CO DOSTAJE MAIN W KAZDYM KROKU
     - jak sie skonczyl ostatni krok (status)
     - po RUN (v459): "Wyniki akcji RUN:" — pelny wynik kazdej
       akcji (do 3500 znakow na akcje, 14 000 razem) i ile akcji
-      Python nie wykonal po bledzie
+      Python nie wykonal po bledzie; v460: bez skrotu sladu, bez
+      "snapshotu" (lista kart idzie osobno), bez wlasnego powodu
     - "Gemini napisał:" — raport wykonawcy, oznaczony jako jego
       slowa, nie pomiar
     - slad narzedzi: ile wywolan, ktore sie nie udaly, co zwrocily

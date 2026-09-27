@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v459
+JAK TO DZIALA — AEL-MINI v460
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -573,5 +573,52 @@ CZESC 19. CO ZMIENILO v459 — RUN: MAIN WYKONUJE SAM
   - MAIN z myśleniem odpowiada 30-120 s; petla "kliknij, spojrz,
     kliknij" na tym tempie to minuty na kazdy formularz.
   - RUN nie widzi ekranu miedzy akcjami — Gemini widzi.
+
+=========================================================================
+
+=========================================================================
+CZESC 20. CO ZMIENILO v460 (z biegu 2026-09-27 22:59, pierwszego na v459)
+=========================================================================
+
+  OCENA BIEGU (22 kroki, 28 min, przerwany przez uzytkownika):
+  - MAIN prowadzil sam przez RUN: 19 z 22 krokow, 73 wywolania
+    narzedzi, ani jednego TASK-a dla Gemini
+  - realny postep: ogloszenie OLX opublikowane bez promocji (50 zl),
+    CV na Useme zapisane, konto do wyplaty PLN dodane (dane od
+    uzytkownika), pierwsza oferta na Useme wciaz blokowana
+    ("Uzupelnij O mnie oraz portfolio i/lub CV")
+  - krok 1: Tomek poradzil "dopytac uzytkownika", MAIN wyslal 5
+    pytan o plan i zasoby; uzytkownik odpisal numerem BLIK i "ty
+    masz wszystko robic automatycznie"
+  - krok 15: po "Zapisz" strona pokazala "Twoje doswiadczenie
+    zostalo zapisane", ale mialo to te sama dlugosc co formularz
+    z bledem — klikniecie wrocilo jako "bez skutku"
+  - kazdy wynik RUN szedl do MAIN-a dwa razy (skrot sladu + pelne
+    wyniki), a w kazdym wyniku chrome_open/chrome_click siedziala
+    lista kart ("snapshot") — przez to "strona" po chrome_open byla
+    ucieta i MAIN dokladal chrome_inspect po kazdym otwarciu
+  - Ela dostawala "MAIN wykonal 4 z 4 akcji" bez slowa, o co szlo,
+    i oceniala postep po tytulach kart (5% -> 10%)
+
+  CO ZMIENIONE:
+  - MAIN i zespol dostaja na start fakt o uzytkowniku: chce, zeby
+    program dzialal sam; loguje sie, daje dostep do kont i dane,
+    ktorych nikt nie ma (hasla, kody, konto do wyplaty); pytan o
+    plan i zasoby nie ma komu zadac — to ustala zespol
+  - stan strony ma skrot tresci: inna tresc o tej samej dlugosci
+    to zmiana ("tresc strony zmienila sie (ta sama dlugosc, inna
+    tresc)"), nie "bez skutku"
+  - po RUN MAIN dostaje tylko pelne wyniki (bez skrotu sladu i bez
+    wlasnego powodu jako "raportu"); z wynikow znika "snapshot" —
+    liste kart MAIN ma osobno; "strona" po chrome_open miesci sie
+    w calosci
+  - raport RUN niesie powod MAIN-a ("... — wykonano 4 z 4 akcji"),
+    Ela widzi, o co szlo w kazdym kroku; etykiety "MAIN wykonal
+    sam" / "MAIN wykonal sam, narzedzie padlo"
+  - RUN trafia do checklisty z dowodami z narzedzi — licza sie dla
+    Eli ("udane wywolania narzedzi") i dla verify_final ("czy
+    cokolwiek realnie zadzialalo") tak samo jak zadania Gemini
+  - etykieta raportu w "Co sie wlasnie stalo" po RUN: "MAIN wykonal
+    sam (RUN):" zamiast "Gemini napisal:"
 
 =========================================================================

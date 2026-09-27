@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v459
+AEL-MINI AUTONOMOUS AGENT v460
 
-ARCHITEKTURA (stan na v459 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v460 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2795,7 +2795,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v459")
+    print("             AEL-MINI AUTONOMOUS AGENT v460")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12076,6 +12076,14 @@ def _chrome_stan_sie_zmienil(przed, po):
     if przed.get("title") != po.get("title"):
         return True
 
+    # v460: inna tresc o tej samej dlugosci to tez zmiana.
+    if (
+        przed.get("skrot") is not None
+        and po.get("skrot") is not None
+        and przed.get("skrot") != po.get("skrot")
+    ):
+        return True
+
     try:
         return abs(
             int(po.get("znakow") or 0)
@@ -12876,7 +12884,12 @@ def _stan_strony(tab):
             " title: document.title,"
             " znakow: (document.body ?"
             " document.body.innerText.replace(/\\s+/g, ' ')"
-            ".trim().length : 0)"
+            ".trim().length : 0),"
+            " skrot: (() => { const t = document.body ?"
+            " document.body.innerText.replace(/\\s+/g, ' ').trim()"
+            ".slice(0, 20000) : ''; let h = 0;"
+            " for (let i = 0; i < t.length; i++)"
+            " h = (h * 31 + t.charCodeAt(i)) | 0; return h; })()"
             "}))()"
         )
 
@@ -12884,7 +12897,11 @@ def _stan_strony(tab):
             return {
                 "href": stan.get("href"),
                 "title": stan.get("title"),
-                "znakow": stan.get("znakow")
+                "znakow": stan.get("znakow"),
+                # v460: skrot tresci — "Twoje doswiadczenie zostalo
+                # zapisane" mialo te sama dlugosc co formularz z bledem
+                # i klikniecie "Zapisz" wracalo jako "bez skutku".
+                "skrot": stan.get("skrot")
             }
 
     except Exception:
@@ -13370,6 +13387,19 @@ def chrome_click(
         _co_sie_zmienilo.append(
             "tresc strony: " + str(_przed.get("znakow"))
             + " -> " + str(_po.get("znakow")) + " znakow"
+        )
+
+    # v460: bieg 2026-09-27 23:18 — po "Zapisz" strona pokazala
+    # "Twoje doswiadczenie zostalo zapisane", ale miala te sama
+    # dlugosc co formularz z bledem, wiec szlo "bez skutku".
+    if (
+        not _co_sie_zmienilo
+        and _przed.get("skrot") is not None
+        and _po.get("skrot") is not None
+        and _przed.get("skrot") != _po.get("skrot")
+    ):
+        _co_sie_zmienilo.append(
+            "treść strony zmieniła się (ta sama długość, inna treść)"
         )
 
     wynik["adres"] = _po.get("href")
@@ -24830,7 +24860,8 @@ def _checklist_record_result(task_id, result):
         # _dowody_z_wykonania). Weryfikacja warunku sukcesu dziala
         # dokladnie jak przedtem.
         if result.get("status") in (
-            "TASK_EXECUTION_FINISHED", "COMPLETED"
+            "TASK_EXECUTION_FINISHED", "COMPLETED",
+            "RUN_FINISHED", "RUN_TOOL_ERROR"
         ):
             verified, evidence = _verify_success_condition_evidence(
                 item.get("success_condition", ""),
@@ -26898,22 +26929,37 @@ def _wykonaj_akcje_maina(decision, step):
         "pominiete_akcje": pominiete,
         "dowody": _dowody_z_wykonania(trace, warnings),
         "report": (
-            "MAIN wykonał " + str(len(wyniki)) + " z " + str(len(akcje))
-            + " akcji" + (" — zatrzymał się na błędzie " + str(wyniki[-1]["tool"])
+            # v460: z powodem MAIN-a — Ela widziala tylko "MAIN wykonal
+            # 4 z 4 akcji" i nie wiedziala, o co w tych akcjach szlo.
+            (short(str(decision.get("reason") or ""), 240) + " — "
+             if decision.get("reason") else "")
+            + "wykonano " + str(len(wyniki)) + " z " + str(len(akcje))
+            + " akcji" + (" — zatrzymano na błędzie " + str(wyniki[-1]["tool"])
                           if status == "RUN_TOOL_ERROR" and wyniki else "")
             + "."
         )
     }
 
+    _run_id = (
+        "run_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_"
+        + uuid.uuid4().hex[:6]
+    )
+
     try:
         write_json(
-            RESULTS_DIR / (
-                "run_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_"
-                + uuid.uuid4().hex[:6] + ".json"
-            ),
+            RESULTS_DIR / (_run_id + ".json"),
             dict(wynik, task=str(decision.get("reason") or ""))
         )
         write_json(LAST_RESULT_FILE, wynik)
+    except Exception:
+        pass
+
+    # v460: RUN liczy sie jak zadanie — dowody z narzedzi ida do
+    # checklisty, z ktorej czerpia Ela (_co_narzedzia_naprawde_zrobily)
+    # i verify_final ("czy cokolwiek realnie zadzialalo").
+    try:
+        _checklist_add(_run_id, "RUN: " + str(decision.get("reason") or ""), "")
+        _checklist_record_result(_run_id, wynik)
     except Exception:
         pass
 
@@ -26933,10 +26979,17 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
     ile = 0
 
     for i, w in enumerate(wyniki):
+        _wynik = w.get("wynik")
+        # v460: "snapshot" (lista kart) powtarzal sie w kazdym wyniku
+        # i zjadal miejsce, przez co "strona" (tekst + elementy) po
+        # chrome_open byla ucieta — MAIN dokladal chrome_inspect po
+        # kazdym chrome_open. Karty MAIN dostaje osobno.
+        if isinstance(_wynik, dict) and "snapshot" in _wynik:
+            _wynik = {k: v for k, v in _wynik.items() if k != "snapshot"}
         tekst = (
             str(i + 1) + ". " + str(w.get("tool")) + " "
             + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
-            + "\n" + short(json.dumps(w.get("wynik"), ensure_ascii=False, default=str), na_akcje)
+            + "\n" + short(json.dumps(_wynik, ensure_ascii=False, default=str), na_akcje)
         )
         ile += len(tekst)
         if ile > razem:
@@ -29804,6 +29857,9 @@ _HUMAN_STATUS_LABELS = {
     "DONE_REJECTED_VERIFICATION_FAILED": "zgłoszony DONE odrzucony (brak dowodu)",
     "TASK_DUPLICATE_OF_VERIFIED_POINT": "powtórka już zweryfikowanego punktu",
     "TASK_ALREADY_SATISFIED_ON_DISK": "już spełnione na dysku",
+    # v460
+    "RUN_FINISHED": "MAIN wykonał sam",
+    "RUN_TOOL_ERROR": "MAIN wykonał sam, narzędzie padło",
 }
 
 
@@ -30077,7 +30133,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     # v432: relacje z krokow i fakty, bez komentarza Pythona do nich
     # i bez listy punktow celu (patrz _checklist_summary_block).
     prompt = f"""
-Gemini po kolejnych krokach:
+Kolejne kroki (co się wykonało):
 {_human_task_summary_lines(summaries)}
 {narzedzia_block}
 {device_state_block}"""
@@ -30877,7 +30933,16 @@ def _condense_last_result_for_team(last_result, limit=2500):
         # powiedziec, CZYM ta tresc jest, nie mowiac czyja jest.
         # v432: "Gemini napisal:" zamiast "relacja z wykonania (opis
         # slowami, nie pomiar…)".
-        parts.append("Gemini napisał:\n" + short(str(report), 1200))
+        # v460: po RUN raport pisze Python (powod MAIN-a + ile akcji),
+        # nie Gemini.
+        parts.append(
+            (
+                "MAIN wykonał sam (RUN): "
+                if last_result.get("executed_by") == "main_run"
+                else "Gemini napisał:\n"
+            )
+            + short(str(report), 1200)
+        )
 
     tool_calls = last_result.get("tool_calls")
 
@@ -35207,13 +35272,22 @@ def main_decide(
     #
     # code_review/checks/attempt_count dokładamy osobno — kondensator
     # ich nie zna, a to na nie wskazują wyjaśnienia statusów wyżej.
-    _facts = _condense_last_result_for_team(last_result, 3000)
-
     # v459: po RUN MAIN pracuje na pelnych wynikach, nie na skrocie.
+    # v460: bez skrotu sladu i bez raportu (to jego wlasny powod) —
+    # w biegu 2026-09-27 22:59 kazdy wynik szedl do MAIN-a dwa razy.
     if isinstance(last_result, dict) and last_result.get("executed_by") == "main_run":
+        _facts = _condense_last_result_for_team(
+            {
+                k: v for k, v in last_result.items()
+                if k not in ("tool_trace", "report", "dowody")
+            },
+            3000
+        )
         _blok_run = _wyniki_run_blok(last_result)
         if _blok_run:
             _facts += "\n" + _blok_run
+    else:
+        _facts = _condense_last_result_for_team(last_result, 3000)
 
     # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
     # poprawki Ani) — raz, do MAIN-a.
@@ -36689,7 +36763,10 @@ _JAK_ROZMAWIAMY = (
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
     "dostajecie, co z tego wyszło. Kod, który napiszecie, program "
     "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje. Gdy "
-    "zwrócicie się do kogoś po imieniu, dostanie to i odpowie."
+    "zwrócicie się do kogoś po imieniu, dostanie to i odpowie. "
+    "Użytkownik chce, żeby program działał sam: loguje się, daje "
+    "dostęp do kont i podaje dane, których nikt z was nie ma — "
+    "resztę ustala zespół."
 )
 
 _ROLE_ZNAJACE_PROGRAM = (
@@ -36769,12 +36846,14 @@ _JAK_TO_DZIALA = (
     "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. Gdy "
     "zapytany zwróci się w odpowiedzi do kogoś po imieniu, ten ktoś "
     "odpowiada mu od razu i dostajesz obie odpowiedzi. "
-    "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
-    "albo o wartość, której nikt z nas nie ma. Formularze, profile i "
-    "ustawienia na stronach wypełnia Gemini (chrome_type, "
-    "chrome_click); użytkownik loguje się i podaje to, czego nikt z "
-    "nas nie wie — hasła, kody, dane osobowe. DONE i FAILED kończą "
-    "cel.\n\n"
+    "NEED_USER_LOGIN to prośba do użytkownika. Użytkownik chce, żeby "
+    "program działał sam: on loguje się na stronach, daje dostęp do "
+    "kont i podaje to, czego nikt z nas nie ma — hasła, kody, dane "
+    "osobowe, konto do wypłaty. Nie odpowie na pytania o plan, wybór "
+    "drogi ani o to, co umie lub ma — to ustala zespół. Formularze, "
+    "profile i ustawienia na stronach wypełnia RUN (chrome_type, "
+    "chrome_click, chrome_execute_js) albo Gemini. DONE i FAILED "
+    "kończą cel.\n\n"
     "Zrzut ekranu (android_screenshot) to plik PNG — nikt z zespołu "
     "ani Gemini go nie ogląda; co widać na stronie, mówi chrome_inspect, "
     "a co na ekranie — android_state, oba tekstem. "
