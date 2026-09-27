@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v451
+KTO CO DOSTAJE I KIEDY — AEL-MINI v452
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 

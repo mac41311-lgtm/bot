@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v451
+JAK TO DZIALA — AEL-MINI v452
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -109,8 +109,20 @@ CZESC 5. CO ROBI GEMINI
 
 Gemini WYKONUJE. Nie pisze kodu, nie decyduje o celu.
 
-Kazde zadanie to nowa rozmowa: 8 krotkich regul, stan telefonu,
-warunek sukcesu i tresc zadania. Do 25 wywolan narzedzi.
+Jeden cel = jedna rozmowa wykonawcy (v452). Pierwsze zadanie w celu
+dostaje 8 krotkich regul, stan telefonu, warunek sukcesu i tresc;
+kazde nastepne idzie jako kolejna wiadomosc w tej samej rozmowie
+(Interactions API, previous_interaction_id) — Gemini pamieta, co
+widzialo i robilo. Do 25 wywolan narzedzi na zadanie.
+
+Rozmowa idzie dalej tylko, gdy: ten sam cel i ta sama para klucz+
+model, ostatnia wiadomosc mlodsza niz 20 h (darmowa wersja trzyma
+rozmowy 1 dzien), kontekst ponizej GEMINI_PAMIEC_TOKENY (80 000) i
+kazde wywolanie narzedzia dostalo wynik. Po bledzie narzedzia Python
+domyka runde jedna wiadomoscia bez narzedzi — Gemini pisze, co o tym
+mysli, i te slowa MAIN dostaje razem ze sladem. Gdy serwer nie zna
+juz rozmowy, zadanie idzie od nowa z pelnym promptem.
+GEMINI_PAMIEC=0 wylacza pamiec.
 
 Blad a brak (v444):
   - blad w kodzie (skladnia, wysypany skrypt, kod bez autora),
@@ -262,5 +274,33 @@ CZESC 11. CO ZMIENILO v451 (przeglad calosci + testy bez telefonu)
   DeepSeeka (myslenie, bez myslenia, paczka BATCH, samo myslenie) i
   cala petla run_agent (ASK -> kod Bartka polozony i uruchomiony przez
   Pythona -> TASK przez Gemini -> NEED_USER_LOGIN -> DONE).
+
+=========================================================================
+
+
+=========================================================================
+CZESC 12. CO ZMIENILO v452 (z logow 2026-09-25 16:15, 2026-09-26
+14:04 i 14:53)
+=========================================================================
+
+  - pamiec wykonawcy na caly cel (czesc 5): w 14 z 76 zadan Gemini
+    zaczynalo od chrome_tabs, a MAIN przepisywal stan strony do
+    kazdego zadania
+  - po bledzie narzedzia runda jest domykana: Gemini dostaje wynik i
+    fakt o przerwaniu, odpowiada bez narzedzi, MAIN dostaje jego slowa
+  - chrome_execute_js: "Runtime.evaluate timeout" (2 zadania stracone)
+    to jedno ponowienie, a potem odpowiedz "kod nie oddal wyniku w
+    10 s", nie koniec zadania
+  - chrome_open z file:// (zrzut PNG) — odpowiedz, ze to nie strona,
+    zamiast `am start` i utraty zadania
+  - opis chrome_execute_js mowi, ze el.value='' nie dziala w
+    formularzach React/Vue (OLX: 22 wywolania na jeden formularz) —
+    pola wpisuje chrome_type
+  - "Tresc zlecenia" -> "Zlecenie MAIN-a dla programu": Bartek czytal
+    zadanie dla wykonawcy jako polecenie dla siebie ("nie mam
+    chrome_open", "nie mam terminala") i odmawial kodu; zlecenie kodu
+    dla Bartka zaczyna sie od faktu, kto je wykonuje
+  - MAIN moze zapytac Wojtka przez ASK (byl dozwolony, brakowalo go w
+    ksztalcie JSON-a); MAIN wie, ze Gemini pamieta poprzednie zadania
 
 =========================================================================

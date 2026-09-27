@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v451
+AEL-MINI AUTONOMOUS AGENT v452
 
-ARCHITEKTURA (stan na v451 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v452 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -25,7 +25,7 @@ ARCHITEKTURA (stan na v451 — patrz jak_to_dziala.txt):
                         |
                         v
         GEMINI (wykonawca, darmowe API, Interactions API)  <-- PALEC
-           nowa rozmowa na kazde zadanie, 40 narzedzi, do 25 wywolan;
+           jedna rozmowa na caly cel (v452), 40 narzedzi, do 25 wywolan;
            NIE pisze kodu — termux_write_file/termux_run z kodem
            odmawiaja i kladzie go Python z wypowiedzi autora
                         |
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v451")
+    print("             AEL-MINI AUTONOMOUS AGENT v452")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2945,7 +2945,7 @@ def init_deepseek():
 # ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
 # oddac decyzje; bez nich kazdy krok konczylby sie
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
-MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER",\n  "ask_question": ""\n}"""
+MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK",\n  "ask_question": ""\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -12264,6 +12264,26 @@ def chrome_open(
     contains=None
 ):
 
+    # v452: chrome_open otwiera strony. Bieg 2026-09-26 14:04, krok 7:
+    # wykonanie podalo file:///…/olx_form.png, poszlo `am start`, karty
+    # CDP nie bylo i cale zadanie padlo. Plik to nie strona — mowimy
+    # to jako wynik, bez uruchamiania czegokolwiek.
+    _adres = str(url or "").strip()
+
+    if not _adres.lower().startswith(("http://", "https://")):
+        return {
+            "ok": False,
+            "error": "nie_adres_http",
+            "nie_adres_http": True,
+            "url": _adres,
+            "message": (
+                "chrome_open otwiera adresy http(s); „"
+                + short(_adres, 120) + "” nim nie jest. Plik z dysku "
+                "czyta termux_read_file (tekst), a zrzut ekranu ogląda "
+                "android_screenshot_ocr."
+            )
+        }
+
     # Ta strona moze juz gdzies wisiec. Wtedy jej nie otwieramy drugi
     # raz — wyciagamy istniejaca karte na wierzch. Patrz
     # _przelacz_na_karte().
@@ -13355,6 +13375,32 @@ def chrome_execute_js(
         timeout=10
     )
 
+    # v452: "Calling Runtime.evaluate timeout" konczylo cale zadanie
+    # (biegi 2026-09-25 16:15 krok 7 i 2026-09-26 14:04 krok 10) — a
+    # to zwykle strona zajeta po kliknieciu albo kod czekajacy na cos,
+    # co nie nadejdzie. Jedno ponowienie na swiezym polaczeniu; gdy
+    # dalej nic, wynik mowi, co sie stalo, i zadanie idzie dalej
+    # (patrz _brak_to_odpowiedz).
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+        and "timeout" in str(result.get("error") or "").lower()
+    ):
+        time.sleep(1.0)
+        result = chrome_eval(tab, javascript, timeout=10)
+
+        if (
+            isinstance(result, dict)
+            and result.get("ok") is False
+            and "timeout" in str(result.get("error") or "").lower()
+        ):
+            result["skrypt_nie_skonczyl_sie"] = (
+                "Kod nie oddał wyniku w 10 s, dwa razy z rzędu. Tak "
+                "kończy się await na coś, co nie nadchodzi, odczyt "
+                "schowka i strona zajęta tuż po kliknięciu. Strona "
+                "dalej stoi — chrome_inspect pokazuje, co na niej jest."
+            )
+
     if (
         isinstance(result, dict)
         and result.get("ok") is False
@@ -14168,7 +14214,8 @@ def _gemini_tools_legacy():
             "type": "function",
             "name": "chrome_open",
             "description": (
-                "Otwórz URL w istniejącej karcie Chrome. " + _OPIS_STRONY
+                "Otwórz adres http(s) w istniejącej karcie Chrome. "
+                + _OPIS_STRONY
             ),
             "parameters": {
                 "type": "object",
@@ -14250,7 +14297,12 @@ def _gemini_tools_legacy():
                 "w przeglądarce, zadziała tak samo jak w konsoli "
                 "deweloperskiej. Użyj tego, gdy chrome_click/chrome_type "
                 "nie wystarczą (np. trzeba wywołać wewnętrzne API strony "
-                "bezpośrednio). Ten kod żyje tylko w karcie — zapisany "
+                "bezpośrednio). Do pól formularzy służy chrome_type: "
+                "przypisanie el.value = '…' nie wysyła zdarzeń klawiatury "
+                "i formularze w React/Vue (OLX, Useme) tego nie widzą — "
+                "pole wygląda na wypełnione, a „Dalej” nic nie robi. Kod "
+                "ma 10 s; await na coś, co nie nadchodzi, kończy się "
+                "timeoutem. Ten kod żyje tylko w karcie — zapisany "
                 "do pliku .js nie ma się gdzie uruchomić. Osobny "
                 "przypadek: navigator.clipboard.readText()/writeText() "
                 "prosi o zgodę w okienku, którego nikt tu nie kliknie, "
@@ -21852,6 +21904,15 @@ def _brak_to_odpowiedz(name, args, result):
     if name == "chrome_type" and result.get("pola"):
         return True
 
+    # v452: kod JS nie oddal wyniku — strona stoi, praca idzie dalej.
+    if name == "chrome_execute_js" and result.get("skrypt_nie_skonczyl_sie"):
+        return True
+
+    # v452: chrome_open dostal nie-adres (file://, sciezke do PNG) —
+    # bieg 2026-09-26 14:04, krok 7.
+    if name == "chrome_open" and result.get("nie_adres_http"):
+        return True
+
     # v442: strona "nie znaleziona" — z widokiem, dokad z niej przejsc.
     if name == "chrome_open" and blad == "page_not_found":
         return True
@@ -21973,15 +22034,15 @@ def _raport_po_limicie(client, model, interaction, interaction_id, tools):
     """
 
     if interaction is None:
-        return ""
+        return "", None
 
     wywolania = _wywolania_w_interakcji(interaction)
 
     if not wywolania:
-        return _tekst_interakcji(interaction).strip()
+        return _tekst_interakcji(interaction).strip(), interaction
 
     if not interaction_id:
-        return ""
+        return "", None
 
     odpowiedzi = [
         _odpowiedz_narzedzia(
@@ -22000,18 +22061,205 @@ def _raport_po_limicie(client, model, interaction, interaction_id, tools):
         for call in wywolania
     ]
 
+    # v452: bez narzedzi — po limicie Gemini moze juz tylko napisac
+    # raport, a rozmowa zostaje domknieta i nadaje sie do ciagniecia
+    # w nastepnym zadaniu.
     try:
         ostatnia = _gemini_create(client,
             model=model,
             input=odpowiedzi,
-            previous_interaction_id=interaction_id,
-            tools=tools
+            previous_interaction_id=interaction_id
         )
     except Exception as e:
         log("GEMINI", "Raport po limicie: " + short(str(e), 200))
-        return ""
+        return "", None
 
-    return _tekst_interakcji(ostatnia).strip()
+    return (
+        _tekst_interakcji(ostatnia).strip(),
+        None if _wywolania_w_interakcji(ostatnia) else ostatnia
+    )
+
+
+# ============================================================
+# PAMIEC WYKONAWCY NA CALY CEL (v452)
+# ============================================================
+#
+# Do v451 kazde zadanie bylo NOWA rozmowa z Gemini: w 14 z 76 zadan
+# pierwszym ruchem bylo chrome_tabs ("gdzie ja jestem?"), a MAIN
+# przepisywal do kazdego zadania stan strony, numer karty i to, co juz
+# bylo probowane (biegi 2026-09-25 16:15, 2026-09-26 14:04 i 14:53).
+#
+# Interactions API przechowuje rozmowy po stronie Google (darmowa
+# wersja: 1 dzien, platna: 55 dni) i pozwala je ciagnac przez
+# previous_interaction_id — z niejawnym cache'em historii, czyli
+# taniej niz wysylac ja od nowa. Wiec jeden cel = jedna rozmowa
+# wykonawcy: kolejne zadanie idzie jako kolejna wiadomosc w tej samej
+# rozmowie, a zasady pracy (8 punktow) ida raz, na jej poczatku.
+#
+# Rozmowe ciagniemy tylko wtedy, gdy:
+#   - to ten sam cel, ta sama para klucz+model (rozmowa nalezy do
+#     klucza, na innym jej nie ma),
+#   - ostatnia wiadomosc jest mlodsza niz _GEMINI_PAMIEC_GODZIN,
+#   - kontekst nie urosl ponad GEMINI_PAMIEC_TOKENY (limit na minute
+#     w darmowej wersji liczy tokeny wejscia, takze te z cache'u),
+#   - ostatnia interakcja jest DOMKNIETA: kazde wywolanie narzedzia
+#     dostalo wynik. Po bledzie narzedzia zamykamy runde jedna
+#     wiadomoscia bez narzedzi (_domknij_runde) — Gemini pisze, co o
+#     tym mysli, a MAIN dostaje te slowa razem ze sladem.
+# Gdy Google nie zna juz tej rozmowy (wygasla), zadanie idzie od nowa
+# z pelnym promptem. GEMINI_PAMIEC=0 wylacza calosc.
+
+GEMINI_PAMIEC = os.environ.get("GEMINI_PAMIEC", "1").strip().lower() not in (
+    "0", "nie", "off", "false"
+)
+
+GEMINI_PAMIEC_TOKENY = int(os.environ.get("GEMINI_PAMIEC_TOKENY", "80000"))
+
+_GEMINI_PAMIEC_GODZIN = 20
+
+
+def _pamiec_wykonawcy():
+    stan = read_json(GEMINI_STATE_FILE, {})
+    return stan if isinstance(stan, dict) else {}
+
+
+def _pamiec_wykonawcy_dla(klucz, model):
+    """
+    interaction_id domknietej rozmowy z tego celu na tej parze
+    klucz+model, gdy da sie ja ciagnac dalej — inaczej None.
+    """
+
+    if not GEMINI_PAMIEC:
+        return None
+
+    stan = _pamiec_wykonawcy()
+    ident = str(stan.get("interaction_id") or "")
+
+    if not ident:
+        return None
+
+    if stan.get("cel") != _odcisk_tresci(str(_current_goal_text or "")):
+        return None
+
+    if stan.get("klucz") != str(klucz) or stan.get("model") != str(model):
+        return None
+
+    try:
+        if time.time() - float(stan.get("czas") or 0) > _GEMINI_PAMIEC_GODZIN * 3600:
+            return None
+        if int(stan.get("tokeny") or 0) > GEMINI_PAMIEC_TOKENY:
+            log(
+                "GEMINI",
+                "Rozmowa wykonawcy urosla do " + str(stan.get("tokeny"))
+                + " tokenow kontekstu — zaczynam nowa (limit "
+                + str(GEMINI_PAMIEC_TOKENY) + ")."
+            )
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    return ident
+
+
+def _tokeny_kontekstu(interaction):
+    """Ile tokenow wejscia mial ostatni obrot — czyli ile wazy historia."""
+
+    uzycie = getattr(interaction, "usage", None)
+
+    for pole in ("total_input_tokens", "total_tokens"):
+        try:
+            wartosc = int(getattr(uzycie, pole, None) or 0)
+        except (TypeError, ValueError):
+            wartosc = 0
+        if wartosc:
+            return wartosc
+
+    return 0
+
+
+def _zapamietaj_rozmowe_wykonawcy(task_id, klucz, model, interaction, interaction_id):
+    """
+    Zapisuje DOMKNIETA interakcje jako punkt, od ktorego pojdzie
+    nastepne zadanie. Wolane tylko tam, gdzie kazde wywolanie
+    narzedzia dostalo juz wynik.
+    """
+
+    if not interaction_id:
+        return
+
+    write_json(
+        GEMINI_STATE_FILE,
+        {
+            "task_id": task_id,
+            "interaction_id": interaction_id,
+            "cel": _odcisk_tresci(str(_current_goal_text or "")),
+            "klucz": str(klucz),
+            "model": str(model),
+            "tokeny": _tokeny_kontekstu(interaction),
+            "czas": time.time(),
+            "updated": datetime.now().isoformat()
+        }
+    )
+
+
+def _rozmowa_wykonawcy_wygasla(blad):
+    """Czy serwer nie zna juz interakcji, ktora chcielismy ciagnac."""
+
+    tekst = str(blad or "").lower()
+
+    return (
+        "previous_interaction" in tekst
+        or "not found" in tekst
+        or "404" in tekst
+        or "no longer" in tekst
+        or "expired" in tekst
+        or ("interaction" in tekst and "invalid" in tekst)
+    )
+
+
+def _domknij_runde(client, model, interaction_id, odpowiedzi, bez_wyniku, powod):
+    """
+    Zamyka runde po przerwaniu zadania: wywolania, ktore nie dostaly
+    wyniku, dostaja fakt o przerwaniu, i idzie jedna wiadomosc BEZ
+    narzedzi — Gemini moze tylko napisac, co o tym mysli.
+
+    Zwraca (tekst, domknieta interakcja albo None).
+    """
+
+    if not interaction_id:
+        return "", None
+
+    wszystkie = list(odpowiedzi)
+
+    for call in bez_wyniku:
+        wszystkie.append(
+            _odpowiedz_narzedzia(
+                call,
+                str(getattr(call, "name", "") or "?").split(":")[-1],
+                {"ok": False, "error": "PRZERWANE", "message": powod}
+            )
+        )
+
+    if not wszystkie:
+        return "", None
+
+    try:
+        ostatnia = _gemini_create(
+            client,
+            model=model,
+            input=wszystkie,
+            previous_interaction_id=interaction_id
+        )
+    except Exception as e:
+        log("GEMINI", "Domkniecie rundy: " + short(str(e), 200))
+        return "", None
+
+    tekst = _tekst_interakcji(ostatnia).strip()
+
+    if _wywolania_w_interakcji(ostatnia):
+        return tekst, None
+
+    return tekst, ostatnia
 
 
 def _stan_telefonu_dla_wykonawcy():
@@ -22263,6 +22511,29 @@ def gemini_execute_task(task_id, task, success_condition=''):
     if _stan_telefonu:
         _stan_telefonu += "\n\n"
 
+    # v452: ciagniemy rozmowe z poprzednich zadan tego celu — zasady
+    # juz w niej sa, idzie samo zadanie.
+    _poprzednia_rozmowa = _pamiec_wykonawcy_dla(key_name, _model)
+
+    prompt_kontynuacji = f"""
+Nowe zadanie w tej samej robocie — zasady pracy jak dotąd. To, co
+zrobiłeś i zobaczyłeś w poprzednich zadaniach, masz w tej rozmowie.
+
+{_stan_telefonu}WARUNEK SUKCESU:
+{success_condition}
+
+TASK ID:
+{task_id}
+
+TASK:
+{task}
+
+Na koniec napisz zwyczajnie, jak koledze z zespołu: co zrobiłeś, co
+z tego wyszło, co się nie udało i jak to teraz wygląda. Powiedz
+wprost, czy warunek sukcesu jest spełniony, a jeśli coś zostało do
+zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
+"""
+
     prompt = f"""
 Jesteś wykonawcą autonomicznego agenta. DeepSeek to mózg, Ty
 wykonujesz REALNIE jego zadania dostępnymi narzędziami (Termux,
@@ -22361,11 +22632,38 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
     collected_confirmed_texts = []
 
     try:
-        interaction = _gemini_create(client,
-            model=_model,
-            input=prompt,
-            tools=gemini_tools(_task_haystack)
-        )
+        if _poprzednia_rozmowa:
+
+            log(
+                "GEMINI",
+                "pamięć: ciągnę rozmowę wykonawcy z tego celu ("
+                + str(_pamiec_wykonawcy().get("tokeny") or 0)
+                + " tokenów kontekstu)."
+            )
+
+            try:
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=prompt_kontynuacji,
+                    previous_interaction_id=_poprzednia_rozmowa,
+                    tools=gemini_tools(_task_haystack)
+                )
+            except Exception as e:
+                if not _rozmowa_wykonawcy_wygasla(e):
+                    raise
+                log(
+                    "GEMINI",
+                    "pamięć: serwer nie zna już tej rozmowy ("
+                    + short(str(e), 120) + ") — zaczynam nową."
+                )
+                _poprzednia_rozmowa = None
+
+        if not _poprzednia_rozmowa:
+            interaction = _gemini_create(client,
+                model=_model,
+                input=prompt,
+                tools=gemini_tools(_task_haystack)
+            )
 
         # Para klucz+model odpowiedziala — jesli byla odstawiona, wraca.
         _para_dziala(key_name, _model)
@@ -22375,16 +22673,6 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             "id",
             None
         )
-
-        if interaction_id:
-            write_json(
-                GEMINI_STATE_FILE,
-                {
-                    "task_id": task_id,
-                    "interaction_id": interaction_id,
-                    "updated": datetime.now().isoformat()
-                }
-            )
 
         tool_calls = 0
 
@@ -22565,6 +22853,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # wykonywanie TASK-a sie skonczylo. Czy cel zostal
                 # osiagniety, rozstrzyga MAIN — na podstawie
                 # raportu, sladu narzedzi i "dowodow" ponizej.
+                # v452: kazde wywolanie ma wynik, Gemini skonczylo
+                # tekstem — od tej interakcji pojdzie nastepne zadanie.
+                _zapamietaj_rozmowe_wykonawcy(
+                    task_id, key_name, _model, interaction, interaction_id
+                )
+
                 return {
                     "ok": True,
                     "status": "TASK_EXECUTION_FINISHED",
@@ -23267,6 +23561,25 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         else ""
                     )
 
+                    # v452: runda nie zostaje otwarta. Wynik tego
+                    # wywolania i fakt o przerwaniu dla pozostalych ida
+                    # do Gemini bez narzedzi; jego slowa o tym bledzie
+                    # trafiaja do MAIN-a, a rozmowa nadaje sie do
+                    # ciagniecia w nastepnym zadaniu.
+                    _idx = function_calls.index(call)
+                    _slowa, _domknieta = _domknij_runde(
+                        client, _model, interaction_id,
+                        responses + [_odpowiedz_narzedzia(call, name, result)],
+                        function_calls[_idx + 1:],
+                        "zadanie przerwane po błędzie narzędzia " + str(name)
+                    )
+
+                    if _domknieta is not None:
+                        _zapamietaj_rozmowe_wykonawcy(
+                            task_id, key_name, _model, _domknieta,
+                            getattr(_domknieta, "id", None)
+                        )
+
                     error_report = {
                         "task_id": task_id,
                         "status": "GEMINI_TOOL_ERROR",
@@ -23276,6 +23589,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "tool": name,
                         "arguments": args,
                         "tool_result": result,
+                        **({"report": short(_slowa, RESULT_LIMIT)} if _slowa else {}),
                         # v429: bez "Narzedzie zakonczylo sie bledem." —
                         # to nic nie mowi; zostaje tylko podpowiedz przy
                         # grep/test z kodem 1, gdy jest.
@@ -23415,23 +23729,20 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             if new_id:
                 interaction_id = new_id
 
-                write_json(
-                    GEMINI_STATE_FILE,
-                    {
-                        "task_id": task_id,
-                        "interaction_id": interaction_id,
-                        "updated": datetime.now().isoformat()
-                    }
-                )
-
         # ====================================================
         # LIMIT NARZĘDZI
         # ====================================================
 
-        _raport = _raport_po_limicie(
+        _raport, _domknieta = _raport_po_limicie(
             client, _model, interaction, interaction_id,
             gemini_tools(_task_haystack)
         )
+
+        if _domknieta is not None:
+            _zapamietaj_rozmowe_wykonawcy(
+                task_id, key_name, _model, _domknieta,
+                getattr(_domknieta, "id", None)
+            )
 
         return {
             "ok": False,
@@ -26052,7 +26363,18 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         "Bartek, potem wykonanie."
     )
 
-    odp = deepseek("ENGINEER", task_text)
+    # v452: jeden fakt przed zleceniem — kto je wykonuje i co z jego
+    # odpowiedzi trafi na dysk. Bez tego Bartek czytal zadanie jako
+    # polecenie dla siebie i pytal "kto to robi?" (bieg 2026-09-25
+    # 16:15, krok 10).
+    odp = deepseek(
+        "ENGINEER",
+        "MAIN zlecił programowi poniższe zadanie. Do "
+        + ", ".join(Path(x).name for x in pliki)
+        + " nikt z zespołu nie napisał jeszcze kodu — program położy "
+        "na dysk to, co napiszesz do tych plików, i je uruchomi.\n\n"
+        + task_text
+    )
 
     if not str(odp or "").strip():
         return []
@@ -32266,7 +32588,13 @@ def consult_team(
         "\nMAIN:\n"
         + _main_decision_for_team
         + (
-            "\n\nTreść zlecenia:\n"
+            # v452: "Tresc zlecenia" Bartek czytal jako zlecenie dla
+            # siebie ("Nie mam narzedzi chrome_open", "nie mam
+            # terminala" — bieg 2026-09-25 16:15, krok 10) i odmawial
+            # kodu. Zlecenie wykonuje program; to jest fakt, ktory
+            # zmienia, jak sie je czyta.
+            "\n\nZlecenie MAIN-a dla programu (wykonuje je program, "
+            "nie zespół):\n"
             # Jednolinijkowa komenda JEST zleceniem ("cat ~/plik") — od v423
             # zostaje w tekscie. Zwijamy skrypty.
             + _kod_na_jedna_linie(str(_main_task_for_team))
@@ -35676,7 +36004,10 @@ _JAK_TO_DZIALA = (
     + str(GEMINI_MAX_TOOL_CALLS) + " wywołań narzędzi. Kod do plików "
     "kładzie Python — dokładnie ten, który napisał ktoś z zespołu. "
     "Gdy podasz write_engineer_code_to, ten kod ląduje pod tą "
-    "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia.\n\n"
+    "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia. Gemini "
+    "pamięta poprzednie zadania z tego celu — to jedna rozmowa na "
+    "cały cel — więc w zadaniu nie trzeba powtarzać tego, co już "
+    "widział i robił.\n\n"
     "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
     "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
     "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
