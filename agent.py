@@ -3,54 +3,44 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v450
+AEL-MINI AUTONOMOUS AGENT v451
 
-ARCHITEKTURA:
+ARCHITEKTURA (stan na v451 — patrz jak_to_dziala.txt):
 
-                    USER
-                     |
-                     v
-                 DEEPSEEK
-                     |
-        +------------+------------+
-        |            |            |
-      MAIN        PLANNER     RESEARCHER
-        |            |            |
-        +------- CRITIC ----------+
-                     |
-                  BROWSER
-                     |
-                     v
-                 TASK QUEUE
-                     |
-                     v
-              GEMINI WORKER
-                     |
-          +----------+----------+
-          |          |          |
-       CHROME     ANDROID     SHELL
-          |          |          |
-          +----------+----------+
-                     |
-                     v
-                  RESULT
-                     |
-                     v
-                   MAIN
+                    UZYTKOWNIK
+                        |  cel; potem odpowiedzi, gdy program zapyta
+                        v
+        MAIN + ZESPOL (DeepSeek, chat.deepseek.com przez token
+        przegladarkowy — opendeep; kazda rola we wlasnej rozmowie)
+           MAIN decyduje: TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+           Tomek plan, Kamil fakty (szukanie w sieci), Marek krytyka,
+           Bartek KOD, Ola relacja, Wojtek uzytkownik, Ela postep,
+           Piotr przeglad kodu, Ania poprawka
+                        |  mysla i pisza — niczego nie wykonuja
+                        v
+        PYTHON (ten plik)                         <-- RECE I OCZY
+           kladzie na dysk kod napisany przez zespol (1:1, z autorem),
+           proste "uruchom ten plik" robi sam, pilnuje limitow i
+           autorstwa, pokazuje ekran/strone, opowiada MAIN-owi fakty
+                        |
+                        v
+        GEMINI (wykonawca, darmowe API, Interactions API)  <-- PALEC
+           nowa rozmowa na kazde zadanie, 40 narzedzi, do 25 wywolan;
+           NIE pisze kodu — termux_write_file/termux_run z kodem
+           odmawiaja i kladzie go Python z wypowiedzi autora
+                        |
+           +------------+-------------+
+           |            |             |
+        TERMUX       ANDROID        CHROME (CDP, tylko istniejace karty)
 
 Gemini:
-    Interactions API
-    previous_interaction_id
-    prawidłowe function_result/call_id
-
-Chrome:
-    tylko istniejące karty
-    BRAK /json/new
+    Interactions API, previous_interaction_id,
+    function_result z call_id kazdego FunctionCallStep,
+    drabinka modeli i odstawianie par klucz+model (v449)
 
 DeepSeek:
-    5 ról utrzymywanych w jednym procesie
-    pamięć zapisywana na dysku
-
+    10 rol w jednym procesie, sesje zapisane na dysku (wznawiane),
+    sekwencyjnie, z limitem tempa na konto
 """
 
 import ast
@@ -324,8 +314,29 @@ if len(sys.argv) > 2 and sys.argv[1] == "--wykonane":
     raise SystemExit(0)
 
 
-from web_search import web_search
-from datetime import datetime, timedelta
+# v451: web_search.py lezy obok agent.py na telefonie, ale nie ma go w
+# repozytorium. Twardy import konczyl program na starcie (ImportError,
+# zanim padlo jedno slowo) na kazdej maszynie bez tego pliku — takze
+# po czystym `git clone`. Kamil ma od v187 natywne szukanie DeepSeeka,
+# a "WEB_SEARCH:" to droga zapasowa: brak modulu to brak jednej drogi,
+# nie brak programu. Gdy Kamil o nia poprosi, dostaje fakt, ze jej nie ma.
+try:
+    from web_search import web_search
+except ImportError:
+
+    def web_search(query, max_results=5):
+        return {
+            "ok": False,
+            "query": str(query),
+            "results": [],
+            "count": 0,
+            "error": (
+                "modul web_search.py nie jest zainstalowany obok "
+                "agent.py — WEB_SEARCH niedostepne na tej maszynie"
+            ),
+        }
+
+from datetime import datetime, timedelta, timezone
 
 # Opcjonalna, czysto-pythonowa biblioteka (żadnych skompilowanych
 # zależności — bezpieczna na Termux, w odróżnieniu od np. pydantic,
@@ -667,10 +678,8 @@ BROWSER_STATE = STATE_DIR / "browser.json"
 
 GEMINI_STATE_FILE = STATE_DIR / "gemini.json"
 
-# Stan KLUCZY Gemini — osobno od stanu zadania. Patrz
-# mark_quota(): wczesniej jedno i drugie mieszkalo w
-# gemini.json, a kazda interakcja nadpisywala plik w calosci.
-GEMINI_KEYS_FILE = STATE_DIR / "gemini_keys.json"
+# v451: stan kluczy Gemini (gemini_keys.json, v277) juz nie istnieje —
+# od v449 odstawia sie PARE klucz+model, w state/gemini_modele.json.
 
 LAST_RESULT_FILE = AGENT_DIR / "last_result.json"
 
@@ -1219,12 +1228,6 @@ sessions = {}
 gemini_clients = {}
 
 gemini_disabled = False
-
-# trwała interakcja wykonawcy
-gemini_interaction_id = None
-
-# blokada Gemini
-gemini_lock = None
 
 
 # ============================================================
@@ -2791,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v450")
+    print("             AEL-MINI AUTONOMOUS AGENT v451")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -6091,6 +6094,73 @@ _szukanie_serwera = None
 _powiedziane_o_szukaniu = set()
 
 
+# ============================================================
+# SZUKANIE W SIECI DZIALA BEZ MYSLENIA (v451)
+# ============================================================
+#
+# Od v328 wiadomo z samego strumienia, ze serwer odpowiadal Kamilowi
+# z "search_enabled": false, choc prosilismy o szukanie. Biblioteka
+# opendeep (0.9) mowi to samo wprost: na chat.deepseek.com szukanie w
+# sieci jest tylko w trybie bez myslenia (V4 Flash / "Instant");
+# tryb z mysleniem (V4 Pro) je ignoruje. My zakladalismy Kamilowi
+# rozmowe z mysleniem — wiec jego "natywne szukanie" nie dzialalo,
+# a zespol dostawal co bieg to samo zdanie o braku wyszukiwarki.
+#
+# Nie zgadujemy — mierzymy, tak jak w v328. Gdy serwer pierwszy raz
+# powie "search_enabled": false, wylaczamy tej roli myslenie i
+# patrzymy na nastepna odpowiedz: gdy wraca "true", zostaje bez
+# myslenia (Kamil ma miec siec, nie rozumowanie); gdy nadal "false",
+# przywracamy myslenie i mowimy zespolowi raz, jak dotad. Koszt
+# najwyzej jednej wiadomosci bez myslenia.
+_szukanie_proba = {}
+
+
+def _szukanie_bez_myslenia(name, session):
+    """
+    True = wlasnie przelaczylismy te role na tryb bez myslenia i
+    czekamy na nastepna odpowiedz (zespolowi jeszcze nic nie mowimy).
+    False = nie ma juz czego probowac.
+    """
+
+    stan = _szukanie_proba.get(name)
+
+    if stan is None and getattr(session, "thinking_enabled", False):
+
+        try:
+            session.thinking_enabled = False
+        except Exception:
+            return False
+
+        _szukanie_proba[name] = "probujemy"
+
+        log(
+            "DEEPSEEK",
+            name + ": serwer nie włączył szukania przy myśleniu "
+            "(search_enabled=false) — od następnej wiadomości ta "
+            "rola pyta BEZ myślenia; DeepSeek szuka w sieci tylko w "
+            "tym trybie."
+        )
+
+        return True
+
+    if stan == "probujemy":
+
+        try:
+            session.thinking_enabled = True
+        except Exception:
+            pass
+
+        _szukanie_proba[name] = "nie_pomoglo"
+
+        log(
+            "DEEPSEEK",
+            name + ": bez myślenia serwer też nie szukał — "
+            "przywracam myślenie, dalej bez sieci."
+        )
+
+    return False
+
+
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
 _samo_myslenie_z_rzedu = {}
 
@@ -7488,14 +7558,33 @@ def deepseek(name, message):
                 else:
                     _speak(name, text)
 
+                # v451: szukanie dziala bez myslenia — patrz
+                # _szukanie_bez_myslenia(). Gdy serwer potwierdzil, ze
+                # szukal, a probowalismy wlasnie bez myslenia — zostaje.
+                if (
+                    getattr(session, "search_enabled", False)
+                    and _szukanie_serwera is True
+                    and _szukanie_proba.get(name) == "probujemy"
+                ):
+                    _szukanie_proba[name] = "dziala"
+                    log(
+                        "DEEPSEEK",
+                        name + ": bez myślenia serwer szuka w sieci "
+                        "(search_enabled=true) — ta rozmowa zostaje "
+                        "w trybie bez myślenia, żeby Kamil miał sieć."
+                    )
+
                 # v328: prosilismy o szukanie w sieci, a serwer go
                 # nie wlaczyl. Mowimy to raz — zespol przestanie
                 # prosic o zrodla kogos, kto ich nie ma jak zdobyc,
                 # i przestanie sie spierac, czy je podal.
+                # v451: najpierw jedna proba bez myslenia — dopiero gdy
+                # i to nie pomoze, mowimy zespolowi.
                 if (
                     getattr(session, "search_enabled", False)
                     and _szukanie_serwera is False
                     and name not in _powiedziane_o_szukaniu
+                    and not _szukanie_bez_myslenia(name, session)
                 ):
 
                     _powiedziane_o_szukaniu.add(name)
@@ -12713,7 +12802,7 @@ def chrome_click(
 
     # Klikniecie w strone, ktora sie jeszcze rysuje, trafia w pustke
     # albo w nie ten element — patrz _poczekaj_az_strona_dojdzie().
-    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
+    _poczekaj_az_strona_dojdzie(tab)
 
     target = json.dumps(
         str(text),
@@ -13025,7 +13114,7 @@ def chrome_type(
             .map(i => (document.getElementById(i) || {{}}).innerText || '').join(' ')
     ].filter(Boolean).join(' | ');
     let el = null;
-    if (/^\d+$/.test(q)) {{
+    if (/^\\d+$/.test(q)) {{
         el = document.querySelector('[data-ael-nr="' + q + '"]');
         if (!el) {{
             return {{ok: false, error: 'Na stronie nie ma już elementu nr ' + q
@@ -13380,126 +13469,19 @@ def load_gemini_keys():
 
 
 # ============================================================
-# WYCZERPANY KLUCZ GEMINI WRACA DO GRY (v277)
+# v451: bez osobnego stanu kluczy. mark_quota/mark_key_ok/key_disabled
+# (v277) liczyly odstepy per KLUCZ; od v449 liczy je _odstaw_pare()
+# per para klucz+model i tylko ta sciezka jest uzywana. Tamte funkcje
+# zostaly jako martwy kod (get_gemini_client nikt nie wolal) — i
+# mark_key_ok() kasowalo wpisy w pliku, ktorego nikt juz nie pisal.
+#
+# Zostaja same odstepy dla nieznanego limitu (patrz _czas_odnowienia):
+# pierwszy raz krotko, bo 429 to zwykle limit na minute; gdy ta sama
+# para pada zaraz po powrocie, podwajamy — do 6 godzin.
 # ============================================================
-#
-# Byly tu dwa bledy wskazujace w PRZECIWNE strony, ktore sie
-# nawzajem maskowaly — dlatego nigdy nie bylo tego widac w logu
-# jako jednej awarii.
-#
-# 1. mark_quota() zapisywalo "ten klucz padl" do gemini.json, ale
-#    KAZDA udana interakcja z Gemini nadpisywala ten sam plik
-#    w calosci ({"task_id": ..., "interaction_id": ...}). write_json
-#    nadpisuje, nie doklada. Wiedza o wyczerpanym kluczu znikala
-#    wiec po jednym wywolaniu i agent wracal do martwego klucza:
-#    429, przelaczenie, zapomnienie, znowu 429.
-#
-# 2. W druga strone: key_disabled() czytalo tylko "status", a pole
-#    "time" nie bylo czytane NIGDZIE. Gdyby wpis jednak przetrwal,
-#    klucz bylby martwy na zawsze — mimo ze limit Gemini sie
-#    odnawia. Wskrzeszal go dopiero "wyczysc".
-#
-# Teraz: stan kluczy ma wlasny plik, a "time" jest czytane. Odstep
-# rosnie tak samo, jak przy przeciazeniu DeepSeeka (v268): pierwszy
-# raz krotko, bo 429 to zwykle limit na minute; gdy ten sam klucz
-# pada zaraz po powrocie, to znaczy, ze to limit dzienny — wtedy
-# podwajamy, zeby nie dobijac sie co chwile. Udane wywolanie
-# kasuje wpis.
+
 _GEMINI_COOLDOWN_START = 60.0
 _GEMINI_COOLDOWN_MAX = 6 * 3600.0
-
-
-def gemini_keys_state():
-
-    value = read_json(
-        GEMINI_KEYS_FILE,
-        {}
-    )
-
-    if not isinstance(value, dict):
-        return {}
-
-    return value
-
-
-def save_gemini_keys_state(value):
-
-    write_json(
-        GEMINI_KEYS_FILE,
-        value
-    )
-
-
-def mark_quota(key_name):
-
-    state = gemini_keys_state()
-
-    poprzedni = state.get(str(key_name)) or {}
-
-    try:
-        byl_odstep = float(poprzedni.get("cooldown") or 0.0)
-        byl_kiedy = float(poprzedni.get("time") or 0.0)
-    except (TypeError, ValueError):
-        byl_odstep, byl_kiedy = 0.0, 0.0
-
-    # Padl znowu tuz po tym, jak wrocil do gry — poprzedni odstep
-    # byl za krotki.
-    if byl_odstep and (time.time() - byl_kiedy) < byl_odstep * 3:
-        odstep = min(byl_odstep * 2, _GEMINI_COOLDOWN_MAX)
-    else:
-        odstep = _GEMINI_COOLDOWN_START
-
-    state[str(key_name)] = {
-        "status": "QUOTA_EXHAUSTED",
-        "time": time.time(),
-        "cooldown": odstep
-    }
-
-    save_gemini_keys_state(state)
-
-    log(
-        "GEMINI",
-        "Klucz " + str(key_name) + " odstawiony na "
-        + str(int(odstep // 60)) + " min — potem sam wroci do gry."
-    )
-
-
-def mark_key_ok(key_name):
-    """Klucz odpowiedzial — nie ma powodu go dalej omijac."""
-
-    state = gemini_keys_state()
-
-    if str(key_name) in state:
-
-        del state[str(key_name)]
-
-        save_gemini_keys_state(state)
-
-        log(
-            "GEMINI",
-            "Klucz " + str(key_name) + " znowu odpowiada — "
-            "wraca do normalnego uzycia."
-        )
-
-
-def key_disabled(key_name):
-
-    info = gemini_keys_state().get(str(key_name))
-
-    if not info:
-        return False
-
-    if info.get("status") != "QUOTA_EXHAUSTED":
-        return False
-
-    try:
-        czekaj = float(info.get("cooldown") or _GEMINI_COOLDOWN_START)
-        kiedy = float(info.get("time") or 0.0)
-    except (TypeError, ValueError):
-        return False
-
-    return (time.time() - kiedy) < czekaj
-
 
 # ============================================================
 # v449: NAJLEPSZY DARMOWY MODEL I DRABINKA MODELI
@@ -13660,7 +13642,9 @@ def _polnoc_pacyfik_po(teraz):
         d += timedelta(days=(6 - d.weekday()) % 7)
         return d + timedelta(weeks=ktora - 1)
 
-    utc = datetime.utcfromtimestamp(teraz)
+    # v451: utcfromtimestamp() jest przestarzale od Pythona 3.12 —
+    # Termux pokazywal DeprecationWarning przy kazdym liczeniu polnocy.
+    utc = datetime.fromtimestamp(teraz, timezone.utc).replace(tzinfo=None)
 
     def _przesuniecie(chwila_utc):
         rok = chwila_utc.year
@@ -13910,23 +13894,6 @@ def init_gemini():
     )
 
     return False
-
-
-def get_gemini_client():
-
-    for name, _ in load_gemini_keys():
-
-        if key_disabled(name):
-            continue
-
-        client = gemini_clients.get(
-            name
-        )
-
-        if client is not None:
-            return name, client
-
-    return None, None
 
 
 # ============================================================
@@ -18684,20 +18651,28 @@ def termux_run_background(
         # chodzi, bo tam podajemy bash jawnie. Ta sama komenda raz
         # dziala, raz nie, zaleznie od tego, czy poszla w tlo —
         # i nikt nie ma jak zgadnac dlaczego.
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            executable=_SHELL_EXECUTABLE,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=open(
-                log,
-                "a",
-                encoding="utf-8"
-            ),
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
+        # v451: uchwyt do logu otwieramy na czas uruchomienia i
+        # zamykamy u siebie — dziecko ma wlasna kopie deskryptora.
+        # Dotad kazde uruchomienie w tle zostawialo w agencie jeden
+        # otwarty plik na zawsze.
+        _log_fh = open(log, "a", encoding="utf-8")
+
+        try:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                executable=_SHELL_EXECUTABLE,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=_log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
+        finally:
+            try:
+                _log_fh.close()
+            except Exception:
+                pass
 
         # v226: trzymamy uchwyt do procesu, zeby dalo sie na niego
         # POCZEKAC i poznac jego kod wyjscia — patrz
@@ -22392,8 +22367,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             tools=gemini_tools(_task_haystack)
         )
 
-        # Klucz odpowiedzial — jesli byl odstawiony, wraca.
-        mark_key_ok(key_name)
+        # Para klucz+model odpowiedziala — jesli byla odstawiona, wraca.
         _para_dziala(key_name, _model)
 
         interaction_id = getattr(
@@ -23010,13 +22984,24 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 
                 if _identical_streak >= GEMINI_IDENTICAL_CALL_STOP:
 
+                    # v451: ten straznik od v371 NICZEGO nie przerywa —
+                    # oddaje wynik z uwaga i konczy sama runde. Log
+                    # mowil "przerywam… nie pale reszty limitu", a
+                    # limit szedl dalej; w sladzie dla MAIN-a rosly
+                    # kolejne "4 razy", "5 razy"… — zostaje ostatnia.
                     log(
                         "GEMINI",
-                        "przerywam: " + str(name) + " zwrocilo "
+                        "straznik: " + str(name) + " zwrocilo "
                         + str(_identical_streak) + " razy pod rzad "
-                        "DOKLADNIE ten sam wynik. To czekanie, nie "
-                        "praca — nie pale na to reszty limitu."
+                        "DOKLADNIE ten sam wynik — to czekanie, nie "
+                        "praca. Mowie to wykonawcy przy tym wyniku; "
+                        "co dalej, decyduje on."
                     )
+
+                    collected_warnings[:] = [
+                        w for w in collected_warnings
+                        if not str(w).startswith("gemini [petla_czekania]: ")
+                    ]
 
                     collected_warnings.append(
                         "gemini [petla_czekania]: " + str(name)
@@ -29134,8 +29119,12 @@ Gemini po kolejnych krokach:
     if not parsed or "percent" not in parsed:
         return None
 
+    # v451: "50%" albo "ok. 50" to tez liczba — int("50%") rzucal i
+    # pasek pokazywal 0.
+    _liczba = re.search(r"-?\d+(?:[.,]\d+)?", str(parsed.get("percent", 0)))
+
     try:
-        percent = int(parsed.get("percent", 0))
+        percent = int(float(_liczba.group().replace(",", "."))) if _liczba else 0
     except Exception:
         percent = 0
 
@@ -32022,7 +32011,6 @@ def consult_team(
     # v432: bez "⚠️ UWAGA: narzedzie X zawiodlo Nx… Czas na inne
     # podejscie" i bez ramy "Przy okazji zauwazylem w narzedziach…".
     # Ostrzezenia z wykonania i tak ida w relacji z kroku.
-    tool_hint = ""
 
     # v435: fakty z _pending_team_warnings ida do MAIN-a (patrz
     # main_decide). Od v413 byly tu zbierane i wyrzucane — nie
@@ -32042,15 +32030,9 @@ def consult_team(
     # w OSTATNIM RAPORCIE i w surowym wyniku — checklista ma go nie
     # powtarzac po raz trzeci. Ona jest od tego, zeby nie zginely
     # punkty STARE.
-    _biezace_zadanie = (
-        last_result.get("task")
-        if isinstance(last_result, dict) else None
-    )
-
     # v432: bez listy punktow celu ("Z 8 punktow: 5 zrobily sie na
     # narzedziach…", "Do tych warto wrocic…") i bez "Tego juz
     # probowalismy…" — Python sam dzielil cel na punkty i je oceniał.
-    checklist_block = ""
 
     # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu od
     # v116/v132 rozmawia po ludzku, ale sam OSTATNI RAPORT był
@@ -32332,7 +32314,6 @@ def consult_team(
     # checklista przypomina o NIEDOKONCZONYCH punktach, a wypisywala
     # tez ten, ktory wlasnie padl i jest opisany dwie linijki nizej.
     # To ja tniemy — patrz _checklist_summary_block(skip_task).
-    report_body = readable_report or raw_report_material
 
     # v193: kazda rola dostaje TYLKO to, czego jeszcze nie widziala.
     # Bloki identyczne z poprzednim krokiem sa juz w historii jej

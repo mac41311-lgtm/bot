@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v450
+JAK TO DZIALA — AEL-MINI v451
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -227,5 +227,40 @@ CZESC 10. ZASADY, KTORYCH SIE TRZYMAMY
   - autorstwo kodu: tylko kod napisany przez zespol trafia na dysk
   - program uniwersalny — nic pod jeden cel
   - zmiana w programie tylko z konkretnego problemu w logach
+
+=========================================================================
+
+
+=========================================================================
+CZESC 11. CO ZMIENILO v451 (przeglad calosci + testy bez telefonu)
+=========================================================================
+
+  - web_search.py (modul obok agent.py, nie ma go w repozytorium) nie
+    jest juz twarda zaleznoscia: bez niego program startuje, a
+    "WEB_SEARCH:" Kamila oddaje fakt, ze tej drogi tu nie ma
+  - Kamil i siec: serwer DeepSeeka szuka w sieci tylko w trybie bez
+    myslenia (V4 Flash). Gdy przy mysleniu odpowie
+    search_enabled=false, Python raz przelacza rozmowe Kamila na tryb
+    bez myslenia; gdy wtedy szuka — zostaje tak, gdy nie — wraca
+    myslenie i zespol slyszy o tym raz, jak dotad
+  - bez ostrzezen Pythona 3.12 na starcie (\d w kodzie JS,
+    utcfromtimestamp przy liczeniu polnocy w Kalifornii)
+  - straznik czekania (4 x ten sam wynik) mowi w logu prawde: nie
+    przerywa, tylko informuje; w sladzie dla MAIN-a zostaje jedna linia
+  - Ela: "50%" w polu percent to tez liczba (bylo 0)
+  - uruchomienie w tle nie zostawia w agencie otwartego uchwytu logu
+  - martwy kod kluczy Gemini (v277: mark_quota/key_disabled/
+    get_gemini_client) usuniety — od v449 liczy sie para klucz+model
+  - update_agent.sh: galaz mozna nadpisac (BRANCH=... bash
+    ~/update_agent.sh); domyslnie idzie z galezi tej wersji
+
+  Sprawdzone bez telefonu, z zaslepionym DeepSeekiem i Gemini: parser
+  JSON-a decyzji, kilka ASK w jednej odpowiedzi, czas odnowienia po
+  429 (dzienny/minutowy/nieznany), polnoc kalifornijska z czasem
+  letnim, wybor bloku kodu Bartka, cala petla Gemini (narzedzie,
+  straznik, limit 25, 429 przed i w trakcie, 503), parser strumienia
+  DeepSeeka (myslenie, bez myslenia, paczka BATCH, samo myslenie) i
+  cala petla run_agent (ASK -> kod Bartka polozony i uruchomiony przez
+  Pythona -> TASK przez Gemini -> NEED_USER_LOGIN -> DONE).
 
 =========================================================================
