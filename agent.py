@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v449
+AEL-MINI AUTONOMOUS AGENT v450
 
 ARCHITEKTURA:
 
@@ -2791,7 +2791,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v449")
+    print("             AEL-MINI AUTONOMOUS AGENT v450")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -39017,7 +39017,10 @@ def run_agent(goal):
                     + str(GEMINI_KEYS_DIR) + "."
             }
 
-            import time
+            # v450: bez lokalnego "import time" — robilo z `time`
+            # zmienna lokalna CALEGO run_agent, wiec time.sleep(1) nizej
+            # (Gemini zablokowany przy nowym zadaniu) rzucilby
+            # UnboundLocalError, gdyby ta galaz nie przeszla wczesniej.
             time.sleep(30)
 
             continue

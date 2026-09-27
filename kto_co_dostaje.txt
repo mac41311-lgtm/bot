@@ -1,253 +1,142 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v352
-wyciagniete z agent.py, nie z pamieci
+KTO CO DOSTAJE I KIEDY — AEL-MINI v450
+wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
 
-CZESC 0. RAZ, NA STARCIE SESJI
+CZESC 0. RAZ, NA STARCIE ROZMOWY
 -------------------------------------------------------------------------
 
-Kazda rola, przy zakladaniu swojej rozmowy z DeepSeekiem, dostaje
-JEDNA wiadomosc:
+Kazda rola ma wlasna rozmowe na DeepSeeku. Pierwsza wiadomosc:
 
-    Termux API, ADB DEBUGOWANIE, Android
+  MAIN, Bartek, Piotr, Ania  (dzialaja na telefonie — v409)
+      Termux API, ADB DEBUGOWANIE, Android
+      + fakty o telefonie, sprawdzone przy starcie programu
+        (model, uklad, wersja Androida, czy jest su, czy Termux:API)
 
-36 znakow. Tyle. Nikt nie dostaje ani zdania o tym, kim jest, co ma
-robic, jak pisac ani jak dziala program.
+  MAIN dodatkowo  (v422)
+      "Kilka słów o tym, jak to wszystko działa": kto jest w
+      zespole, ze TASK wykonuje Gemini (do 25 wywolan narzedzi), ze
+      kod kladzie Python, jak dziala ASK (do 4 pytan na krok),
+      NEED_USER_LOGIN, DONE i FAILED
+      + ksztalty JSON-a decyzji
 
-Wyjatek dotyczy dwoch rol, ktorych odpowiedz Python PARSUJE
-maszynowo — do tych 36 znakow dolaczony jest sam ksztalt JSON-a:
+  Bartek, Piotr, Ania, Tomek, Marek, Ola, Ela  (v424)
+      jedno zdanie, jak dziala rozmowa: nikt nie ma terminala, to,
+      co zespol ustali, wykonuje program; kod program kladzie na
+      dysk i uruchamia, gdy MAIN tak zdecyduje
 
-    MAIN   + 374 znaki   {"type": "TASK"|"DONE"|"FAILED"|
-                          "NEED_USER_LOGIN"|"ASK", ...}
-    Ela    +  35 znakow  {"percent": 0, "summary": ""}
+  Kamil i Wojtek
+      nic — zaczynaja od samego celu
 
-Promty pozostalych osmiu rol maja 0 znakow:
-Tomek, Kamil, Marek, Bartek, Ola, Wojtek, Piotr, Ania.
+  Kazdy
+      jedno zdanie tozsamosci ("Jesteś Bartkiem. Zajmujesz się
+      kodem, skryptami i rozwiązaniami technicznymi.")
+  Ela dodatkowo
+      ksztalt JSON-a: {"percent": 0-100, "summary": "..."}
 
-Przy wznowieniu sesji te 36 znakow idzie ponownie tylko wtedy, gdy
-fakty o maszynie sie zmienily (inne adb, doinstalowane termux-*).
-
-Rola, ktora ma w historii prompt sprzed v337, zaczyna rozmowe od
-nowa — zamiast slyszec od nas "poprzednie instrukcje nie
-obowiazuja".
+Cel — Twoimi slowami, doklejony do pierwszej wiadomosci do tej roli
+w tym celu. Nowy cel czysci te pamiec.
 
 
-CZESC 1. RAZ, NA POCZATKU
+CZESC 1. KTO SIE ODZYWA W KROKU (od v435)
 -------------------------------------------------------------------------
 
-Kotwica roli (v352) — jedno zdanie, pierwsza wiadomosc rozmowy na
-DeepSeeku, nigdy wiecej:
+  MAIN   — w kazdym kroku
+  Ela    — co 5 krokow albo gdy MAIN poprosi
+  reszta — tylko gdy MAIN zapyta (ASK); kilka pytan z jednej
+           odpowiedzi MAIN-a idzie po kolei (v440), do 4 na krok
+  Piotr  — gdy uruchomiony kod sie wysypal
+  Ania   — gdy trzeba napisac poprawke do tego kodu
 
-  Tomek   Jesteś Tomkiem. Pomagasz zespołowi znaleźć sensowny
-          następny krok.
-  Kamil   Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych
-          informacji.
-  Marek   Jesteś Markiem. Oceniasz pomysły i plany Tomka, szukając
-          ich słabych punktów.
-  Bartek  Jesteś Bartkiem. Zajmujesz się kodem, skryptami
-          i rozwiązaniami technicznymi.
-  Ola     Jesteś Olą. Pomagasz uporządkować to, co się wydarzyło,
-          i wyjaśniasz to po ludzku.
-  Wojtek  Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik
-          i zwracasz uwagę na praktyczny sens.
-  Piotr   Jesteś Piotrem. Analizujesz błędy i szukasz ich
-          rzeczywistej przyczyny, a poprawia je Ania.
-  Ania    Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa.
-  MAIN    Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co
-          najlepiej zrobić dalej.          + ksztalty JSON-a
-  Ela     Jesteś Elą. Oceniasz, ile celu zostało rzeczywiście
-          wykonane.                        + ksztalt JSON-a
-
-Nikt nie dostaje ani slowa o tym, jak ma pisac, w jakim formacie,
-ani jak dziala program. O Gemini nie wie nikt.
-
-O kims innym wie tylko ten, komu to wynika z samej roboty: Marek
-ocenia plany Tomka, Piotr szuka przyczyny bledu, ktory naprawia
-Ania. Reszta poznaje sie z rozmowy.
-
-Fakty o maszynie — "Termux API, ADB DEBUGOWANIE, Android". Raz, i
-jeszcze raz tylko wtedy, gdy sie zmienia.
-
-Cel — Twoimi slowami, bez ramki, bez naszego komentarza. Doklejany
-do pierwszej wiadomosci do tej roli w tym celu i nigdy wiecej.
-Nowy cel czysci te pamiec.
+Nikt nie mowi dlatego, ze minal kolejny krok.
 
 
-CZESC 2. KOLEJNOSC W KROKU
+CZESC 2. CO DOSTAJE MAIN W KAZDYM KROKU
 -------------------------------------------------------------------------
 
-    1. Ola (BROWSER)      — streszcza wynik poprzedniego kroku
-    2. Wojtek             — patrzy na cel po ludzku
-    3. Kamil (RESEARCHER) — sprawdza fakty
-    4. Tomek (PLANNER)    — planuje krok
-    5. Ola (BROWSER)      — drugi raz, gdy jest co czytac
-    6. Bartek (ENGINEER)  — kod i komendy
-    7. Marek (CRITIC)     — ocenia plan
-    8. MAIN               — decyduje
-    9. Gemini             — wykonuje
+  "Co się właśnie stało:"
+    - jak sie skonczyl ostatni krok (status)
+    - "Gemini napisał:" — raport wykonawcy, oznaczony jako jego
+      slowa, nie pomiar
+    - slad narzedzi: ile wywolan, ktore sie nie udaly, co zwrocily
+    - blad narzedzia i jego tresc, gdy zadanie sie na nim skonczylo
+  co powstalo na dysku — kod jako jedna linia:
+      [~/zarobek/setup.sh — 7929 znaków, na dysku]
+  "W Chrome jest teraz:" i "Na ekranie telefonu jest teraz:"
+    — po kroku, w ktorym Gemini cos tam robilo
+  "Użytkownik powiedział nam w trakcie tego celu:" — Twoje zdania
+  odpowiedzi osob, ktore zapytal, kazda pod imieniem
+  kto zapytany oddal pusty tekst — jedno zdanie, tylko gdy naprawde
+    byl zapytany (v440)
 
-Kamil PRZED Tomkiem celowo: jego ustalenia maja wplynac na plan z
-TEGO kroku, nie z nastepnego.
-
-KIEDY KTO SIE ODZYWA (v351)
-
-Nie ma zadnego zegarka. Nikt nie mowi dlatego, ze minal kolejny
-krok. Powody sa cztery i kazdy jest konkretny:
-
-  1. ktos zawolal te osobe po imieniu
-  2. Marek zadal jej pytanie
-  3. MAIN poprosil o nia w swojej decyzji
-  4. wlasnie cos sie wysypalo
-
-Poza tym:
-  - Wojtek slyszy cel RAZ, na starcie — po to jest.
-  - Ola porzadkuje, gdy ktos ja o to poprosi; sama z siebie
-    odzywa sie tylko przy celu z przegladarka.
-  - Tomek i Marek mowia, gdy nikt inny nie mial powodu — zeby
-    krok nie zostal bez zadnego glosu.
-
-Spokojny krok to dzis dwie osoby (Tomek + Marek). Po awarii
-dochodza Kamil i Wojtek. Gdy nie kompiluje sie kod — jeszcze Bartek.
-
-Kto sie nie odzywa, tego ostatnia wypowiedz idzie dalej pod podpisem
-"Bartek, wcześniej (krok 3):" — z numerem kroku, zeby MAIN nie
-pomylil starej opinii z biezaca.
+W logu kazda wiadomosc ma w naglowku "tekst Pythona: N znaków" —
+ile w niej jest naszego tekstu, a ile faktow i wypowiedzi.
 
 
-CZESC 3. CO DOSTAJE KAZDY (wspolny rdzen)
+CZESC 3. CO DOSTAJE OSOBA, KTORA MAIN ZAPYTAL
 -------------------------------------------------------------------------
 
-Kazdy blok idzie przez filtr powtorek: kto juz to widzial, nie
-dostaje drugi raz.
+  - cel (tylko przy pierwszej wiadomosci w tym celu)
+  - "MAIN:" i jego pytanie
+  - co sie stalo od jej ostatniej wypowiedzi
+  - to, co koledzy napisali do niej po imieniu (skrzynka)
+  - Bartek i Marek: ostatni plan Tomka, jesli go jeszcze nie
+    widzieli (gdy Tomek nic nie powiedzial — nic, nie "Tomek nie
+    odpowiedzial"; v440)
+  - autor kodu: co wypisal jego kod po uruchomieniu
 
-  temat                  czym sie teraz zajmujemy
-  delegacja              gdy ktos przekazal komus robote
-  pliki                  stan dysku wobec celu
-  checklista             punkty celu i co z nich potwierdzone
-  decyzja MAIN-a         "MAIN:" + jego ostatnia decyzja
-  uwagi z narzedzi       co Python zauwazyl w wynikach
-  Python zauwazyl        fakty ustalone przez sam kod
-  Uzytkownik:            to, co napisales — w calosci
-  komendy termux-*       spis tego, co jest na telefonie
-  moj log                co wypisalo to, co TA osoba napisala
-  skrzynka               co koledzy napisali do niej po imieniu
-  stan Chrome            gdy cel dotyczy przegladarki
-
-Co kolega napisal do kogos po imieniu, dostaje tamten. Reszta
-zespolu dostaje wspolny wstep. Gdy dla kogos nie zostaloby NIC —
-dostaje calosc; cisza jest gorsza niz nadmiar.
-  stan ekranu Androida   gdy cel dotyczy telefonu
-
-MOJ LOG — wyglada tak i nie jest skracany:
-
-    $ bash ~/build_apk.sh 2>&1 | tee ~/build.log
-    ### 3/6 Budowanie APK przez Gradle
-    ERROR: JAVA_HOME is set to an invalid directory: (...)
-    kod wyjścia: 1
-
-Dopasowanie po tym, co widac: plik, ktorego tresc pochodzi od tej
-osoby, albo komenda stojaca doslownie w jej wypowiedzi. Cudzego
-loga nikt nie dostaje.
+Jej odpowiedz wraca do MAIN-a od razu.
 
 
-CZESC 4. CO DOSTAJE KTO — OSOBNO
+CZESC 4. PIOTR, ANIA, ELA
 -------------------------------------------------------------------------
 
-OLA (BROWSER)
-  surowy material z poprzedniego kroku i nic wiecej
-  NIE dostaje: zadnego polecenia, co ma z nim zrobic
-  pomijana, gdy z kroku zostal sam wiersz stanu
-
-WOJTEK
-  pierwsza tura:  sam cel
-  kolejne:        odpowiedz Kamila na to, o co Wojtek pytal —
-                  CALY jego akapit, nie 400 znakow (v348)
-  NIE dostaje: stanu dysku, maszynowni, wynikow narzedzi
-  gdy nie mamy nic prawdziwego — nie piszemy do niego wcale
-
-KAMIL (RESEARCHER)
-  rdzen BEZ maszynowni: bez "Python zauwazyl", bez surowych
-  zrzutow narzedzi, bez odpowiedzi na pytania o pliki
-  + wypowiedz Wojtka, gdy Wojtek go o cos pytal
-  + linia od Oli, gdy napisala cos wprost do niego
-
-TOMEK (PLANNER)
-  pelny rdzen
-  + "Kamil:" — jego czesc wypowiedzi Kamila
-  + "Wojtek:" — jego czesc wypowiedzi Wojtka
-  + zarzut Marka do poprzedniego planu
-
-BARTEK (ENGINEER)
-  pelny rdzen
-  + "Tomek proponuje:" — plan, w calosci, niecienty
-  + "Kamil:" i "Wojtek:" — ich czesci
-  + tresc pliku, o ktory chodzi
-  + swoj log z terminala (czesc 3)
-
-MAREK (CRITIC)
-  pelny rdzen
-  + "Tomek proponuje:" — plan do oceny
-  + tresc pliku, o ktory chodzi
-
-PIOTR (CODE_REVIEWER), ANIA (CODE_FIXER), ELA (PROGRESS_ESTIMATOR)
-  wolani poza kolejka — gdy cos sie wydarzy, nie co krok
-  od v349 dostaja to samo, co reszta zespolu:
-    + "Użytkownik:" — to, co napisales
-    + swoj wlasny log z terminala
-  Piotr: caly plik z dysku albo narzedzie + co zwrocilo + kod
-         (bez formatki do wypelnienia — v349)
-  Ania:  plik i opis problemu; jej patch naklada Python
-  Ela:   material o postepie, oddaje sam JSON z procentem
-  szczegoly: jak_to_dziala.txt, czesc 4
-
-MAIN
-  + "Nowe na dysku w tym kroku:" — lista z rozmiarami (v348)
-  + "Użytkownik:" — to, co napisales
-  + co sie stalo w poprzednim kroku
-  + wypowiedzi wszystkich, pod imionami
-  + stan Chrome i ekranu, gdy cel tego dotyczy
-  KOD widzi jako jedna linie (v347):
-      [echo.py — 1247 znaków]
-      [build.gradle — 202 znaków]
-  bo decyduje, a nie pisze. Zmierzone: 47 537 -> 26 634 znaki.
+  Piotr: plik, ktory sie wysypal, i jak sie skonczyl; najwyzej 3
+         przeglady na cel
+  Ania:  plik i opis problemu; jej poprawke naklada Python — z kopia
+         zapasowa, sprawdzeniem skladni i wycofaniem, gdy nie przejdzie
+  Ela:   co zrobily kolejne zadania ("Gemini po kolejnych krokach")
+         i Twoje zdania; oddaje sam JSON z procentem
 
 
-CZESC 5. CZEGO NIE DOSTAJE NIKT
+CZESC 5. CO DOSTAJE GEMINI
 -------------------------------------------------------------------------
 
-  - zdan o tym, kim jest i co ma robic
-  - zdan o tym, jak dziala program
-  - slowa "Gemini" (zostaly 3 wzmianki, wszystkie w bledach DO
-    NIEGO, gdy sam zle wywola narzedzie)
-  - naszych pytan na koncu wiadomosci
-  - podpowiedzi, jak pisac ani w jakim formacie
-  - kodu, ktory juz lezy na dysku — zamiast niego:
-      [va_final.sh — 18676 znaków, na dysku]
+Kazde zadanie to nowa rozmowa:
+
+  - 8 krotkich regul pracy (zapis i poprawki plikow, komendy, sprawdz
+    rezultat, blad konczy zadanie / brak to zwykly wynik, ekran
+    Androida, proces w tle, gdzie zapisywac, usuwanie)
+  - "TERAZ NA TELEFONIE:" — aplikacja na wierzchu i otwarte karty
+    Chrome (v446)
+  - warunek sukcesu i tresc zadania od MAIN-a
+  - 40 narzedzi (lista: jak_to_dziala.txt, czesc 5)
+
+Po kazdym ruchu w Chrome — pole "strona": adres, tytul, poczatek
+tekstu i ponumerowane linki, przyciski i pola (v442).
 
 
 CZESC 6. CZEGO NIE TNIEMY
 -------------------------------------------------------------------------
 
-Zadna wypowiedz roli nie idzie do innej roli przez short().
-Przejscia maja siatke bezpieczenstwa na 30 000 znakow; gdy kiedys
-do niej dojdzie, odbiorca dostaje to powiedziane wprost.
+Wypowiedz roli idzie do innej roli bez skracania — siatka
+bezpieczenstwa to 30 000 znakow; gdy kiedys do niej dojdzie,
+odbiorca dostaje to powiedziane wprost.
 
-Kto poprosi o plik, dostaje go w calosci — do 60 000 znakow.
-
-Cudza wypowiedz jest CIETA WEDLUG ADRESATA, nie wedlug dlugosci:
-akapit "Kamilu: ..." idzie do Kamila caly, a do Bartka nie idzie
-wcale.
+Kodu, ktory juz lezy na dysku, nie wysylamy drugi raz — idzie
+sciezka z rozmiarem.
 
 
 CZESC 7. CO WRACA DO CIEBIE
 -------------------------------------------------------------------------
 
-  - log na ekranie i w pliku przebiegu
-  - kopia na telefon po kazdym kroku i przy zamknieciu (Ctrl+C)
-  - podsumowanie komunikacji co 5 krokow
-  - pytanie, gdy potrzebny jest Twoj palec: instalacja, zgoda,
-    uprawnienie, Play Protect (v341) — wtedy program CZEKA
-  - to, co odpiszesz, idzie do wszystkich rol i do MAIN-a
-    pod podpisem "Użytkownik:" (v341)
+  - log na ekranie i w pliku przebiegu (.log) oraz zdarzenia (.jsonl)
+  - kopia na telefon po kazdym kroku i przy zamknieciu
+  - "JAK IDZIE KOMUNIKACJA" — liczby na koniec biegu
+  - drabinka modeli Gemini na starcie dnia i ktory model wykonal
+    ktore zadanie
+  - pytanie, gdy potrzebny jest Twoj palec albo wartosc, ktorej nikt
+    nie ma — wtedy program CZEKA; to, co odpiszesz, idzie do
+    wszystkich rol pod podpisem "Użytkownik:"
 
 =========================================================================
