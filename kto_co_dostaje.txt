@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v456
+KTO CO DOSTAJE I KIEDY — AEL-MINI v457
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -110,7 +110,7 @@ Kazde zadanie to nowa rozmowa:
   - "TERAZ NA TELEFONIE:" — aplikacja na wierzchu i otwarte karty
     Chrome (v446)
   - warunek sukcesu i tresc zadania od MAIN-a
-  - 40 narzedzi (lista: jak_to_dziala.txt, czesc 5)
+  - 41 narzedzi (lista: jak_to_dziala.txt, czesc 5)
 
 Po kazdym ruchu w Chrome — pole "strona": adres, tytul, poczatek
 tekstu i ponumerowane linki, przyciski i pola (v442).

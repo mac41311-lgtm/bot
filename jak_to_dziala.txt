@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v456
+JAK TO DZIALA — AEL-MINI v457
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -27,7 +27,7 @@ CZESC 1. TRZY WARSTWY
      |  pokazuje strone i ekran, pilnuje autorstwa i limitow
      v
     GEMINI (wykonawca, przez API)        <-- PALEC
-     |  40 narzedzi, do 25 wywolan na zadanie
+     |  41 narzedzi, do 25 wywolan na zadanie
      v
     TERMUX + ANDROID + CHROME            <-- TELEFON
 
@@ -132,7 +132,7 @@ Blad a brak (v444):
     fragmentu w pliku, miejsca do zapisu) — to zwykly wynik,
     Gemini dziala dalej
 
-40 narzedzi:
+41 narzedzi:
 
   TERMUX (14)
     termux_run, termux_run_background, termux_check_process,
@@ -141,11 +141,11 @@ Blad a brak (v444):
     termux_delete, termux_file_exists, termux_check_apk,
     termux_start_second_session
 
-  CHROME (7)
+  CHROME (8)
     chrome_open, chrome_tabs, chrome_inspect,
     chrome_click (po numerze albo tekscie),
     chrome_type (pole po numerze, enter: true),
-    chrome_back, chrome_execute_js
+    chrome_back, chrome_close, chrome_execute_js
 
   ANDROID (19)
     android_state (drzewo ekranu), android_click,
@@ -457,5 +457,46 @@ CZESC 16. CO ZMIENILO v456 (z biegu 2026-09-27 20:49, juz na v455)
   - opis programu dla MAIN-a: formularze, profile i ustawienia na
     stronach wypelnia Gemini; uzytkownik loguje sie i podaje to, czego
     nikt z nas nie wie (hasla, kody, dane osobowe)
+
+=========================================================================
+
+
+=========================================================================
+CZESC 17. CO ZMIENILO v457 (z biegu 2026-09-27 21:19, na v456)
+=========================================================================
+
+  CO POKAZAL LOG:
+  - piec zadan z rzedu padlo na Chrome: "Page.navigate nie powiodlo
+    sie" i "Brak danych strony", kazde po 40 s. Wszystkie na kartach
+    lezacych W TLE (1492, 1494, 1500, 1503); karta na wierzchu (1502)
+    dzialala. Chrome na Androidzie zamraza karty w tle — ich renderer
+    nie odpowiada na CDP, poki karta nie wroci na ekran
+  - po tych bledach Gemini porzucilo Chrome i przez 12 krokow stukalo
+    w ekran przez `adb shell input tap` na zgadywanych wspolrzednych,
+    a `adb shell input text` zgubilo polskie znaki
+  - `adb shell uiautomator dump` (krok 6) zerwal polaczenie
+    uiautomator2 — w kroku 14 android_swipe "nie odpowiedzialo w 20 s"
+  - DeepSeek: MAIN odpowiadal w 6-60 s, Ela w 3 s (bez myslenia);
+    zadnego bledu; przez 17 krokow MAIN nikogo nie zapytal — to jego
+    wybor, program go nie ogranicza
+  - limity Gemini: caly bieg na gemini-3.5-flash-lite, 100+ zapytan
+    bez 429 — v456 dobral model z zapasem
+
+  CO ZMIENIONE:
+  - kazda operacja Chrome zaczyna sie od wyciagniecia karty na
+    wierzch (/json/activate) — jedno tanie zadanie; po zmianie karty
+    chwila na odmrozenie. Nieudany Page.navigate idzie jeszcze raz po
+    aktywacji, a gdy i to nie pomoze, wynik mowi, co zrobic
+  - chrome_close (41. narzedzie): zamyka karte; kilkanascie kart w
+    tle to zamrozone renderery
+  - `uiautomator dump` nie jest uruchamiany — wynik mowi, ze drzewo
+    ekranu daje android_state; zadanie idzie dalej
+  - `adb shell input text` z polskimi znakami albo %s idzie przez
+    schowek (termux-clipboard-set + KEYCODE_PASTE) do pola z kursorem
+
+  Klikanie po ekranie (android_click po tekscie, android_state z
+  polozeniem) zostaje jako druga droga obok Chrome przez CDP — obie sa
+  do wyboru wykonawcy; CDP daje numerowane elementy i tresc strony,
+  ekran daje to, co widac.
 
 =========================================================================

@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v456
+AEL-MINI AUTONOMOUS AGENT v457
 
-ARCHITEKTURA (stan na v456 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v457 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -25,7 +25,7 @@ ARCHITEKTURA (stan na v456 — patrz jak_to_dziala.txt):
                         |
                         v
         GEMINI (wykonawca, darmowe API, Interactions API)  <-- PALEC
-           jedna rozmowa na caly cel (v452), 40 narzedzi, do 25 wywolan;
+           jedna rozmowa na caly cel (v452), 41 narzedzi, do 25 wywolan;
            NIE pisze kodu — termux_write_file/termux_run z kodem
            odmawiaja i kladzie go Python z wypowiedzi autora
                         |
@@ -2794,7 +2794,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v456")
+    print("             AEL-MINI AUTONOMOUS AGENT v457")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11603,7 +11603,7 @@ def _przelacz_na_karte(tab_id):
         return False
 
 
-def find_tab(
+def _find_tab_bez_aktywacji(
     tab_id=None,
     contains=None
 ):
@@ -11648,6 +11648,66 @@ def find_tab(
         return tabs[0]
 
     return None
+
+
+# ============================================================
+# KARTA W TLE NIE ODPOWIADA (v457)
+# ============================================================
+#
+# Bieg 2026-09-27 21:19, kroki 1-5: piec zadan z rzedu padlo na CDP —
+# "Page.navigate nie powiodlo sie" i "Brak danych strony", kazde po
+# 40 s. Wspolny mianownik: karta, na ktorej pracowalismy, NIE byla
+# na wierzchu (1492, 1494, 1500, 1503 lezaly w tle; 1502 na wierzchu
+# dzialala bez zarzutu). Chrome na Androidzie zamraza karty w tle —
+# ich renderer nie odpowiada na Runtime.evaluate ani Page.navigate,
+# az karta wroci na ekran. Po tych bledach wykonanie porzucilo Chrome
+# i przez 12 krokow stukalo w ekran przez `adb shell input tap` na
+# zgadywanych wspolrzednych.
+#
+# Wiec kazda operacja na karcie zaczyna sie od wyciagniecia jej na
+# wierzch (/json/activate) — jedno tanie zadanie HTTP; po zmianie
+# karty chwila na odmrozenie. find_tab() jest jedynym miejscem, przez
+# ktore narzedzia Chrome dostaja karte, wiec to tu.
+_ostatnio_aktywna_karta = [None]
+
+
+def _aktywuj_karte(tab):
+    """Karta na wierzch; True, gdy byla juz na wierzchu albo sie udalo."""
+
+    ident = str((tab or {}).get("id") or "")
+
+    if not ident:
+        return False
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/activate/" + ident,
+            timeout=5
+        )
+        ok = r.status_code == 200
+    except Exception:
+        ok = False
+
+    if ok and _ostatnio_aktywna_karta[0] != ident:
+        _ostatnio_aktywna_karta[0] = ident
+        time.sleep(0.7)
+
+    return ok
+
+
+def find_tab(
+    tab_id=None,
+    contains=None
+):
+    """Karta wg id / fragmentu adresu, wyciagnieta na wierzch (v457)."""
+
+    tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    if tab is not None:
+        _aktywuj_karte(tab)
+
+    return tab
 
 
 # Na wyraźną prośbę użytkownika (2026-08-28): najsłabszym punktem
@@ -12664,6 +12724,25 @@ def chrome_open(
 
     # Zamiast sztywnych 1,5 s — czekamy dokladnie tyle, ile ta strona
     # potrzebuje. Patrz _poczekaj_az_strona_dojdzie().
+    # v457: karta mogla byc zamrozona w tle — na wierzch i jeszcze raz.
+    if not result.get("ok", False):
+
+        _aktywuj_karte(tab)
+        time.sleep(1.0)
+
+        ws = cdp_connect(tab)
+
+        if ws is not None:
+            try:
+                result = cdp_call(
+                    ws, 1, "Page.navigate", {"url": str(url)}, timeout=15
+                )
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+
     _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
     if not result.get("ok", False):
@@ -12672,7 +12751,14 @@ def chrome_open(
             "ok": False,
             "tab_id": tab["id"],
             "url": str(url),
-            "error": "Page.navigate nie powiodlo sie"
+            "error": "Page.navigate nie powiodlo sie",
+            "message": (
+                "Karta " + str(tab["id"]) + " nie odpowiada mimo "
+                "wyciągnięcia na wierzch — " + short(str(result.get("error") or ""), 120)
+                + ". chrome_tabs pokazuje karty; chrome_close zamyka "
+                "zbędne, a chrome_open bez tab_id otwiera adres w karcie, "
+                "która działa."
+            )
         }
 
     return _chrome_open_wynik(
@@ -13252,6 +13338,49 @@ def chrome_click(
 # ============================================================
 # CHROME TYPE
 # ============================================================
+
+def chrome_close(tab_id=None, contains=None):
+    """
+    v457: zamyka karte (/json/close). Osiem i wiecej kart w tle to
+    zamrozone renderery i CDP, ktore nie odpowiada — patrz
+    _aktywuj_karte(). Zwraca, ktore karty zostaly.
+    """
+
+    tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    if tab is None:
+        return {"ok": False, "error": "Brak takiej karty"}
+
+    if not ensure_chrome_cdp_forward():
+        return {"ok": False, "error": "CDP niedostępne"}
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/close/" + str(tab["id"]),
+            timeout=5
+        )
+        ok = r.status_code == 200
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    time.sleep(0.5)
+
+    if _ostatnio_aktywna_karta[0] == str(tab["id"]):
+        _ostatnio_aktywna_karta[0] = None
+
+    zostaly = [
+        {"tab_id": k.get("id"), "title": short(str(k.get("title") or ""), 60),
+         "url": short(str(k.get("url") or ""), 100)}
+        for k in (chrome_tabs() or [])[:12]
+    ]
+
+    return {
+        "ok": bool(ok),
+        "zamknieta": {"tab_id": tab.get("id"), "title": tab.get("title"), "url": tab.get("url")},
+        "otwarte_karty": zostaly
+    }
+
 
 def chrome_back(
     tab_id=None,
@@ -14741,6 +14870,24 @@ def _gemini_tools_legacy():
             "name": "chrome_back",
             "description": (
                 "Wstecz w karcie, jak przycisk w przeglądarce. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                }
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "chrome_close",
+            "description": (
+                "Zamknij kartę Chrome (tab_id z chrome_tabs albo contains — "
+                "fragment adresu/tytułu). Karty w tle są zamrażane i nie "
+                "odpowiadają; kilka kart to porządek, kilkanaście to kłopot. "
+                "Wynik: która karta zamknięta i jakie zostały."
             ),
             "parameters": {
                 "type": "object",
@@ -18477,6 +18624,67 @@ def _gemini_pisze_kod(command_str):
     return None
 
 
+_INPUT_TEXT_RE = re.compile(
+    r"^\s*adb(?:\s+-s\s+\S+)?\s+shell\s+input\s+text\s+(.+?)\s*$"
+)
+
+
+def _zamiast_input_text(command_str):
+    """
+    Gdy komenda to SAMO `adb shell input text <tekst>` z tekstem, ktorego
+    `input text` nie przeniesie (znaki spoza ASCII albo spacje pisane
+    %s), wpisujemy go przez schowek. None = to nie ten przypadek.
+    """
+
+    if "&&" in command_str or ";" in command_str or "|" in command_str:
+        return None
+
+    m = _INPUT_TEXT_RE.match(command_str)
+
+    if not m:
+        return None
+
+    try:
+        czesci = shlex.split(m.group(1))
+    except ValueError:
+        return None
+
+    tekst = re.sub(r" {2,}", " ", " ".join(czesci).replace("%s", " "))
+
+    if not tekst.strip():
+        return None
+
+    if tekst.isascii() and "%s" not in m.group(1):
+        return None
+
+    schowek = execute_shell(
+        "termux-clipboard-set " + shlex.quote(tekst), timeout=20
+    )
+
+    if not schowek.get("ok"):
+        return None
+
+    wklej = execute_shell("adb shell input keyevent 279", timeout=20)
+
+    return {
+        "ok": bool(wklej.get("ok")),
+        "returncode": wklej.get("returncode"),
+        "stdout": "",
+        "stderr": str(wklej.get("stderr") or ""),
+        "command": command_str,
+        "wpisane_przez_schowek": (
+            "`input text` gubi polskie znaki, więc tekst („"
+            + short(tekst, 80) + "”) poszedł przez schowek "
+            "(termux-clipboard-set + KEYCODE_PASTE) do pola, które ma "
+            "kursor. Co jest w polu, pokaże android_state."
+        ),
+        "duration_s": round(
+            float(schowek.get("duration_s") or 0)
+            + float(wklej.get("duration_s") or 0), 1
+        )
+    }
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -18559,6 +18767,36 @@ def termux_run(command):
         # Otwieranie strony, ktora juz wisi w Chrome, tylko mnozy
         # karty — patrz _przelacz_na_karte(). Zamiast tego wyciagamy
         # na wierzch te, ktora jest.
+        # v457: `adb shell uiautomator dump` na tym telefonie nie tylko
+        # ginie (kod 137, v445) — zrywa tez polaczenie uiautomator2, z
+        # ktorego zyja android_state/android_click/android_swipe. Bieg
+        # 2026-09-27 21:19: dump w kroku 6, a w kroku 14 android_swipe
+        # "urzadzenie nie odpowiedzialo w 20 s". Nie uruchamiamy go.
+        if "uiautomator dump" in command_str:
+            return {
+                "ok": False,
+                "error": "uiautomator_dump",
+                "command": command_str,
+                "na_tym_telefonie": (
+                    "`uiautomator dump` jest tu ubijany (kod 137) i zrywa "
+                    "połączenie, z którego korzystają android_state i "
+                    "android_click. Drzewo ekranu — teksty, opisy, czy "
+                    "klikalne, położenie — daje android_state; nie "
+                    "uruchomiłem tej komendy."
+                ),
+                "duration_s": 0.0
+            }
+
+        # v457: `adb shell input text` gubi polskie znaki (i wymaga %s
+        # za spacje). Bieg 2026-09-27 21:19, krok 8: tytul "Excel%s i%s
+        # Google%s Sheets" wszedl bez ogonkow, po czym wykonanie samo
+        # przeszlo na schowek. Robimy to od razu: termux-clipboard-set
+        # + KEYCODE_PASTE (279) w skupionym polu.
+        _przez_schowek = _zamiast_input_text(command_str)
+
+        if _przez_schowek is not None:
+            return _przez_schowek
+
         if "termux-open-url" in command_str:
 
             _adres = _ADRES_W_KOMENDZIE_RE.search(command_str)
@@ -20916,6 +21154,10 @@ def _dispatch_tool_inner(
 
             return _call_tool_function(chrome_back, args)
 
+        if name == "chrome_close":
+
+            return _call_tool_function(chrome_close, args)
+
         if name == "chrome_execute_js":
 
             fn = globals().get(
@@ -22371,6 +22613,10 @@ def _brak_to_odpowiedz(name, args, result):
 
     # v452: kod JS nie oddal wyniku — strona stoi, praca idzie dalej.
     if name == "chrome_execute_js" and result.get("skrypt_nie_skonczyl_sie"):
+        return True
+
+    # v457: uiautomator dump nie uruchomiony — fakt, praca idzie dalej.
+    if str(name).startswith("termux_run") and blad == "uiautomator_dump":
         return True
 
     # v452: chrome_open dostal nie-adres (file://, sciezke do PNG) —
