@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v460
+KTO CO DOSTAJE I KIEDY — AEL-MINI v461
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -64,7 +64,9 @@ CZESC 2. CO DOSTAJE MAIN W KAZDYM KROKU
     - po RUN (v459): "Wyniki akcji RUN:" — pelny wynik kazdej
       akcji (do 3500 znakow na akcje, 14 000 razem) i ile akcji
       Python nie wykonal po bledzie; v460: bez skrotu sladu, bez
-      "snapshotu" (lista kart idzie osobno), bez wlasnego powodu
+      "snapshotu" (lista kart idzie osobno), bez wlasnego powodu;
+      v461: gdy RUN mial android_state, blok "Na ekranie telefonu"
+      nie idzie drugi raz
     - "Gemini napisał:" — raport wykonawcy, oznaczony jako jego
       slowa, nie pomiar
     - slad narzedzi: ile wywolan, ktore sie nie udaly, co zwrocily

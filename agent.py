@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v460
+AEL-MINI AUTONOMOUS AGENT v461
 
-ARCHITEKTURA (stan na v460 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v461 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2795,7 +2795,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v460")
+    print("             AEL-MINI AUTONOMOUS AGENT v461")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3437,6 +3437,13 @@ def _czyj_kod_to(rola):
 # Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
 # wkleja w nia kod Bartka — patrz termux_write_file().
 _tresc_zadania_teraz = ""
+
+# v461: czy narzedzie wola teraz Python na polecenie MAIN-a (RUN), a
+# nie Gemini. MAIN jest osoba z DeepSeeka — kod, ktory sam napisze w
+# RUN, jest kodem zespolu. Bieg 2026-09-28 16:53: MAIN poprawil
+# sms_reader.py heredokiem i dostal "KOD_POLOZYL_PYTHON" — odmowe
+# pisana dla Gemini.
+_wykonuje_main = False
 
 # Czy MAIN w POPRZEDNIM kroku prosil o kod Bartka. To jedyny powod,
 # dla ktorego Bartek odzywa sie, choc nikt nie zawolal go po imieniu
@@ -8472,7 +8479,24 @@ def android_summary(with_header=True):
 
         lines = []
 
+        # v461: pasek stanu (com.android.systemui — "Powiadomienie z
+        # aplikacji Messenger", "Bluetooth nie jest podlaczony") szedl
+        # na poczatku kazdego odczytu i zjadal limit; bieg 2026-09-28
+        # 17:30: MAIN dokladal zrzut + OCR, zeby zobaczyc apke.
+        _pakiety = [
+            str(n.attrib.get("package") or "") for n in root.iter("node")
+        ]
+        _jest_nie_systemui = any(
+            pk and pk != "com.android.systemui" for pk in _pakiety
+        )
+
         for node in root.iter("node"):
+
+            if (
+                _jest_nie_systemui
+                and node.attrib.get("package") == "com.android.systemui"
+            ):
+                continue
             text = node.attrib.get(
                 "text",
                 ""
@@ -9829,6 +9853,31 @@ def android_swipe(
         }
 
     except Exception as e:
+        # v461: uiautomator2 potrafi nie odpowiadac (ekran systemowy,
+        # WebView) — `adb shell input swipe` rysuje gest bez niego.
+        # Bieg 2026-09-28 17:27 i 18:02: dwa swipe'y po 20 s bez ruchu.
+        try:
+            _ms = max(50, int(float(duration) * 1000))
+            _adb = execute_shell(
+                "adb shell input swipe " + " ".join(
+                    str(int(v)) for v in (x1, y1, x2, y2)
+                ) + " " + str(_ms),
+                timeout=20
+            )
+            if _adb.get("returncode") == 0:
+                return {
+                    "ok": True,
+                    "action": "swipe",
+                    "from": [int(x1), int(y1)],
+                    "to": [int(x2), int(y2)],
+                    "method": "adb input swipe",
+                    "message": (
+                        "uiautomator2 nie odpowiedział, gest poszedł "
+                        "przez adb (input swipe)."
+                    )
+                }
+        except Exception:
+            pass
         return {
             "ok": False,
             "action": "swipe",
@@ -10386,6 +10435,24 @@ def android_list_packages(filter_text=None):
         and not str(result.get("stderr") or "").strip()
     )
 
+    # v461: drugie spojrzenie po 20 s ma sens tylko wtedy, gdy cos sie
+    # wlasnie instaluje (adb install w ostatnich 5 min albo Sklep Play
+    # na wierzchu). Bieg 2026-09-28 16:39: osiem sprawdzen "czy jest
+    # paypal/revolut/..." po 20 s kazde — prawie 3 minuty czekania.
+    if _nic_nie_pasuje:
+        _instalacja = (
+            time.time() - float(globals().get("_ostatnia_instalacja_ts") or 0)
+            < 300
+        )
+        if not _instalacja:
+            try:
+                _instalacja = (_foreground_app()[0] or "") == "com.android.vending"
+            except Exception:
+                _instalacja = False
+        if not _instalacja:
+            _nic_nie_pasuje = False
+            result = dict(result, ok=True, stdout="")
+
     if _nic_nie_pasuje:
 
         log(
@@ -10684,6 +10751,7 @@ def android_install_apk(path, reinstall=True):
         }
 
     flags = "-r" if reinstall else ""
+    globals()["_ostatnia_instalacja_ts"] = time.time()
 
     result = execute_shell(
         "adb install " + flags + " " + shlex.quote(path),
@@ -16002,7 +16070,12 @@ def termux_write_file(path, content, append=False):
         except Exception:
             _is_custom_tool = False
 
-        if (_code_suffix or _has_shebang) and not _is_custom_tool:
+        # v461: w RUN pisze MAIN (DeepSeek) — to kod zespolu, nie Gemini.
+        if (
+            (_code_suffix or _has_shebang)
+            and not _is_custom_tool
+            and not _wykonuje_main
+        ):
 
             # Gemini siega po zapis kodu. Podzial rol zostaje: kod
             # pisze Bartek, na dysk kladzie go Python, Gemini
@@ -16232,6 +16305,11 @@ def termux_write_file(path, content, append=False):
 
         _track_project_path(p)
         _zapamietaj_gdzie(p)
+
+        if _wykonuje_main and (_code_suffix or _has_shebang):
+            _autor_pliku[p.name] = "MAIN"
+            _zapisz_autoryzacje_kodu(p, autor="MAIN")
+            log("MAIN", "Kod MAIN-a zapisany: " + p.name + " (RUN).")
 
         result = {
             "ok": True,
@@ -16964,13 +17042,17 @@ def _reset_irreversible_memory():
 
 def _irreversible_kind(command):
     """Ktora czynnosc nieodwracalna to jest (albo None)."""
-
     text = str(command or "")
-
+    # v461: slowo "termux-sms-send" w notatce zapisywanej heredokiem
+    # to nie wyslanie SMS-a (bieg 2026-09-28 16:54: "POWTORZONA
+    # CZYNNOSC NIEODWRACALNA" przy `cat > research.md <<EOF`).
+    text = re.sub(
+        r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\s*(?=\n|$)",
+        " ", text, flags=re.DOTALL
+    )
     for marker in _IRREVERSIBLE_MARKERS:
-        if marker in text:
+        if re.search(r"(^|[;&|(`\s])" + re.escape(marker) + r"(\s|$)", text):
             return marker
-
     return None
 
 
@@ -18817,11 +18899,27 @@ def termux_run(command):
         #   _gemini_zmienia_cudzy_kod — zmienia w miejscu plik z
         #                               kodem, ktorego nikt nie
         #                               autoryzowal (sed -i itp.)
-        _tworzy = _gemini_pisze_kod(command_str)
-        _pisze_kod = (
-            _tworzy
-            or _gemini_zmienia_cudzy_kod(command_str)
-        )
+        # v461: w RUN komende pisze MAIN (DeepSeek) — jego heredoc z
+        # kodem to kod zespolu; zapisujemy autora i puszczamy dalej.
+        if _wykonuje_main:
+            _tworzy = None
+            _pisze_kod = None
+            try:
+                for _sciezka_m, _tresc_m in _pliki_pisane_komenda(command_str):
+                    _pm = _resolve_home_relative_path(_sciezka_m)
+                    if (
+                        _pm.suffix.lower() in _KOD_SUFIKSY
+                        or str(_tresc_m or "").lstrip().startswith("#!")
+                    ):
+                        _autor_pliku[_pm.name] = "MAIN"
+            except Exception:
+                pass
+        else:
+            _tworzy = _gemini_pisze_kod(command_str)
+            _pisze_kod = (
+                _tworzy
+                or _gemini_zmienia_cudzy_kod(command_str)
+            )
 
         if _pisze_kod:
 
@@ -22794,7 +22892,9 @@ def _brak_to_odpowiedz(name, args, result):
 
 
 # v447: odstepy miedzy ponowieniami, gdy Gemini jest chwilowo przeciazony.
-_GEMINI_PRZECIAZONY_PONOW_S = (5, 10)
+# v461: jedna ponowka — bieg 2026-09-28 16:46: trzy proby po ~100 s
+# to 6 minut stania na jednym zadaniu.
+_GEMINI_PRZECIAZONY_PONOW_S = (5,)
 
 
 def _gemini_przeciazony(blad):
@@ -26834,6 +26934,8 @@ def _wykonaj_akcje_maina(decision, step):
     trace, wyniki, warnings = [], [], []
     ok_all, status, pominiete = True, "RUN_FINISHED", 0
 
+    globals()["_wykonuje_main"] = True
+
     for i, akcja in enumerate(akcje[:_RUN_MAX_AKCJI]):
 
         if not isinstance(akcja, dict):
@@ -26909,6 +27011,8 @@ def _wykonaj_akcje_maina(decision, step):
             ok_all, status = False, "RUN_TOOL_ERROR"
             pominiete = len(akcje) - (i + 1)
             break
+
+    globals()["_wykonuje_main"] = False
 
     if len(akcje) > _RUN_MAX_AKCJI and status == "RUN_FINISHED":
         warnings.append(
@@ -35173,6 +35277,17 @@ def main_decide(
         android_text if android_text is not None else android_summary()
     )
 
+    # v461: po RUN z android_state MAIN ma juz ekran w wynikach —
+    # bieg 2026-09-28: blok "android" dla MAIN-a wazyl 55 tys. znakow.
+    _run_mial_ekran = (
+        isinstance(last_result, dict)
+        and last_result.get("executed_by") == "main_run"
+        and any(
+            (w or {}).get("tool") == "android_state"
+            for w in (last_result.get("wyniki_run") or [])
+        )
+    )
+
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(
@@ -35180,6 +35295,7 @@ def main_decide(
             3500
         ) + "\n"
         if (_ekran_w_grze(last_result)
+            and not _run_mial_ekran
             and _odczyt_sie_udal(_resolved_android_text)) else ""
     )
 
@@ -36836,8 +36952,11 @@ _JAK_TO_DZIALA = (
     "listę elementów strony, po której działa chrome_click(nr) i "
     "chrome_type(pole). Na błędzie narzędzia zatrzymuje się i mówi, "
     "które akcje pominął. RUN działa zawsze, także gdy Gemini ma "
-    "wyczerpany limit. TASK zostaje, gdy chcesz oddać Gemini dłuższą "
-    "robotę na własną rękę. Narzędzia (te same dla RUN i Gemini): "
+    "wyczerpany limit. Kod, który sam napiszesz w RUN (termux_write_file "
+    "albo heredoc w termux_run), program kładzie na dysk jako Twój; "
+    "kod Bartka kładzie przez write_engineer_code_to. TASK zostaje, "
+    "gdy chcesz oddać Gemini dłuższą robotę na własną rękę. Narzędzia "
+    "(te same dla RUN i Gemini): "
     + _lista_narzedzi_dla_maina() + ".\n\n"
     "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
     "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "

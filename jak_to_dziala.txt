@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v460
+JAK TO DZIALA — AEL-MINI v461
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -620,5 +620,49 @@ CZESC 20. CO ZMIENILO v460 (z biegu 2026-09-27 22:59, pierwszego na v459)
     cokolwiek realnie zadzialalo") tak samo jak zadania Gemini
   - etykieta raportu w "Co sie wlasnie stalo" po RUN: "MAIN wykonal
     sam (RUN):" zamiast "Gemini napisal:"
+
+=========================================================================
+
+=========================================================================
+CZESC 21. CO ZMIENILO v461 (z biegu 2026-09-28 16:33, cel "1000 PLN")
+=========================================================================
+
+  OCENA BIEGU (40 krokow, 90 min, 237 wywolan narzedzi, przerwany):
+  - MAIN prowadzil sam przez RUN w 35 z 40 krokow; jeden TASK dla
+    Gemini (uruchomienie sms_reader.py Bartka) skonczyl sie 503
+    "high demand" po 6 minutach trzech prob
+  - realny postep: sms_reader.py (kod Bartka, poprawka MAIN-a)
+    czyta SMS-y i wyciaga kody; konto Clickworker zalozone i
+    zalogowane (rejestracja, 2FA i dane bankowe od uzytkownika);
+    apka Clickworker otwarta na pierwszym zadaniu; 0 zl
+  - krok 6: MAIN poprawil sms_reader.py heredokiem w termux_run i
+    dostal KOD_POLOZYL_PYTHON — odmowe pisana dla Gemini, choc MAIN
+    jest osoba z DeepSeeka
+  - krok 2-3: osiem android_list_packages z filtrem, kazde czekalo
+    20 s na "drugie spojrzenie" (instalacja mogla trwac) — prawie
+    3 minuty na nic
+  - krok 7: "POWTORZONA CZYNNOSC NIEODWRACALNA: termux-sms-send" —
+    a to byla notatka w heredoku, nie SMS
+  - kroki 27 i 40: android_swipe czekal 20 s na uiautomator2 i nic
+  - android_state zaczynal od paska stanu ("Powiadomienie z
+    aplikacji Messenger", "Bluetooth nie jest podlaczony"), przez
+    co MAIN dokladal zrzut + OCR; blok "ekran" dla MAIN-a wazyl
+    55 tys. znakow, bo szedl obok wyniku android_state z RUN
+
+  CO ZMIENIONE:
+  - w RUN kod pisze MAIN (DeepSeek): termux_write_file i heredoc w
+    termux_run kladzie jego kod na dysk jako kod zespolu, z autorem
+    MAIN (Piotr/Ania wiedza, czyj); Gemini dalej kodu nie pisze
+  - android_state pomija pasek stanu (com.android.systemui), gdy na
+    ekranie jest cokolwiek innego
+  - android_swipe: gdy uiautomator2 nie odpowiada, gest idzie przez
+    `adb shell input swipe`
+  - android_list_packages: drugie spojrzenie po 20 s tylko, gdy w
+    ostatnich 5 min bylo adb install albo Sklep Play jest na
+    wierzchu
+  - Gemini 503: jedna ponowka zamiast dwoch (kazda proba to ~100 s)
+  - czynnosc nieodwracalna liczy sie tylko jako komenda (poczatek,
+    po ; && | ), nie jako slowo w tresci heredoca
+  - po RUN z android_state MAIN nie dostaje drugiego bloku ekranu
 
 =========================================================================
