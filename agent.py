@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v461
+AEL-MINI AUTONOMOUS AGENT v462
 
-ARCHITEKTURA (stan na v461 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v462 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2795,7 +2795,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v461")
+    print("             AEL-MINI AUTONOMOUS AGENT v462")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -14685,9 +14685,18 @@ def init_gemini():
 
         try:
 
-            client = genai.Client(
-                api_key=key
-            )
+            # v462: limit 60 s na jedno zapytanie. Bieg 2026-09-28 18:28:
+            # serwer trzymal polaczenie 2-4 min, zanim oddal 503 —
+            # cztery takie proby to 11 minut stania calego programu.
+            try:
+                client = genai.Client(
+                    api_key=key,
+                    http_options=types.HttpOptions(timeout=60000)
+                )
+            except Exception:
+                client = genai.Client(
+                    api_key=key
+                )
 
             gemini_clients[
                 name
@@ -22894,7 +22903,9 @@ def _brak_to_odpowiedz(name, args, result):
 # v447: odstepy miedzy ponowieniami, gdy Gemini jest chwilowo przeciazony.
 # v461: jedna ponowka — bieg 2026-09-28 16:46: trzy proby po ~100 s
 # to 6 minut stania na jednym zadaniu.
-_GEMINI_PRZECIAZONY_PONOW_S = (5,)
+# v462: zero ponowek w tej samej parze — przy przeciazeniu zadanie
+# idzie od razu na inny model (patrz _odstaw_model_wszedzie).
+_GEMINI_PRZECIAZONY_PONOW_S = ()
 
 
 def _gemini_przeciazony(blad):
@@ -22908,6 +22919,11 @@ def _gemini_przeciazony(blad):
         or "UNAVAILABLE" in tekst
         or "high demand" in tekst
         or "overloaded" in tekst.lower()
+        # v462: limit czasu klienta (60 s) to ten sam przypadek —
+        # serwer nie odpowiada.
+        or "timeout" in tekst.lower()
+        or "timed out" in tekst.lower()
+        or "504" in tekst
     )
 
 
@@ -24757,12 +24773,21 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             if _limit:
                 _odstaw_pare(key_name, _model, error_text)
             else:
-                _odstaw_pare(
-                    key_name, _model, error_text,
-                    sekund=120, powod="serwer przeciążony"
-                )
+                # v462: przeciazony jest MODEL, nie klucz — ten sam
+                # model na drugim kluczu dal 503 po kolejnych 4 min.
+                for _k in list(gemini_clients.keys()):
+                    _odstaw_pare(
+                        _k, _model, error_text,
+                        sekund=120, powod="serwer przeciążony"
+                    )
 
-            if tool_calls == 0 and _wybierz_pare() is not None:
+            _przeskoki = globals().setdefault("_przeskoki_zadan", {})
+            if (
+                tool_calls == 0
+                and _wybierz_pare() is not None
+                and _przeskoki.get(task_id, 0) < 1
+            ):
+                _przeskoki[task_id] = _przeskoki.get(task_id, 0) + 1
 
                 log(
                     "GEMINI",
@@ -24803,6 +24828,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         if _najbl else ""
                     )
                     + "; program czeka sam i wraca, gdy limit się odnowi."
+                )
+            if not _limit:
+                _co_dalej = (
+                    "Wykonawca nie odpowiedział (" + str(_model)
+                    + "). RUN wykonuje akcje bez Gemini."
+                    + (" " + _co_dalej if _co_dalej else "")
                 )
 
             return {
@@ -36954,7 +36985,8 @@ _JAK_TO_DZIALA = (
     "które akcje pominął. RUN działa zawsze, także gdy Gemini ma "
     "wyczerpany limit. Kod, który sam napiszesz w RUN (termux_write_file "
     "albo heredoc w termux_run), program kładzie na dysk jako Twój; "
-    "kod Bartka kładzie przez write_engineer_code_to. TASK zostaje, "
+    "kod Bartka w RUN wklejasz 1:1 do termux_write_file, a w TASK "
+    "podajesz write_engineer_code_to. TASK zostaje, "
     "gdy chcesz oddać Gemini dłuższą robotę na własną rękę. Narzędzia "
     "(te same dla RUN i Gemini): "
     + _lista_narzedzi_dla_maina() + ".\n\n"

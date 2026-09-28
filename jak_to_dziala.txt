@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v461
+JAK TO DZIALA — AEL-MINI v462
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -664,5 +664,34 @@ CZESC 21. CO ZMIENILO v461 (z biegu 2026-09-28 16:33, cel "1000 PLN")
   - czynnosc nieodwracalna liczy sie tylko jako komenda (poczatek,
     po ; && | ), nie jako slowo w tresci heredoca
   - po RUN z android_state MAIN nie dostaje drugiego bloku ekranu
+
+=========================================================================
+
+=========================================================================
+CZESC 22. CO ZMIENILO v462 (z biegu 2026-09-28 18:21 — Gemini stoi)
+=========================================================================
+
+  OCENA BIEGU (1 krok, 17 min, przerwany):
+  - krok 1: MAIN zapytal Kamila, Marka i Wojtka, wzial kod Bartka
+    (env_check.sh) i zlecil TASK z write_engineer_code_to
+  - Gemini (gemini-3.5-flash-lite, klucz main): serwer trzymal
+    polaczenie 2 min, potem 4 min, i oddal 503 "high demand";
+    program przeskoczyl na TEN SAM model na drugim kluczu — znow
+    4 min i 503. Razem 11 minut stania calego programu bez jednego
+    wykonanego narzedzia. Klient Google nie mial limitu czasu na
+    zapytanie i sam nie ponawia — to serwer trzymal polaczenie.
+
+  CO ZMIENIONE:
+  - klient Gemini ma limit 60 s na jedno zapytanie
+    (HttpOptions.timeout); po nim blad liczy sie jak przeciazenie
+  - przy przeciazeniu odstawiany jest MODEL na wszystkich kluczach
+    (120 s), wiec nastepna proba idzie na inny model, nie na ten
+    sam na drugim kluczu
+  - zero ponowek w tej samej parze — nastepna para JEST ponowka; a
+    przeskok na kolejna pare tylko jeden na zadanie: najgorszy
+    przypadek to ok. 2 min, po czym MAIN dostaje fakt "Wykonawca
+    nie odpowiedzial. RUN wykonuje akcje bez Gemini."
+  - MAIN wie, ze kod Bartka w RUN wkleja 1:1 do termux_write_file
+    (nie potrzebuje TASK-a, zeby polozyc cudzy kod)
 
 =========================================================================
