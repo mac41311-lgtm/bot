@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v463
+AEL-MINI AUTONOMOUS AGENT v464
 
-ARCHITEKTURA (stan na v463 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v464 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -713,14 +713,13 @@ GEMINI_MODEL = os.environ.get(
     "gemini-3.5-flash-lite"
 )
 
-# v463: 40 krokow to ok. 40 minut biegu (bieg 2026-09-28 18:53
-# skonczyl sie sam w polowie roboty, bez slowa w logu). Cel "zarob
-# pieniadze" trwa godzinami — 150; AGENT_MAX_STEPS zmienia.
-MAX_STEPS = int(
-    os.environ.get(
-        "AGENT_MAX_STEPS",
-        "150"
-    )
+# v464: bez limitu krokow — program chodzi, az MAIN powie DONE albo
+# FAILED (decyzja uzytkownika 2026-09-28: "nie robimy limitow"). Kto
+# chce limit, ustawia AGENT_MAX_STEPS; None = bez konca.
+MAX_STEPS = (
+    int(os.environ["AGENT_MAX_STEPS"])
+    if str(os.environ.get("AGENT_MAX_STEPS") or "").strip().isdigit()
+    else None
 )
 
 # Ile razy Gemini moze dostac DOKLADNIE ten sam wynik z tego samego
@@ -2798,7 +2797,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v463")
+    print("             AEL-MINI AUTONOMOUS AGENT v464")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -40347,7 +40346,7 @@ def run_agent(goal):
     # faktycznie doczeka realnego resetu zamiast zamykać się na próżno.
     step = 0
 
-    while step < MAX_STEPS:
+    while MAX_STEPS is None or step < MAX_STEPS:
 
         # ------------------------------------------------------
         # Jeśli Gemini quota jest wyczerpana, NIE twórz kolejnych

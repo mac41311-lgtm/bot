@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v463
+JAK TO DZIALA — AEL-MINI v464
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -204,7 +204,7 @@ pracuja na telefonie (MAIN, Bartek, Piotr, Ania).
 CZESC 8. LICZBY, KTORE RZADZA
 =========================================================================
 
-  40        krokow na cel (AGENT_MAX_STEPS)
+  bez limitu krokow na cel (v464; AGENT_MAX_STEPS ustawia limit, gdy ktos chce)
   5         pytania ASK MAIN-a na krok (nadmiar idzie na nastepny krok)
   25        wywolan narzedzi na jedno zadanie Gemini (GEMINI_MAX_TOOL_CALLS)
   4         ten sam wynik z tego samego wywolania pod rzad = czekanie
@@ -733,5 +733,17 @@ sie sam)
   - android_tap przy Termuksie na wierzchu: gdy ostatnie narzedzie
     bylo w Chrome, program sam wyciaga Chrome i tapie; odmowa
     zostaje dla innych przypadkow
+
+=========================================================================
+
+
+=========================================================================
+CZESC 24. v464 — BEZ LIMITU KROKOW
+=========================================================================
+
+  Decyzja uzytkownika: program chodzi caly czas, az cel jest DONE
+  albo FAILED. Limit krokow zdjety (MAX_STEPS = None). Zmienna
+  AGENT_MAX_STEPS ustawia limit tylko wtedy, gdy ktos jej uzyje.
+  Promptow nie zmieniono.
 
 =========================================================================
