@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v462
+JAK TO DZIALA — AEL-MINI v463
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -693,5 +693,45 @@ CZESC 22. CO ZMIENILO v462 (z biegu 2026-09-28 18:21 — Gemini stoi)
     nie odpowiedzial. RUN wykonuje akcje bez Gemini."
   - MAIN wie, ze kod Bartka w RUN wkleja 1:1 do termux_write_file
     (nie potrzebuje TASK-a, zeby polozyc cudzy kod)
+
+=========================================================================
+
+=========================================================================
+CZESC 23. CO ZMIENILO v463 (z biegu 2026-09-28 18:53 — program skonczyl
+sie sam)
+=========================================================================
+
+  OCENA BIEGU (40 krokow, 43 min, 156 wywolan, zero TASK-ow):
+  - program skonczyl sie sam, bo 40 to domyslny limit krokow
+    (AGENT_MAX_STEPS); w logu nie bylo o tym slowa
+  - krok 1: MAIN napisal "Nie widzę wyników poprzedniego RUN" — to
+    ta sama rozmowa na DeepSeeku co w poprzednim biegu, a nikt mu
+    nie powiedzial, ze program wystartowal od nowa
+  - kroki 2-8: rekonesans Clickworker (sesja wygasla, PayPal
+    niezweryfikowany, brak danych podatkowych, zero zadan)
+  - kroki 9-16: Paidwork — rejestracja przez uzytkownika, saldo
+    0 zl, ankiety w iframe (Bitlabs, CPX); MAIN otworzyl adresy
+    iframe'ow na wierzchu
+  - kroki 17-26: bramka zgody CPX — chrome_click nie trafial w
+    elementy bez tekstu, MAIN wstrzykiwal JS; Marek to zatrzymal
+    (ryzyko bana), MAIN posluchal
+  - kroki 27-40: Bitlabs — zgody zdjete tapnieciami, lista ankiet
+    widoczna, ale karta ankiety to div bez roli: chrome_click
+    mowil "Nie znaleziono: 5 min", choc napis byl w tekscie
+    strony; android_tap raz odrzucony, bo na wierzchu byl Termux
+  - Ela: 0% -> 15%; realny stan: konta sa, pieniedzy 0
+
+  CO ZMIENIONE:
+  - limit krokow 40 -> 150 (AGENT_MAX_STEPS), a jego osiagniecie
+    jest w logu wprost
+  - wznowiona rozmowa MAIN-a dostaje w kroku 1 fakt: "Nowe
+    uruchomienie programu. Poprzedni bieg zostal przerwany — jego
+    ostatnie wyniki nie wracaja"
+  - chrome_click(text): gdy napisu nie ma wsrod kontrolek, bierze
+    najmniejszy widoczny element z tym napisem (div, span, karta) i
+    klika myszka przez CDP w jego srodek
+  - android_tap przy Termuksie na wierzchu: gdy ostatnie narzedzie
+    bylo w Chrome, program sam wyciaga Chrome i tapie; odmowa
+    zostaje dla innych przypadkow
 
 =========================================================================

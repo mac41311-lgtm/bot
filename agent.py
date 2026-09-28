@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v462
+AEL-MINI AUTONOMOUS AGENT v463
 
-ARCHITEKTURA (stan na v462 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v463 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -713,10 +713,13 @@ GEMINI_MODEL = os.environ.get(
     "gemini-3.5-flash-lite"
 )
 
+# v463: 40 krokow to ok. 40 minut biegu (bieg 2026-09-28 18:53
+# skonczyl sie sam w polowie roboty, bez slowa w logu). Cel "zarob
+# pieniadze" trwa godzinami — 150; AGENT_MAX_STEPS zmienia.
 MAX_STEPS = int(
     os.environ.get(
         "AGENT_MAX_STEPS",
-        "40"
+        "150"
     )
 )
 
@@ -2795,7 +2798,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v462")
+    print("             AEL-MINI AUTONOMOUS AGENT v463")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4933,6 +4936,10 @@ def start_session(name, system_prompt):
                     f"Sesja {name}: OK (wznowiona z poprzedniego "
                     "uruchomienia)"
                 )
+
+            # v463: rozmowa trwa, ale program to nowe uruchomienie —
+            # MAIN w kroku 1 pisal "Nie widzę wyników poprzedniego RUN".
+            globals().setdefault("_wznowione_sesje", set()).add(name)
 
         else:
 
@@ -9525,6 +9532,28 @@ def _pisanie_do_wlasnego_terminala(co_robimy):
     if pakiet != "com.termux":
         return None
 
+    # v463: bieg 2026-09-28 19:32 — po chrome_execute_js na wierzchu
+    # byl Termux i tap w karte ankiety zostal odrzucony. Gdy ostatnie
+    # narzedzie bylo w Chrome, to Chrome jest celem — wyciagamy go.
+    if str(globals().get("_ostatnie_narzedzie") or "").startswith("chrome_"):
+        try:
+            execute_shell(
+                "adb shell am start -n "
+                "com.android.chrome/com.google.android.apps.chrome.Main",
+                timeout=15
+            )
+            time.sleep(1.5)
+            pakiet2, _ = _foreground_app()
+            if pakiet2 and pakiet2 != "com.termux":
+                log(
+                    "ANDROID",
+                    "Termux byl na wierzchu — wyciagnalem Chrome, bo "
+                    "ostatnie narzedzie bylo w Chrome."
+                )
+                return None
+        except Exception:
+            pass
+
     return {
         "ok": False,
         "error": (
@@ -13316,7 +13345,25 @@ def chrome_click(
             return ra - rb || a.t.length - b.t.length;
         }});
 
-    const el = kandydaci.length ? kandydaci[0].e : null;
+    let el = kandydaci.length ? kandydaci[0].e : null;
+    // v463: karty ankiet Bitlabs to zwykle divy bez roli — "5 min"
+    // bylo w tekscie strony, a chrome_click mowil "Nie znaleziono".
+    // Najmniejszy widoczny element z tym napisem; klik i tak idzie
+    // myszka przez CDP w jego srodek, wiec trafia w to, co reaguje.
+    if (!el) {{
+        const wszystkie = Array.from(
+            document.querySelectorAll("div,span,p,li,td,th,h1,h2,h3,h4,h5,h6,label,img,svg,section,article")
+        ).filter(e => !!(e.offsetParent || e.getClientRects().length));
+        const luzne = wszystkie
+            .map(e => ({{ e, t: opis(e) }}))
+            .filter(k => k.t && k.t.includes(target) && k.t.length <= target.length + 80)
+            .sort((a, b) => {{
+                const ra = a.t === target ? 0 : a.t.startsWith(target) ? 1 : 2;
+                const rb = b.t === target ? 0 : b.t.startsWith(target) ? 1 : 2;
+                return ra - rb || a.t.length - b.t.length;
+            }});
+        el = luzne.length ? luzne[0].e : null;
+    }}
 
     if (!el) {{
 
@@ -20568,6 +20615,9 @@ def dispatch_tool(
         args = {}
 
     started = datetime.now()
+
+    # v463: ostatnie narzedzie — patrz _pisanie_do_wlasnego_terminala().
+    globals()["_ostatnie_narzedzie"] = str(name or "")
 
     result = _dispatch_tool_inner(
         name,
@@ -35725,6 +35775,19 @@ def main_decide(
         else "Co się właśnie stało:\n" + _facts + "\n"
     )
 
+    # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
+    # czekal na wyniki RUN sprzed restartu.
+    if (
+        int(step or 0) <= 1
+        and "MAIN" in globals().get("_wznowione_sesje", set())
+    ):
+        globals()["_wznowione_sesje"].discard("MAIN")
+        _co_sie_stalo_main = (
+            "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
+            "— jego ostatnie wyniki nie wracają; to, co się teraz "
+            "wykona, dostaniesz tutaj.\n" + _co_sie_stalo_main
+        )
+
     prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
 {_co_sie_stalo_main}
 
@@ -42134,6 +42197,11 @@ def run_agent(goal):
     print("=" * 72)
     print("OSIĄGNIĘTO LIMIT KROKÓW")
     print("=" * 72)
+    log(
+        "MAIN",
+        "Osiągnięto limit " + str(MAX_STEPS) + " kroków (AGENT_MAX_STEPS) "
+        "— program kończy bieg sam; cel nie jest ani DONE, ani FAILED."
+    )
 
     pokaz_podsumowanie_biegu()
 
