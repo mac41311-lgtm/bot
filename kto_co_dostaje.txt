@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v464
+KTO CO DOSTAJE I KIEDY — AEL-MINI v465
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -45,6 +45,10 @@ w tym celu. Nowy cel czysci te pamiec.
 
 CZESC 1. KTO SIE ODZYWA W KROKU (od v435)
 -------------------------------------------------------------------------
+
+  Tomek i Marek — takze gdy MAIN da FAILED (v465): dostaja jego
+           powod jako wypowiedz MAIN-a i odpowiadaja; MAIN widzi
+           obie odpowiedzi w calosci w nastepnym kroku
 
   MAIN   — w kazdym kroku
   Ela    — co 5 krokow albo gdy MAIN poprosi

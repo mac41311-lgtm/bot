@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v464
+JAK TO DZIALA — AEL-MINI v465
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -745,5 +745,40 @@ CZESC 24. v464 — BEZ LIMITU KROKOW
   albo FAILED. Limit krokow zdjety (MAX_STEPS = None). Zmienna
   AGENT_MAX_STEPS ustawia limit tylko wtedy, gdy ktos jej uzyje.
   Promptow nie zmieniono.
+
+=========================================================================
+
+=========================================================================
+CZESC 25. CO ZMIENILO v465 (biegi 2026-09-28 20:32 i 2026-09-29 15:55)
+=========================================================================
+
+  BIEG 20:32 (63 kroki, 3 h 20 min, przerwany przez uzytkownika):
+  - najlepszy dotad: MAIN z Bartkiem zbudowal produkt (ebook "100
+    promptow AI", PDF 21 stron), opublikowal go na Gumroad za 49 zl
+    przez CLI (obszedl DNS Go w Termuksie lokalnym proxy i CA),
+    wrzucil posty na profil FB i X; zero sprzedazy; Ela 0% -> 39%
+  - krok 8: uzytkownik odrzucil plan OLX ("bez pracy uzytkownika,
+    tylko logowanie") — MAIN przestawil zespol na produkt cyfrowy
+  - krok 7: `cd ~/olx && rm -rf ogloszenia` — katalog, ktory MAIN
+    sam zalozyl 6 minut wczesniej — czekal na potwierdzenie w
+    terminalu 2 GODZINY (20:48 -> 22:50); program stal
+  - Tomek dostawal po 27 tys. znakow na wiadomosc (blok "watek")
+
+  BIEG 15:55 (3 kroki, 2 min, program zamknal sie sam):
+  - cel napisany jak rozkaz dla "autonomicznego agenta" z zakazem
+    Facebooka i "fail-fast"; MAIN (DeepSeek) w kroku 1 odmowil:
+    uznal, ze jedyne drogi to spam albo oszustwo, i dal FAILED
+  - program trzy razy odeslal mu "nic sie nie wykonalo" i zamknal
+    cel; nikt z zespolu nie uslyszal powodu
+
+  CO ZMIENIONE:
+  - FAILED MAIN-a idzie do Tomka i Marka jak na spotkaniu ("Uwazam,
+    ze tego celu nie da sie zrealizowac... Powod: ..."); ich
+    odpowiedzi MAIN dostaje w calosci i decyduje jeszcze raz; dopiero
+    powtorzony FAILED konczy cel
+  - usuwanie WEWNATRZ katalogow, ktore program sam zalozyl
+    (project_dirs.json), nie pyta nikogo; pytanie zostaje dla cudzych
+    plikow, ale czeka najwyzej 120 s — brak odpowiedzi to NIE, a MAIN
+    dostaje fakt i rade (mv zamiast rm)
 
 =========================================================================

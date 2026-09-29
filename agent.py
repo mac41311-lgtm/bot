@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v464
+AEL-MINI AUTONOMOUS AGENT v465
 
-ARCHITEKTURA (stan na v464 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v465 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2797,7 +2797,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v464")
+    print("             AEL-MINI AUTONOMOUS AGENT v465")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11033,6 +11033,65 @@ def _usuwa_tylko_nasze_logi_z_tego_biegu(command):
     return usuwajace > 0
 
 
+def _usuwa_tylko_wlasne_katalogi(command):
+    """
+    v465: czy ta komenda usuwa WYLACZNIE rzeczy wewnatrz katalogow, ktore
+    program sam zalozyl w tym albo poprzednich biegach (PROJECT_DIRS_FILE —
+    patrz _track_project_path). Wtedy nie ma o co pytac czlowieka: to
+    porzadki we wlasnym warsztacie (bieg 2026-09-28 20:48: `cd ~/olx &&
+    rm -rf ogloszenia` — ~/olx zalozyl MAIN 6 minut wczesniej).
+    False przy najmniejszej watpliwosci — wtedy zostaje pytanie.
+    """
+    try:
+        wlasne = [
+            Path(str(p)).expanduser().resolve()
+            for p in (read_json(PROJECT_DIRS_FILE, []) or [])
+            if str(p).strip()
+        ]
+    except Exception:
+        wlasne = []
+    if not wlasne:
+        return False
+
+    def _wlasna(sciezka):
+        try:
+            cel = sciezka.resolve()
+        except Exception:
+            return False
+        return any(w == cel or w in cel.parents for w in wlasne)
+
+    cwd = Path.home()
+    usuwajace = 0
+    for czlon in re.split(r"&&|\|\||[;|]|\n", str(command or "")):
+        slowa = shlex.split(czlon) if czlon.strip() else []
+        if not slowa:
+            continue
+        if slowa[0] == "cd":
+            if len(slowa) < 2:
+                cwd = Path.home()
+            else:
+                cwd = (Path(os.path.expanduser(slowa[1]))
+                       if slowa[1].startswith(("/", "~"))
+                       else cwd / slowa[1])
+            continue
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        if slowa[0] not in ("rm", "rmdir"):
+            return False
+        cele = [a for a in slowa[1:] if not a.startswith("-")]
+        if not cele:
+            return False
+        for arg in cele:
+            if any(z in arg for z in "*?$`"):
+                return False
+            sciezka = (Path(os.path.expanduser(arg))
+                       if arg.startswith(("/", "~")) else cwd / arg)
+            if not _wlasna(sciezka):
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
 def _confirm_destructive_action(description):
     """
     Blokuje i pyta operatora w terminalu, zanim agent wykona
@@ -11075,9 +11134,19 @@ def _confirm_destructive_action(description):
         except Exception:
             pass
 
-        answer = input(
-            "   Zezwolić? [t/N] > "
-        ).strip().lower()
+        # v465: bieg 2026-09-28 20:48 — `rm -rf ogloszenia` w katalogu,
+        # ktory MAIN sam zalozyl, czekalo na odpowiedz 2 godziny; program
+        # stal. Teraz 120 s bez odpowiedzi = NIE, i lecimy dalej.
+        print("   Zezwolić? [t/N] (120 s, brak odpowiedzi = NIE) > ", end="", flush=True)
+        try:
+            gotowe, _, _ = select.select([sys.stdin], [], [], 120)
+        except Exception:
+            gotowe = [sys.stdin]
+        if not gotowe:
+            print()
+            print("   (brak odpowiedzi w 120 s — traktuję jako NIE)")
+            return False
+        answer = str(sys.stdin.readline() or "").strip().lower()
 
         return answer in ("t", "tak", "y", "yes")
 
@@ -11243,6 +11312,7 @@ def execute_shell(command, timeout=None):
     if (
         _looks_like_delete_command(command)
         and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+        and not _usuwa_tylko_wlasne_katalogi(command)
     ):
 
         if not _confirm_destructive_action(
@@ -11251,15 +11321,20 @@ def execute_shell(command, timeout=None):
             return {
                 "ok": False,
                 "error": (
-                    "Operacja usuwania odrzucona (brak "
-                    "potwierdzenia operatora). Jeżeli to "
-                    "naprawdę potrzebne, zapytaj użytkownika "
-                    "wprost i poczekaj na jego decyzję zamiast "
-                    "ponawiać tę samą komendę."
+                    "Usunięcie odrzucone — nikt nie potwierdził w "
+                    "terminalu. Bez pytania wolno usuwać tylko wewnątrz "
+                    "katalogów, które program sam założył. Cudze pliki "
+                    "zostają: zamiast usuwać, przenieś je (mv) albo "
+                    "zapisz obok pod nową nazwą."
                 ),
                 "command": command,
                 "blocked_by_safety_gate": True
             }
+    elif _looks_like_delete_command(command) and _usuwa_tylko_wlasne_katalogi(command):
+        log(
+            "TERMUX",
+            "Usuwanie wewnątrz katalogu, który program sam założył — bez pytania."
+        )
 
     # v283: gdy wywolujacy nie narzucil limitu, dobieramy go do
     # tego, co ta komenda ma zrobic. Sondy po plikach wolaja z
@@ -19591,6 +19666,7 @@ def termux_run_background(
         if (
             _looks_like_delete_command(command)
             and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+            and not _usuwa_tylko_wlasne_katalogi(command)
         ):
 
             if not _confirm_destructive_action(
@@ -35485,6 +35561,10 @@ def main_decide(
     else:
         _facts = _condense_last_result_for_team(last_result, 3000)
 
+    # v465: po FAILED MAIN-a — co powiedzieli Tomek i Marek, w calosci.
+    if isinstance(last_result, dict) and last_result.get("glosy_zespolu"):
+        _facts += "\n" + str(last_result["glosy_zespolu"])
+
     # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
     # poprawki Ani) — raz, do MAIN-a.
     if _pending_team_warnings:
@@ -42130,20 +42210,44 @@ def run_agent(goal):
             # zeby to nie bylo krecenie w kolko.
             if not _zespol_slyszal_juz_ten_powod(reason):
 
-                # v423: w relacji z kroku — sam fakt. Uzasadnienie to
-                # slowa MAIN-a i zespol dostaje je pod jego imieniem
-                # ("MAIN: FAILED — ..."). Bieg 2026-09-22 23:24, kroki
-                # 6-7: to samo uzasadnienie ("petla trwa juz szosta
-                # runde", "Ela 0%") szlo drugi raz pod "Co sie wlasnie
-                # stalo", czyli jako wynik kroku — a zespol je
-                # "jednomyslnie" potwierdzal. Brak kodu byl raz.
+                # v465: bieg 2026-09-29 15:55 — MAIN trzy razy z rzedu
+                # FAILED, a program trzy razy odsylal mu "nic sie nie
+                # wykonalo" i zamknal cel po 2 minutach. Nikt z zespolu
+                # nie uslyszal powodu. Teraz Tomek i Marek dostaja go
+                # jak na spotkaniu i odpowiadaja; MAIN decyduje z ich
+                # glosem, nie z echem.
+                _glosy = []
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Uważam, że tego celu nie da się zrealizować "
+                            "i chcę go zamknąć jako FAILED. Powód:\n"
+                            + str(reason)
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O FAILED MAIN-A: " + short(_t, 300))
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o FAILED: " + str(_e))
+
                 last_result = {
                     "status": "WNIOSEK_ZE_SIE_NIE_DA",
                     "message": (
                         "W kroku " + str(step) + " MAIN uznał, że "
                         "dalej się nie da. Nic się w tym kroku nie "
                         "wykonało."
-                    )
+                        + (" Tomek i Marek usłyszeli powód — ich odpowiedzi niżej."
+                           if _glosy else "")
+                    ),
+                    "glosy_zespolu": "\n\n".join(_glosy)
                 }
 
                 continue
