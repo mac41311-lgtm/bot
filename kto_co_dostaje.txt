@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v465
+KTO CO DOSTAJE I KIEDY — AEL-MINI v466
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -47,8 +47,10 @@ CZESC 1. KTO SIE ODZYWA W KROKU (od v435)
 -------------------------------------------------------------------------
 
   Tomek i Marek — takze gdy MAIN da FAILED (v465): dostaja jego
-           powod jako wypowiedz MAIN-a i odpowiadaja; MAIN widzi
-           obie odpowiedzi w calosci w nastepnym kroku
+           powod jako wypowiedz MAIN-a z pytaniem o inna droge
+           (v466) i odpowiadaja; MAIN widzi obie odpowiedzi w
+           calosci w nastepnym kroku; "NIE MA INNEJ DROGI" od obu
+           + powtorzony FAILED konczy cel
 
   MAIN   — w kazdym kroku
   Ela    — co 5 krokow albo gdy MAIN poprosi

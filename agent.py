@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v465
+AEL-MINI AUTONOMOUS AGENT v466
 
-ARCHITEKTURA (stan na v465 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v466 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2797,7 +2797,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v465")
+    print("             AEL-MINI AUTONOMOUS AGENT v466")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4209,6 +4209,8 @@ def _reset_powody_zakonczenia():
     """Nowy cel = wnioski o niewykonalnosci poprzedniego nie licza sie."""
 
     del _powody_zakonczenia[:]
+    globals()["_failed_z_droga"] = 0
+    globals()["_zespol_bez_drogi"] = False
 
 
 def _zespol_slyszal_juz_ten_powod(reason, ile_prob=2):
@@ -6595,6 +6597,7 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "TASK_DUPLICATE_OF_VERIFIED_POINT",
     "TASK_ALREADY_SATISFIED_ON_DISK",
     "WNIOSEK_ZE_SIE_NIE_DA",
+    "ZESPOL_WIDZI_INNA_DROGE",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
     "ASK_PRZENIESIONE",
@@ -11092,6 +11095,42 @@ def _usuwa_tylko_wlasne_katalogi(command):
     return usuwajace > 0
 
 
+def _usuwa_wlasny_plik_tymczasowy(command):
+    """
+    v466: `screencap -p /sdcard/_t.png && ... && rm /sdcard/_t.png` —
+    komenda sprzata po sobie plik, ktory sama utworzyla. Bieg
+    2026-09-29 16:22: bramka czekala 120 s i odmowila. Pozwalamy, gdy
+    KAZDY cel rm pojawil sie w tej komendzie WCZESNIEJ (jako plik
+    wyjsciowy). False przy najmniejszej watpliwosci.
+    """
+    tekst = str(command or "")
+    usuwajace = 0
+    pozycja = 0
+    for czlon in re.split(r"&&|\|\||[;|]|\n", tekst):
+        start = tekst.find(czlon, pozycja)
+        if start < 0:
+            start = pozycja
+        pozycja = start + len(czlon)
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        try:
+            slowa = shlex.split(czlon)
+        except Exception:
+            return False
+        if "rm" not in slowa:
+            return False
+        po_rm = slowa[slowa.index("rm") + 1:]
+        cele = [a for a in po_rm if not a.startswith("-")]
+        if not cele:
+            return False
+        wczesniej = tekst[:start]
+        for arg in cele:
+            if any(z in arg for z in "*?$`") or arg not in wczesniej:
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
 def _confirm_destructive_action(description):
     """
     Blokuje i pyta operatora w terminalu, zanim agent wykona
@@ -11313,6 +11352,7 @@ def execute_shell(command, timeout=None):
         _looks_like_delete_command(command)
         and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
         and not _usuwa_tylko_wlasne_katalogi(command)
+        and not _usuwa_wlasny_plik_tymczasowy(command)
     ):
 
         if not _confirm_destructive_action(
@@ -11330,10 +11370,14 @@ def execute_shell(command, timeout=None):
                 "command": command,
                 "blocked_by_safety_gate": True
             }
-    elif _looks_like_delete_command(command) and _usuwa_tylko_wlasne_katalogi(command):
+    elif _looks_like_delete_command(command) and (
+        _usuwa_tylko_wlasne_katalogi(command)
+        or _usuwa_wlasny_plik_tymczasowy(command)
+    ):
         log(
             "TERMUX",
-            "Usuwanie wewnątrz katalogu, który program sam założył — bez pytania."
+            "Usuwanie własnego pliku (katalog programu albo plik z tej "
+            "samej komendy) — bez pytania."
         )
 
     # v283: gdy wywolujacy nie narzucil limitu, dobieramy go do
@@ -19667,6 +19711,7 @@ def termux_run_background(
             _looks_like_delete_command(command)
             and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
             and not _usuwa_tylko_wlasne_katalogi(command)
+            and not _usuwa_wlasny_plik_tymczasowy(command)
         ):
 
             if not _confirm_destructive_action(
@@ -42208,15 +42253,20 @@ def run_agent(goal):
             # turze, a MAIN decyduje jeszcze raz — juz z tym, co
             # powiedzieli. Powtorzony ten sam powod konczy cel,
             # zeby to nie bylo krecenie w kolko.
-            if not _zespol_slyszal_juz_ten_powod(reason):
+            # v466: bieg 2026-09-29 16:18 — MAIN zamknal cel, bo padla
+            # JEDNA sciezka (Useme), ktora Tomek sam nazwal w kroku 1;
+            # Tomek i Marek w tej samej odpowiedzi wskazali inne drogi
+            # (Fiverr, wlasny klient), a program i tak sie zamknal.
+            # Program chodzi, poki cel nie jest zrobiony: FAILED konczy
+            # bieg dopiero wtedy, gdy zespol mowi wprost, ze innej drogi
+            # nie ma — albo gdy MAIN upiera sie czwarty raz.
+            _failed_z_droga = int(globals().get("_failed_z_droga") or 0)
+            _zespol_bez_drogi = bool(globals().get("_zespol_bez_drogi"))
 
-                # v465: bieg 2026-09-29 15:55 — MAIN trzy razy z rzedu
-                # FAILED, a program trzy razy odsylal mu "nic sie nie
-                # wykonalo" i zamknal cel po 2 minutach. Nikt z zespolu
-                # nie uslyszal powodu. Teraz Tomek i Marek dostaja go
-                # jak na spotkaniu i odpowiadaja; MAIN decyduje z ich
-                # glosem, nie z echem.
+            if not _zespol_bez_drogi and _failed_z_droga < 3:
+
                 _glosy = []
+                _ktos_widzi_droge = False
                 try:
                     for _rola in ("PLANNER", "CRITIC"):
                         _role_inbox.setdefault(_rola, []).append((
@@ -42224,6 +42274,9 @@ def run_agent(goal):
                             "Uważam, że tego celu nie da się zrealizować "
                             "i chcę go zamknąć jako FAILED. Powód:\n"
                             + str(reason)
+                            + "\n\nJeśli widzisz inną drogę do celu użytkownika "
+                            "(nie tej ścieżki, która padła), opisz ją. Jeśli "
+                            "nie ma żadnej, napisz wprost: NIE MA INNEJ DROGI."
                         ))
                     _odp = consult_team(
                         goal, last_result, step,
@@ -42235,8 +42288,48 @@ def run_agent(goal):
                         if _t:
                             _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
                             log("MAIN", _rola + " O FAILED MAIN-A: " + short(_t, 300))
+                            if "nie ma innej drogi" not in " ".join(_t.lower().split()):
+                                _ktos_widzi_droge = True
                 except Exception as _e:
                     log("MAIN", "Nie udało się zapytać zespołu o FAILED: " + str(_e))
+
+                if _ktos_widzi_droge:
+                    globals()["_failed_z_droga"] = _failed_z_droga + 1
+                    log(
+                        "MAIN",
+                        "Zespół widzi inną drogę — cel trwa (FAILED nie "
+                        "zamyka biegu, próba " + str(_failed_z_droga + 1) + "/3)."
+                    )
+                    last_result = {
+                        "status": "ZESPOL_WIDZI_INNA_DROGE",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zamknąć cel "
+                            "(FAILED). Nic się w tym kroku nie wykonało. Tomek "
+                            "i Marek usłyszeli powód i widzą inną drogę do celu "
+                            "użytkownika — ich odpowiedzi niżej. Cel trwa."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+                if _glosy:
+                    globals()["_zespol_bez_drogi"] = True
+                    last_result = {
+                        "status": "WNIOSEK_ZE_SIE_NIE_DA",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN uznał, że "
+                            "dalej się nie da. Nic się w tym kroku nie "
+                            "wykonało. Tomek i Marek nie widzą innej drogi "
+                            "— ich odpowiedzi niżej. Powtórzony FAILED "
+                            "zamknie cel."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+            # Gdy zespol juz powiedzial, ze innej drogi nie ma, powtorzony
+            # FAILED konczy cel od razu — bez kolejnych ech.
+            if not _zespol_bez_drogi and not _zespol_slyszal_juz_ten_powod(reason):
 
                 last_result = {
                     "status": "WNIOSEK_ZE_SIE_NIE_DA",
@@ -42244,10 +42337,7 @@ def run_agent(goal):
                         "W kroku " + str(step) + " MAIN uznał, że "
                         "dalej się nie da. Nic się w tym kroku nie "
                         "wykonało."
-                        + (" Tomek i Marek usłyszeli powód — ich odpowiedzi niżej."
-                           if _glosy else "")
-                    ),
-                    "glosy_zespolu": "\n\n".join(_glosy)
+                    )
                 }
 
                 continue

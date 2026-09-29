@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v465
+JAK TO DZIALA — AEL-MINI v466
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -780,5 +780,43 @@ CZESC 25. CO ZMIENILO v465 (biegi 2026-09-28 20:32 i 2026-09-29 15:55)
     (project_dirs.json), nie pyta nikogo; pytanie zostaje dla cudzych
     plikow, ale czeka najwyzej 120 s — brak odpowiedzi to NIE, a MAIN
     dostaje fakt i rade (mv zamiast rm)
+
+=========================================================================
+
+=========================================================================
+CZESC 26. CO ZMIENILO v466 (bieg 2026-09-29 16:18 — cel bez celu)
+=========================================================================
+
+  OCENA BIEGU (13 krokow, 25 min, zamknal sie sam):
+  - tekst celu to same zasady ("kategoryczne ograniczenia",
+    "autonomia", "fail-fast") bez kwoty i bez tego, co ma powstac;
+    MAIN w kroku 1 poprosil Tomka, zeby NAZWAL cel — Tomek wybral
+    "pierwsze platne zlecenie na Useme"
+  - kroki 1-4: MAIN sprawdzil warsztat (ADB, input, CDP, Chrome)
+  - krok 2: `screencap -p /sdcard/_t.png && ... && rm /sdcard/_t.png`
+    czekalo 120 s na potwierdzenie usuwania i dostalo odmowe —
+    plik utworzyla ta sama komenda
+  - kroki 5-10: uzytkownik zalogowal Useme; MAIN ustalil, ze Useme
+    to gielda zlecen, konto ma role Zleceniodawcy, a zlecen w niszy
+    nie ma
+  - krok 11: MAIN dal FAILED dla sciezki Useme; Tomek i Marek
+    (v465) uslyszeli powod, zgodzili sie co do Useme i W TEJ SAMEJ
+    odpowiedzi wskazali inne drogi (Fiverr, wlasny klient) — a
+    program po powtorzonym FAILED zamknal caly bieg
+
+  CO ZMIENIONE:
+  - FAILED zamyka bieg dopiero wtedy, gdy Tomek i Marek napisza
+    wprost "NIE MA INNEJ DROGI" (Python pyta ich o to w tej samej
+    wiadomosci z powodem MAIN-a) i MAIN powtorzy FAILED; poki ktos
+    widzi droge, MAIN dostaje status ZESPOL_WIDZI_INNA_DROGE z ich
+    odpowiedziami i cel trwa (najwyzej 3 takie rundy)
+  - rm pliku, ktory ta sama komenda utworzyla wczesniej (zrzut,
+    plik tymczasowy), nie pyta nikogo
+
+  UWAGA DO CELU: program nie zgadnie kwoty ani produktu. Tekst
+  zasad bez celu daje bieg, w ktorym zespol sam wymysla cel i
+  zamyka go, gdy padnie. Cel z kwota i z tym, co jest do
+  dyspozycji (jak w biegu 2026-09-28 20:32), daje kilka godzin
+  pracy i realny produkt.
 
 =========================================================================
