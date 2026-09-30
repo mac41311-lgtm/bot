@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v467
+AEL-MINI AUTONOMOUS AGENT v468
 
-ARCHITEKTURA (stan na v467 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v468 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2797,7 +2797,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v467")
+    print("             AEL-MINI AUTONOMOUS AGENT v468")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8522,7 +8522,31 @@ def android_summary(with_header=True):
             pk and pk != "com.android.systemui" for pk in _pakiety
         )
 
+        # v468: klawiatura ekranowa (pakiet ...inputmethod...) zaslania
+        # dol ekranu — bieg 2026-09-30, kroki 18-24: MAIN nie widzial
+        # odpowiedzi bota i klikal w to, co bylo pod klawiatura.
+        _klaw_od = None
+        for n in root.iter("node"):
+            pk = str(n.attrib.get("package") or "")
+            if "inputmethod" in pk or pk.endswith(".keyboard") or ".keyboard." in pk:
+                m = re.search(r"\[\d+,(\d+)\]\[\d+,\d+\]", str(n.attrib.get("bounds") or ""))
+                if m:
+                    y = int(m.group(1))
+                    if _klaw_od is None or y < _klaw_od:
+                        _klaw_od = y
+        if _klaw_od is not None:
+            lines.append(
+                "KLAWIATURA EKRANOWA zasłania ekran od y=" + str(_klaw_od)
+                + " w dół — to, co pod nią, nie jest widoczne ani klikalne; "
+                "android_press(back) ją chowa."
+            )
+        globals()["_klawiatura_od_y"] = _klaw_od
+
         for node in root.iter("node"):
+
+            pk_node = str(node.attrib.get("package") or "")
+            if _klaw_od is not None and ("inputmethod" in pk_node or ".keyboard" in pk_node):
+                continue
 
             if (
                 _jest_nie_systemui
@@ -8884,6 +8908,32 @@ def android_click_text(text):
                 result["matched_via_synonym_of"] = target_text
             return result
 
+    # v468: elementu nie ma, a klawiatura zaslania ekran — chowamy ja
+    # (back) i probujemy raz jeszcze.
+    if (
+        result is not None
+        and not result.get("ok")
+        and globals().get("_klawiatura_od_y") is not None
+        and android_device is not None
+    ):
+        try:
+            android_device.press("back")
+            time.sleep(0.8)
+            ponownie = _android_click_single_text(target_text)
+            if ponownie.get("ok"):
+                ponownie["schowana_klawiatura"] = True
+                ponownie["message"] = (
+                    "Element był pod klawiaturą ekranową — schowałem ją "
+                    "(back) i kliknąłem."
+                )
+                return ponownie
+            result["schowana_klawiatura"] = True
+            result["hint"] = (
+                "Klawiatura zasłaniała ekran — schowałem ją (back), ale "
+                "elementu dalej nie ma. " + str(result.get("hint") or "")
+            ).strip()
+        except Exception:
+            pass
     if result is not None and len(tried) > 1:
         result["tried_synonyms"] = tried
 
@@ -9713,6 +9763,117 @@ def android_type(text):
             "ok": False,
             "error": str(e)
         }
+
+
+def _rozmiar_png(dane):
+    """(szerokosc, wysokosc) z naglowka PNG albo (None, None)."""
+    try:
+        if dane[:8] == b"\x89PNG\r\n\x1a\n" and dane[12:16] == b"IHDR":
+            return (
+                int.from_bytes(dane[16:20], "big"),
+                int.from_bytes(dane[20:24], "big")
+            )
+    except Exception:
+        pass
+    return (None, None)
+
+
+def android_look(question=None, path=None):
+    """
+    v468: Gemini jako OCZY. Zrzut ekranu idzie do modelu z drabinki
+    (multimodalny), a wraca opis: jaka aplikacja, jaki tekst, jakie
+    przyciski i pola z przyblizonymi wspolrzednymi w pikselach ekranu.
+    Bieg 2026-09-30: 16 krokow walki z botem w Telegramie, bo
+    android_state nie pokazywal odpowiedzi bota pod klawiatura, a
+    tapniecia po starych wspolrzednych trafialy w "Referrals" zamiast
+    w "All Available". Jedno spojrzenie modelu odpowiada na to od razu.
+    Jedno wywolanie = jedno zapytanie z dziennego limitu tego modelu.
+    """
+    if gemini_disabled and _wybierz_pare() is None:
+        return {
+            "ok": False,
+            "error": "Gemini ma teraz wyczerpane limity — nie ma kto obejrzeć ekranu. "
+                     "Zostają android_state (tekstem) i android_screenshot_ocr."
+        }
+    para = _wybierz_pare()
+    if para is None:
+        _najbl = _najblizsze_odnowienie()
+        return {
+            "ok": False,
+            "error": "Wszystkie modele Gemini mają wyczerpany limit"
+            + (" — najbliższy wraca o " + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+               if _najbl else "") + ". Zostają android_state i android_screenshot_ocr."
+        }
+    if path:
+        zrzut = _resolve_home_relative_path(str(path))
+        if not zrzut.exists():
+            return {"ok": False, "error": "Nie ma takiego pliku: " + str(zrzut)}
+    else:
+        z = android_screenshot()
+        if not isinstance(z, dict) or not z.get("ok"):
+            return {
+                "ok": False,
+                "error": "Nie udało się zrobić zrzutu ekranu: "
+                + str((z or {}).get("error") if isinstance(z, dict) else z)
+            }
+        zrzut = Path(str(z.get("path")))
+    try:
+        dane = zrzut.read_bytes()
+    except Exception as e:
+        return {"ok": False, "error": "Nie mogę odczytać zrzutu: " + str(e)}
+    klucz, client, model = para
+    szer, wys = _rozmiar_png(dane)
+    pytanie = str(question or "").strip()
+    prompt = (
+        "To jest zrzut ekranu telefonu z Androidem"
+        + (" o rozmiarze " + str(szer) + "x" + str(wys) + " pikseli" if szer else "")
+        + ". Opisz po polsku, zwięźle i konkretnie: (1) jaka aplikacja lub strona "
+        "jest na wierzchu, (2) najważniejszy widoczny tekst (dosłownie), (3) każdy "
+        "przycisk, link, pole, przełącznik i element listy — z przybliżonym środkiem "
+        "w pikselach ekranu jako (x, y), w kolejności od góry. Powiedz wprost, jeśli "
+        "widać klawiaturę ekranową, okno dialogowe, baner zgód, komunikat błędu albo "
+        "wskaźnik ładowania. Nie zgaduj tego, czego nie widać."
+        + ("\n\nPytanie, na które trzeba odpowiedzieć na końcu: " + pytanie if pytanie else "")
+    )
+    _para_w_uzyciu[:] = [klucz, model]
+    _policz_zapytanie(klucz, model)
+    try:
+        odp = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=dane, mime_type="image/png"),
+                prompt
+            ]
+        )
+        tekst = str(getattr(odp, "text", "") or "").strip()
+    except Exception as e:
+        blad = str(e)
+        log("GEMINI", "android_look: " + short(blad, 300))
+        if _to_limit(blad) or _gemini_przeciazony(blad):
+            try:
+                _odstaw_pare(klucz, model, blad)
+            except Exception:
+                pass
+        return {
+            "ok": False,
+            "error": "Gemini nie obejrzał ekranu: " + short(blad, 400),
+            "model": model
+        }
+    if not tekst:
+        return {"ok": False, "error": "Gemini odpowiedział pusto.", "model": model}
+    log("GEMINI", "android_look (" + str(model) + "): " + short(tekst, 300))
+    return {
+        "ok": True,
+        "action": "look",
+        "model": model,
+        "rozmiar_ekranu": [szer, wys],
+        "zrzut": str(zrzut),
+        "opis": short(tekst, 6000),
+        "uwaga": (
+            "Współrzędne są przybliżone (ocena z obrazu). Dokładne bounds daje "
+            "android_state, gdy element ma węzeł UI."
+        )
+    }
 
 
 def android_press(key):
@@ -11946,6 +12107,19 @@ def _find_tab_bez_aktywacji(
     if not tab_id and not contains and len(tabs) == 1:
         return tabs[0]
 
+    # v468: bieg 2026-09-30 — osiem razy "Brak istniejącej karty", bo
+    # MAIN nie podal tab_id przy kilku kartach. Bez wskazania bierzemy
+    # karte, na ktorej ostatnio pracowalismy, a gdy jej nie ma —
+    # pierwsza z adresem http(s) (CDP wymienia aktywna jako pierwsza).
+    if not tab_id and not contains and tabs:
+        ostatnia = _ostatnio_aktywna_karta[0]
+        for tab in tabs:
+            if ostatnia and tab.get("id") == ostatnia:
+                return tab
+        for tab in tabs:
+            if str(tab.get("url") or "").lower().startswith(("http://", "https://")):
+                return tab
+        return tabs[0]
     return None
 
 
@@ -15741,6 +15915,28 @@ def _gemini_tools_legacy():
             }
         },
 
+        {
+            "type": "function",
+            "name": "android_look",
+            "description": (
+                "Gemini OGLĄDA ekran telefonu (zrzut) i opisuje, co widzi: "
+                "aplikację/stronę, widoczny tekst, przyciski, pola i linki z "
+                "przybliżonymi współrzędnymi (x, y) w pikselach ekranu, oraz "
+                "czy jest klawiatura, dialog, baner albo błąd. Używaj, gdy "
+                "android_state albo chrome_inspect nie pokazują tego, co jest "
+                "na ekranie (WebView, gra, obrazki, klawiatura zasłania czat), "
+                "albo gdy kliknięcia trafiają nie tam. question: na co "
+                "odpowiedzieć patrząc na ekran. Jedno wywołanie = jedno "
+                "zapytanie z dziennego limitu Gemini."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "path": {"type": "string"}
+                }
+            }
+        },
         {
             "type": "function",
             "name": "android_screenshot_ocr",
@@ -21496,6 +21692,9 @@ def _dispatch_tool_inner(
 
         # Gemini: android_screenshot_ocr
         # Python: android_screenshot_ocr
+        if name == "android_look":
+            return _call_tool_function(android_look, args)
+
         if name == "android_screenshot_ocr":
 
             fn = globals().get(
@@ -27518,6 +27717,17 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
     wyniki = (last_result or {}).get("wyniki_run") or []
     czesci = []
     ile = 0
+
+    # v468: gdy calosc nie miesci sie w limicie, kazdy wynik dostaje
+    # rowna czesc, ale ZADEN nie wypada — bieg 2026-09-30, krok 67:
+    # "wynik ostatnich akcji jest uciety" i MAIN powtarzal zapis.
+    if wyniki:
+        _pelne = sum(
+            len(json.dumps(w.get("wynik"), ensure_ascii=False, default=str)) + 400
+            for w in wyniki
+        )
+        if _pelne > razem:
+            na_akcje = max(700, min(na_akcje, (razem - 300 * len(wyniki)) // len(wyniki)))
 
     for i, w in enumerate(wyniki):
         _wynik = w.get("wynik")
@@ -37482,9 +37692,12 @@ _JAK_TO_DZIALA = (
     "profile i ustawienia na stronach wypełnia RUN (chrome_type, "
     "chrome_click, chrome_execute_js) albo Gemini. DONE i FAILED "
     "kończą cel.\n\n"
-    "Zrzut ekranu (android_screenshot) to plik PNG — nikt z zespołu "
-    "ani Gemini go nie ogląda; co widać na stronie, mówi chrome_inspect, "
-    "a co na ekranie — android_state, oba tekstem. "
+    "Zrzut ekranu (android_screenshot) to plik PNG, którego zespół nie "
+    "ogląda; co widać na stronie, mówi chrome_inspect, a co na ekranie "
+    "— android_state, oba tekstem. Gdy one nie widzą (WebView, gra, "
+    "obrazki, klawiatura zasłania czat) albo kliknięcia trafiają nie "
+    "tam, android_look daje ekran oczom Gemini: opis, widoczny tekst i "
+    "elementy z przybliżonymi współrzędnymi. "
     "Po wykonaniu dostajesz fakty z narzędzi: co wypisały, co się "
     "udało, co padło. Kod, który leży już na dysku, widzisz jako "
     "ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na dysku] — "

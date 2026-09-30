@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v467
+JAK TO DZIALA — AEL-MINI v468
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -29,7 +29,7 @@ CZESC 1. TRZY WARSTWY
      |  strone i ekran, pilnuje autorstwa i limitow
      v
     GEMINI (wykonawca, przez API)        <-- PALEC, gdy trzeba patrzec
-     |  42 narzedzi, do 25 wywolan na zadanie (TASK)
+     |  43 narzedzia, do 25 wywolan na zadanie (TASK)
      v
     TERMUX + ANDROID + CHROME            <-- TELEFON
 
@@ -870,5 +870,44 @@ CZESC 27. CO ZMIENILO v467 (bieg 2026-09-29 18:33 -> 2026-09-30 07:40)
   - rm z maska (*) wewnatrz wlasnego katalogu bez pytania
   - wynik komendy z "/tmp/...: Permission denied" niesie podpowiedz
     o $PREFIX/tmp
+
+=========================================================================
+
+=========================================================================
+CZESC 28. CO ZMIENILO v468 (bieg 2026-09-30 12:34 — Gemini jako oczy)
+=========================================================================
+
+  OCENA BIEGU (78 krokow, ok. 2 h, Ela 0% -> 55%, przerwany):
+  - najdalej dotad: zespol znalazl zywa platforme (FreddyWorks, escrow,
+    bez KYC, 168 projektow), uzytkownik sie zalogowal, MAIN wypelnil
+    profil (bio, stawka, 3 umiejetnosci -> 42%), znalazl projekt za
+    397 USDC bez ofert i zatrzymal sie na 2FA (instalowal pyotp)
+  - Gemini wzial udzial raz (TASK w kroku 2: 16 narzedzi, bez bledu);
+    reszte MAIN robil przez RUN
+  - kroki 12-27: bot w Telegramie — 16 krokow, bo klawiatura
+    ekranowa zaslaniala odpowiedz bota, a tapniecia po starych
+    wspolrzednych trafialy w "Referrals" zamiast "All Available";
+    w kroku 37 okazalo sie, ze "Poland" poszlo juz w kroku 17
+  - osiem razy "Brak istniejacej karty" — MAIN nie podal tab_id, a
+    kart bylo kilka
+  - krok 67: wyniki ostatnich akcji RUN uciete ("za dlugie") — MAIN
+    powtarzal zapis
+  - uzytkownik w kroku 2: "buduj nowe oczy, rece" — chcial, zeby
+    program sam rozbudowywal narzedzia
+
+  CO ZMIENIONE:
+  - android_look(question): Gemini OGLADA zrzut ekranu (model z
+    drabinki, multimodalny) i opisuje: aplikacje, widoczny tekst,
+    przyciski/pola z przyblizonymi (x, y), klawiature, dialog, blad.
+    Jedno wywolanie = jedno zapytanie z limitu; bez Gemini narzedzie
+    mowi to wprost i odsyla do android_state / OCR. 43 narzedzia
+  - bez tab_id chrome_* bierze karte, na ktorej ostatnio
+    pracowalismy, a gdy jej nie ma — pierwsza z adresem http(s)
+  - android_state mowi "KLAWIATURA EKRANOWA zaslania ekran od y=..."
+    i nie wypisuje klawiszy; android_click, gdy nie znajdzie
+    elementu przy otwartej klawiaturze, chowa ja (back) i probuje raz
+    jeszcze
+  - wyniki RUN: gdy calosc nie miesci sie w 14 000 znakow, kazdy
+    wynik dostaje rowna czesc — zaden nie wypada
 
 =========================================================================
