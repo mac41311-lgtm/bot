@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v466
+JAK TO DZIALA — AEL-MINI v467
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -29,7 +29,7 @@ CZESC 1. TRZY WARSTWY
      |  strone i ekran, pilnuje autorstwa i limitow
      v
     GEMINI (wykonawca, przez API)        <-- PALEC, gdy trzeba patrzec
-     |  41 narzedzi, do 25 wywolan na zadanie (TASK)
+     |  42 narzedzi, do 25 wywolan na zadanie (TASK)
      v
     TERMUX + ANDROID + CHROME            <-- TELEFON
 
@@ -818,5 +818,57 @@ CZESC 26. CO ZMIENILO v466 (bieg 2026-09-29 16:18 — cel bez celu)
   zamyka go, gdy padnie. Cel z kwota i z tym, co jest do
   dyspozycji (jak w biegu 2026-09-28 20:32), daje kilka godzin
   pracy i realny produkt.
+
+=========================================================================
+
+=========================================================================
+CZESC 27. CO ZMIENILO v467 (bieg 2026-09-29 18:33 -> 2026-09-30 07:40)
+=========================================================================
+
+  OCENA BIEGU (69 krokow, 172 wywolania, przerwany na kroku 69):
+  - zespol wybral usluge OCR skanow -> Word za 40 zl; Bartek dal
+    pipeline ocr2docx (tesseract + python-docx), MAIN go uruchomil i
+    naprawil (kroki 2-16)
+  - krok 17: NEED_USER_LOGIN (dane do ogloszenia) czekal 6 godzin
+    na uzytkownika — to normalne
+  - kroki 21-24 i 48-49: bezprzewodowe ADB padlo ("no devices/
+    emulators found") — port zmienia sie po restarcie sesji; bez ADB
+    nie ma chrome_* ani android_*, MAIN dwa razy prosil uzytkownika
+  - kroki 25-68: formularz OLX (m.olx.pl/nowe-ogloszenie, SPA React):
+    wartosci ustawiane przez JS nie wchodzily do stanu (licznik
+    0/9000) — dopiero chrome_type (klawisze) zadzialal (krok 59-60);
+    zdjecia nie dalo sie wgrac (input type=file) — uzytkownik dodal
+    recznie; przycisk "Dodaj ogloszenie" nie reagowal na klik myszka
+    przez CDP (trzy razy), a tap palcem zostal odrzucony, bo program
+    uznal, ze ostatnim narzedziem byl sam tap (blad v463)
+  - kroki 38, 55, 58, 66: MAIN odpowiedzial natywnym formatem
+    wywolan DeepSeeka (DSML: <|DSML| invoke name=...>) zamiast JSON
+    — program uznal to za UNKNOWN_DECISION, cztery kroki stracone
+  - krok 14: `rm -f ~/ocr2docx/out/multi.*` (maska we wlasnym
+    katalogu) czekalo 120 s i dostalo odmowe
+  - kroki 4, 8: "/tmp/...: Permission denied" — w Termuksie nie ma
+    /tmp
+  - Ela: 0% -> 27%; realny stan: pipeline OCR->DOCX dziala, cennik i
+    opis gotowe, ogloszenie OLX wypelnione, niepublikowane
+
+  CO ZMIENIONE:
+  - DSML: odpowiedz MAIN-a w natywnym formacie wywolan DeepSeeka
+    staje sie decyzja RUN z lista akcji (parse_json)
+  - chrome_click: gdy klik myszka nie ruszyl strony, ten sam punkt
+    dostaje dotyk palcem (Input.dispatchTouchEvent) — mobilne SPA
+    sluchaja touch; wynik mowi "po dotknieciu palcem (touch)"
+  - nowe narzedzie chrome_upload_file(path, nr, selector): plik z
+    Termuksa idzie przez `adb push` do /sdcard/Download/ael_upload/,
+    a potem DOM.setFileInputFiles wklada go w input[type=file]
+    (zdjecie do ogloszenia bez czlowieka); 42 narzedzia
+  - ADB: gdy komenda zwroci "no devices/emulators found", program
+    laczy sie ponownie (zapamietany adres, potem `adb mdns services`)
+    i powtarza komende raz; find_adb zna mDNS
+  - android_tap przy Termuksie na wierzchu: decyduje POPRZEDNIE
+    narzedzie (nie biezace) — Chrome jest wyciagany, gdy krok
+    wczesniej pracowalismy w Chrome
+  - rm z maska (*) wewnatrz wlasnego katalogu bez pytania
+  - wynik komendy z "/tmp/...: Permission denied" niesie podpowiedz
+    o $PREFIX/tmp
 
 =========================================================================

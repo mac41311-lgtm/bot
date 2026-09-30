@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v466
+KTO CO DOSTAJE I KIEDY — AEL-MINI v467
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -17,7 +17,7 @@ Kazda rola ma wlasna rozmowe na DeepSeeku. Pierwsza wiadomosc:
       "Kilka słów o tym, jak to wszystko działa" (v460: + fakt o
       uzytkowniku — loguje sie, daje dostepy i dane, reszte ustala
       zespol): kto jest w
-      zespole, ze RUN wykonuje Python (v459: lista 41 narzedzi z
+      zespole, ze RUN wykonuje Python (v459: lista 41 narzedzi (v467: 42, + chrome_upload_file) z
       argumentami, do 12 akcji na RUN), ze TASK wykonuje Gemini
       (do 25 wywolan narzedzi), ze kod kladzie Python, jak dziala
       ASK (do 5 pytan na krok), NEED_USER_LOGIN, DONE i FAILED

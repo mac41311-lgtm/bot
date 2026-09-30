@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v466
+AEL-MINI AUTONOMOUS AGENT v467
 
-ARCHITEKTURA (stan na v466 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v467 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2797,7 +2797,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v466")
+    print("             AEL-MINI AUTONOMOUS AGENT v467")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8158,6 +8158,29 @@ def find_adb(auto_reconnect=True):
     if target and adb_try_connect(target):
         device = _list_devices()
 
+    if device:
+        return device
+
+    # v467: port debugowania bezprzewodowego zmienia sie po restarcie
+    # sesji; `adb mdns services` pokazuje aktualny (bieg 2026-09-30,
+    # kroki 21-24 i 48-49: "no devices/emulators found").
+    try:
+        mdns = subprocess.run(
+            ["adb", "mdns", "services"],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in (mdns.stdout or "").splitlines():
+            if "_adb-tls-connect" not in line and "_adb._tcp" not in line:
+                continue
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+:\d+)", line)
+            if m and adb_try_connect(m.group(1)):
+                device = _list_devices()
+                if device:
+                    log("ANDROID", "ADB polaczone przez mDNS: " + m.group(1))
+                    return device
+    except Exception:
+        pass
+
     return device
 
 
@@ -9537,7 +9560,10 @@ def _pisanie_do_wlasnego_terminala(co_robimy):
     # v463: bieg 2026-09-28 19:32 — po chrome_execute_js na wierzchu
     # byl Termux i tap w karte ankiety zostal odrzucony. Gdy ostatnie
     # narzedzie bylo w Chrome, to Chrome jest celem — wyciagamy go.
-    if str(globals().get("_ostatnie_narzedzie") or "").startswith("chrome_"):
+    # v467: "ostatnie" bylo juz biezacym (android_tap) — bieg 2026-09-30
+    # 07:40: tap w "Dodaj ogloszenie" odrzucony, choc krok wczesniej
+    # pracowalismy w Chrome.
+    if str(globals().get("_poprzednie_narzedzie") or "").startswith("chrome_"):
         try:
             execute_shell(
                 "adb shell am start -n "
@@ -11085,14 +11111,68 @@ def _usuwa_tylko_wlasne_katalogi(command):
         if not cele:
             return False
         for arg in cele:
-            if any(z in arg for z in "*?$`"):
+            if any(z in arg for z in "$`"):
                 return False
+            # v467: `rm -f ~/ocr2docx/out/multi.*` — maska wewnatrz
+            # wlasnego katalogu; liczy sie czesc przed pierwsza maska.
+            if any(z in arg for z in "*?"):
+                arg = re.split(r"[*?]", arg, 1)[0]
+                if "/" in arg:
+                    arg = arg.rsplit("/", 1)[0] or "/"
+                else:
+                    arg = "."
             sciezka = (Path(os.path.expanduser(arg))
                        if arg.startswith(("/", "~")) else cwd / arg)
             if not _wlasna(sciezka):
                 return False
         usuwajace += 1
     return usuwajace > 0
+
+
+def _po_komendzie(command, wynik, effective_timeout):
+    """
+    v467: dwa fakty dopisywane do wyniku komendy, bo w biegu 2026-09-30
+    kosztowaly po kilka krokow:
+    - "/tmp/...: Permission denied" — w Termuksie nie ma /tmp, jest
+      $PREFIX/tmp (i ~);
+    - "adb: no devices/emulators found" — bezprzewodowe ADB zmienilo
+      port; laczymy ponownie (find_adb: zapamietany adres, potem mDNS)
+      i powtarzamy komende raz.
+    """
+    if not isinstance(wynik, dict):
+        return wynik
+    tekst = str(wynik.get("stderr") or "") + " " + str(wynik.get("stdout") or "")
+    if "/tmp/" in tekst and ("Permission denied" in tekst or "No such file" in tekst):
+        wynik["podpowiedz"] = (
+            "W Termuksie nie ma /tmp — pliki tymczasowe idą do "
+            "$PREFIX/tmp (" + str(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+            + "/tmp) albo do ~/."
+        )
+    if "no devices/emulators found" in tekst and "adb" in str(command):
+        if not globals().get("_adb_ponowka_w_toku"):
+            globals()["_adb_ponowka_w_toku"] = True
+            try:
+                urzadzenie = find_adb(auto_reconnect=True)
+                if urzadzenie:
+                    log("ANDROID", "ADB wróciło (" + str(urzadzenie) + ") — powtarzam komendę raz.")
+                    try:
+                        init_android()
+                    except Exception:
+                        pass
+                    ponow = _uruchom_z_podgladem(command, effective_timeout, datetime.now())
+                    if isinstance(ponow, dict):
+                        ponow["adb_polaczone_ponownie"] = str(urzadzenie)
+                        return ponow
+                else:
+                    wynik["podpowiedz"] = (
+                        "Bezprzewodowe ADB nie odpowiada i nie udało się połączyć "
+                        "ponownie (ani zapamiętany adres, ani mDNS). Zwykle pomaga "
+                        "ponowne włączenie 'Debugowanie bezprzewodowe' na telefonie "
+                        "— to jest sprawa dla użytkownika."
+                    )
+            finally:
+                globals()["_adb_ponowka_w_toku"] = False
+    return wynik
 
 
 def _usuwa_wlasny_plik_tymczasowy(command):
@@ -11440,9 +11520,10 @@ def execute_shell(command, timeout=None):
         # skrypt nagrywajacy potrafil przez to wisiec pelne 120 s i
         # wrocic jako "Timeout". Cala reszta programu dostaje
         # dokladnie ten sam slownik co dotad.
-        return _uruchom_z_podgladem(
+        _wynik_sh = _uruchom_z_podgladem(
             command, effective_timeout, started
         )
+        return _po_komendzie(command, _wynik_sh, effective_timeout)
 
     except subprocess.TimeoutExpired as e:
 
@@ -13308,6 +13389,34 @@ def _dolacz_widok(wynik, tab):
     return wynik
 
 
+def _dotknij_punkt(tab, x, y):
+    """
+    v467: dotyk palcem przez CDP (Input.dispatchTouchEvent). Mobilne
+    SPA (m.olx.pl "Dodaj ogloszenie") reaguja na touchstart/touchend,
+    a nie na zdarzenia myszy — bieg 2026-09-30, kroki 60-68.
+    """
+    ws = cdp_connect(tab)
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+    try:
+        for i, (typ, punkty) in enumerate((
+            ("touchStart", [{"x": float(x), "y": float(y)}]),
+            ("touchEnd", []),
+        )):
+            odp = cdp_call(ws, 30 + i, "Input.dispatchTouchEvent", {
+                "type": typ,
+                "touchPoints": punkty
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    return {"ok": True}
+
+
 def _kliknij_w_punkt(tab, x, y):
     """Prawdziwe klikniecie myszy przez CDP w punkt (x, y) karty."""
 
@@ -13390,7 +13499,87 @@ def _kliknij_nr(tab, nr):
         except Exception:
             pass
 
-    return {"ok": True, "clicked": polozenie.get("opis") or ("nr " + str(nr))}
+    return {
+        "ok": True,
+        "clicked": polozenie.get("opis") or ("nr " + str(nr)),
+        "_xy": (polozenie["x"], polozenie["y"])
+    }
+
+
+def chrome_upload_file(path, nr=None, selector=None, tab_id=None, contains=None):
+    """
+    v467: wklada plik do pola input[type=file] w Chrome przez CDP
+    (DOM.setFileInputFiles). Bieg 2026-09-30: OLX wymagal zdjecia,
+    MAIN probowal base64/DataTransfer/fetch z localhost i w koncu
+    oddal to uzytkownikowi. Plik z Termuksa idzie najpierw przez
+    `adb push` do /sdcard/Download/ael_upload/, bo Chrome czyta tylko
+    pamiec wspoldzielona.
+    """
+    tab = find_tab(tab_id, contains)
+    if tab is None:
+        return {"ok": False, "error": "Brak istniejącej karty"}
+    src = Path(os.path.expanduser(str(path or "").strip()))
+    if not src.exists() or not src.is_file():
+        return {"ok": False, "error": "Nie ma takiego pliku: " + str(src)}
+    if str(src).startswith(("/sdcard/", "/storage/")):
+        na_telefonie = str(src).replace("/sdcard/", "/storage/emulated/0/", 1)
+    else:
+        docelowy = "/sdcard/Download/ael_upload/" + src.name
+        push = execute_shell(
+            "adb shell mkdir -p /sdcard/Download/ael_upload && adb push "
+            + shlex.quote(str(src)) + " " + shlex.quote(docelowy),
+            timeout=60
+        )
+        if not push.get("ok"):
+            return {
+                "ok": False,
+                "error": "adb push nie przeszedł: "
+                + short(str(push.get("stderr") or push.get("error") or ""), 300)
+            }
+        na_telefonie = "/storage/emulated/0/Download/ael_upload/" + src.name
+    if nr is not None and str(nr).strip():
+        sel = '[data-ael-nr="' + str(int(str(nr).strip())) + '"]'
+    else:
+        sel = str(selector or "").strip() or 'input[type="file"]'
+    ws = cdp_connect(tab)
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+    try:
+        doc = cdp_call(ws, 40, "DOM.getDocument", {"depth": 1})
+        if not doc.get("ok"):
+            return {"ok": False, "error": str(doc.get("error"))}
+        root = ((doc.get("result") or {}).get("root") or {}).get("nodeId")
+        q = cdp_call(ws, 41, "DOM.querySelector", {"nodeId": root, "selector": sel})
+        node = (q.get("result") or {}).get("nodeId") if q.get("ok") else None
+        if not node:
+            return {
+                "ok": False,
+                "error": "Na stronie nie ma pola pliku pasującego do " + sel
+                + " — chrome_inspect pokaże, co jest (pola typu file są na liście)."
+            }
+        odp = cdp_call(ws, 42, "DOM.setFileInputFiles", {"files": [na_telefonie], "nodeId": node})
+        if not odp.get("ok"):
+            return {"ok": False, "error": str(odp.get("error"))}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    _poczekaj_az_strona_dojdzie(tab)
+    sprawdzenie = chrome_eval(
+        tab,
+        "(() => { const el = document.querySelector(" + json.dumps(sel) + ");"
+        " if (!el || !el.files) return null; return Array.from(el.files).map(f => f.name + ' (' + f.size + ' B)'); })()"
+    )
+    wynik = {
+        "ok": True,
+        "tab_id": tab.get("id"),
+        "plik": na_telefonie,
+        "pole": sel,
+        "pliki_w_polu": sprawdzenie if isinstance(sprawdzenie, list) else [],
+        "message": "Plik włożony do pola przez CDP; strona dostała zdarzenie change."
+    }
+    return _dolacz_widok(wynik, tab)
 
 
 def chrome_click(
@@ -13580,7 +13769,11 @@ def chrome_click(
                     + str(float(wynik["x"])) + ", " + str(float(wynik["y"]))
                     + "); if (el) el.click(); return !!el; })()"
                 )
-            wynik = {"ok": True, "clicked": wynik["clicked"]}
+            wynik = {
+                "ok": True,
+                "clicked": wynik["clicked"],
+                "_xy": (wynik["x"], wynik["y"])
+            }
 
     if not isinstance(wynik, dict) or not wynik.get("clicked"):
         # v443: nie ma takiego elementu — razem z tym, co na stronie
@@ -13634,6 +13827,23 @@ def chrome_click(
         _co_sie_zmienilo.append(
             "treść strony zmieniła się (ta sama długość, inna treść)"
         )
+
+    # v467: klik myszka nie ruszyl strony — probujemy dotyku palcem w
+    # ten sam punkt (mobilne SPA slucha touch, nie mouse).
+    _xy = wynik.pop("_xy", None)
+    if not _co_sie_zmienilo and _xy:
+        _dotyk = _dotknij_punkt(tab, _xy[0], _xy[1])
+        if _dotyk.get("ok"):
+            _poczekaj_az_strona_dojdzie(tab)
+            _po2 = _stan_strony(tab)
+            if _po2 and _chrome_stan_sie_zmienil(_po, _po2):
+                _po = _po2
+                _co_sie_zmienilo.append(
+                    "po dotknięciu palcem (touch, nie mysz): "
+                    + ("adres " + str(_po2.get("href")) if _przed.get("href") != _po2.get("href")
+                       else "treść strony " + str(_przed.get("znakow")) + " -> " + str(_po2.get("znakow")) + " znaków")
+                )
+                wynik["metoda"] = "touch"
 
     wynik["adres"] = _po.get("href")
 
@@ -15226,6 +15436,28 @@ def _gemini_tools_legacy():
             }
         },
 
+        {
+            "type": "function",
+            "name": "chrome_upload_file",
+            "description": (
+                "Włóż plik do pola wyboru pliku na stronie (input type=file), "
+                "np. zdjęcie do ogłoszenia. path: plik w Termuxie albo na "
+                "/sdcard; nr: numer pola z listy strony albo selector CSS; "
+                "bez nich — pierwsze pole pliku. Wynik mówi, jakie pliki są "
+                "w polu. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "nr": {"type": "string"},
+                    "selector": {"type": "string"},
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                },
+                "required": ["path"]
+            }
+        },
         {
             "type": "function",
             "name": "chrome_back",
@@ -20737,6 +20969,7 @@ def dispatch_tool(
     started = datetime.now()
 
     # v463: ostatnie narzedzie — patrz _pisanie_do_wlasnego_terminala().
+    globals()["_poprzednie_narzedzie"] = str(globals().get("_ostatnie_narzedzie") or "")
     globals()["_ostatnie_narzedzie"] = str(name or "")
 
     result = _dispatch_tool_inner(
@@ -21545,6 +21778,9 @@ def _dispatch_tool_inner(
                 fn,
                 args
             )
+
+        if name == "chrome_upload_file":
+            return _call_tool_function(chrome_upload_file, args)
 
         if name == "chrome_back":
 
@@ -36214,10 +36450,64 @@ def _extract_last_balanced_json_object(text):
     return None
 
 
+def _dsml_na_run(text):
+    """
+    v467: DeepSeek potrafi odpowiedziec swoim natywnym formatem
+    wywolan narzedzi zamiast JSON-em:
+      <|DSML| invoke name="chrome_execute_js">
+      <|DSML| parameter name="args" string="false">{...}</|DSML| parameter>
+      </|DSML| invoke>
+    Bieg 2026-09-30: cztery kroki (38, 55, 58, 66) poszly jako
+    UNKNOWN_DECISION, choc kazdy byl gotowa lista akcji. To jest RUN.
+    """
+    tekst = str(text or "")
+    if "DSML" not in tekst or "invoke" not in tekst:
+        return None
+    akcje = []
+    for m in re.finditer(
+        r'invoke\s+name="([A-Za-z0-9_]+)"\s*>(.*?)</[^>]*invoke\s*>',
+        tekst, re.DOTALL
+    ):
+        nazwa = m.group(1).strip()
+        cialo = m.group(2)
+        args = {}
+        pm = re.search(
+            r'parameter\s+name="args"[^>]*>(.*?)</[^>]*parameter\s*>',
+            cialo, re.DOTALL
+        )
+        if pm:
+            surowe = pm.group(1).strip()
+            try:
+                args = json.loads(surowe)
+            except Exception:
+                obj = _extract_last_balanced_json_object(surowe)
+                args = obj if isinstance(obj, dict) else {}
+        else:
+            for pm2 in re.finditer(
+                r'parameter\s+name="([A-Za-z0-9_]+)"[^>]*>(.*?)</[^>]*parameter\s*>',
+                cialo, re.DOTALL
+            ):
+                args[pm2.group(1)] = pm2.group(2).strip()
+        if nazwa:
+            akcje.append({"tool": nazwa, "args": args if isinstance(args, dict) else {}})
+    if not akcje:
+        return None
+    przed = re.split(r"<[^>]*DSML", tekst, 1)[0].strip()
+    return {
+        "type": "RUN",
+        "reason": short(przed, 600) if przed else "(wywołania narzędzi w formacie DSML)",
+        "actions": akcje,
+        "_z_dsml": True
+    }
+
+
 def parse_json(text):
 
     if not text:
         return None
+    _d = _dsml_na_run(text)
+    if _d:
+        return _d
 
     text = str(
         text
