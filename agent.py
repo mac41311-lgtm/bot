@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v468
+AEL-MINI AUTONOMOUS AGENT v469
 
-ARCHITEKTURA (stan na v468 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v469 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2797,7 +2797,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v468")
+    print("             AEL-MINI AUTONOMOUS AGENT v469")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2836,13 +2836,19 @@ def banner():
 # drugie z ~1.0 — podział tylko z nazwy, nie z realnego obciążenia.
 # Poniższy podział rozdziela też "co krok" role między oba konta,
 # żeby faktycznie wyrównać ruch (~2.6 vs ~2.4 wagi):
+#
+# v469: wagi wyzej sa sprzed RUN. Bieg 2026-09-30 (78 krokow, ~1,6 h):
+# MAIN 87 wiadomosci, Ela 15, Tomek 5, Kamil 3, Marek 2, Wojtek 1. Konto
+# 1 (MAIN, Marek, Kamil, Ela, Wojtek) mialo 75 z 90 w ostatniej
+# godzinie, konto 2 — jedna. MAIN sam robi ~55 na godzine, wiec ma
+# konto 1 tylko dla siebie, a reszta zespolu idzie przez konto 2.
 _ROLE_ACCOUNT = {
     "MAIN": 1,
-    "CRITIC": 1,
-    "RESEARCHER": 1,
-    "PROGRESS_ESTIMATOR": 1,
-    "WOJTEK": 1,
 
+    "CRITIC": 2,
+    "RESEARCHER": 2,
+    "PROGRESS_ESTIMATOR": 2,
+    "WOJTEK": 2,
     "PLANNER": 2,
     "ENGINEER": 2,
     "BROWSER": 2,
@@ -10051,6 +10057,17 @@ def android_swipe(
                 "error": "Android niedostępny."
             }
 
+    # v469: bieg 2026-09-30, krok 22 — MAIN podal duration=500 (ms, jak
+    # w `adb shell input swipe`), a uiautomator2 liczy sekundy: gest
+    # mial trwac ponad 8 minut, wiec uiautomator2 i adb (500 000 ms)
+    # skonczyly sie limitem 20 s, a ekran stal. Gest dluzszy niz 10 s
+    # to milisekundy.
+    try:
+        if float(duration) > 10:
+            duration = float(duration) / 1000.0
+    except (TypeError, ValueError):
+        duration = 0.3
+
     try:
         _android_with_deadline(
             "android_swipe",
@@ -12143,6 +12160,10 @@ def _find_tab_bez_aktywacji(
 # ktore narzedzia Chrome dostaja karte, wiec to tu.
 _ostatnio_aktywna_karta = [None]
 
+# v469: find_tab() wzial inna karte niz wskazana — dispatch_tool()
+# dopisuje to do wyniku narzedzia jako "karta".
+_uwaga_o_karcie = [None]
+
 
 def _aktywuj_karte(tab):
     """Karta na wierzch; True, gdy byla juz na wierzchu albo sie udalo."""
@@ -12207,6 +12228,43 @@ def find_tab(
     """Karta wg id / fragmentu adresu, wyciagnieta na wierzch (v457)."""
 
     tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    # v469: bieg 2026-09-30, kroki 60, 61, 64 — MAIN podal tab_id=1614,
+    # a tej karty juz nie bylo (Chrome zamknal ja przy porzadkach), wiec
+    # chrome_type, chrome_execute_js i chrome_click wrocily z "Brak
+    # istniejącej karty", choc strona, o ktora chodzilo, byla na
+    # wierzchu w karcie 1623. Kroki 3, 9, 24: chrome_inspect z
+    # contains="Moje OLX" / "Visit website" — MAIN szukal tekstu NA
+    # stronie, a contains porownuje tytul i adres karty. Gdy wskazanie
+    # niczego nie trafia, bierzemy karte, na ktorej pracujemy (ta sama
+    # regula, co bez tab_id — v468), a wynik mowi o zamianie.
+    # chrome_close wola _find_tab_bez_aktywacji wprost — nigdy nie
+    # zamknie karty innej niz wskazana.
+    if tab is None and (tab_id or contains):
+
+        tab = _find_tab_bez_aktywacji(None, None)
+
+        if tab is not None:
+
+            if tab_id and not contains:
+                _co = "Karty " + str(tab_id) + " już nie ma"
+            elif tab_id:
+                _co = (
+                    "Karty " + str(tab_id) + " już nie ma i żadna nie ma "
+                    "w tytule ani adresie „" + short(str(contains), 60) + "”"
+                )
+            else:
+                _co = (
+                    "Żadna karta nie ma w tytule ani adresie „"
+                    + short(str(contains), 60) + "”"
+                )
+
+            _uwaga_o_karcie[0] = (
+                _co + " — użyłem karty " + str(tab.get("id")) + " ("
+                + short(str(tab.get("url") or ""), 100) + ")."
+            )
+
+            log("CHROME", _uwaga_o_karcie[0])
 
     if tab is not None:
         _aktywuj_karte(tab)
@@ -12921,11 +12979,23 @@ def _chrome_open_wynik(
     stan = _stan_strony(tab)
     tresc = _tresc_strony(tab)
 
+    # v469: tytul z listy kart CDP tylko wtedy, gdy ta lista mowi o tym
+    # samym adresie. Bieg 2026-09-30, krok 4: otwieralismy
+    # /mojolx/szukampracy/pulpit/, strona nie miala jeszcze tytulu, a
+    # wynik podawal "title": "m.olx.pl/konto/portfel/" — tytul
+    # poprzedniej strony z listy sprzed nawigacji.
+    _tytul = (stan or {}).get("title")
+
+    if not _tytul and _ta_sama_strona(
+        (tab or {}).get("url"), (stan or {}).get("href") or url
+    ):
+        _tytul = (tab or {}).get("title")
+
     wynik = {
         "ok": True,
         "tab_id": (tab or {}).get("id"),
         "url": (stan or {}).get("href") or str(url),
-        "title": (stan or {}).get("title") or (tab or {}).get("title")
+        "title": _tytul or ""
     }
 
     if czekalismy:
@@ -13002,6 +13072,66 @@ def _chrome_open_wynik(
     return wynik
 
 
+def _karta_po_am_start(url, karty_przed, limit=12.0, na_koniec=True):
+    """
+    v469: karta, ktora pokazala sie po `am start`, albo None.
+
+    Bieg 2026-09-30, kroki 5 i 6: `am start` otworzyl adres, ale po
+    sztywnej sekundzie CDP jeszcze nie wymienial nowej karty (w kroku 5
+    Chrome dopiero wstawal po zerwanym polaczeniu) — chrome_open wrocil
+    z bledem, a w nastepnym kroku "W Chrome jest teraz" pokazywalo te
+    karte z tym adresem. Pytamy wiec co sekunde, az do `limit`: karta
+    z TYM adresem albo karta, ktorej przed `am start` nie bylo (adres
+    mogl przeniesc, np. www.olx.pl -> m.olx.pl). Dopiero po czasie,
+    gdy `na_koniec`, karta z tej domeny, a potem ta, na ktorej
+    pracujemy (v367: nie pierwsza z domeny, gdy jest dokladna).
+    """
+
+    koniec = time.time() + float(limit)
+    time.sleep(1.0)
+
+    while True:
+
+        karty = chrome_tabs()
+
+        for karta in karty:
+            if _ta_sama_strona(karta.get("url"), url):
+                _aktywuj_karte(karta)
+                return karta
+
+        # Bez listy sprzed `am start` (CDP lezalo) kazda karta
+        # wygladalaby na nowa — wtedy liczy sie tylko adres.
+        for karta in (karty if karty_przed else []):
+            if str(karta.get("id")) not in karty_przed:
+                _aktywuj_karte(karta)
+                return karta
+
+        if time.time() >= koniec:
+            break
+
+        time.sleep(1.0)
+
+    if not na_koniec:
+        return None
+
+    domain = ""
+
+    try:
+        domain = urlparse(str(url)).netloc
+    except Exception:
+        pass
+
+    karta = (
+        (_find_tab_bez_aktywacji(None, domain) if domain else None)
+        or _find_tab_bez_aktywacji(None, None)
+    )
+
+    if karta is not None:
+        _aktywuj_karte(karta)
+
+    return karta
+
+
 def chrome_open(
     url,
     tab_id=None,
@@ -13031,7 +13161,13 @@ def chrome_open(
     # Ta strona moze juz gdzies wisiec. Wtedy jej nie otwieramy drugi
     # raz — wyciagamy istniejaca karte na wierzch. Patrz
     # _przelacz_na_karte().
-    if not tab_id and not contains:
+    # v469: takze wtedy, gdy wskazanej karty juz nie ma — find_tab()
+    # wzialby karte, na ktorej pracujemy, i nadpisal ja, choc ten adres
+    # wisi obok.
+    if (
+        (not tab_id and not contains)
+        or _find_tab_bez_aktywacji(tab_id, contains) is None
+    ):
 
         _juz = _karta_z_tym_adresem(url)
 
@@ -13135,6 +13271,10 @@ def chrome_open(
                 )
             )
 
+        _karty_przed = {
+            str(k.get("id")) for k in chrome_tabs()
+        }
+
         fallback = execute_shell(
             "am start -a android.intent.action.VIEW -p "
             "com.android.chrome -d "
@@ -13166,29 +13306,7 @@ def chrome_open(
         # dashboard w Reakcie potrzebuje jeszcze chwili; kto zajrzy w
         # ta chwile, zobaczy "Loading...". Czekamy wiec na karte, a
         # potem na sama strone — dokladnie tyle, ile trzeba.
-        time.sleep(1.0)
-
-        domain = ""
-
-        try:
-            domain = urlparse(str(url)).netloc
-        except Exception:
-            pass
-
-        # v367: NAJPIERW karta z TYM adresem, dopiero potem
-        # jakakolwiek z tej domeny.
-        #
-        # Bylo: find_tab(None, domain) — czyli PIERWSZA karta z tej
-        # domeny. Gdy na dashboard.daily.co wisiala juz karta
-        # /login, a wlasnie otwierali smy /rooms, dostawalismy z
-        # powrotem /login i jego tresc. Nawigacja sie udala, a
-        # odpowiedz mowila o zupelnie innej stronie — stad
-        # "przeciez otworzylem, a widze stare".
-        tab = (
-            _karta_z_tym_adresem(url)
-            or find_tab(None, domain or None)
-            or find_tab(None, None)
-        )
+        tab = _karta_po_am_start(url, _karty_przed)
 
         if tab is None:
 
@@ -13276,6 +13394,7 @@ def chrome_open(
     if not result.get("ok", False):
 
         _stara = str(tab.get("id") or "")
+        _karty_przed = {str(k.get("id")) for k in chrome_tabs()}
 
         _zapas = execute_shell(
             "am start -a android.intent.action.VIEW -p "
@@ -13285,9 +13404,7 @@ def chrome_open(
 
         if _zapas.get("ok"):
 
-            time.sleep(1.5)
-
-            _nowa = _karta_z_tym_adresem(url)
+            _nowa = _karta_po_am_start(url, _karty_przed, na_koniec=False)
 
             if _nowa is not None:
 
@@ -21168,6 +21285,8 @@ def dispatch_tool(
     globals()["_poprzednie_narzedzie"] = str(globals().get("_ostatnie_narzedzie") or "")
     globals()["_ostatnie_narzedzie"] = str(name or "")
 
+    _uwaga_o_karcie[0] = None
+
     result = _dispatch_tool_inner(
         name,
         args
@@ -21177,6 +21296,9 @@ def dispatch_tool(
         (datetime.now() - started).total_seconds(),
         2
     )
+
+    if isinstance(result, dict) and _uwaga_o_karcie[0]:
+        result.setdefault("karta", _uwaga_o_karcie[0])
 
     if isinstance(result, dict):
 
