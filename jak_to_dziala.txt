@@ -911,3 +911,28 @@ CZESC 28. CO ZMIENILO v468 (bieg 2026-09-30 12:34 — Gemini jako oczy)
     wynik dostaje rowna czesc — zaden nie wypada
 
 =========================================================================
+
+CZESC 29. CO ZMIENILO v469 (ten sam bieg 2026-09-30 12:34 — to, czego
+v468 jeszcze nie zalatalo)
+=========================================================================
+
+  - find_tab: gdy podany tab_id juz nie istnieje albo `contains` nie
+    trafia w tytul/adres zadnej karty, narzedzie bierze karte, na ktorej
+    pracujemy (jak bez tab_id), a wynik ma pole "karta" z informacja o
+    zamianie. Kroki 60, 61, 64 (tab_id=1614 po zamknieciu karty) i 3, 9,
+    24 (contains="Visit website" — tekst ze strony, nie z tytulu).
+    chrome_close nadal zamyka TYLKO wskazana karte.
+  - chrome_open po `am start` czeka na karte do 12 s (co sekunde):
+    karta z tym adresem albo karta, ktorej wczesniej nie bylo. Kroki 5
+    i 6 konczyly sie bledem "brak widocznej karty CDP" po 1 s, a karta
+    byla. Przy nieistniejacym tab_id chrome_open najpierw szuka karty z
+    tym adresem, zamiast nadpisywac biezaca.
+  - chrome_open: "title" nie jest juz tytulem poprzedniej strony, gdy
+    nowa jeszcze go nie ma (krok 4).
+  - android_swipe: duration > 10 to milisekundy (krok 22: 500 ->
+    gest na 8 minut, 40 s czekania i blad).
+  - konta DeepSeek: MAIN sam na koncie 1, reszta zespolu na koncie 2.
+    W tym biegu konto 1 mialo 75 z 90 wiadomosci w godzinie, konto 2 —
+    jedna.
+
+=========================================================================
