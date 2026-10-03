@@ -936,3 +936,32 @@ v468 jeszcze nie zalatalo)
     jedna.
 
 =========================================================================
+
+CZESC 30. CO ZMIENILO v470 (bieg 2026-10-03 22:23 — Useme, 95 krokow)
+=========================================================================
+
+  OCENA BIEGU (na v468, bo v469 nie byla jeszcze na telefonie):
+  - 7 ofert na Useme (potencjal 3150 zl), naprawiony profil, 3-4
+    zapytania przez "Zapytaj o szczegoly"; potem OLX (wymusza wersje
+    mobilna), Gmail, grupy na Facebooku
+  - 32 wywolania chrome_execute_js wrocily z "value": null. W krokach
+    48-59 kod mial zbedne "})" na koncu — blad skladni, a wynik
+    wygladal jak udane wywolanie bez wartosci. MAIN uznal, ze
+    "Promise w chrome_execute_js gubi wynik"
+
+  CO ZMIENIONE:
+  - chrome_execute_js: blad JavaScriptu (exceptionDetails z CDP) to
+    ok: false, "Błąd JavaScriptu: ...", z linia i kolumna; kod bez
+    wartosci (undefined) dostaje pole "undefined"; "Inspected target
+    navigated or closed" (kod kliknal i strona przeszla dalej) to
+    ok: true z "strona_przeszla_dalej" i nowym adresem
+  - chrome_type bez `pole`, gdy kursor nie stoi w polu, a na stronie
+    jest dokladnie jedno pole — pisze w nie (krok 41: szesc razy
+    "Kursor nie stoi w polu tekstowym" przy jednym polu tagow);
+    pola contenteditable kazdego rodzaju, bez wylaczonych i tylko do
+    odczytu
+  - chrome_screenshot -> android_screenshot (alias)
+  - podsumowanie biegu: krok, ktory sie dopiero zaczal, nie liczy sie
+    jako "krok bez ani jednego narzedzia"
+
+=========================================================================

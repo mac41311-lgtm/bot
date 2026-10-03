@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v469
+AEL-MINI AUTONOMOUS AGENT v470
 
-ARCHITEKTURA (stan na v469 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v470 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -1624,6 +1624,7 @@ def policz_bieg(sciezka=None):
 
     narzedzia_w_kroku = {}
     kroki = set()
+    kroki_z_decyzja = set()
 
     for z in zdarzenia:
 
@@ -1655,6 +1656,10 @@ def policz_bieg(sciezka=None):
         elif typ == "blok_powtorka":
             wynik["oszczedzone"] += znaki
 
+        elif typ == "odpowiedz" and rola == "MAIN":
+            # v470: krok, w ktorym MAIN juz odpowiedzial — patrz nizej.
+            kroki_z_decyzja.add(krok)
+
         elif typ == "narzedzie":
             wynik["narzedzia"] += 1
             narzedzia_w_kroku[krok] = (
@@ -1667,8 +1672,13 @@ def policz_bieg(sciezka=None):
 
     wynik["kroki"] = len(kroki)
 
+    # v470: bieg 2026-10-03 — co piec krokow podsumowanie mowilo
+    # "Kroki bez ani jednego narzędzia: 5, 11", "5, 16", "5, 21"...
+    # Liczyl sie krok, ktory sie dopiero zaczal (podsumowanie leci na
+    # jego poczatku). Krok bez decyzji MAIN-a jeszcze trwa.
     wynik["kroki_bez_narzedzia"] = sorted(
-        k for k in kroki if not narzedzia_w_kroku.get(k)
+        k for k in kroki
+        if not narzedzia_w_kroku.get(k) and k in kroki_z_decyzja
     )
 
     return wynik
@@ -2797,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v469")
+    print("             AEL-MINI AUTONOMOUS AGENT v470")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12352,7 +12362,8 @@ def cdp_call(
 def chrome_eval(
     tab,
     javascript,
-    timeout=20
+    timeout=20,
+    zglos_wyjatek=False
 ):
 
     ws = cdp_connect(tab)
@@ -12390,12 +12401,39 @@ def chrome_eval(
     if not result.get("ok"):
         return result
 
-    return (
-        result
-        .get("result", {})
-        .get("result", {})
-        .get("value")
-    )
+    # v470: bieg 2026-10-03 — 32 wywolania chrome_execute_js wrocily z
+    # "value": null, w tym kroki 48-59, gdzie kod mial zbedne "})" na
+    # koncu (SyntaxError, wynik po 0,6 s zamiast po setTimeout 2-4 s).
+    # Blad JavaScriptu przychodzi z CDP jako exceptionDetails, a my
+    # oddawalismy samo "value" — wiec MAIN uznal, ze "Promise w
+    # chrome_execute_js gubi wynik" i przez kilka krokow obchodzil
+    # problem, ktorego nie bylo. Wewnetrzne sondy dalej dostaja None.
+    _odp = result.get("result", {}) or {}
+
+    if zglos_wyjatek and _odp.get("exceptionDetails"):
+
+        _szczegoly = _odp.get("exceptionDetails") or {}
+        _wyjatek = _szczegoly.get("exception") or {}
+        _opis = str(
+            _wyjatek.get("description")
+            or _wyjatek.get("value")
+            or _szczegoly.get("text")
+            or "wyjątek"
+        )
+
+        return {
+            "ok": False,
+            "error": "Błąd JavaScriptu: " + short(_opis, 400),
+            "linia": int(_szczegoly.get("lineNumber") or 0) + 1,
+            "kolumna": int(_szczegoly.get("columnNumber") or 0) + 1
+        }
+
+    _wynik = _odp.get("result", {}) or {}
+
+    if zglos_wyjatek and _wynik.get("type") == "undefined":
+        return {"ok": True, "undefined": True}
+
+    return _wynik.get("value")
 
 
 # ============================================================
@@ -14321,8 +14359,8 @@ def chrome_type(
     const q = szukane.trim().toLowerCase();
     const widoczny = (el) => !!(el.offsetParent || el.getClientRects().length);
     const pola = Array.from(document.querySelectorAll(
-        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable=""], [contenteditable="true"]'
-    )).filter(widoczny);
+        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable]:not([contenteditable="false"])'
+    )).filter(widoczny).filter(e => !e.disabled && !e.readOnly);
     const opis = (el) => [
         el.id, el.name, el.getAttribute('placeholder'),
         el.getAttribute('aria-label'),
@@ -14349,8 +14387,15 @@ def chrome_type(
         el = document.activeElement;
         const tag = el ? el.tagName.toLowerCase() : '';
         if (!el || !(tag === 'input' || tag === 'textarea' || el.isContentEditable)) {{
-            return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
-                     pola: pola.slice(0, 15).map(opis)}};
+            // v470: bieg 2026-10-03, krok 41 — szesc razy "Kursor nie
+            // stoi w polu tekstowym", a na stronie bylo jedno pole.
+            // Jedno pole to jedyny mozliwy adresat.
+            if (pola.length === 1) {{
+                el = pola[0];
+            }} else {{
+                return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
+                         pola: pola.slice(0, 15).map(opis)}};
+            }}
         }}
     }}
     el.scrollIntoView({{block: 'center'}});
@@ -14569,7 +14614,8 @@ def chrome_execute_js(
     result = chrome_eval(
         tab,
         javascript,
-        timeout=10
+        timeout=10,
+        zglos_wyjatek=True
     )
 
     # v452: "Calling Runtime.evaluate timeout" konczylo cale zadanie
@@ -14584,7 +14630,7 @@ def chrome_execute_js(
         and "timeout" in str(result.get("error") or "").lower()
     ):
         time.sleep(1.0)
-        result = chrome_eval(tab, javascript, timeout=10)
+        result = chrome_eval(tab, javascript, timeout=10, zglos_wyjatek=True)
 
         if (
             isinstance(result, dict)
@@ -14598,11 +14644,42 @@ def chrome_execute_js(
                 "dalej stoi — chrome_inspect pokazuje, co na niej jest."
             )
 
+    # v470: bieg 2026-10-03, krok 60 — kod kliknal "Wyślij", strona
+    # przeszla dalej i CDP oddal "Inspected target navigated or closed".
+    # Kod sie wykonal; wyniku nie ma, bo strona, ktora mialaby go oddac,
+    # juz zniknela. Mowimy, gdzie jestesmy teraz.
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+        and "navigated or closed" in str(result.get("error") or "")
+    ):
+        _poczekaj_az_strona_dojdzie(tab)
+        _po = _stan_strony(tab) or {}
+        return {
+            "ok": True,
+            "value": None,
+            "strona_przeszla_dalej": (
+                "Kod się wykonał, a strona w tym czasie przeszła na "
+                + short(str(_po.get("href") or "inny adres"), 150)
+                + " — dlatego bez wyniku."
+            ),
+            "url": _po.get("href"),
+            "tytul": _po.get("title")
+        }
+
     if (
         isinstance(result, dict)
         and result.get("ok") is False
     ):
         return result
+
+    _bez_wartosci = (
+        isinstance(result, dict) and result.get("undefined") is True
+        and len(result) == 2
+    )
+
+    if _bez_wartosci:
+        result = None
 
     dom_fields_warning = _detect_empty_js_fields(result)
 
@@ -14610,6 +14687,12 @@ def chrome_execute_js(
         "ok": True,
         "value": result
     }
+
+    if _bez_wartosci:
+        final["undefined"] = (
+            "Kod skończył się bez wartości (undefined) — nic nie "
+            "zwrócił ani nie rozwiązał Promise wartością."
+        )
 
     if _czekalismy:
         final["czekalem_na_zaladowanie_s"] = _czekalismy
@@ -21383,6 +21466,9 @@ _TOOL_NAME_ALIASES = {
     "android_start_app": "android_launch_app",
     "android_run_new_window": "android_run_in_new_window",
     "android_new_window": "android_run_in_new_window",
+    # v470: bieg 2026-10-03, krok 16 — MAIN wolal chrome_screenshot.
+    # Zrzut ekranu z Chrome na wierzchu to zrzut Androida.
+    "chrome_screenshot": "android_screenshot",
 }
 
 
