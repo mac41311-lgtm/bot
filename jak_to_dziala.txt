@@ -1015,3 +1015,32 @@ sam sobie pobrać")
     prosba z dopiskiem, ze aplikacja juz jest
 
 =========================================================================
+
+CZESC 33. CO ZMIENILO v473 (bieg 2026-10-04 12:24 — "teraz sobie
+gorzej radzi")
+=========================================================================
+
+  OCENA BIEGU (51 krokow, v472): to nie byl skutek v472 (instalacja ze
+  Sklepu w tym biegu sie nie odpalila). Zadanie bylo trudniejsze (oferta
+  na Useme), a dwie stare usterki programu wprowadzaly MAIN w blad:
+
+  1. Krok 26: chrome_open przelaczyl na juz otwarta karte z formularzem,
+     ale zapamietana "karta, na ktorej pracujemy" zostala stara
+     (/pl/login/). Dwa chrome_execute_js bez tab_id poszly w nia —
+     formularz "nie istnial", MAIN wypelnial go od nowa.
+  2. Kroki 30-50: android_state zaczynal sie od "Na wierzchu jest teraz:
+     Termux", choc cale drzewo ekranu to byl Chrome (Termux mial fokus,
+     ale na ekranie byl tylko maly podglad w rogu). MAIN ani razu nie
+     uzyl android_tap i przez 14 krokow probowal kliknac "Przejdz do
+     podsumowania" wlasnymi skryptami CDP. Udalo sie dopiero przez
+     `adb shell input tap`.
+
+  CO ZMIENIONE:
+  - _przelacz_na_karte() i kazde udane narzedzie chrome_* (poza
+    chrome_close), ktore zwraca tab_id, ustawia te karte jako biezaca
+  - _termux_nie_zaslania(): gdy Termux ma fokus, ale nie ma go w drzewie
+    ekranu, a jest tam inna aplikacja — android_state mowi, ze na
+    wierzchu jest ta aplikacja, a android_tap klika (jak przy
+    plywajacym oknie z v471)
+
+=========================================================================

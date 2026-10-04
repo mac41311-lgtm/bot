@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v472
+AEL-MINI AUTONOMOUS AGENT v473
 
-ARCHITEKTURA (stan na v472 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v473 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v472")
+    print("             AEL-MINI AUTONOMOUS AGENT v473")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8743,7 +8743,15 @@ def android_summary(with_header=True):
             # v471: Termux w plywajacym oknie — patrz _okna_na_ekranie().
             if naglowek and _app_pakiet == "com.termux":
                 _okno, _ekran, _pod = _okna_na_ekranie(xml)
-                if _termux_plywa(_okno, _ekran) and _pod:
+                if _okno is None and _termux_nie_zaslania(_okno, _ekran, _pod):
+                    naglowek = (
+                        "Na wierzchu jest teraz: " + str(_pod)
+                        + " — to jego drzewo jest poniżej. Termux ma "
+                        "fokus, ale nie ma go na tym ekranie (najwyżej "
+                        "mały podgląd), więc dotyk trafia w "
+                        + str(_pod) + "."
+                    )
+                elif _termux_plywa(_okno, _ekran) and _pod:
                     naglowek = (
                         "Na wierzchu jest teraz: " + str(_pod)
                         + " (na całym ekranie), a nad nim Termux w "
@@ -9685,6 +9693,25 @@ def _termux_plywa(okno, ekran):
     return pole < 0.85 * ekran[0] * ekran[1]
 
 
+# v473: bieg 2026-10-04 12:24, kroki 30-50 — Termux mial fokus, ale na
+# ekranie byl tylko maly podglad w rogu, ktorego drzewo ekranu w ogole
+# nie zawieralo; cale drzewo to byl Chrome z formularzem Useme. Mimo to
+# android_state zaczynal sie od "Na wierzchu jest teraz: Termux", wiec
+# MAIN ani razu nie uzyl android_tap i przez 14 krokow klikal przycisk
+# "Przejdz do podsumowania" wlasnymi skryptami CDP (JS click, zdarzenia
+# myszy i dotyku, Enter, fetch POST) — bez skutku.
+def _termux_nie_zaslania(okno, ekran, pod):
+    """
+    Na ekranie jest inna aplikacja, a Termux (choc ma fokus) albo
+    plywa w mniejszym oknie, albo nie ma go w drzewie ekranu wcale.
+    """
+
+    if not pod:
+        return False
+
+    return okno is None or _termux_plywa(okno, ekran)
+
+
 def _pisanie_do_wlasnego_terminala(co_robimy, xy=None):
     """
     Czy to, co zaraz zrobimy na ekranie, poleci w terminal, w ktorym
@@ -9726,6 +9753,8 @@ def _pisanie_do_wlasnego_terminala(co_robimy, xy=None):
     # nim — patrz _okna_na_ekranie().
     if xy is not None:
         _okno, _ekran, _pod = _okna_na_ekranie()
+        if _okno is None and _termux_nie_zaslania(_okno, _ekran, _pod):
+            return None
         if _termux_plywa(_okno, _ekran):
             x, y = int(xy[0]), int(xy[1])
             if not (_okno[0] <= x < _okno[2] and _okno[1] <= y < _okno[3]):
@@ -9805,7 +9834,7 @@ def android_tap(x, y):
     # poza jego plywajace okno, w aplikacje pod nim.
     if not _odmowa and pakiet == "com.termux":
         _okno, _ekran, _pod = _okna_na_ekranie()
-        if _termux_plywa(_okno, _ekran):
+        if _termux_nie_zaslania(_okno, _ekran, _pod):
             pakiet = _pod
             etykieta = (
                 (_ZNANE_PAKIETY.get(_pod, "") + " — " + _pod)
@@ -12386,6 +12415,12 @@ def _przelacz_na_karte(tab_id):
             + "/json/activate/" + str(tab_id),
             timeout=5
         )
+
+        # v473: patrz dispatch_tool() — karta, na ktora przelaczylismy,
+        # jest ta, na ktorej teraz pracujemy.
+        if r.status_code == 200:
+            _ostatnio_aktywna_karta[0] = str(tab_id)
+
         return r.status_code == 200
 
     except Exception:
@@ -21684,6 +21719,22 @@ def dispatch_tool(
 
     if isinstance(result, dict) and _uwaga_o_karcie[0]:
         result.setdefault("karta", _uwaga_o_karcie[0])
+
+    # v473: bieg 2026-10-04 12:24, krok 26 — chrome_open zwrocil karte
+    # 71B4… (strona juz byla otwarta, wiec tylko na nia przelaczyl), a
+    # zaraz potem dwa chrome_execute_js bez tab_id poszly w karte
+    # 0920… z /pl/login/ — te, ktora find_tab() zapamietal wczesniej.
+    # Formularz "nie istnial", MAIN wypelnial go od nowa w kroku 27.
+    # Karta, ktora narzedzie Chrome zwraca, jest ta, na ktorej teraz
+    # pracujemy.
+    if (
+        isinstance(result, dict)
+        and str(name or "").startswith("chrome_")
+        and name != "chrome_close"
+        and result.get("ok") is True
+        and result.get("tab_id")
+    ):
+        _ostatnio_aktywna_karta[0] = str(result.get("tab_id"))
 
     if isinstance(result, dict):
 
