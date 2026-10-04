@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v471
+AEL-MINI AUTONOMOUS AGENT v472
 
-ARCHITEKTURA (stan na v471 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v472 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v471")
+    print("             AEL-MINI AUTONOMOUS AGENT v472")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -10669,6 +10669,155 @@ def android_screenshot_ocr(path=None, lang=None):
 _confirmed_app_launches = {}
 
 
+# v472: aplikacja ze Sklepu Google Play.
+#
+# Bieg 2026-10-04 11:15 i 11:51: zespol chcial pisac do ludzi z grupy
+# na Facebooku, aplikacji Facebook (com.facebook.katana) nie bylo
+# (android_list_packages: tylko Messenger), wiec MAIN poprosil
+# uzytkownika o instalacje ("Wejdź do Play Store -> Facebook ->
+# Zainstaluj") i stanal. Uzytkownik: "google play mógł sam sobie
+# pobrać". android_launch_app pakietu, ktorego nie ma, otwiera teraz
+# jego strone w Sklepie, naciska "Zainstaluj", czeka na instalacje i
+# uruchamia aplikacje.
+_PLAY_INSTALUJ_RE = r"(?i)^(zainstaluj|install|instaluj)$"
+_PLAY_OTWORZ_RE = r"(?i)^(otwórz|otworz|open|graj|play)$"
+PLAY_CZEKANIE_NA_INSTALACJE_S = float(
+    os.environ.get("PLAY_CZEKANIE_NA_INSTALACJE_S", "600")
+)
+
+
+def _pakiet_jest_na_telefonie(package):
+    """True / False, albo None, gdy adb nie odpowiedzialo jak trzeba."""
+
+    wynik = execute_shell(
+        "adb shell pm path " + shlex.quote(package), timeout=20
+    )
+
+    if "package:" in str(wynik.get("stdout") or ""):
+        return True
+
+    if str(wynik.get("stderr") or "").strip() or wynik.get("returncode") not in (0, 1):
+        return None
+
+    return False
+
+
+def _zainstaluj_ze_sklepu(package):
+    """
+    Instaluje `package` ze Sklepu Google Play. Zwraca slownik z "ok"
+    (True, gdy pakiet jest juz na telefonie) i tym, co sie stalo.
+    """
+
+    if android_device is None and not init_android():
+        return {"ok": False, "error": "Android niedostępny."}
+
+    otwarcie = execute_shell(
+        "adb shell am start -a android.intent.action.VIEW -p "
+        "com.android.vending -d "
+        + shlex.quote("market://details?id=" + package),
+        timeout=20
+    )
+
+    if not otwarcie.get("ok"):
+        return {
+            "ok": False,
+            "error": "Sklep Google Play się nie otworzył: "
+            + short(str(otwarcie.get("stderr") or otwarcie.get("error") or ""), 200)
+        }
+
+    log("ANDROID", "Nie ma " + package + " — otwieram jego stronę w Sklepie Google Play.")
+
+    # Strona Sklepu laduje sie kilka sekund; przycisk szukamy, az sie
+    # pojawi.
+    kliknieto = False
+    widac_otworz = False
+    koniec = time.time() + 30
+
+    while time.time() < koniec and not kliknieto:
+
+        time.sleep(2.0)
+
+        try:
+            przycisk = android_device(textMatches=_PLAY_INSTALUJ_RE)
+            if _android_with_deadline(
+                "play_install_exists", lambda: przycisk.exists, timeout=10
+            ):
+                _android_with_deadline(
+                    "play_install_click", lambda: przycisk.click(), timeout=10
+                )
+                kliknieto = True
+                break
+
+            otworz = android_device(textMatches=_PLAY_OTWORZ_RE)
+            if _android_with_deadline(
+                "play_open_exists", lambda: otworz.exists, timeout=10
+            ):
+                widac_otworz = True
+        except Exception:
+            pass
+
+        if _pakiet_jest_na_telefonie(package) is True:
+            return {"ok": True, "zainstalowano": True, "metoda": "Sklep Google Play"}
+
+    if not kliknieto:
+
+        if widac_otworz or _pakiet_jest_na_telefonie(package) is True:
+            return {"ok": True, "zainstalowano": True, "metoda": "Sklep Google Play"}
+
+        return {
+            "ok": False,
+            "error": "play_brak_przycisku",
+            "message": (
+                "Otworzyłem stronę " + package + " w Sklepie Google Play, "
+                "ale nie ma na niej przycisku „Zainstaluj”. Co jest na "
+                "ekranie, pokaże android_state."
+            ),
+            "sklep_na_wierzchu": True
+        }
+
+    globals()["_ostatnia_instalacja_ts"] = time.time()
+    log("ANDROID", "Kliknąłem „Zainstaluj” dla " + package + " — czekam na instalację.")
+
+    start = time.time()
+    ostatni_log = start
+
+    while time.time() - start < PLAY_CZEKANIE_NA_INSTALACJE_S:
+
+        time.sleep(5.0)
+
+        if _pakiet_jest_na_telefonie(package) is True:
+            log(
+                "ANDROID",
+                package + " zainstalowany po "
+                + str(int(time.time() - start)) + " s."
+            )
+            return {
+                "ok": True,
+                "zainstalowano": True,
+                "metoda": "Sklep Google Play",
+                "instalacja_s": round(time.time() - start, 1)
+            }
+
+        if time.time() - ostatni_log >= 60:
+            ostatni_log = time.time()
+            log(
+                "ANDROID",
+                "Instalacja " + package + " trwa ("
+                + str(int(time.time() - start)) + " s)."
+            )
+
+    return {
+        "ok": False,
+        "error": "instalacja_trwa",
+        "message": (
+            "Kliknąłem „Zainstaluj” dla " + package + ", po "
+            + str(int(PLAY_CZEKANIE_NA_INSTALACJE_S)) + " s jeszcze go "
+            "nie ma. Pobieranie może dalej trwać — android_list_packages "
+            "pokaże, kiedy będzie."
+        )
+    }
+
+
 def android_launch_app(package):
     """
     Uruchamia zainstalowaną aplikację po nazwie pakietu przez
@@ -10692,6 +10841,23 @@ def android_launch_app(package):
             "ok": False,
             "error": "Pusta nazwa pakietu."
         }
+
+    # v472: nie ma go na telefonie — najpierw Sklep Google Play.
+    _instalacja = None
+
+    if (
+        re.fullmatch(r"[A-Za-z][\w]*(\.[A-Za-z][\w]*)+", package)
+        and _pakiet_jest_na_telefonie(package) is False
+    ):
+        _instalacja = _zainstaluj_ze_sklepu(package)
+
+        if not _instalacja.get("ok"):
+            return dict(
+                _instalacja,
+                action="launch_app",
+                package=package,
+                nie_bylo_na_telefonie=True
+            )
 
     result = execute_shell(
         "adb shell monkey -p " + shlex.quote(package)
@@ -10745,6 +10911,12 @@ def android_launch_app(package):
 
     if already_launched_note:
         output["already_launched_note"] = already_launched_note
+
+    if _instalacja:
+        output["zainstalowano_ze_sklepu"] = (
+            package + " nie było na telefonie — pobrałem go ze Sklepu "
+            "Google Play i uruchomiłem."
+        )
 
     return output
 
@@ -10888,6 +11060,16 @@ def android_list_packages(filter_text=None):
             "Za pierwszym razem tego nie było — po "
             + str(DRUGIE_SPOJRZENIE) + " s już jest. Instalacja "
             "właśnie się kończyła."
+        )
+
+    # v472: brak aplikacji to nie koniec drogi — patrz
+    # _zainstaluj_ze_sklepu().
+    if filter_text and not packages:
+        _wynik["nie_ma_na_telefonie"] = (
+            "Nic pasującego do „" + short(str(filter_text), 60) + "”. "
+            "android_launch_app z pełną nazwą pakietu (np. "
+            "com.facebook.katana) pobierze aplikację ze Sklepu Google "
+            "Play i ją uruchomi."
         )
 
     return _wynik
@@ -40612,6 +40794,140 @@ def _sam_wyciagnij_na_wierzch(decision):
     }
 
 
+# v472: prosba do czlowieka o instalacje ze Sklepu Google Play.
+#
+# Bieg 2026-10-04 11:51, krok 11: MAIN zatrzymal bieg prosba "zainstaluj
+# apkę Facebook (...) Wejdź do Play Store -> Facebook -> Zainstaluj.
+# Po instalacji zaloguj się (...)". Uzytkownik: "google play mógł sam
+# sobie pobrać". Instalacje ze Sklepu robi program sam (patrz
+# _zainstaluj_ze_sklepu); czlowiekowi zostaje to, czego program nie
+# ma — logowanie.
+_PROSBA_O_SKLEP_RE = re.compile(
+    r"play\s*store|sklep\w*\s+(?:google\s+)?play|google\s+play",
+    re.IGNORECASE
+)
+_PROSBA_O_INSTALACJE_RE = re.compile(
+    r"zainstaluj|instal|pobierz|install", re.IGNORECASE
+)
+_ZNANE_APLIKACJE_SKLEPU = (
+    (r"facebook\s+lite", "com.facebook.lite"),
+    (r"messenger", "com.facebook.orca"),
+    (r"facebook", "com.facebook.katana"),
+    (r"instagram", "com.instagram.android"),
+    (r"whats\s*app", "com.whatsapp"),
+    (r"telegram", "org.telegram.messenger"),
+    (r"tik\s*tok", "com.zhiliaoapp.musically"),
+    (r"linkedin", "com.linkedin.android"),
+    (r"discord", "com.discord"),
+    (r"signal", "org.thoughtcrime.securesms"),
+    (r"\bolx\b", "pl.tablica"),
+    (r"allegro", "pl.allegro"),
+    (r"vinted", "fr.vinted"),
+    (r"fiverr", "com.fiverr.fiverr"),
+    (r"upwork", "com.upwork.android.apps.main"),
+    (r"revolut", "com.revolut.revolut"),
+)
+
+
+def _aplikacje_z_prosby(tekst):
+    """Pakiety, o ktorych instalacje prosi tekst — po kolei, bez powtorzen."""
+
+    pakiety = []
+
+    for m in _PAKIET_W_TEKSCIE_RE.finditer(tekst):
+        # Adres strony (m.facebook.com, useme.com/pl/...) to nie pakiet.
+        if (
+            m.group(0).rsplit(".", 1)[-1] in ("com", "pl", "net", "org", "io", "eu", "me", "app", "dev")
+            or tekst[m.end():m.end() + 1] == "/"
+            or tekst[max(0, m.start() - 2):m.start()] == "//"
+        ):
+            continue
+        if m.group(0) not in pakiety:
+            pakiety.append(m.group(0))
+
+    # Nazwy wlasne tylko w zdaniu o Sklepie/instalacji — "Messenger
+    # masz" nie jest prosba o Messengera, a "nie Messenger" tym
+    # bardziej.
+    for zdanie in re.split(r"[.\n!?]", tekst):
+        if not (_PROSBA_O_INSTALACJE_RE.search(zdanie) or _PROSBA_O_SKLEP_RE.search(zdanie)):
+            continue
+        reszta = zdanie
+        for wzor, pakiet in _ZNANE_APLIKACJE_SKLEPU:
+            if re.search(r"\bnie\s+" + wzor, reszta, re.IGNORECASE):
+                reszta = re.sub(wzor, " ", reszta, flags=re.IGNORECASE)
+                continue
+            if re.search(wzor, reszta, re.IGNORECASE):
+                if pakiet not in pakiety:
+                    pakiety.append(pakiet)
+                reszta = re.sub(wzor, " ", reszta, flags=re.IGNORECASE)
+
+    return pakiety
+
+
+def _sam_zainstaluj_ze_sklepu(decision):
+    """
+    Instaluje aplikacje, o ktore MAIN prosi czlowieka. Zwraca
+    (gotowy last_result albo None, lista zainstalowanych pakietow).
+    last_result jest tylko wtedy, gdy w prosbie nie zostalo nic dla
+    czlowieka (bez logowania i kont).
+    """
+
+    tekst = (
+        str(decision.get("reason") or "")
+        + "\n"
+        + str(decision.get("instructions") or "")
+    )
+
+    if not (_PROSBA_O_SKLEP_RE.search(tekst) and _PROSBA_O_INSTALACJE_RE.search(tekst)):
+        return None, []
+
+    zainstalowane = []
+    wyniki = []
+
+    for pakiet in _aplikacje_z_prosby(tekst)[:3]:
+
+        if _pakiet_jest_na_telefonie(pakiet) is not False:
+            continue
+
+        log(
+            "MAIN",
+            "Prośba do użytkownika o instalację " + pakiet + " ze "
+            "Sklepu Google Play — instaluję sam."
+        )
+
+        try:
+            wynik = _zainstaluj_ze_sklepu(pakiet)
+        except Exception as e:
+            wynik = {"ok": False, "error": str(e)}
+
+        wyniki.append(dict(wynik, package=pakiet))
+
+        if wynik.get("ok"):
+            zainstalowane.append(pakiet)
+
+    if not zainstalowane:
+        return None, []
+
+    _pending_team_warnings.append(
+        "MAIN prosił użytkownika o instalację ze Sklepu Google Play — "
+        "program zainstalował sam: " + ", ".join(zainstalowane) + "."
+    )
+
+    if re.search(r"zaloguj|logowan|has[łl]o|konto", tekst, re.IGNORECASE):
+        return None, zainstalowane
+
+    return {
+        "status": "ZAINSTALOWANO_ZE_SKLEPU",
+        "ok": True,
+        "zainstalowane": zainstalowane,
+        "wyniki": wyniki,
+        "message": (
+            "Nie pytałem użytkownika — zainstalowałem ze Sklepu Google "
+            "Play: " + ", ".join(zainstalowane) + "."
+        )
+    }, zainstalowane
+
+
 def _need_user_login_with_contact_gate(
     decision, contact_gate_redirects, credential_gate_redirects=0
 ):
@@ -40628,6 +40944,29 @@ def _need_user_login_with_contact_gate(
     wywołujący musi nadpisać obie swoje lokalne zmienne licznika
     wynikiem.
     """
+
+    # v472: instalacje ze Sklepu robi program — patrz
+    # _sam_zainstaluj_ze_sklepu().
+    try:
+        _po_instalacji, _zainstalowane = _sam_zainstaluj_ze_sklepu(decision)
+    except Exception as e:
+        log("MAIN", "Instalacja ze Sklepu nie wyszła: " + str(e))
+        _po_instalacji, _zainstalowane = None, []
+
+    if _po_instalacji is not None:
+        return (
+            _po_instalacji,
+            contact_gate_redirects,
+            credential_gate_redirects
+        )
+
+    if _zainstalowane:
+        decision = dict(decision)
+        decision["instructions"] = (
+            "Program sam zainstalował ze Sklepu Google Play: "
+            + ", ".join(_zainstalowane) + " — tę część prośby możesz "
+            "pominąć.\n\n" + str(decision.get("instructions") or "")
+        )
 
     sam_zrobione = _sam_wyciagnij_na_wierzch(decision)
 

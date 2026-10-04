@@ -988,3 +988,30 @@ CZESC 31. CO ZMIENILO v471 (bieg 2026-10-04 11:15 — Messenger, Facebook)
   - wpisywanie tekstu i klawisze bez zmian (fokus moze byc w Termuksie)
 
 =========================================================================
+
+CZESC 32. CO ZMIENILO v472 (bieg 2026-10-04 11:51 — "google play mógł
+sam sobie pobrać")
+=========================================================================
+
+  OCENA BIEGU (11 krokow, v471): telefon byl widoczny caly czas (ADB,
+  CDP i android_state dzialaly), ale w kroku 11 MAIN zatrzymal bieg
+  prosba: "zainstaluj apkę Facebook (...) Play Store -> Facebook ->
+  Zainstaluj". Aplikacji Facebook (com.facebook.katana) nie bylo, a
+  program nie umial instalowac ze Sklepu.
+
+  CO ZMIENIONE:
+  - _zainstaluj_ze_sklepu(pakiet): `am start market://details?id=...`
+    w Sklepie Google Play, klik w "Zainstaluj"/"Install", czekanie na
+    instalacje (pm path co 5 s, do PLAY_CZEKANIE_NA_INSTALACJE_S, domyslnie
+    600 s, z logiem co minute)
+  - android_launch_app pakietu, ktorego nie ma na telefonie, najpierw go
+    instaluje, potem uruchamia
+  - android_list_packages bez wyniku mowi, ze android_launch_app pobierze
+    aplikacje ze Sklepu
+  - NEED_USER_LOGIN z prosba o instalacje ze Sklepu: program instaluje
+    sam (pakiet z tekstu albo znana nazwa: Facebook, Instagram, WhatsApp,
+    OLX, Allegro, Vinted...). Gdy w prosbie nie ma nic wiecej — bieg idzie
+    dalej bez pytania; gdy jest tez logowanie — do uzytkownika idzie
+    prosba z dopiskiem, ze aplikacja juz jest
+
+=========================================================================
