@@ -965,3 +965,26 @@ CZESC 30. CO ZMIENILO v470 (bieg 2026-10-03 22:23 — Useme, 95 krokow)
     jako "krok bez ani jednego narzedzia"
 
 =========================================================================
+
+CZESC 31. CO ZMIENILO v471 (bieg 2026-10-04 11:15 — Messenger, Facebook)
+=========================================================================
+
+  OCENA BIEGU (28 krokow, nadal v468 na telefonie):
+  - Termux wisial w plywajacym oknie ([104,282][977,1834]) nad
+    Messengerem/Chrome. app_current() mowil "com.termux", wiec kazdy
+    android_tap byl odrzucany jako "poszłoby w Termux", a android_state
+    zaczynal sie od "Na wierzchu jest teraz: Termux". Kroki 3-9 zeszly
+    na obchodzenie tego; `adb shell input tap 864 200` trafil od razu
+  - potem komentarz z oferta pod postem w grupie FB poszedl (czeka na
+    moderacje)
+
+  CO ZMIENIONE:
+  - _okna_na_ekranie(): okno Termuksa, rozmiar ekranu i aplikacja z
+    najwieksza powierzchnia — z drzewa ekranu
+  - android_tap: gdy Termux plywa, a punkt lezy poza jego oknem, tap
+    idzie (trafia w aplikacje pod spodem); w oknie Termuksa — nadal nie
+  - android_state: naglowek mowi, co jest na calym ekranie, a co w
+    plywajacym oknie Termuksa
+  - wpisywanie tekstu i klawisze bez zmian (fokus moze byc w Termuksie)
+
+=========================================================================

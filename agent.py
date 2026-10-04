@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v470
+AEL-MINI AUTONOMOUS AGENT v471
 
-ARCHITEKTURA (stan na v470 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v471 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v470")
+    print("             AEL-MINI AUTONOMOUS AGENT v471")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -8740,6 +8740,19 @@ def android_summary(with_header=True):
                 if (_app_label and with_header) else ""
             )
 
+            # v471: Termux w plywajacym oknie — patrz _okna_na_ekranie().
+            if naglowek and _app_pakiet == "com.termux":
+                _okno, _ekran, _pod = _okna_na_ekranie(xml)
+                if _termux_plywa(_okno, _ekran) and _pod:
+                    naglowek = (
+                        "Na wierzchu jest teraz: " + str(_pod)
+                        + " (na całym ekranie), a nad nim Termux w "
+                        "pływającym oknie [" + str(_okno[0]) + ","
+                        + str(_okno[1]) + "][" + str(_okno[2]) + ","
+                        + str(_okno[3]) + "] — dotyk poza tym oknem "
+                        "trafia w " + str(_pod) + "."
+                    )
+
             if not lines:
                 return (
                     (naglowek + "\n") if naglowek else ""
@@ -9586,7 +9599,93 @@ def android_paste_text(text, target_text):
     }
 
 
-def _pisanie_do_wlasnego_terminala(co_robimy):
+# v471: Termux w plywajacym oknie.
+#
+# Bieg 2026-10-04 11:15, kroki 3-9: Messenger byl otwarty na calym
+# ekranie, a Termux wisial nad nim w plywajacym oknie
+# ([104,282][977,1834] — `dumpsys activity` pokazywal DWA
+# topResumedActivity: Termux i Messenger). app_current() mowil
+# "com.termux", wiec android_tap(864, 200) — w "Nowa wiadomość",
+# poza oknem Termuksa — byl odrzucany jako "poszłoby w Termux", a
+# android_state zaczynal sie od "Na wierzchu jest teraz: Termux".
+# Siedem krokow zeszlo, zanim MAIN obszedl to przez `adb shell input
+# tap`, ktory trafil od razu.
+_WEZEL_RE = re.compile(
+    r'package="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+)
+
+
+def _okna_na_ekranie(xml=None):
+    """
+    (okno Termuksa (x1, y1, x2, y2) albo None, ekran (szer, wys),
+    pakiet z najwieksza powierzchnia poza Termuksem albo None)
+    z drzewa ekranu. Nigdy nie rzuca wyjatkiem.
+    """
+
+    try:
+
+        if xml is None:
+            xml = _android_with_deadline(
+                "dump_hierarchy",
+                lambda: android_device.dump_hierarchy(compressed=False),
+                timeout=10
+            )
+
+        termux = None
+        szer = wys = 0
+        inne = {}
+
+        for m in _WEZEL_RE.finditer(str(xml or "")):
+
+            pakiet = m.group(1)
+            x1, y1, x2, y2 = (int(m.group(i)) for i in range(2, 6))
+            szer, wys = max(szer, x2), max(wys, y2)
+
+            if pakiet == "com.termux":
+                termux = (
+                    (x1, y1, x2, y2) if termux is None else (
+                        min(termux[0], x1), min(termux[1], y1),
+                        max(termux[2], x2), max(termux[3], y2)
+                    )
+                )
+            elif pakiet and pakiet not in (
+                "com.android.systemui",
+            ) and "inputmethod" not in pakiet:
+                pole = (x2 - x1) * (y2 - y1)
+                inne[pakiet] = max(inne.get(pakiet, 0), pole)
+
+        pod = max(inne, key=inne.get) if inne else None
+
+        # Drzewo moze miec tylko okno Termuksa — wtedy jego brzegi
+        # udawalyby brzegi ekranu.
+        try:
+            _w, _h = _android_with_deadline(
+                "window_size", lambda: android_device.window_size(),
+                timeout=5
+            )
+            szer, wys = max(szer, int(_w)), max(wys, int(_h))
+        except Exception:
+            pass
+
+        return termux, (szer, wys), pod
+
+    except Exception:
+        return None, (0, 0), None
+
+
+def _termux_plywa(okno, ekran):
+    """Okno Termuksa zajmuje wyraznie mniej niz caly ekran."""
+
+    if not okno or not ekran[0] or not ekran[1]:
+        return False
+
+    x1, y1, x2, y2 = okno
+    pole = max(0, x2 - x1) * max(0, y2 - y1)
+
+    return pole < 0.85 * ekran[0] * ekran[1]
+
+
+def _pisanie_do_wlasnego_terminala(co_robimy, xy=None):
     """
     Czy to, co zaraz zrobimy na ekranie, poleci w terminal, w ktorym
     dziala sam agent. Zwraca gotowa odmowe albo None.
@@ -9622,6 +9721,15 @@ def _pisanie_do_wlasnego_terminala(co_robimy):
 
     if pakiet != "com.termux":
         return None
+
+    # v471: tap poza plywajacym oknem Termuksa trafia w aplikacje pod
+    # nim — patrz _okna_na_ekranie().
+    if xy is not None:
+        _okno, _ekran, _pod = _okna_na_ekranie()
+        if _termux_plywa(_okno, _ekran):
+            x, y = int(xy[0]), int(xy[1])
+            if not (_okno[0] <= x < _okno[2] and _okno[1] <= y < _okno[3]):
+                return None
 
     # v463: bieg 2026-09-28 19:32 — po chrome_execute_js na wierzchu
     # byl Termux i tap w karte ankiety zostal odrzucony. Gdy ostatnie
@@ -9689,8 +9797,20 @@ def android_tap(x, y):
     # nie ma poprawnego zastosowania: znaki ida na jego wlasne
     # wejscie, a wyniku i tak nie ma skad wziac.
     _odmowa = _pisanie_do_wlasnego_terminala(
-        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")"
+        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")",
+        xy=(x, y)
     )
+
+    # v471: tap przeszedl, choc na wierzchu jest Termux — wiec trafil
+    # poza jego plywajace okno, w aplikacje pod nim.
+    if not _odmowa and pakiet == "com.termux":
+        _okno, _ekran, _pod = _okna_na_ekranie()
+        if _termux_plywa(_okno, _ekran):
+            pakiet = _pod
+            etykieta = (
+                (_ZNANE_PAKIETY.get(_pod, "") + " — " + _pod)
+                if _ZNANE_PAKIETY.get(_pod) else _pod
+            )
 
     if _odmowa:
         # v432: sam fakt, bez rady o termux_run.
