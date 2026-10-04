@@ -3,54 +3,45 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v450
+AEL-MINI AUTONOMOUS AGENT v473
 
-ARCHITEKTURA:
+ARCHITEKTURA (stan na v473 — patrz jak_to_dziala.txt):
 
-                    USER
-                     |
-                     v
-                 DEEPSEEK
-                     |
-        +------------+------------+
-        |            |            |
-      MAIN        PLANNER     RESEARCHER
-        |            |            |
-        +------- CRITIC ----------+
-                     |
-                  BROWSER
-                     |
-                     v
-                 TASK QUEUE
-                     |
-                     v
-              GEMINI WORKER
-                     |
-          +----------+----------+
-          |          |          |
-       CHROME     ANDROID     SHELL
-          |          |          |
-          +----------+----------+
-                     |
-                     v
-                  RESULT
-                     |
-                     v
-                   MAIN
+                    UZYTKOWNIK
+                        |  cel; potem odpowiedzi, gdy program zapyta
+                        v
+        MAIN + ZESPOL (DeepSeek, chat.deepseek.com przez token
+        przegladarkowy — opendeep; kazda rola we wlasnej rozmowie)
+           MAIN decyduje: RUN / TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+           RUN = MAIN wykonuje sam, Python jest rekami (v459)
+           Tomek plan, Kamil fakty (szukanie w sieci), Marek krytyka,
+           Bartek KOD, Ola relacja, Wojtek uzytkownik, Ela postep,
+           Piotr przeglad kodu, Ania poprawka
+                        |  mysla i pisza — niczego nie wykonuja
+                        v
+        PYTHON (ten plik)                         <-- RECE I OCZY
+           kladzie na dysk kod napisany przez zespol (1:1, z autorem),
+           proste "uruchom ten plik" robi sam, pilnuje limitow i
+           autorstwa, pokazuje ekran/strone, opowiada MAIN-owi fakty
+                        |
+                        v
+        GEMINI (wykonawca, darmowe API, Interactions API)  <-- PALEC
+           jedna rozmowa na caly cel (v452), 41 narzedzi, do 25 wywolan;
+           NIE pisze kodu — termux_write_file/termux_run z kodem
+           odmawiaja i kladzie go Python z wypowiedzi autora
+                        |
+           +------------+-------------+
+           |            |             |
+        TERMUX       ANDROID        CHROME (CDP, tylko istniejace karty)
 
 Gemini:
-    Interactions API
-    previous_interaction_id
-    prawidłowe function_result/call_id
-
-Chrome:
-    tylko istniejące karty
-    BRAK /json/new
+    Interactions API, previous_interaction_id,
+    function_result z call_id kazdego FunctionCallStep,
+    drabinka modeli i odstawianie par klucz+model (v449)
 
 DeepSeek:
-    5 ról utrzymywanych w jednym procesie
-    pamięć zapisywana na dysku
-
+    10 rol w jednym procesie, sesje zapisane na dysku (wznawiane),
+    sekwencyjnie, z limitem tempa na konto
 """
 
 import ast
@@ -324,8 +315,29 @@ if len(sys.argv) > 2 and sys.argv[1] == "--wykonane":
     raise SystemExit(0)
 
 
-from web_search import web_search
-from datetime import datetime, timedelta
+# v451: web_search.py lezy obok agent.py na telefonie, ale nie ma go w
+# repozytorium. Twardy import konczyl program na starcie (ImportError,
+# zanim padlo jedno slowo) na kazdej maszynie bez tego pliku — takze
+# po czystym `git clone`. Kamil ma od v187 natywne szukanie DeepSeeka,
+# a "WEB_SEARCH:" to droga zapasowa: brak modulu to brak jednej drogi,
+# nie brak programu. Gdy Kamil o nia poprosi, dostaje fakt, ze jej nie ma.
+try:
+    from web_search import web_search
+except ImportError:
+
+    def web_search(query, max_results=5):
+        return {
+            "ok": False,
+            "query": str(query),
+            "results": [],
+            "count": 0,
+            "error": (
+                "modul web_search.py nie jest zainstalowany obok "
+                "agent.py — WEB_SEARCH niedostepne na tej maszynie"
+            ),
+        }
+
+from datetime import datetime, timedelta, timezone
 
 # Opcjonalna, czysto-pythonowa biblioteka (żadnych skompilowanych
 # zależności — bezpieczna na Termux, w odróżnieniu od np. pydantic,
@@ -667,10 +679,8 @@ BROWSER_STATE = STATE_DIR / "browser.json"
 
 GEMINI_STATE_FILE = STATE_DIR / "gemini.json"
 
-# Stan KLUCZY Gemini — osobno od stanu zadania. Patrz
-# mark_quota(): wczesniej jedno i drugie mieszkalo w
-# gemini.json, a kazda interakcja nadpisywala plik w calosci.
-GEMINI_KEYS_FILE = STATE_DIR / "gemini_keys.json"
+# v451: stan kluczy Gemini (gemini_keys.json, v277) juz nie istnieje —
+# od v449 odstawia sie PARE klucz+model, w state/gemini_modele.json.
 
 LAST_RESULT_FILE = AGENT_DIR / "last_result.json"
 
@@ -703,11 +713,13 @@ GEMINI_MODEL = os.environ.get(
     "gemini-3.5-flash-lite"
 )
 
-MAX_STEPS = int(
-    os.environ.get(
-        "AGENT_MAX_STEPS",
-        "40"
-    )
+# v464: bez limitu krokow — program chodzi, az MAIN powie DONE albo
+# FAILED (decyzja uzytkownika 2026-09-28: "nie robimy limitow"). Kto
+# chce limit, ustawia AGENT_MAX_STEPS; None = bez konca.
+MAX_STEPS = (
+    int(os.environ["AGENT_MAX_STEPS"])
+    if str(os.environ.get("AGENT_MAX_STEPS") or "").strip().isdigit()
+    else None
 )
 
 # Ile razy Gemini moze dostac DOKLADNIE ten sam wynik z tego samego
@@ -1220,12 +1232,6 @@ gemini_clients = {}
 
 gemini_disabled = False
 
-# trwała interakcja wykonawcy
-gemini_interaction_id = None
-
-# blokada Gemini
-gemini_lock = None
-
 
 # ============================================================
 # POMOCNICZE
@@ -1618,6 +1624,7 @@ def policz_bieg(sciezka=None):
 
     narzedzia_w_kroku = {}
     kroki = set()
+    kroki_z_decyzja = set()
 
     for z in zdarzenia:
 
@@ -1649,6 +1656,10 @@ def policz_bieg(sciezka=None):
         elif typ == "blok_powtorka":
             wynik["oszczedzone"] += znaki
 
+        elif typ == "odpowiedz" and rola == "MAIN":
+            # v470: krok, w ktorym MAIN juz odpowiedzial — patrz nizej.
+            kroki_z_decyzja.add(krok)
+
         elif typ == "narzedzie":
             wynik["narzedzia"] += 1
             narzedzia_w_kroku[krok] = (
@@ -1661,8 +1672,13 @@ def policz_bieg(sciezka=None):
 
     wynik["kroki"] = len(kroki)
 
+    # v470: bieg 2026-10-03 — co piec krokow podsumowanie mowilo
+    # "Kroki bez ani jednego narzędzia: 5, 11", "5, 16", "5, 21"...
+    # Liczyl sie krok, ktory sie dopiero zaczal (podsumowanie leci na
+    # jego poczatku). Krok bez decyzji MAIN-a jeszcze trwa.
     wynik["kroki_bez_narzedzia"] = sorted(
-        k for k in kroki if not narzedzia_w_kroku.get(k)
+        k for k in kroki
+        if not narzedzia_w_kroku.get(k) and k in kroki_z_decyzja
     )
 
     return wynik
@@ -2791,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v450")
+    print("             AEL-MINI AUTONOMOUS AGENT v473")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2830,13 +2846,19 @@ def banner():
 # drugie z ~1.0 — podział tylko z nazwy, nie z realnego obciążenia.
 # Poniższy podział rozdziela też "co krok" role między oba konta,
 # żeby faktycznie wyrównać ruch (~2.6 vs ~2.4 wagi):
+#
+# v469: wagi wyzej sa sprzed RUN. Bieg 2026-09-30 (78 krokow, ~1,6 h):
+# MAIN 87 wiadomosci, Ela 15, Tomek 5, Kamil 3, Marek 2, Wojtek 1. Konto
+# 1 (MAIN, Marek, Kamil, Ela, Wojtek) mialo 75 z 90 w ostatniej
+# godzinie, konto 2 — jedna. MAIN sam robi ~55 na godzine, wiec ma
+# konto 1 tylko dla siebie, a reszta zespolu idzie przez konto 2.
 _ROLE_ACCOUNT = {
     "MAIN": 1,
-    "CRITIC": 1,
-    "RESEARCHER": 1,
-    "PROGRESS_ESTIMATOR": 1,
-    "WOJTEK": 1,
 
+    "CRITIC": 2,
+    "RESEARCHER": 2,
+    "PROGRESS_ESTIMATOR": 2,
+    "WOJTEK": 2,
     "PLANNER": 2,
     "ENGINEER": 2,
     "BROWSER": 2,
@@ -2871,6 +2893,116 @@ def _activate_account_for_role(name):
 
     if token:
         opendeep.configure(api_key=token)
+
+
+# ============================================================
+# STYK Z BIBLIOTEKA OPENDEEP (v453)
+# ============================================================
+#
+# opendeep to cienka warstwa nad strona chat.deepseek.com: tworzy
+# rozmowe (/chat_session/create), rozwiazuje proof-of-work
+# (/chat/create_pow_challenge, WebAssembly przez wasmtime+numpy) i
+# czyta strumien SSE z /chat/completion. Token to userToken z
+# localStorage przegladarki. Program nie uzywa jej send_message()
+# — ma wlasna kopie czytnika strumienia (_deepseek_raw_post_with_action),
+# bo biblioteka wyrzuca status odpowiedzi, myslenie i pole
+# search_enabled, na ktorych opiera sie polowa obslugi rozmow
+# (v189-v440). Naglowki i sesje HTTP bierze z biblioteki, wiec jej
+# aktualizacja przechodzi na program bez zmian w kodzie.
+#
+# Trzy rzeczy, ktorych brakowalo na tym styku:
+#   1. LIMIT CZASU. Zadne zadanie HTTP biblioteki ani nasza kopia nie
+#      mialy timeoutu: zerwane WiFi w trakcie strumienia wieszalo caly
+#      program w nieskonczonosc, bez jednej linii w logu. Teraz kazde
+#      zadanie ma limit (_DEEPSEEK_HTTP_TIMEOUT), takze tworzenie
+#      rozmowy w bibliotece — patrz _zaloz_limit_czasu_http().
+#   2. TRESC BLEDU. raise_for_status() i "Unexpected Content-Type"
+#      gubily cialo odpowiedzi — a to w nim serwer mowi "invalid
+#      message id" albo "Messages too frequent", po ktorych program
+#      rozpoznaje zerwana rozmowe i przeciazenie. Cialo idzie do tekstu
+#      wyjatku, jak w bibliotece.
+#   3. BEZ PODWOJNEJ WYSYLKI. Awaryjny powrot do send_message()
+#      biblioteki wysylal te sama wiadomosc drugi raz po KAZDYM bledzie
+#      naszej sciezki (takze po HTTP 4xx/5xx) — dwie wiadomosci w
+#      rozmowie, jedna odpowiedz. Powrot zostaje tylko dla zmiany
+#      ksztaltu biblioteki (brak metody/pola), nie dla bledu serwera.
+#
+# Fakty, ktore program mowi na starcie: czym rozmawia (curl_cffi
+# udajacy Chrome — tego biblioteka chce przy Cloudflare — albo zwykle
+# requests) i czy umie rozwiazac proof-of-work. Bez POW serwer moze
+# odrzucac wiadomosci; dotad ta proba byla polykana po cichu.
+
+# (polaczenie, czytanie miedzy porcjami strumienia) — myslenie i
+# szukanie w sieci potrafia milczec dlugo, ale nie w nieskonczonosc.
+_DEEPSEEK_HTTP_TIMEOUT = (
+    float(os.environ.get("DEEPSEEK_CONNECT_TIMEOUT", "20")),
+    float(os.environ.get("DEEPSEEK_READ_TIMEOUT", "300")),
+)
+
+
+def _limit_dla_sesji(sesja_http):
+    """requests bierze pare (polaczenie, czytanie); inne — jedna liczbe."""
+
+    modul = str(type(sesja_http).__module__ or "")
+
+    if modul.startswith("requests"):
+        return _DEEPSEEK_HTTP_TIMEOUT
+
+    return max(_DEEPSEEK_HTTP_TIMEOUT)
+
+
+def _zaloz_limit_czasu_http(model):
+    """
+    Kazde zadanie sesji HTTP biblioteki dostaje limit czasu, o ile
+    wywolujacy nie podal wlasnego. Obejmuje to tworzenie rozmowy
+    (/chat_session/create), ktore biblioteka robi bez limitu.
+    """
+
+    sesja = getattr(model, "session", None)
+    oryginal = getattr(sesja, "request", None)
+
+    if sesja is None or not callable(oryginal):
+        return
+
+    limit = _limit_dla_sesji(sesja)
+
+    def _z_limitem(*args, **kwargs):
+        kwargs.setdefault("timeout", limit)
+        return oryginal(*args, **kwargs)
+
+    try:
+        sesja.request = _z_limitem
+    except Exception:
+        pass
+
+
+def _pow_dostepny():
+    try:
+        import wasmtime  # noqa: F401
+        import numpy  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _fakty_o_transporcie_deepseek():
+    """Czym program rozmawia ze strona i czy umie rozwiazac POW."""
+
+    try:
+        import opendeep.models as _om
+        curl = bool(getattr(_om, "HAS_CURL_CFFI", False))
+    except Exception:
+        curl = False
+
+    return (
+        ("transport: curl_cffi (jak Chrome)" if curl
+         else "transport: requests (bez curl_cffi — przy blokadzie "
+              "Cloudflare: pip install curl_cffi)")
+        + " | proof-of-work: "
+        + ("jest" if _pow_dostepny()
+           else "BRAK (pip install wasmtime numpy) — serwer może "
+                "odrzucać wiadomości")
+    )
 
 
 def init_deepseek():
@@ -2916,10 +3048,12 @@ def init_deepseek():
             )
         )
 
+        _zaloz_limit_czasu_http(deepseek_model)
+
         log(
             "DEEPSEEK",
-            "OpenDeep OK — "
-            + DEEPSEEK_MODEL
+            "OpenDeep OK — " + DEEPSEEK_MODEL + " | "
+            + _fakty_o_transporcie_deepseek()
         )
 
         return True
@@ -2942,7 +3076,7 @@ def init_deepseek():
 # ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
 # oddac decyzje; bez nich kazdy krok konczylby sie
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
-MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER",\n  "ask_question": ""\n}"""
+MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -3321,6 +3455,13 @@ def _czyj_kod_to(rola):
 # Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
 # wkleja w nia kod Bartka — patrz termux_write_file().
 _tresc_zadania_teraz = ""
+
+# v461: czy narzedzie wola teraz Python na polecenie MAIN-a (RUN), a
+# nie Gemini. MAIN jest osoba z DeepSeeka — kod, ktory sam napisze w
+# RUN, jest kodem zespolu. Bieg 2026-09-28 16:53: MAIN poprawil
+# sms_reader.py heredokiem i dostal "KOD_POLOZYL_PYTHON" — odmowe
+# pisana dla Gemini.
+_wykonuje_main = False
 
 # Czy MAIN w POPRZEDNIM kroku prosil o kod Bartka. To jedyny powod,
 # dla ktorego Bartek odzywa sie, choc nikt nie zawolal go po imieniu
@@ -4084,6 +4225,8 @@ def _reset_powody_zakonczenia():
     """Nowy cel = wnioski o niewykonalnosci poprzedniego nie licza sie."""
 
     del _powody_zakonczenia[:]
+    globals()["_failed_z_droga"] = 0
+    globals()["_zespol_bez_drogi"] = False
 
 
 def _zespol_slyszal_juz_ten_powod(reason, ile_prob=2):
@@ -4595,6 +4738,24 @@ def _clear_session_state(name):
         pass
 
 
+# v453: role, ktore rozmawiaja BEZ myslenia (tryb szybki strony).
+#
+# ZMIERZONE (zdarzenia biegu 2026-09-26 14:04): Ela oddala 228 znakow
+# JSON-a po 49 s i 1322 po 22 s; Ola streszcza cudzy tekst. Zadna z
+# nich nie rozumuje nad celem — czeka sie na myslenie, z ktorego nic
+# nie wchodzi do odpowiedzi. MAIN, Tomek, Marek, Bartek, Piotr, Ania
+# i Wojtek mysla jak dotad; Kamil — patrz _szukanie_bez_myslenia().
+# DEEPSEEK_BEZ_MYSLENIA="BROWSER,PROGRESS_ESTIMATOR" zmienia liste;
+# pusta wartosc = wszyscy z mysleniem.
+_ROLE_BEZ_MYSLENIA = tuple(
+    r.strip().upper()
+    for r in os.environ.get(
+        "DEEPSEEK_BEZ_MYSLENIA", "BROWSER,PROGRESS_ESTIMATOR"
+    ).split(",")
+    if r.strip()
+)
+
+
 def start_session(name, system_prompt):
 
     try:
@@ -4604,6 +4765,14 @@ def start_session(name, system_prompt):
         session = (
             deepseek_model.start_chat()
         )
+
+        # v453: Ola (streszcza) i Ela (procent) bez myslenia — patrz
+        # _ROLE_BEZ_MYSLENIA.
+        if name in _ROLE_BEZ_MYSLENIA:
+            try:
+                session.thinking_enabled = False
+            except Exception:
+                pass
 
         # v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil
         # (RESEARCHER) dostaje NATYWNĄ zdolność szukania w sieci
@@ -4784,6 +4953,10 @@ def start_session(name, system_prompt):
                     f"Sesja {name}: OK (wznowiona z poprzedniego "
                     "uruchomienia)"
                 )
+
+            # v463: rozmowa trwa, ale program to nowe uruchomienie —
+            # MAIN w kroku 1 pisal "Nie widzę wyników poprzedniego RUN".
+            globals().setdefault("_wznowione_sesje", set()).add(name)
 
         else:
 
@@ -5550,6 +5723,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             _ods_config.base_url + "/chat/create_pow_challenge",
             headers=headers,
             json={"target_path": "/api/v0/chat/completion"},
+            timeout=_limit_dla_sesji(model.session),
         )
 
         if pow_resp.ok:
@@ -5571,8 +5745,25 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         headers=headers,
         json=payload,
         stream=True,
+        timeout=_limit_dla_sesji(model.session),
     )
-    response.raise_for_status()
+
+    # v453: cialo odpowiedzi idzie do wyjatku — to w nim serwer mowi
+    # "invalid message id" / "Messages too frequent" (patrz
+    # _ZERWANA_ROZMOWA_RE, _PRZECIAZENIE_RE).
+    def _cialo():
+        try:
+            return short(str(response.text or ""), 600)
+        except Exception:
+            return ""
+
+    try:
+        response.raise_for_status()
+    except Exception as e:
+        raise RuntimeError(
+            "HTTP " + str(getattr(response, "status_code", "?"))
+            + ": " + str(e) + " | " + _cialo()
+        ) from None
 
     if "text/event-stream" not in response.headers.get(
         "Content-Type", ""
@@ -5580,6 +5771,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         raise RuntimeError(
             "Unexpected Content-Type: "
             + response.headers.get("Content-Type", "")
+            + " | " + _cialo()
         )
 
     full_text = ""
@@ -6091,6 +6283,73 @@ _szukanie_serwera = None
 _powiedziane_o_szukaniu = set()
 
 
+# ============================================================
+# SZUKANIE W SIECI DZIALA BEZ MYSLENIA (v451)
+# ============================================================
+#
+# Od v328 wiadomo z samego strumienia, ze serwer odpowiadal Kamilowi
+# z "search_enabled": false, choc prosilismy o szukanie. Biblioteka
+# opendeep (0.9) mowi to samo wprost: na chat.deepseek.com szukanie w
+# sieci jest tylko w trybie bez myslenia (V4 Flash / "Instant");
+# tryb z mysleniem (V4 Pro) je ignoruje. My zakladalismy Kamilowi
+# rozmowe z mysleniem — wiec jego "natywne szukanie" nie dzialalo,
+# a zespol dostawal co bieg to samo zdanie o braku wyszukiwarki.
+#
+# Nie zgadujemy — mierzymy, tak jak w v328. Gdy serwer pierwszy raz
+# powie "search_enabled": false, wylaczamy tej roli myslenie i
+# patrzymy na nastepna odpowiedz: gdy wraca "true", zostaje bez
+# myslenia (Kamil ma miec siec, nie rozumowanie); gdy nadal "false",
+# przywracamy myslenie i mowimy zespolowi raz, jak dotad. Koszt
+# najwyzej jednej wiadomosci bez myslenia.
+_szukanie_proba = {}
+
+
+def _szukanie_bez_myslenia(name, session):
+    """
+    True = wlasnie przelaczylismy te role na tryb bez myslenia i
+    czekamy na nastepna odpowiedz (zespolowi jeszcze nic nie mowimy).
+    False = nie ma juz czego probowac.
+    """
+
+    stan = _szukanie_proba.get(name)
+
+    if stan is None and getattr(session, "thinking_enabled", False):
+
+        try:
+            session.thinking_enabled = False
+        except Exception:
+            return False
+
+        _szukanie_proba[name] = "probujemy"
+
+        log(
+            "DEEPSEEK",
+            name + ": serwer nie włączył szukania przy myśleniu "
+            "(search_enabled=false) — od następnej wiadomości ta "
+            "rola pyta BEZ myślenia; DeepSeek szuka w sieci tylko w "
+            "tym trybie."
+        )
+
+        return True
+
+    if stan == "probujemy":
+
+        try:
+            session.thinking_enabled = True
+        except Exception:
+            pass
+
+        _szukanie_proba[name] = "nie_pomoglo"
+
+        log(
+            "DEEPSEEK",
+            name + ": bez myślenia serwer też nie szukał — "
+            "przywracam myślenie, dalej bez sieci."
+        )
+
+    return False
+
+
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
 _samo_myslenie_z_rzedu = {}
 
@@ -6354,8 +6613,10 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "TASK_DUPLICATE_OF_VERIFIED_POINT",
     "TASK_ALREADY_SATISFIED_ON_DISK",
     "WNIOSEK_ZE_SIE_NIE_DA",
+    "ZESPOL_WIDZI_INNA_DROGE",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
+    "ASK_PRZENIESIONE",
 )
 
 
@@ -6382,6 +6643,7 @@ _STATUSY_KLOPOTU = tuple(sorted(set(
         "FAILED",
         "BRAK_KODU_DO_ZAPISU",
         "DONE_REJECTED_VERIFICATION_FAILED",
+        "RUN_TOOL_ERROR",
     )
 )))
 
@@ -6509,8 +6771,13 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
         return _deepseek_raw_post_with_action(
             session, prompt, action
         )
-    except Exception as e:
+    except (AttributeError, TypeError, ImportError, KeyError) as e:
 
+        # v453: powrot do send_message() biblioteki TYLKO, gdy nasza
+        # kopia nie pasuje juz do jej ksztaltu (brak metody, pola,
+        # modulu). Blad serwera i sieci idzie w gore — deepseek() ma
+        # na to restart i ponowienie; wysylanie tej samej wiadomosci
+        # drugi raz od razu tutaj dawalo dwie wiadomosci w rozmowie.
         # v260: gdy prosilismy o action='continue', awaryjne
         # session.send_message() NIE jest tym samym — wysyla nowa
         # wiadomosc (jedna spacje) i dostaje SWIEZY tekst, ktory
@@ -6760,14 +7027,10 @@ def _length_notice_for(name):
     ile = _role_last_cut_len.get(name, 0)
 
     return (
-        "Uwaga ode mnie: Twoja poprzednia odpowiedź została "
-        "ucięta po " + str(ile) + " znakach — to limit długości "
-        "odpowiedzi w tej sesji, nie Twój błąd i nie niedbalstwo. "
-        "Nie przepraszaj za to i nie zaczynaj od nowa. Po prostu "
-        "zmieść się krócej: jeden krok albo jedna sprawa na "
-        "wiadomość, bez powtarzania tego, co już ustalone. Jeśli "
-        "masz do przekazania więcej, powiedz na końcu, że ciąg "
-        "dalszy podasz w następnej wiadomości.)\n\n"
+        "Twoja poprzednia odpowiedź została ucięta po " + str(ile)
+        + " znakach — to limit długości odpowiedzi w tej sesji. "
+        "Krótsze wiadomości dochodzą w całości; ciąg dalszy można "
+        "podać w następnej.\n\n"
     )
 
 
@@ -7488,14 +7751,33 @@ def deepseek(name, message):
                 else:
                     _speak(name, text)
 
+                # v451: szukanie dziala bez myslenia — patrz
+                # _szukanie_bez_myslenia(). Gdy serwer potwierdzil, ze
+                # szukal, a probowalismy wlasnie bez myslenia — zostaje.
+                if (
+                    getattr(session, "search_enabled", False)
+                    and _szukanie_serwera is True
+                    and _szukanie_proba.get(name) == "probujemy"
+                ):
+                    _szukanie_proba[name] = "dziala"
+                    log(
+                        "DEEPSEEK",
+                        name + ": bez myślenia serwer szuka w sieci "
+                        "(search_enabled=true) — ta rozmowa zostaje "
+                        "w trybie bez myślenia, żeby Kamil miał sieć."
+                    )
+
                 # v328: prosilismy o szukanie w sieci, a serwer go
                 # nie wlaczyl. Mowimy to raz — zespol przestanie
                 # prosic o zrodla kogos, kto ich nie ma jak zdobyc,
                 # i przestanie sie spierac, czy je podal.
+                # v451: najpierw jedna proba bez myslenia — dopiero gdy
+                # i to nie pomoze, mowimy zespolowi.
                 if (
                     getattr(session, "search_enabled", False)
                     and _szukanie_serwera is False
                     and name not in _powiedziane_o_szukaniu
+                    and not _szukanie_bez_myslenia(name, session)
                 ):
 
                     _powiedziane_o_szukaniu.add(name)
@@ -7892,6 +8174,29 @@ def find_adb(auto_reconnect=True):
     if target and adb_try_connect(target):
         device = _list_devices()
 
+    if device:
+        return device
+
+    # v467: port debugowania bezprzewodowego zmienia sie po restarcie
+    # sesji; `adb mdns services` pokazuje aktualny (bieg 2026-09-30,
+    # kroki 21-24 i 48-49: "no devices/emulators found").
+    try:
+        mdns = subprocess.run(
+            ["adb", "mdns", "services"],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in (mdns.stdout or "").splitlines():
+            if "_adb-tls-connect" not in line and "_adb._tcp" not in line:
+                continue
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+:\d+)", line)
+            if m and adb_try_connect(m.group(1)):
+                device = _list_devices()
+                if device:
+                    log("ANDROID", "ADB polaczone przez mDNS: " + m.group(1))
+                    return device
+    except Exception:
+        pass
+
     return device
 
 
@@ -8222,7 +8527,48 @@ def android_summary(with_header=True):
 
         lines = []
 
+        # v461: pasek stanu (com.android.systemui — "Powiadomienie z
+        # aplikacji Messenger", "Bluetooth nie jest podlaczony") szedl
+        # na poczatku kazdego odczytu i zjadal limit; bieg 2026-09-28
+        # 17:30: MAIN dokladal zrzut + OCR, zeby zobaczyc apke.
+        _pakiety = [
+            str(n.attrib.get("package") or "") for n in root.iter("node")
+        ]
+        _jest_nie_systemui = any(
+            pk and pk != "com.android.systemui" for pk in _pakiety
+        )
+
+        # v468: klawiatura ekranowa (pakiet ...inputmethod...) zaslania
+        # dol ekranu — bieg 2026-09-30, kroki 18-24: MAIN nie widzial
+        # odpowiedzi bota i klikal w to, co bylo pod klawiatura.
+        _klaw_od = None
+        for n in root.iter("node"):
+            pk = str(n.attrib.get("package") or "")
+            if "inputmethod" in pk or pk.endswith(".keyboard") or ".keyboard." in pk:
+                m = re.search(r"\[\d+,(\d+)\]\[\d+,\d+\]", str(n.attrib.get("bounds") or ""))
+                if m:
+                    y = int(m.group(1))
+                    if _klaw_od is None or y < _klaw_od:
+                        _klaw_od = y
+        if _klaw_od is not None:
+            lines.append(
+                "KLAWIATURA EKRANOWA zasłania ekran od y=" + str(_klaw_od)
+                + " w dół — to, co pod nią, nie jest widoczne ani klikalne; "
+                "android_press(back) ją chowa."
+            )
+        globals()["_klawiatura_od_y"] = _klaw_od
+
         for node in root.iter("node"):
+
+            pk_node = str(node.attrib.get("package") or "")
+            if _klaw_od is not None and ("inputmethod" in pk_node or ".keyboard" in pk_node):
+                continue
+
+            if (
+                _jest_nie_systemui
+                and node.attrib.get("package") == "com.android.systemui"
+            ):
+                continue
             text = node.attrib.get(
                 "text",
                 ""
@@ -8393,6 +8739,27 @@ def android_summary(with_header=True):
                 "Na wierzchu jest teraz: " + _app_label
                 if (_app_label and with_header) else ""
             )
+
+            # v471: Termux w plywajacym oknie — patrz _okna_na_ekranie().
+            if naglowek and _app_pakiet == "com.termux":
+                _okno, _ekran, _pod = _okna_na_ekranie(xml)
+                if _okno is None and _termux_nie_zaslania(_okno, _ekran, _pod):
+                    naglowek = (
+                        "Na wierzchu jest teraz: " + str(_pod)
+                        + " — to jego drzewo jest poniżej. Termux ma "
+                        "fokus, ale nie ma go na tym ekranie (najwyżej "
+                        "mały podgląd), więc dotyk trafia w "
+                        + str(_pod) + "."
+                    )
+                elif _termux_plywa(_okno, _ekran) and _pod:
+                    naglowek = (
+                        "Na wierzchu jest teraz: " + str(_pod)
+                        + " (na całym ekranie), a nad nim Termux w "
+                        "pływającym oknie [" + str(_okno[0]) + ","
+                        + str(_okno[1]) + "][" + str(_okno[2]) + ","
+                        + str(_okno[3]) + "] — dotyk poza tym oknem "
+                        "trafia w " + str(_pod) + "."
+                    )
 
             if not lines:
                 return (
@@ -8578,6 +8945,32 @@ def android_click_text(text):
                 result["matched_via_synonym_of"] = target_text
             return result
 
+    # v468: elementu nie ma, a klawiatura zaslania ekran — chowamy ja
+    # (back) i probujemy raz jeszcze.
+    if (
+        result is not None
+        and not result.get("ok")
+        and globals().get("_klawiatura_od_y") is not None
+        and android_device is not None
+    ):
+        try:
+            android_device.press("back")
+            time.sleep(0.8)
+            ponownie = _android_click_single_text(target_text)
+            if ponownie.get("ok"):
+                ponownie["schowana_klawiatura"] = True
+                ponownie["message"] = (
+                    "Element był pod klawiaturą ekranową — schowałem ją "
+                    "(back) i kliknąłem."
+                )
+                return ponownie
+            result["schowana_klawiatura"] = True
+            result["hint"] = (
+                "Klawiatura zasłaniała ekran — schowałem ją (back), ale "
+                "elementu dalej nie ma. " + str(result.get("hint") or "")
+            ).strip()
+        except Exception:
+            pass
     if result is not None and len(tried) > 1:
         result["tried_synonyms"] = tried
 
@@ -9214,7 +9607,112 @@ def android_paste_text(text, target_text):
     }
 
 
-def _pisanie_do_wlasnego_terminala(co_robimy):
+# v471: Termux w plywajacym oknie.
+#
+# Bieg 2026-10-04 11:15, kroki 3-9: Messenger byl otwarty na calym
+# ekranie, a Termux wisial nad nim w plywajacym oknie
+# ([104,282][977,1834] — `dumpsys activity` pokazywal DWA
+# topResumedActivity: Termux i Messenger). app_current() mowil
+# "com.termux", wiec android_tap(864, 200) — w "Nowa wiadomość",
+# poza oknem Termuksa — byl odrzucany jako "poszłoby w Termux", a
+# android_state zaczynal sie od "Na wierzchu jest teraz: Termux".
+# Siedem krokow zeszlo, zanim MAIN obszedl to przez `adb shell input
+# tap`, ktory trafil od razu.
+_WEZEL_RE = re.compile(
+    r'package="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+)
+
+
+def _okna_na_ekranie(xml=None):
+    """
+    (okno Termuksa (x1, y1, x2, y2) albo None, ekran (szer, wys),
+    pakiet z najwieksza powierzchnia poza Termuksem albo None)
+    z drzewa ekranu. Nigdy nie rzuca wyjatkiem.
+    """
+
+    try:
+
+        if xml is None:
+            xml = _android_with_deadline(
+                "dump_hierarchy",
+                lambda: android_device.dump_hierarchy(compressed=False),
+                timeout=10
+            )
+
+        termux = None
+        szer = wys = 0
+        inne = {}
+
+        for m in _WEZEL_RE.finditer(str(xml or "")):
+
+            pakiet = m.group(1)
+            x1, y1, x2, y2 = (int(m.group(i)) for i in range(2, 6))
+            szer, wys = max(szer, x2), max(wys, y2)
+
+            if pakiet == "com.termux":
+                termux = (
+                    (x1, y1, x2, y2) if termux is None else (
+                        min(termux[0], x1), min(termux[1], y1),
+                        max(termux[2], x2), max(termux[3], y2)
+                    )
+                )
+            elif pakiet and pakiet not in (
+                "com.android.systemui",
+            ) and "inputmethod" not in pakiet:
+                pole = (x2 - x1) * (y2 - y1)
+                inne[pakiet] = max(inne.get(pakiet, 0), pole)
+
+        pod = max(inne, key=inne.get) if inne else None
+
+        # Drzewo moze miec tylko okno Termuksa — wtedy jego brzegi
+        # udawalyby brzegi ekranu.
+        try:
+            _w, _h = _android_with_deadline(
+                "window_size", lambda: android_device.window_size(),
+                timeout=5
+            )
+            szer, wys = max(szer, int(_w)), max(wys, int(_h))
+        except Exception:
+            pass
+
+        return termux, (szer, wys), pod
+
+    except Exception:
+        return None, (0, 0), None
+
+
+def _termux_plywa(okno, ekran):
+    """Okno Termuksa zajmuje wyraznie mniej niz caly ekran."""
+
+    if not okno or not ekran[0] or not ekran[1]:
+        return False
+
+    x1, y1, x2, y2 = okno
+    pole = max(0, x2 - x1) * max(0, y2 - y1)
+
+    return pole < 0.85 * ekran[0] * ekran[1]
+
+
+# v473: bieg 2026-10-04 12:24, kroki 30-50 — Termux mial fokus, ale na
+# ekranie byl tylko maly podglad w rogu, ktorego drzewo ekranu w ogole
+# nie zawieralo; cale drzewo to byl Chrome z formularzem Useme. Mimo to
+# android_state zaczynal sie od "Na wierzchu jest teraz: Termux", wiec
+# MAIN ani razu nie uzyl android_tap i przez 14 krokow klikal przycisk
+# "Przejdz do podsumowania" wlasnymi skryptami CDP (JS click, zdarzenia
+# myszy i dotyku, Enter, fetch POST) — bez skutku.
+def _termux_nie_zaslania(okno, ekran, pod):
+    """
+    Na ekranie jest inna aplikacja, a Termux (choc ma fokus) albo
+    plywa w mniejszym oknie, albo nie ma go w drzewie ekranu wcale.
+    """
+
+    if not pod:
+        return False
+
+    return okno is None or _termux_plywa(okno, ekran)
+
+
+def _pisanie_do_wlasnego_terminala(co_robimy, xy=None):
     """
     Czy to, co zaraz zrobimy na ekranie, poleci w terminal, w ktorym
     dziala sam agent. Zwraca gotowa odmowe albo None.
@@ -9250,6 +9748,42 @@ def _pisanie_do_wlasnego_terminala(co_robimy):
 
     if pakiet != "com.termux":
         return None
+
+    # v471: tap poza plywajacym oknem Termuksa trafia w aplikacje pod
+    # nim — patrz _okna_na_ekranie().
+    if xy is not None:
+        _okno, _ekran, _pod = _okna_na_ekranie()
+        if _okno is None and _termux_nie_zaslania(_okno, _ekran, _pod):
+            return None
+        if _termux_plywa(_okno, _ekran):
+            x, y = int(xy[0]), int(xy[1])
+            if not (_okno[0] <= x < _okno[2] and _okno[1] <= y < _okno[3]):
+                return None
+
+    # v463: bieg 2026-09-28 19:32 — po chrome_execute_js na wierzchu
+    # byl Termux i tap w karte ankiety zostal odrzucony. Gdy ostatnie
+    # narzedzie bylo w Chrome, to Chrome jest celem — wyciagamy go.
+    # v467: "ostatnie" bylo juz biezacym (android_tap) — bieg 2026-09-30
+    # 07:40: tap w "Dodaj ogloszenie" odrzucony, choc krok wczesniej
+    # pracowalismy w Chrome.
+    if str(globals().get("_poprzednie_narzedzie") or "").startswith("chrome_"):
+        try:
+            execute_shell(
+                "adb shell am start -n "
+                "com.android.chrome/com.google.android.apps.chrome.Main",
+                timeout=15
+            )
+            time.sleep(1.5)
+            pakiet2, _ = _foreground_app()
+            if pakiet2 and pakiet2 != "com.termux":
+                log(
+                    "ANDROID",
+                    "Termux byl na wierzchu — wyciagnalem Chrome, bo "
+                    "ostatnie narzedzie bylo w Chrome."
+                )
+                return None
+        except Exception:
+            pass
 
     return {
         "ok": False,
@@ -9292,8 +9826,20 @@ def android_tap(x, y):
     # nie ma poprawnego zastosowania: znaki ida na jego wlasne
     # wejscie, a wyniku i tak nie ma skad wziac.
     _odmowa = _pisanie_do_wlasnego_terminala(
-        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")"
+        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")",
+        xy=(x, y)
     )
+
+    # v471: tap przeszedl, choc na wierzchu jest Termux — wiec trafil
+    # poza jego plywajace okno, w aplikacje pod nim.
+    if not _odmowa and pakiet == "com.termux":
+        _okno, _ekran, _pod = _okna_na_ekranie()
+        if _termux_nie_zaslania(_okno, _ekran, _pod):
+            pakiet = _pod
+            etykieta = (
+                (_ZNANE_PAKIETY.get(_pod, "") + " — " + _pod)
+                if _ZNANE_PAKIETY.get(_pod) else _pod
+            )
 
     if _odmowa:
         # v432: sam fakt, bez rady o termux_run.
@@ -9382,6 +9928,117 @@ def android_type(text):
             "ok": False,
             "error": str(e)
         }
+
+
+def _rozmiar_png(dane):
+    """(szerokosc, wysokosc) z naglowka PNG albo (None, None)."""
+    try:
+        if dane[:8] == b"\x89PNG\r\n\x1a\n" and dane[12:16] == b"IHDR":
+            return (
+                int.from_bytes(dane[16:20], "big"),
+                int.from_bytes(dane[20:24], "big")
+            )
+    except Exception:
+        pass
+    return (None, None)
+
+
+def android_look(question=None, path=None):
+    """
+    v468: Gemini jako OCZY. Zrzut ekranu idzie do modelu z drabinki
+    (multimodalny), a wraca opis: jaka aplikacja, jaki tekst, jakie
+    przyciski i pola z przyblizonymi wspolrzednymi w pikselach ekranu.
+    Bieg 2026-09-30: 16 krokow walki z botem w Telegramie, bo
+    android_state nie pokazywal odpowiedzi bota pod klawiatura, a
+    tapniecia po starych wspolrzednych trafialy w "Referrals" zamiast
+    w "All Available". Jedno spojrzenie modelu odpowiada na to od razu.
+    Jedno wywolanie = jedno zapytanie z dziennego limitu tego modelu.
+    """
+    if gemini_disabled and _wybierz_pare() is None:
+        return {
+            "ok": False,
+            "error": "Gemini ma teraz wyczerpane limity — nie ma kto obejrzeć ekranu. "
+                     "Zostają android_state (tekstem) i android_screenshot_ocr."
+        }
+    para = _wybierz_pare()
+    if para is None:
+        _najbl = _najblizsze_odnowienie()
+        return {
+            "ok": False,
+            "error": "Wszystkie modele Gemini mają wyczerpany limit"
+            + (" — najbliższy wraca o " + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+               if _najbl else "") + ". Zostają android_state i android_screenshot_ocr."
+        }
+    if path:
+        zrzut = _resolve_home_relative_path(str(path))
+        if not zrzut.exists():
+            return {"ok": False, "error": "Nie ma takiego pliku: " + str(zrzut)}
+    else:
+        z = android_screenshot()
+        if not isinstance(z, dict) or not z.get("ok"):
+            return {
+                "ok": False,
+                "error": "Nie udało się zrobić zrzutu ekranu: "
+                + str((z or {}).get("error") if isinstance(z, dict) else z)
+            }
+        zrzut = Path(str(z.get("path")))
+    try:
+        dane = zrzut.read_bytes()
+    except Exception as e:
+        return {"ok": False, "error": "Nie mogę odczytać zrzutu: " + str(e)}
+    klucz, client, model = para
+    szer, wys = _rozmiar_png(dane)
+    pytanie = str(question or "").strip()
+    prompt = (
+        "To jest zrzut ekranu telefonu z Androidem"
+        + (" o rozmiarze " + str(szer) + "x" + str(wys) + " pikseli" if szer else "")
+        + ". Opisz po polsku, zwięźle i konkretnie: (1) jaka aplikacja lub strona "
+        "jest na wierzchu, (2) najważniejszy widoczny tekst (dosłownie), (3) każdy "
+        "przycisk, link, pole, przełącznik i element listy — z przybliżonym środkiem "
+        "w pikselach ekranu jako (x, y), w kolejności od góry. Powiedz wprost, jeśli "
+        "widać klawiaturę ekranową, okno dialogowe, baner zgód, komunikat błędu albo "
+        "wskaźnik ładowania. Nie zgaduj tego, czego nie widać."
+        + ("\n\nPytanie, na które trzeba odpowiedzieć na końcu: " + pytanie if pytanie else "")
+    )
+    _para_w_uzyciu[:] = [klucz, model]
+    _policz_zapytanie(klucz, model)
+    try:
+        odp = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=dane, mime_type="image/png"),
+                prompt
+            ]
+        )
+        tekst = str(getattr(odp, "text", "") or "").strip()
+    except Exception as e:
+        blad = str(e)
+        log("GEMINI", "android_look: " + short(blad, 300))
+        if _to_limit(blad) or _gemini_przeciazony(blad):
+            try:
+                _odstaw_pare(klucz, model, blad)
+            except Exception:
+                pass
+        return {
+            "ok": False,
+            "error": "Gemini nie obejrzał ekranu: " + short(blad, 400),
+            "model": model
+        }
+    if not tekst:
+        return {"ok": False, "error": "Gemini odpowiedział pusto.", "model": model}
+    log("GEMINI", "android_look (" + str(model) + "): " + short(tekst, 300))
+    return {
+        "ok": True,
+        "action": "look",
+        "model": model,
+        "rozmiar_ekranu": [szer, wys],
+        "zrzut": str(zrzut),
+        "opis": short(tekst, 6000),
+        "uwaga": (
+            "Współrzędne są przybliżone (ocena z obrazu). Dokładne bounds daje "
+            "android_state, gdy element ma węzeł UI."
+        )
+    }
 
 
 def android_press(key):
@@ -9559,6 +10216,17 @@ def android_swipe(
                 "error": "Android niedostępny."
             }
 
+    # v469: bieg 2026-09-30, krok 22 — MAIN podal duration=500 (ms, jak
+    # w `adb shell input swipe`), a uiautomator2 liczy sekundy: gest
+    # mial trwac ponad 8 minut, wiec uiautomator2 i adb (500 000 ms)
+    # skonczyly sie limitem 20 s, a ekran stal. Gest dluzszy niz 10 s
+    # to milisekundy.
+    try:
+        if float(duration) > 10:
+            duration = float(duration) / 1000.0
+    except (TypeError, ValueError):
+        duration = 0.3
+
     try:
         _android_with_deadline(
             "android_swipe",
@@ -9579,6 +10247,31 @@ def android_swipe(
         }
 
     except Exception as e:
+        # v461: uiautomator2 potrafi nie odpowiadac (ekran systemowy,
+        # WebView) — `adb shell input swipe` rysuje gest bez niego.
+        # Bieg 2026-09-28 17:27 i 18:02: dwa swipe'y po 20 s bez ruchu.
+        try:
+            _ms = max(50, int(float(duration) * 1000))
+            _adb = execute_shell(
+                "adb shell input swipe " + " ".join(
+                    str(int(v)) for v in (x1, y1, x2, y2)
+                ) + " " + str(_ms),
+                timeout=20
+            )
+            if _adb.get("returncode") == 0:
+                return {
+                    "ok": True,
+                    "action": "swipe",
+                    "from": [int(x1), int(y1)],
+                    "to": [int(x2), int(y2)],
+                    "method": "adb input swipe",
+                    "message": (
+                        "uiautomator2 nie odpowiedział, gest poszedł "
+                        "przez adb (input swipe)."
+                    )
+                }
+        except Exception:
+            pass
         return {
             "ok": False,
             "action": "swipe",
@@ -10005,6 +10698,155 @@ def android_screenshot_ocr(path=None, lang=None):
 _confirmed_app_launches = {}
 
 
+# v472: aplikacja ze Sklepu Google Play.
+#
+# Bieg 2026-10-04 11:15 i 11:51: zespol chcial pisac do ludzi z grupy
+# na Facebooku, aplikacji Facebook (com.facebook.katana) nie bylo
+# (android_list_packages: tylko Messenger), wiec MAIN poprosil
+# uzytkownika o instalacje ("Wejdź do Play Store -> Facebook ->
+# Zainstaluj") i stanal. Uzytkownik: "google play mógł sam sobie
+# pobrać". android_launch_app pakietu, ktorego nie ma, otwiera teraz
+# jego strone w Sklepie, naciska "Zainstaluj", czeka na instalacje i
+# uruchamia aplikacje.
+_PLAY_INSTALUJ_RE = r"(?i)^(zainstaluj|install|instaluj)$"
+_PLAY_OTWORZ_RE = r"(?i)^(otwórz|otworz|open|graj|play)$"
+PLAY_CZEKANIE_NA_INSTALACJE_S = float(
+    os.environ.get("PLAY_CZEKANIE_NA_INSTALACJE_S", "600")
+)
+
+
+def _pakiet_jest_na_telefonie(package):
+    """True / False, albo None, gdy adb nie odpowiedzialo jak trzeba."""
+
+    wynik = execute_shell(
+        "adb shell pm path " + shlex.quote(package), timeout=20
+    )
+
+    if "package:" in str(wynik.get("stdout") or ""):
+        return True
+
+    if str(wynik.get("stderr") or "").strip() or wynik.get("returncode") not in (0, 1):
+        return None
+
+    return False
+
+
+def _zainstaluj_ze_sklepu(package):
+    """
+    Instaluje `package` ze Sklepu Google Play. Zwraca slownik z "ok"
+    (True, gdy pakiet jest juz na telefonie) i tym, co sie stalo.
+    """
+
+    if android_device is None and not init_android():
+        return {"ok": False, "error": "Android niedostępny."}
+
+    otwarcie = execute_shell(
+        "adb shell am start -a android.intent.action.VIEW -p "
+        "com.android.vending -d "
+        + shlex.quote("market://details?id=" + package),
+        timeout=20
+    )
+
+    if not otwarcie.get("ok"):
+        return {
+            "ok": False,
+            "error": "Sklep Google Play się nie otworzył: "
+            + short(str(otwarcie.get("stderr") or otwarcie.get("error") or ""), 200)
+        }
+
+    log("ANDROID", "Nie ma " + package + " — otwieram jego stronę w Sklepie Google Play.")
+
+    # Strona Sklepu laduje sie kilka sekund; przycisk szukamy, az sie
+    # pojawi.
+    kliknieto = False
+    widac_otworz = False
+    koniec = time.time() + 30
+
+    while time.time() < koniec and not kliknieto:
+
+        time.sleep(2.0)
+
+        try:
+            przycisk = android_device(textMatches=_PLAY_INSTALUJ_RE)
+            if _android_with_deadline(
+                "play_install_exists", lambda: przycisk.exists, timeout=10
+            ):
+                _android_with_deadline(
+                    "play_install_click", lambda: przycisk.click(), timeout=10
+                )
+                kliknieto = True
+                break
+
+            otworz = android_device(textMatches=_PLAY_OTWORZ_RE)
+            if _android_with_deadline(
+                "play_open_exists", lambda: otworz.exists, timeout=10
+            ):
+                widac_otworz = True
+        except Exception:
+            pass
+
+        if _pakiet_jest_na_telefonie(package) is True:
+            return {"ok": True, "zainstalowano": True, "metoda": "Sklep Google Play"}
+
+    if not kliknieto:
+
+        if widac_otworz or _pakiet_jest_na_telefonie(package) is True:
+            return {"ok": True, "zainstalowano": True, "metoda": "Sklep Google Play"}
+
+        return {
+            "ok": False,
+            "error": "play_brak_przycisku",
+            "message": (
+                "Otworzyłem stronę " + package + " w Sklepie Google Play, "
+                "ale nie ma na niej przycisku „Zainstaluj”. Co jest na "
+                "ekranie, pokaże android_state."
+            ),
+            "sklep_na_wierzchu": True
+        }
+
+    globals()["_ostatnia_instalacja_ts"] = time.time()
+    log("ANDROID", "Kliknąłem „Zainstaluj” dla " + package + " — czekam na instalację.")
+
+    start = time.time()
+    ostatni_log = start
+
+    while time.time() - start < PLAY_CZEKANIE_NA_INSTALACJE_S:
+
+        time.sleep(5.0)
+
+        if _pakiet_jest_na_telefonie(package) is True:
+            log(
+                "ANDROID",
+                package + " zainstalowany po "
+                + str(int(time.time() - start)) + " s."
+            )
+            return {
+                "ok": True,
+                "zainstalowano": True,
+                "metoda": "Sklep Google Play",
+                "instalacja_s": round(time.time() - start, 1)
+            }
+
+        if time.time() - ostatni_log >= 60:
+            ostatni_log = time.time()
+            log(
+                "ANDROID",
+                "Instalacja " + package + " trwa ("
+                + str(int(time.time() - start)) + " s)."
+            )
+
+    return {
+        "ok": False,
+        "error": "instalacja_trwa",
+        "message": (
+            "Kliknąłem „Zainstaluj” dla " + package + ", po "
+            + str(int(PLAY_CZEKANIE_NA_INSTALACJE_S)) + " s jeszcze go "
+            "nie ma. Pobieranie może dalej trwać — android_list_packages "
+            "pokaże, kiedy będzie."
+        )
+    }
+
+
 def android_launch_app(package):
     """
     Uruchamia zainstalowaną aplikację po nazwie pakietu przez
@@ -10028,6 +10870,23 @@ def android_launch_app(package):
             "ok": False,
             "error": "Pusta nazwa pakietu."
         }
+
+    # v472: nie ma go na telefonie — najpierw Sklep Google Play.
+    _instalacja = None
+
+    if (
+        re.fullmatch(r"[A-Za-z][\w]*(\.[A-Za-z][\w]*)+", package)
+        and _pakiet_jest_na_telefonie(package) is False
+    ):
+        _instalacja = _zainstaluj_ze_sklepu(package)
+
+        if not _instalacja.get("ok"):
+            return dict(
+                _instalacja,
+                action="launch_app",
+                package=package,
+                nie_bylo_na_telefonie=True
+            )
 
     result = execute_shell(
         "adb shell monkey -p " + shlex.quote(package)
@@ -10082,6 +10941,12 @@ def android_launch_app(package):
     if already_launched_note:
         output["already_launched_note"] = already_launched_note
 
+    if _instalacja:
+        output["zainstalowano_ze_sklepu"] = (
+            package + " nie było na telefonie — pobrałem go ze Sklepu "
+            "Google Play i uruchomiłem."
+        )
+
     return output
 
 
@@ -10135,6 +11000,24 @@ def android_list_packages(filter_text=None):
         and not str(result.get("stdout") or "").strip()
         and not str(result.get("stderr") or "").strip()
     )
+
+    # v461: drugie spojrzenie po 20 s ma sens tylko wtedy, gdy cos sie
+    # wlasnie instaluje (adb install w ostatnich 5 min albo Sklep Play
+    # na wierzchu). Bieg 2026-09-28 16:39: osiem sprawdzen "czy jest
+    # paypal/revolut/..." po 20 s kazde — prawie 3 minuty czekania.
+    if _nic_nie_pasuje:
+        _instalacja = (
+            time.time() - float(globals().get("_ostatnia_instalacja_ts") or 0)
+            < 300
+        )
+        if not _instalacja:
+            try:
+                _instalacja = (_foreground_app()[0] or "") == "com.android.vending"
+            except Exception:
+                _instalacja = False
+        if not _instalacja:
+            _nic_nie_pasuje = False
+            result = dict(result, ok=True, stdout="")
 
     if _nic_nie_pasuje:
 
@@ -10206,6 +11089,16 @@ def android_list_packages(filter_text=None):
             "Za pierwszym razem tego nie było — po "
             + str(DRUGIE_SPOJRZENIE) + " s już jest. Instalacja "
             "właśnie się kończyła."
+        )
+
+    # v472: brak aplikacji to nie koniec drogi — patrz
+    # _zainstaluj_ze_sklepu().
+    if filter_text and not packages:
+        _wynik["nie_ma_na_telefonie"] = (
+            "Nic pasującego do „" + short(str(filter_text), 60) + "”. "
+            "android_launch_app z pełną nazwą pakietu (np. "
+            "com.facebook.katana) pobierze aplikację ze Sklepu Google "
+            "Play i ją uruchomi."
         )
 
     return _wynik
@@ -10434,6 +11327,7 @@ def android_install_apk(path, reinstall=True):
         }
 
     flags = "-r" if reinstall else ""
+    globals()["_ostatnia_instalacja_ts"] = time.time()
 
     result = execute_shell(
         "adb install " + flags + " " + shlex.quote(path),
@@ -10687,6 +11581,155 @@ def _usuwa_tylko_nasze_logi_z_tego_biegu(command):
     return usuwajace > 0
 
 
+def _usuwa_tylko_wlasne_katalogi(command):
+    """
+    v465: czy ta komenda usuwa WYLACZNIE rzeczy wewnatrz katalogow, ktore
+    program sam zalozyl w tym albo poprzednich biegach (PROJECT_DIRS_FILE —
+    patrz _track_project_path). Wtedy nie ma o co pytac czlowieka: to
+    porzadki we wlasnym warsztacie (bieg 2026-09-28 20:48: `cd ~/olx &&
+    rm -rf ogloszenia` — ~/olx zalozyl MAIN 6 minut wczesniej).
+    False przy najmniejszej watpliwosci — wtedy zostaje pytanie.
+    """
+    try:
+        wlasne = [
+            Path(str(p)).expanduser().resolve()
+            for p in (read_json(PROJECT_DIRS_FILE, []) or [])
+            if str(p).strip()
+        ]
+    except Exception:
+        wlasne = []
+    if not wlasne:
+        return False
+
+    def _wlasna(sciezka):
+        try:
+            cel = sciezka.resolve()
+        except Exception:
+            return False
+        return any(w == cel or w in cel.parents for w in wlasne)
+
+    cwd = Path.home()
+    usuwajace = 0
+    for czlon in re.split(r"&&|\|\||[;|]|\n", str(command or "")):
+        slowa = shlex.split(czlon) if czlon.strip() else []
+        if not slowa:
+            continue
+        if slowa[0] == "cd":
+            if len(slowa) < 2:
+                cwd = Path.home()
+            else:
+                cwd = (Path(os.path.expanduser(slowa[1]))
+                       if slowa[1].startswith(("/", "~"))
+                       else cwd / slowa[1])
+            continue
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        if slowa[0] not in ("rm", "rmdir"):
+            return False
+        cele = [a for a in slowa[1:] if not a.startswith("-")]
+        if not cele:
+            return False
+        for arg in cele:
+            if any(z in arg for z in "$`"):
+                return False
+            # v467: `rm -f ~/ocr2docx/out/multi.*` — maska wewnatrz
+            # wlasnego katalogu; liczy sie czesc przed pierwsza maska.
+            if any(z in arg for z in "*?"):
+                arg = re.split(r"[*?]", arg, 1)[0]
+                if "/" in arg:
+                    arg = arg.rsplit("/", 1)[0] or "/"
+                else:
+                    arg = "."
+            sciezka = (Path(os.path.expanduser(arg))
+                       if arg.startswith(("/", "~")) else cwd / arg)
+            if not _wlasna(sciezka):
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
+def _po_komendzie(command, wynik, effective_timeout):
+    """
+    v467: dwa fakty dopisywane do wyniku komendy, bo w biegu 2026-09-30
+    kosztowaly po kilka krokow:
+    - "/tmp/...: Permission denied" — w Termuksie nie ma /tmp, jest
+      $PREFIX/tmp (i ~);
+    - "adb: no devices/emulators found" — bezprzewodowe ADB zmienilo
+      port; laczymy ponownie (find_adb: zapamietany adres, potem mDNS)
+      i powtarzamy komende raz.
+    """
+    if not isinstance(wynik, dict):
+        return wynik
+    tekst = str(wynik.get("stderr") or "") + " " + str(wynik.get("stdout") or "")
+    if "/tmp/" in tekst and ("Permission denied" in tekst or "No such file" in tekst):
+        wynik["podpowiedz"] = (
+            "W Termuksie nie ma /tmp — pliki tymczasowe idą do "
+            "$PREFIX/tmp (" + str(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+            + "/tmp) albo do ~/."
+        )
+    if "no devices/emulators found" in tekst and "adb" in str(command):
+        if not globals().get("_adb_ponowka_w_toku"):
+            globals()["_adb_ponowka_w_toku"] = True
+            try:
+                urzadzenie = find_adb(auto_reconnect=True)
+                if urzadzenie:
+                    log("ANDROID", "ADB wróciło (" + str(urzadzenie) + ") — powtarzam komendę raz.")
+                    try:
+                        init_android()
+                    except Exception:
+                        pass
+                    ponow = _uruchom_z_podgladem(command, effective_timeout, datetime.now())
+                    if isinstance(ponow, dict):
+                        ponow["adb_polaczone_ponownie"] = str(urzadzenie)
+                        return ponow
+                else:
+                    wynik["podpowiedz"] = (
+                        "Bezprzewodowe ADB nie odpowiada i nie udało się połączyć "
+                        "ponownie (ani zapamiętany adres, ani mDNS). Zwykle pomaga "
+                        "ponowne włączenie 'Debugowanie bezprzewodowe' na telefonie "
+                        "— to jest sprawa dla użytkownika."
+                    )
+            finally:
+                globals()["_adb_ponowka_w_toku"] = False
+    return wynik
+
+
+def _usuwa_wlasny_plik_tymczasowy(command):
+    """
+    v466: `screencap -p /sdcard/_t.png && ... && rm /sdcard/_t.png` —
+    komenda sprzata po sobie plik, ktory sama utworzyla. Bieg
+    2026-09-29 16:22: bramka czekala 120 s i odmowila. Pozwalamy, gdy
+    KAZDY cel rm pojawil sie w tej komendzie WCZESNIEJ (jako plik
+    wyjsciowy). False przy najmniejszej watpliwosci.
+    """
+    tekst = str(command or "")
+    usuwajace = 0
+    pozycja = 0
+    for czlon in re.split(r"&&|\|\||[;|]|\n", tekst):
+        start = tekst.find(czlon, pozycja)
+        if start < 0:
+            start = pozycja
+        pozycja = start + len(czlon)
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        try:
+            slowa = shlex.split(czlon)
+        except Exception:
+            return False
+        if "rm" not in slowa:
+            return False
+        po_rm = slowa[slowa.index("rm") + 1:]
+        cele = [a for a in po_rm if not a.startswith("-")]
+        if not cele:
+            return False
+        wczesniej = tekst[:start]
+        for arg in cele:
+            if any(z in arg for z in "*?$`") or arg not in wczesniej:
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
 def _confirm_destructive_action(description):
     """
     Blokuje i pyta operatora w terminalu, zanim agent wykona
@@ -10729,9 +11772,19 @@ def _confirm_destructive_action(description):
         except Exception:
             pass
 
-        answer = input(
-            "   Zezwolić? [t/N] > "
-        ).strip().lower()
+        # v465: bieg 2026-09-28 20:48 — `rm -rf ogloszenia` w katalogu,
+        # ktory MAIN sam zalozyl, czekalo na odpowiedz 2 godziny; program
+        # stal. Teraz 120 s bez odpowiedzi = NIE, i lecimy dalej.
+        print("   Zezwolić? [t/N] (120 s, brak odpowiedzi = NIE) > ", end="", flush=True)
+        try:
+            gotowe, _, _ = select.select([sys.stdin], [], [], 120)
+        except Exception:
+            gotowe = [sys.stdin]
+        if not gotowe:
+            print()
+            print("   (brak odpowiedzi w 120 s — traktuję jako NIE)")
+            return False
+        answer = str(sys.stdin.readline() or "").strip().lower()
 
         return answer in ("t", "tak", "y", "yes")
 
@@ -10897,6 +11950,8 @@ def execute_shell(command, timeout=None):
     if (
         _looks_like_delete_command(command)
         and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+        and not _usuwa_tylko_wlasne_katalogi(command)
+        and not _usuwa_wlasny_plik_tymczasowy(command)
     ):
 
         if not _confirm_destructive_action(
@@ -10905,15 +11960,24 @@ def execute_shell(command, timeout=None):
             return {
                 "ok": False,
                 "error": (
-                    "Operacja usuwania odrzucona (brak "
-                    "potwierdzenia operatora). Jeżeli to "
-                    "naprawdę potrzebne, zapytaj użytkownika "
-                    "wprost i poczekaj na jego decyzję zamiast "
-                    "ponawiać tę samą komendę."
+                    "Usunięcie odrzucone — nikt nie potwierdził w "
+                    "terminalu. Bez pytania wolno usuwać tylko wewnątrz "
+                    "katalogów, które program sam założył. Cudze pliki "
+                    "zostają: zamiast usuwać, przenieś je (mv) albo "
+                    "zapisz obok pod nową nazwą."
                 ),
                 "command": command,
                 "blocked_by_safety_gate": True
             }
+    elif _looks_like_delete_command(command) and (
+        _usuwa_tylko_wlasne_katalogi(command)
+        or _usuwa_wlasny_plik_tymczasowy(command)
+    ):
+        log(
+            "TERMUX",
+            "Usuwanie własnego pliku (katalog programu albo plik z tej "
+            "samej komendy) — bez pytania."
+        )
 
     # v283: gdy wywolujacy nie narzucil limitu, dobieramy go do
     # tego, co ta komenda ma zrobic. Sondy po plikach wolaja z
@@ -10975,9 +12039,10 @@ def execute_shell(command, timeout=None):
         # skrypt nagrywajacy potrafil przez to wisiec pelne 120 s i
         # wrocic jako "Timeout". Cala reszta programu dostaje
         # dokladnie ten sam slownik co dotad.
-        return _uruchom_z_podgladem(
+        _wynik_sh = _uruchom_z_podgladem(
             command, effective_timeout, started
         )
+        return _po_komendzie(command, _wynik_sh, effective_timeout)
 
     except subprocess.TimeoutExpired as e:
 
@@ -11350,13 +12415,19 @@ def _przelacz_na_karte(tab_id):
             + "/json/activate/" + str(tab_id),
             timeout=5
         )
+
+        # v473: patrz dispatch_tool() — karta, na ktora przelaczylismy,
+        # jest ta, na ktorej teraz pracujemy.
+        if r.status_code == 200:
+            _ostatnio_aktywna_karta[0] = str(tab_id)
+
         return r.status_code == 200
 
     except Exception:
         return False
 
 
-def find_tab(
+def _find_tab_bez_aktywacji(
     tab_id=None,
     contains=None
 ):
@@ -11400,7 +12471,152 @@ def find_tab(
     if not tab_id and not contains and len(tabs) == 1:
         return tabs[0]
 
+    # v468: bieg 2026-09-30 — osiem razy "Brak istniejącej karty", bo
+    # MAIN nie podal tab_id przy kilku kartach. Bez wskazania bierzemy
+    # karte, na ktorej ostatnio pracowalismy, a gdy jej nie ma —
+    # pierwsza z adresem http(s) (CDP wymienia aktywna jako pierwsza).
+    if not tab_id and not contains and tabs:
+        ostatnia = _ostatnio_aktywna_karta[0]
+        for tab in tabs:
+            if ostatnia and tab.get("id") == ostatnia:
+                return tab
+        for tab in tabs:
+            if str(tab.get("url") or "").lower().startswith(("http://", "https://")):
+                return tab
+        return tabs[0]
     return None
+
+
+# ============================================================
+# KARTA W TLE NIE ODPOWIADA (v457)
+# ============================================================
+#
+# Bieg 2026-09-27 21:19, kroki 1-5: piec zadan z rzedu padlo na CDP —
+# "Page.navigate nie powiodlo sie" i "Brak danych strony", kazde po
+# 40 s. Wspolny mianownik: karta, na ktorej pracowalismy, NIE byla
+# na wierzchu (1492, 1494, 1500, 1503 lezaly w tle; 1502 na wierzchu
+# dzialala bez zarzutu). Chrome na Androidzie zamraza karty w tle —
+# ich renderer nie odpowiada na Runtime.evaluate ani Page.navigate,
+# az karta wroci na ekran. Po tych bledach wykonanie porzucilo Chrome
+# i przez 12 krokow stukalo w ekran przez `adb shell input tap` na
+# zgadywanych wspolrzednych.
+#
+# Wiec kazda operacja na karcie zaczyna sie od wyciagniecia jej na
+# wierzch (/json/activate) — jedno tanie zadanie HTTP; po zmianie
+# karty chwila na odmrozenie. find_tab() jest jedynym miejscem, przez
+# ktore narzedzia Chrome dostaja karte, wiec to tu.
+_ostatnio_aktywna_karta = [None]
+
+# v469: find_tab() wzial inna karte niz wskazana — dispatch_tool()
+# dopisuje to do wyniku narzedzia jako "karta".
+_uwaga_o_karcie = [None]
+
+
+def _aktywuj_karte(tab):
+    """Karta na wierzch; True, gdy byla juz na wierzchu albo sie udalo."""
+
+    ident = str((tab or {}).get("id") or "")
+
+    if not ident:
+        return False
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/activate/" + ident,
+            timeout=5
+        )
+        ok = r.status_code == 200
+    except Exception:
+        ok = False
+
+    if ok and _ostatnio_aktywna_karta[0] != ident:
+        _ostatnio_aktywna_karta[0] = ident
+        time.sleep(0.7)
+
+    return ok
+
+
+def _obudz_karte(tab):
+    """
+    v458: karta, ktora CDP nie odpowiada, dostaje swoj adres od nowa
+    przez Android (`am start`); zwraca karte, ktora ten adres pokazuje
+    (te sama albo nowa), albo None.
+    """
+
+    adres = str((tab or {}).get("url") or "")
+
+    if not adres.lower().startswith(("http://", "https://")):
+        return None
+
+    wynik = execute_shell(
+        "am start -a android.intent.action.VIEW -p com.android.chrome -d "
+        + shlex.quote(adres),
+        timeout=20
+    )
+
+    if not wynik.get("ok"):
+        return None
+
+    time.sleep(1.5)
+
+    nowa = _karta_z_tym_adresem(adres)
+
+    if nowa is not None and _stan_strony(nowa) is not None:
+        return nowa
+
+    return None
+
+
+def find_tab(
+    tab_id=None,
+    contains=None
+):
+    """Karta wg id / fragmentu adresu, wyciagnieta na wierzch (v457)."""
+
+    tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    # v469: bieg 2026-09-30, kroki 60, 61, 64 — MAIN podal tab_id=1614,
+    # a tej karty juz nie bylo (Chrome zamknal ja przy porzadkach), wiec
+    # chrome_type, chrome_execute_js i chrome_click wrocily z "Brak
+    # istniejącej karty", choc strona, o ktora chodzilo, byla na
+    # wierzchu w karcie 1623. Kroki 3, 9, 24: chrome_inspect z
+    # contains="Moje OLX" / "Visit website" — MAIN szukal tekstu NA
+    # stronie, a contains porownuje tytul i adres karty. Gdy wskazanie
+    # niczego nie trafia, bierzemy karte, na ktorej pracujemy (ta sama
+    # regula, co bez tab_id — v468), a wynik mowi o zamianie.
+    # chrome_close wola _find_tab_bez_aktywacji wprost — nigdy nie
+    # zamknie karty innej niz wskazana.
+    if tab is None and (tab_id or contains):
+
+        tab = _find_tab_bez_aktywacji(None, None)
+
+        if tab is not None:
+
+            if tab_id and not contains:
+                _co = "Karty " + str(tab_id) + " już nie ma"
+            elif tab_id:
+                _co = (
+                    "Karty " + str(tab_id) + " już nie ma i żadna nie ma "
+                    "w tytule ani adresie „" + short(str(contains), 60) + "”"
+                )
+            else:
+                _co = (
+                    "Żadna karta nie ma w tytule ani adresie „"
+                    + short(str(contains), 60) + "”"
+                )
+
+            _uwaga_o_karcie[0] = (
+                _co + " — użyłem karty " + str(tab.get("id")) + " ("
+                + short(str(tab.get("url") or ""), 100) + ")."
+            )
+
+            log("CHROME", _uwaga_o_karcie[0])
+
+    if tab is not None:
+        _aktywuj_karte(tab)
+
+    return tab
 
 
 # Na wyraźną prośbę użytkownika (2026-08-28): najsłabszym punktem
@@ -11483,7 +12699,8 @@ def cdp_call(
 def chrome_eval(
     tab,
     javascript,
-    timeout=20
+    timeout=20,
+    zglos_wyjatek=False
 ):
 
     ws = cdp_connect(tab)
@@ -11521,12 +12738,39 @@ def chrome_eval(
     if not result.get("ok"):
         return result
 
-    return (
-        result
-        .get("result", {})
-        .get("result", {})
-        .get("value")
-    )
+    # v470: bieg 2026-10-03 — 32 wywolania chrome_execute_js wrocily z
+    # "value": null, w tym kroki 48-59, gdzie kod mial zbedne "})" na
+    # koncu (SyntaxError, wynik po 0,6 s zamiast po setTimeout 2-4 s).
+    # Blad JavaScriptu przychodzi z CDP jako exceptionDetails, a my
+    # oddawalismy samo "value" — wiec MAIN uznal, ze "Promise w
+    # chrome_execute_js gubi wynik" i przez kilka krokow obchodzil
+    # problem, ktorego nie bylo. Wewnetrzne sondy dalej dostaja None.
+    _odp = result.get("result", {}) or {}
+
+    if zglos_wyjatek and _odp.get("exceptionDetails"):
+
+        _szczegoly = _odp.get("exceptionDetails") or {}
+        _wyjatek = _szczegoly.get("exception") or {}
+        _opis = str(
+            _wyjatek.get("description")
+            or _wyjatek.get("value")
+            or _szczegoly.get("text")
+            or "wyjątek"
+        )
+
+        return {
+            "ok": False,
+            "error": "Błąd JavaScriptu: " + short(_opis, 400),
+            "linia": int(_szczegoly.get("lineNumber") or 0) + 1,
+            "kolumna": int(_szczegoly.get("columnNumber") or 0) + 1
+        }
+
+    _wynik = _odp.get("result", {}) or {}
+
+    if zglos_wyjatek and _wynik.get("type") == "undefined":
+        return {"ok": True, "undefined": True}
+
+    return _wynik.get("value")
 
 
 # ============================================================
@@ -11640,11 +12884,25 @@ def chrome_inspect(
 
     widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
 
+    # v458: karta wyladowana przez Chrome — Android laduje jej adres od
+    # nowa, my bierzemy karte, ktora go pokazuje.
+    if not widok:
+        _nowa = _obudz_karte(tab)
+        if _nowa is not None:
+            tab = _nowa
+            widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
+
     if not widok:
 
         return {
             "ok": False,
-            "error": "Brak danych strony"
+            "error": "Brak danych strony",
+            "message": (
+                "Karta " + str(tab.get("id")) + " nie odpowiada mimo "
+                "wyciągnięcia na wierzch i ponownego otwarcia adresu. "
+                "chrome_close ją zamyka; chrome_open bez tab_id otwiera "
+                "adres w karcie, która działa."
+            )
         }
 
     return {
@@ -11719,6 +12977,14 @@ def _chrome_stan_sie_zmienil(przed, po):
         return True
 
     if przed.get("title") != po.get("title"):
+        return True
+
+    # v460: inna tresc o tej samej dlugosci to tez zmiana.
+    if (
+        przed.get("skrot") is not None
+        and po.get("skrot") is not None
+        and przed.get("skrot") != po.get("skrot")
+    ):
         return True
 
     try:
@@ -12088,11 +13354,23 @@ def _chrome_open_wynik(
     stan = _stan_strony(tab)
     tresc = _tresc_strony(tab)
 
+    # v469: tytul z listy kart CDP tylko wtedy, gdy ta lista mowi o tym
+    # samym adresie. Bieg 2026-09-30, krok 4: otwieralismy
+    # /mojolx/szukampracy/pulpit/, strona nie miala jeszcze tytulu, a
+    # wynik podawal "title": "m.olx.pl/konto/portfel/" — tytul
+    # poprzedniej strony z listy sprzed nawigacji.
+    _tytul = (stan or {}).get("title")
+
+    if not _tytul and _ta_sama_strona(
+        (tab or {}).get("url"), (stan or {}).get("href") or url
+    ):
+        _tytul = (tab or {}).get("title")
+
     wynik = {
         "ok": True,
         "tab_id": (tab or {}).get("id"),
         "url": (stan or {}).get("href") or str(url),
-        "title": (stan or {}).get("title") or (tab or {}).get("title")
+        "title": _tytul or ""
     }
 
     if czekalismy:
@@ -12169,16 +13447,102 @@ def _chrome_open_wynik(
     return wynik
 
 
+def _karta_po_am_start(url, karty_przed, limit=12.0, na_koniec=True):
+    """
+    v469: karta, ktora pokazala sie po `am start`, albo None.
+
+    Bieg 2026-09-30, kroki 5 i 6: `am start` otworzyl adres, ale po
+    sztywnej sekundzie CDP jeszcze nie wymienial nowej karty (w kroku 5
+    Chrome dopiero wstawal po zerwanym polaczeniu) — chrome_open wrocil
+    z bledem, a w nastepnym kroku "W Chrome jest teraz" pokazywalo te
+    karte z tym adresem. Pytamy wiec co sekunde, az do `limit`: karta
+    z TYM adresem albo karta, ktorej przed `am start` nie bylo (adres
+    mogl przeniesc, np. www.olx.pl -> m.olx.pl). Dopiero po czasie,
+    gdy `na_koniec`, karta z tej domeny, a potem ta, na ktorej
+    pracujemy (v367: nie pierwsza z domeny, gdy jest dokladna).
+    """
+
+    koniec = time.time() + float(limit)
+    time.sleep(1.0)
+
+    while True:
+
+        karty = chrome_tabs()
+
+        for karta in karty:
+            if _ta_sama_strona(karta.get("url"), url):
+                _aktywuj_karte(karta)
+                return karta
+
+        # Bez listy sprzed `am start` (CDP lezalo) kazda karta
+        # wygladalaby na nowa — wtedy liczy sie tylko adres.
+        for karta in (karty if karty_przed else []):
+            if str(karta.get("id")) not in karty_przed:
+                _aktywuj_karte(karta)
+                return karta
+
+        if time.time() >= koniec:
+            break
+
+        time.sleep(1.0)
+
+    if not na_koniec:
+        return None
+
+    domain = ""
+
+    try:
+        domain = urlparse(str(url)).netloc
+    except Exception:
+        pass
+
+    karta = (
+        (_find_tab_bez_aktywacji(None, domain) if domain else None)
+        or _find_tab_bez_aktywacji(None, None)
+    )
+
+    if karta is not None:
+        _aktywuj_karte(karta)
+
+    return karta
+
+
 def chrome_open(
     url,
     tab_id=None,
     contains=None
 ):
 
+    # v452: chrome_open otwiera strony. Bieg 2026-09-26 14:04, krok 7:
+    # wykonanie podalo file:///…/olx_form.png, poszlo `am start`, karty
+    # CDP nie bylo i cale zadanie padlo. Plik to nie strona — mowimy
+    # to jako wynik, bez uruchamiania czegokolwiek.
+    _adres = str(url or "").strip()
+
+    if not _adres.lower().startswith(("http://", "https://")):
+        return {
+            "ok": False,
+            "error": "nie_adres_http",
+            "nie_adres_http": True,
+            "url": _adres,
+            "message": (
+                "chrome_open otwiera adresy http(s); „"
+                + short(_adres, 120) + "” nim nie jest. Plik z dysku "
+                "czyta termux_read_file (tekst), a zrzut ekranu ogląda "
+                "android_screenshot_ocr."
+            )
+        }
+
     # Ta strona moze juz gdzies wisiec. Wtedy jej nie otwieramy drugi
     # raz — wyciagamy istniejaca karte na wierzch. Patrz
     # _przelacz_na_karte().
-    if not tab_id and not contains:
+    # v469: takze wtedy, gdy wskazanej karty juz nie ma — find_tab()
+    # wzialby karte, na ktorej pracujemy, i nadpisal ja, choc ten adres
+    # wisi obok.
+    if (
+        (not tab_id and not contains)
+        or _find_tab_bez_aktywacji(tab_id, contains) is None
+    ):
 
         _juz = _karta_z_tym_adresem(url)
 
@@ -12282,6 +13646,10 @@ def chrome_open(
                 )
             )
 
+        _karty_przed = {
+            str(k.get("id")) for k in chrome_tabs()
+        }
+
         fallback = execute_shell(
             "am start -a android.intent.action.VIEW -p "
             "com.android.chrome -d "
@@ -12313,29 +13681,7 @@ def chrome_open(
         # dashboard w Reakcie potrzebuje jeszcze chwili; kto zajrzy w
         # ta chwile, zobaczy "Loading...". Czekamy wiec na karte, a
         # potem na sama strone — dokladnie tyle, ile trzeba.
-        time.sleep(1.0)
-
-        domain = ""
-
-        try:
-            domain = urlparse(str(url)).netloc
-        except Exception:
-            pass
-
-        # v367: NAJPIERW karta z TYM adresem, dopiero potem
-        # jakakolwiek z tej domeny.
-        #
-        # Bylo: find_tab(None, domain) — czyli PIERWSZA karta z tej
-        # domeny. Gdy na dashboard.daily.co wisiala juz karta
-        # /login, a wlasnie otwierali smy /rooms, dostawalismy z
-        # powrotem /login i jego tresc. Nawigacja sie udala, a
-        # odpowiedz mowila o zupelnie innej stronie — stad
-        # "przeciez otworzylem, a widze stare".
-        tab = (
-            _karta_z_tym_adresem(url)
-            or find_tab(None, domain or None)
-            or find_tab(None, None)
-        )
+        tab = _karta_po_am_start(url, _karty_przed)
 
         if tab is None:
 
@@ -12397,6 +13743,64 @@ def chrome_open(
 
     # Zamiast sztywnych 1,5 s — czekamy dokladnie tyle, ile ta strona
     # potrzebuje. Patrz _poczekaj_az_strona_dojdzie().
+    # v457: karta mogla byc zamrozona w tle — na wierzch i jeszcze raz.
+    if not result.get("ok", False):
+
+        _aktywuj_karte(tab)
+        time.sleep(1.0)
+
+        ws = cdp_connect(tab)
+
+        if ws is not None:
+            try:
+                result = cdp_call(
+                    ws, 1, "Page.navigate", {"url": str(url)}, timeout=15
+                )
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+
+    # v458: karta wciaz nie odpowiada (bieg 2026-09-27 22:11, kroki 3-4:
+    # karta 1504 sprzed restartu — Chrome ja wyladowal i CDP milczy
+    # mimo aktywacji). Adres otwiera wtedy sam Android (`am start`),
+    # a my bierzemy karte, ktora go pokazuje — nawet gdy to nowa.
+    if not result.get("ok", False):
+
+        _stara = str(tab.get("id") or "")
+        _karty_przed = {str(k.get("id")) for k in chrome_tabs()}
+
+        _zapas = execute_shell(
+            "am start -a android.intent.action.VIEW -p "
+            "com.android.chrome -d " + shlex.quote(str(url)),
+            timeout=20
+        )
+
+        if _zapas.get("ok"):
+
+            _nowa = _karta_po_am_start(url, _karty_przed, na_koniec=False)
+
+            if _nowa is not None:
+
+                if str(_nowa.get("id")) != _stara:
+                    log(
+                        "CHROME",
+                        "Karta " + _stara + " nie odpowiada (zamrożona) — "
+                        "adres otworzył Android w karcie "
+                        + str(_nowa.get("id")) + "."
+                    )
+
+                _czekalismy = _poczekaj_az_strona_dojdzie(_nowa)
+
+                return _chrome_open_wynik(
+                    _nowa,
+                    url,
+                    czekalismy=_czekalismy,
+                    metoda="am_start_po_zamrozonej_karcie",
+                    nowa_karta=str(_nowa.get("id")) != _stara
+                )
+
     _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
     if not result.get("ok", False):
@@ -12405,7 +13809,15 @@ def chrome_open(
             "ok": False,
             "tab_id": tab["id"],
             "url": str(url),
-            "error": "Page.navigate nie powiodlo sie"
+            "error": "Page.navigate nie powiodlo sie",
+            "message": (
+                "Karta " + str(tab["id"]) + " nie odpowiada mimo "
+                "wyciągnięcia na wierzch i otwarcia adresu przez Android — "
+                + short(str(result.get("error") or ""), 120)
+                + ". chrome_tabs pokazuje karty; chrome_close zamyka "
+                "zbędne, a chrome_open bez tab_id otwiera adres w karcie, "
+                "która działa."
+            )
         }
 
     return _chrome_open_wynik(
@@ -12434,7 +13846,12 @@ def _stan_strony(tab):
             " title: document.title,"
             " znakow: (document.body ?"
             " document.body.innerText.replace(/\\s+/g, ' ')"
-            ".trim().length : 0)"
+            ".trim().length : 0),"
+            " skrot: (() => { const t = document.body ?"
+            " document.body.innerText.replace(/\\s+/g, ' ').trim()"
+            ".slice(0, 20000) : ''; let h = 0;"
+            " for (let i = 0; i < t.length; i++)"
+            " h = (h * 31 + t.charCodeAt(i)) | 0; return h; })()"
             "}))()"
         )
 
@@ -12442,7 +13859,11 @@ def _stan_strony(tab):
             return {
                 "href": stan.get("href"),
                 "title": stan.get("title"),
-                "znakow": stan.get("znakow")
+                "znakow": stan.get("znakow"),
+                # v460: skrot tresci — "Twoje doswiadczenie zostalo
+                # zapisane" mialo te sama dlugosc co formularz z bledem
+                # i klikniecie "Zapisz" wracalo jako "bez skutku".
+                "skrot": stan.get("skrot")
             }
 
     except Exception:
@@ -12634,6 +14055,62 @@ def _dolacz_widok(wynik, tab):
     return wynik
 
 
+def _dotknij_punkt(tab, x, y):
+    """
+    v467: dotyk palcem przez CDP (Input.dispatchTouchEvent). Mobilne
+    SPA (m.olx.pl "Dodaj ogloszenie") reaguja na touchstart/touchend,
+    a nie na zdarzenia myszy — bieg 2026-09-30, kroki 60-68.
+    """
+    ws = cdp_connect(tab)
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+    try:
+        for i, (typ, punkty) in enumerate((
+            ("touchStart", [{"x": float(x), "y": float(y)}]),
+            ("touchEnd", []),
+        )):
+            odp = cdp_call(ws, 30 + i, "Input.dispatchTouchEvent", {
+                "type": typ,
+                "touchPoints": punkty
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+def _kliknij_w_punkt(tab, x, y):
+    """Prawdziwe klikniecie myszy przez CDP w punkt (x, y) karty."""
+
+    ws = cdp_connect(tab)
+
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+
+    try:
+        for i, typ in enumerate(("mouseMoved", "mousePressed", "mouseReleased")):
+            odp = cdp_call(ws, 10 + i, "Input.dispatchMouseEvent", {
+                "type": typ,
+                "x": float(x),
+                "y": float(y),
+                "button": "none" if typ == "mouseMoved" else "left",
+                "clickCount": 0 if typ == "mouseMoved" else 1
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    return {"ok": True}
+
+
 def _kliknij_nr(tab, nr):
     """
     Klika element o numerze z listy _widok_strony — prawdziwym
@@ -12688,7 +14165,87 @@ def _kliknij_nr(tab, nr):
         except Exception:
             pass
 
-    return {"ok": True, "clicked": polozenie.get("opis") or ("nr " + str(nr))}
+    return {
+        "ok": True,
+        "clicked": polozenie.get("opis") or ("nr " + str(nr)),
+        "_xy": (polozenie["x"], polozenie["y"])
+    }
+
+
+def chrome_upload_file(path, nr=None, selector=None, tab_id=None, contains=None):
+    """
+    v467: wklada plik do pola input[type=file] w Chrome przez CDP
+    (DOM.setFileInputFiles). Bieg 2026-09-30: OLX wymagal zdjecia,
+    MAIN probowal base64/DataTransfer/fetch z localhost i w koncu
+    oddal to uzytkownikowi. Plik z Termuksa idzie najpierw przez
+    `adb push` do /sdcard/Download/ael_upload/, bo Chrome czyta tylko
+    pamiec wspoldzielona.
+    """
+    tab = find_tab(tab_id, contains)
+    if tab is None:
+        return {"ok": False, "error": "Brak istniejącej karty"}
+    src = Path(os.path.expanduser(str(path or "").strip()))
+    if not src.exists() or not src.is_file():
+        return {"ok": False, "error": "Nie ma takiego pliku: " + str(src)}
+    if str(src).startswith(("/sdcard/", "/storage/")):
+        na_telefonie = str(src).replace("/sdcard/", "/storage/emulated/0/", 1)
+    else:
+        docelowy = "/sdcard/Download/ael_upload/" + src.name
+        push = execute_shell(
+            "adb shell mkdir -p /sdcard/Download/ael_upload && adb push "
+            + shlex.quote(str(src)) + " " + shlex.quote(docelowy),
+            timeout=60
+        )
+        if not push.get("ok"):
+            return {
+                "ok": False,
+                "error": "adb push nie przeszedł: "
+                + short(str(push.get("stderr") or push.get("error") or ""), 300)
+            }
+        na_telefonie = "/storage/emulated/0/Download/ael_upload/" + src.name
+    if nr is not None and str(nr).strip():
+        sel = '[data-ael-nr="' + str(int(str(nr).strip())) + '"]'
+    else:
+        sel = str(selector or "").strip() or 'input[type="file"]'
+    ws = cdp_connect(tab)
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+    try:
+        doc = cdp_call(ws, 40, "DOM.getDocument", {"depth": 1})
+        if not doc.get("ok"):
+            return {"ok": False, "error": str(doc.get("error"))}
+        root = ((doc.get("result") or {}).get("root") or {}).get("nodeId")
+        q = cdp_call(ws, 41, "DOM.querySelector", {"nodeId": root, "selector": sel})
+        node = (q.get("result") or {}).get("nodeId") if q.get("ok") else None
+        if not node:
+            return {
+                "ok": False,
+                "error": "Na stronie nie ma pola pliku pasującego do " + sel
+                + " — chrome_inspect pokaże, co jest (pola typu file są na liście)."
+            }
+        odp = cdp_call(ws, 42, "DOM.setFileInputFiles", {"files": [na_telefonie], "nodeId": node})
+        if not odp.get("ok"):
+            return {"ok": False, "error": str(odp.get("error"))}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    _poczekaj_az_strona_dojdzie(tab)
+    sprawdzenie = chrome_eval(
+        tab,
+        "(() => { const el = document.querySelector(" + json.dumps(sel) + ");"
+        " if (!el || !el.files) return null; return Array.from(el.files).map(f => f.name + ' (' + f.size + ' B)'); })()"
+    )
+    wynik = {
+        "ok": True,
+        "tab_id": tab.get("id"),
+        "plik": na_telefonie,
+        "pole": sel,
+        "pliki_w_polu": sprawdzenie if isinstance(sprawdzenie, list) else [],
+        "message": "Plik włożony do pola przez CDP; strona dostała zdarzenie change."
+    }
+    return _dolacz_widok(wynik, tab)
 
 
 def chrome_click(
@@ -12713,7 +14270,7 @@ def chrome_click(
 
     # Klikniecie w strone, ktora sie jeszcze rysuje, trafia w pustke
     # albo w nie ten element — patrz _poczekaj_az_strona_dojdzie().
-    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
+    _poczekaj_az_strona_dojdzie(tab)
 
     target = json.dumps(
         str(text),
@@ -12734,24 +14291,52 @@ def chrome_click(
     const elements =
         Array.from(
             document.querySelectorAll(
-                'a,button,input,' +
-                '[role="button"]'
+                'a,button,input,select,label,summary,' +
+                '[role="button"],[role="link"],[role="tab"],' +
+                '[role="option"],[role="menuitem"],[role="radio"],' +
+                '[role="checkbox"],[tabindex],[onclick]'
             )
-        );
+        ).filter(e => !!(e.offsetParent || e.getClientRects().length));
 
-    const el =
-        elements.find(
-            e =>
-                clean(
-                    e.innerText ||
-                    e.value ||
-                    e.getAttribute(
-                        "aria-label"
-                    )
-                )
-                .toLowerCase()
-                .includes(target)
-        );
+    const opis = (e) =>
+        clean(
+            e.innerText ||
+            e.value ||
+            e.getAttribute("aria-label") ||
+            e.getAttribute("title")
+        ).toLowerCase();
+
+    // v455: najpierw dokladnie ten napis, potem poczatek, potem
+    // fragment — a przy remisie NAJMNIEJSZY element (sam przycisk,
+    // nie jego pojemnik: "Zmień" zamiast "Pozostałe Elektronika Zmień").
+    const kandydaci = elements
+        .map(e => ({{ e, t: opis(e) }}))
+        .filter(k => k.t && k.t.includes(target))
+        .sort((a, b) => {{
+            const ra = a.t === target ? 0 : a.t.startsWith(target) ? 1 : 2;
+            const rb = b.t === target ? 0 : b.t.startsWith(target) ? 1 : 2;
+            return ra - rb || a.t.length - b.t.length;
+        }});
+
+    let el = kandydaci.length ? kandydaci[0].e : null;
+    // v463: karty ankiet Bitlabs to zwykle divy bez roli — "5 min"
+    // bylo w tekscie strony, a chrome_click mowil "Nie znaleziono".
+    // Najmniejszy widoczny element z tym napisem; klik i tak idzie
+    // myszka przez CDP w jego srodek, wiec trafia w to, co reaguje.
+    if (!el) {{
+        const wszystkie = Array.from(
+            document.querySelectorAll("div,span,p,li,td,th,h1,h2,h3,h4,h5,h6,label,img,svg,section,article")
+        ).filter(e => !!(e.offsetParent || e.getClientRects().length));
+        const luzne = wszystkie
+            .map(e => ({{ e, t: opis(e) }}))
+            .filter(k => k.t && k.t.includes(target) && k.t.length <= target.length + 80)
+            .sort((a, b) => {{
+                const ra = a.t === target ? 0 : a.t.startsWith(target) ? 1 : 2;
+                const rb = b.t === target ? 0 : b.t.startsWith(target) ? 1 : 2;
+                return ra - rb || a.t.length - b.t.length;
+            }});
+        el = luzne.length ? luzne[0].e : null;
+    }}
 
     if (!el) {{
 
@@ -12768,10 +14353,12 @@ def chrome_click(
         block: "center"
     }});
 
-    el.click();
+    const r = el.getBoundingClientRect();
 
     return {{
         ok: true,
+        x: r.x + r.width / 2,
+        y: r.y + r.height / 2,
         clicked:
             clean(
                 el.innerText ||
@@ -12833,6 +14420,27 @@ def chrome_click(
             javascript
         )
 
+        # v455: prawdziwe klikniecie myszy w srodek elementu — tak jak
+        # przy numerze (_kliknij_nr). `el.click()` z JS strony w React/
+        # react-aria czesto nie robi nic: bieg 2026-09-27 20:18, OLX —
+        # "Nie, zaczynam od nowa", "Dalej", "Zmień" bez skutku, a te
+        # same przyciski ruszaly od zdarzen myszy. Gdy myszka sie nie
+        # uda (CDP), zostaje el.click() jak dotad.
+        if isinstance(wynik, dict) and wynik.get("clicked") and "x" in wynik:
+            _mysz = _kliknij_w_punkt(tab, wynik["x"], wynik["y"])
+            if not _mysz.get("ok"):
+                chrome_eval(
+                    tab,
+                    "(() => { const el = document.elementFromPoint("
+                    + str(float(wynik["x"])) + ", " + str(float(wynik["y"]))
+                    + "); if (el) el.click(); return !!el; })()"
+                )
+            wynik = {
+                "ok": True,
+                "clicked": wynik["clicked"],
+                "_xy": (wynik["x"], wynik["y"])
+            }
+
     if not isinstance(wynik, dict) or not wynik.get("clicked"):
         # v443: nie ma takiego elementu — razem z tym, co na stronie
         # jest, zeby nastepny ruch mogl trafic po numerze.
@@ -12872,6 +14480,36 @@ def chrome_click(
             "tresc strony: " + str(_przed.get("znakow"))
             + " -> " + str(_po.get("znakow")) + " znakow"
         )
+
+    # v460: bieg 2026-09-27 23:18 — po "Zapisz" strona pokazala
+    # "Twoje doswiadczenie zostalo zapisane", ale miala te sama
+    # dlugosc co formularz z bledem, wiec szlo "bez skutku".
+    if (
+        not _co_sie_zmienilo
+        and _przed.get("skrot") is not None
+        and _po.get("skrot") is not None
+        and _przed.get("skrot") != _po.get("skrot")
+    ):
+        _co_sie_zmienilo.append(
+            "treść strony zmieniła się (ta sama długość, inna treść)"
+        )
+
+    # v467: klik myszka nie ruszyl strony — probujemy dotyku palcem w
+    # ten sam punkt (mobilne SPA slucha touch, nie mouse).
+    _xy = wynik.pop("_xy", None)
+    if not _co_sie_zmienilo and _xy:
+        _dotyk = _dotknij_punkt(tab, _xy[0], _xy[1])
+        if _dotyk.get("ok"):
+            _poczekaj_az_strona_dojdzie(tab)
+            _po2 = _stan_strony(tab)
+            if _po2 and _chrome_stan_sie_zmienil(_po, _po2):
+                _po = _po2
+                _co_sie_zmienilo.append(
+                    "po dotknięciu palcem (touch, nie mysz): "
+                    + ("adres " + str(_po2.get("href")) if _przed.get("href") != _po2.get("href")
+                       else "treść strony " + str(_przed.get("znakow")) + " -> " + str(_po2.get("znakow")) + " znaków")
+                )
+                wynik["metoda"] = "touch"
 
     wynik["adres"] = _po.get("href")
 
@@ -12928,6 +14566,49 @@ def chrome_click(
 # ============================================================
 # CHROME TYPE
 # ============================================================
+
+def chrome_close(tab_id=None, contains=None):
+    """
+    v457: zamyka karte (/json/close). Osiem i wiecej kart w tle to
+    zamrozone renderery i CDP, ktore nie odpowiada — patrz
+    _aktywuj_karte(). Zwraca, ktore karty zostaly.
+    """
+
+    tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    if tab is None:
+        return {"ok": False, "error": "Brak takiej karty"}
+
+    if not ensure_chrome_cdp_forward():
+        return {"ok": False, "error": "CDP niedostępne"}
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/close/" + str(tab["id"]),
+            timeout=5
+        )
+        ok = r.status_code == 200
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    time.sleep(0.5)
+
+    if _ostatnio_aktywna_karta[0] == str(tab["id"]):
+        _ostatnio_aktywna_karta[0] = None
+
+    zostaly = [
+        {"tab_id": k.get("id"), "title": short(str(k.get("title") or ""), 60),
+         "url": short(str(k.get("url") or ""), 100)}
+        for k in (chrome_tabs() or [])[:12]
+    ]
+
+    return {
+        "ok": bool(ok),
+        "zamknieta": {"tab_id": tab.get("id"), "title": tab.get("title"), "url": tab.get("url")},
+        "otwarte_karty": zostaly
+    }
+
 
 def chrome_back(
     tab_id=None,
@@ -13015,8 +14696,8 @@ def chrome_type(
     const q = szukane.trim().toLowerCase();
     const widoczny = (el) => !!(el.offsetParent || el.getClientRects().length);
     const pola = Array.from(document.querySelectorAll(
-        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable=""], [contenteditable="true"]'
-    )).filter(widoczny);
+        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable]:not([contenteditable="false"])'
+    )).filter(widoczny).filter(e => !e.disabled && !e.readOnly);
     const opis = (el) => [
         el.id, el.name, el.getAttribute('placeholder'),
         el.getAttribute('aria-label'),
@@ -13025,7 +14706,7 @@ def chrome_type(
             .map(i => (document.getElementById(i) || {{}}).innerText || '').join(' ')
     ].filter(Boolean).join(' | ');
     let el = null;
-    if (/^\d+$/.test(q)) {{
+    if (/^\\d+$/.test(q)) {{
         el = document.querySelector('[data-ael-nr="' + q + '"]');
         if (!el) {{
             return {{ok: false, error: 'Na stronie nie ma już elementu nr ' + q
@@ -13043,8 +14724,15 @@ def chrome_type(
         el = document.activeElement;
         const tag = el ? el.tagName.toLowerCase() : '';
         if (!el || !(tag === 'input' || tag === 'textarea' || el.isContentEditable)) {{
-            return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
-                     pola: pola.slice(0, 15).map(opis)}};
+            // v470: bieg 2026-10-03, krok 41 — szesc razy "Kursor nie
+            // stoi w polu tekstowym", a na stronie bylo jedno pole.
+            // Jedno pole to jedyny mozliwy adresat.
+            if (pola.length === 1) {{
+                el = pola[0];
+            }} else {{
+                return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
+                         pola: pola.slice(0, 15).map(opis)}};
+            }}
         }}
     }}
     el.scrollIntoView({{block: 'center'}});
@@ -13263,8 +14951,58 @@ def chrome_execute_js(
     result = chrome_eval(
         tab,
         javascript,
-        timeout=10
+        timeout=10,
+        zglos_wyjatek=True
     )
+
+    # v452: "Calling Runtime.evaluate timeout" konczylo cale zadanie
+    # (biegi 2026-09-25 16:15 krok 7 i 2026-09-26 14:04 krok 10) — a
+    # to zwykle strona zajeta po kliknieciu albo kod czekajacy na cos,
+    # co nie nadejdzie. Jedno ponowienie na swiezym polaczeniu; gdy
+    # dalej nic, wynik mowi, co sie stalo, i zadanie idzie dalej
+    # (patrz _brak_to_odpowiedz).
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+        and "timeout" in str(result.get("error") or "").lower()
+    ):
+        time.sleep(1.0)
+        result = chrome_eval(tab, javascript, timeout=10, zglos_wyjatek=True)
+
+        if (
+            isinstance(result, dict)
+            and result.get("ok") is False
+            and "timeout" in str(result.get("error") or "").lower()
+        ):
+            result["skrypt_nie_skonczyl_sie"] = (
+                "Kod nie oddał wyniku w 10 s, dwa razy z rzędu. Tak "
+                "kończy się await na coś, co nie nadchodzi, odczyt "
+                "schowka i strona zajęta tuż po kliknięciu. Strona "
+                "dalej stoi — chrome_inspect pokazuje, co na niej jest."
+            )
+
+    # v470: bieg 2026-10-03, krok 60 — kod kliknal "Wyślij", strona
+    # przeszla dalej i CDP oddal "Inspected target navigated or closed".
+    # Kod sie wykonal; wyniku nie ma, bo strona, ktora mialaby go oddac,
+    # juz zniknela. Mowimy, gdzie jestesmy teraz.
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+        and "navigated or closed" in str(result.get("error") or "")
+    ):
+        _poczekaj_az_strona_dojdzie(tab)
+        _po = _stan_strony(tab) or {}
+        return {
+            "ok": True,
+            "value": None,
+            "strona_przeszla_dalej": (
+                "Kod się wykonał, a strona w tym czasie przeszła na "
+                + short(str(_po.get("href") or "inny adres"), 150)
+                + " — dlatego bez wyniku."
+            ),
+            "url": _po.get("href"),
+            "tytul": _po.get("title")
+        }
 
     if (
         isinstance(result, dict)
@@ -13272,12 +15010,26 @@ def chrome_execute_js(
     ):
         return result
 
+    _bez_wartosci = (
+        isinstance(result, dict) and result.get("undefined") is True
+        and len(result) == 2
+    )
+
+    if _bez_wartosci:
+        result = None
+
     dom_fields_warning = _detect_empty_js_fields(result)
 
     final = {
         "ok": True,
         "value": result
     }
+
+    if _bez_wartosci:
+        final["undefined"] = (
+            "Kod skończył się bez wartości (undefined) — nic nie "
+            "zwrócił ani nie rozwiązał Promise wartością."
+        )
 
     if _czekalismy:
         final["czekalem_na_zaladowanie_s"] = _czekalismy
@@ -13380,126 +15132,19 @@ def load_gemini_keys():
 
 
 # ============================================================
-# WYCZERPANY KLUCZ GEMINI WRACA DO GRY (v277)
+# v451: bez osobnego stanu kluczy. mark_quota/mark_key_ok/key_disabled
+# (v277) liczyly odstepy per KLUCZ; od v449 liczy je _odstaw_pare()
+# per para klucz+model i tylko ta sciezka jest uzywana. Tamte funkcje
+# zostaly jako martwy kod (get_gemini_client nikt nie wolal) — i
+# mark_key_ok() kasowalo wpisy w pliku, ktorego nikt juz nie pisal.
+#
+# Zostaja same odstepy dla nieznanego limitu (patrz _czas_odnowienia):
+# pierwszy raz krotko, bo 429 to zwykle limit na minute; gdy ta sama
+# para pada zaraz po powrocie, podwajamy — do 6 godzin.
 # ============================================================
-#
-# Byly tu dwa bledy wskazujace w PRZECIWNE strony, ktore sie
-# nawzajem maskowaly — dlatego nigdy nie bylo tego widac w logu
-# jako jednej awarii.
-#
-# 1. mark_quota() zapisywalo "ten klucz padl" do gemini.json, ale
-#    KAZDA udana interakcja z Gemini nadpisywala ten sam plik
-#    w calosci ({"task_id": ..., "interaction_id": ...}). write_json
-#    nadpisuje, nie doklada. Wiedza o wyczerpanym kluczu znikala
-#    wiec po jednym wywolaniu i agent wracal do martwego klucza:
-#    429, przelaczenie, zapomnienie, znowu 429.
-#
-# 2. W druga strone: key_disabled() czytalo tylko "status", a pole
-#    "time" nie bylo czytane NIGDZIE. Gdyby wpis jednak przetrwal,
-#    klucz bylby martwy na zawsze — mimo ze limit Gemini sie
-#    odnawia. Wskrzeszal go dopiero "wyczysc".
-#
-# Teraz: stan kluczy ma wlasny plik, a "time" jest czytane. Odstep
-# rosnie tak samo, jak przy przeciazeniu DeepSeeka (v268): pierwszy
-# raz krotko, bo 429 to zwykle limit na minute; gdy ten sam klucz
-# pada zaraz po powrocie, to znaczy, ze to limit dzienny — wtedy
-# podwajamy, zeby nie dobijac sie co chwile. Udane wywolanie
-# kasuje wpis.
+
 _GEMINI_COOLDOWN_START = 60.0
 _GEMINI_COOLDOWN_MAX = 6 * 3600.0
-
-
-def gemini_keys_state():
-
-    value = read_json(
-        GEMINI_KEYS_FILE,
-        {}
-    )
-
-    if not isinstance(value, dict):
-        return {}
-
-    return value
-
-
-def save_gemini_keys_state(value):
-
-    write_json(
-        GEMINI_KEYS_FILE,
-        value
-    )
-
-
-def mark_quota(key_name):
-
-    state = gemini_keys_state()
-
-    poprzedni = state.get(str(key_name)) or {}
-
-    try:
-        byl_odstep = float(poprzedni.get("cooldown") or 0.0)
-        byl_kiedy = float(poprzedni.get("time") or 0.0)
-    except (TypeError, ValueError):
-        byl_odstep, byl_kiedy = 0.0, 0.0
-
-    # Padl znowu tuz po tym, jak wrocil do gry — poprzedni odstep
-    # byl za krotki.
-    if byl_odstep and (time.time() - byl_kiedy) < byl_odstep * 3:
-        odstep = min(byl_odstep * 2, _GEMINI_COOLDOWN_MAX)
-    else:
-        odstep = _GEMINI_COOLDOWN_START
-
-    state[str(key_name)] = {
-        "status": "QUOTA_EXHAUSTED",
-        "time": time.time(),
-        "cooldown": odstep
-    }
-
-    save_gemini_keys_state(state)
-
-    log(
-        "GEMINI",
-        "Klucz " + str(key_name) + " odstawiony na "
-        + str(int(odstep // 60)) + " min — potem sam wroci do gry."
-    )
-
-
-def mark_key_ok(key_name):
-    """Klucz odpowiedzial — nie ma powodu go dalej omijac."""
-
-    state = gemini_keys_state()
-
-    if str(key_name) in state:
-
-        del state[str(key_name)]
-
-        save_gemini_keys_state(state)
-
-        log(
-            "GEMINI",
-            "Klucz " + str(key_name) + " znowu odpowiada — "
-            "wraca do normalnego uzycia."
-        )
-
-
-def key_disabled(key_name):
-
-    info = gemini_keys_state().get(str(key_name))
-
-    if not info:
-        return False
-
-    if info.get("status") != "QUOTA_EXHAUSTED":
-        return False
-
-    try:
-        czekaj = float(info.get("cooldown") or _GEMINI_COOLDOWN_START)
-        kiedy = float(info.get("time") or 0.0)
-    except (TypeError, ValueError):
-        return False
-
-    return (time.time() - kiedy) < czekaj
-
 
 # ============================================================
 # v449: NAJLEPSZY DARMOWY MODEL I DRABINKA MODELI
@@ -13660,7 +15305,9 @@ def _polnoc_pacyfik_po(teraz):
         d += timedelta(days=(6 - d.weekday()) % 7)
         return d + timedelta(weeks=ktora - 1)
 
-    utc = datetime.utcfromtimestamp(teraz)
+    # v451: utcfromtimestamp() jest przestarzale od Pythona 3.12 —
+    # Termux pokazywal DeprecationWarning przy kazdym liczeniu polnocy.
+    utc = datetime.fromtimestamp(teraz, timezone.utc).replace(tzinfo=None)
 
     def _przesuniecie(chwila_utc):
         rok = chwila_utc.year
@@ -13673,6 +15320,226 @@ def _polnoc_pacyfik_po(teraz):
     polnoc_utc = polnoc_lok - timedelta(hours=_przesuniecie(polnoc_lok + timedelta(hours=8)))
 
     return (polnoc_utc - datetime(1970, 1, 1)).total_seconds()
+
+
+def _limit_dzienny(blad):
+    """Czy ten 429 to limit na DZIEN (odnawia sie o polnocy PT)."""
+
+    tekst = str(blad or "")
+
+    return bool(
+        re.search(r"PerDay", tekst)
+        or re.search(r"per\s+day", tekst, re.IGNORECASE)
+        or re.search(r"daily", tekst, re.IGNORECASE)
+    )
+
+
+def _ile_na_dzien(blad):
+    """Ile zapytan na dzien ma ten model wedlug tresci 429 (0 = nie wiadomo)."""
+
+    m = re.search(
+        r"limit\W{0,5}(\d+)\s*requests?\s*per\s*day",
+        str(blad or ""), re.IGNORECASE
+    )
+
+    return int(m.group(1)) if m else 0
+
+
+def _sekundy_ponowienia(blad):
+    """Po ilu sekundach Google kaze sprobowac (0 = nie podal)."""
+
+    m = re.search(
+        r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
+        str(blad or ""), re.IGNORECASE
+    )
+
+    return float(m.group(1) or m.group(2)) if m else 0.0
+
+
+# v455: model, ktorego dzienny limit nie starcza na jedno zadanie, nie
+# wchodzi do drabinki — inaczej kazdego dnia pierwsze dwa zadania
+# przepadaja w polowie (gemini-3.8-flash: 20 zapytan/dzien przy 25
+# wywolaniach na zadanie, bieg 2026-09-27 20:18).
+_MODEL_ZA_MALY_NA_ZADANIE = GEMINI_MAX_TOOL_CALLS + 5
+
+_powiedziane_o_malym_limicie = set()
+
+
+def _zapamietaj_limit_dzienny(model, blad):
+    ile = _ile_na_dzien(blad)
+
+    if not ile:
+        return
+
+    stan = _stan_modeli()
+    stan.setdefault("limity_dzienne", {})[str(model)] = ile
+    _zapisz_stan_modeli(stan)
+
+
+def _dzien_pt(teraz=None):
+    """Znacznik doby kalifornijskiej (wtedy Google odnawia limity dzienne)."""
+
+    teraz = time.time() if teraz is None else teraz
+
+    return str(int(_polnoc_pacyfik_po(teraz) // 86400))
+
+
+# Para, ktora wlasnie pracuje — zeby _gemini_create moglo liczyc jej
+# zapytania bez przekazywania klucza przez wszystkie wywolania.
+_para_w_uzyciu = [None, None]
+
+
+def _policz_zapytanie(klucz=None, model=None):
+    """Jedno zapytanie do Gemini wiecej dla tej pary w tej dobie PT."""
+
+    klucz = klucz if klucz is not None else _para_w_uzyciu[0]
+    model = model if model is not None else _para_w_uzyciu[1]
+
+    if not klucz or not model:
+        return
+
+    try:
+        stan = _stan_modeli()
+        dzis = _dzien_pt()
+        uzycie = stan.setdefault("uzycie", {})
+
+        # Zostaje tylko dzisiejsza doba — stare wpisy nie sa nikomu
+        # potrzebne.
+        for stary in [d for d in uzycie if d != dzis]:
+            uzycie.pop(stary, None)
+
+        para = str(klucz) + "|" + str(model)
+        uzycie.setdefault(dzis, {})[para] = int(
+            uzycie.get(dzis, {}).get(para, 0)
+        ) + 1
+        _zapisz_stan_modeli(stan)
+    except Exception:
+        pass
+
+
+def _zapytan_dzis(klucz, model, stan=None):
+    stan = _stan_modeli() if stan is None else stan
+
+    try:
+        return int(
+            (stan.get("uzycie") or {}).get(_dzien_pt(), {}).get(
+                str(klucz) + "|" + str(model), 0
+            )
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _zostalo_na_zadanie(klucz, model, stan=None):
+    """
+    Czy na tej parze zostalo dzis dosc zapytan na jedno zadanie. True
+    takze wtedy, gdy limitu dziennego modelu nie znamy.
+    """
+
+    stan = _stan_modeli() if stan is None else stan
+    ile = (stan.get("limity_dzienne") or {}).get(str(model))
+
+    try:
+        ile = int(ile) if ile else 0
+    except (TypeError, ValueError):
+        return True
+
+    if not ile:
+        return True
+
+    zostalo = ile - _zapytan_dzis(klucz, model, stan)
+
+    if zostalo < GEMINI_MAX_TOOL_CALLS + 2:
+        log(
+            "GEMINI",
+            "Model " + str(model) + " (klucz " + str(klucz) + "): zostało "
+            + str(max(zostalo, 0)) + " z " + str(ile) + " zapytań na dziś "
+            "— za mało na całe zadanie, pomijam do jutra."
+        )
+        return False
+
+    return True
+
+
+def _wyczerpany_dzis(klucz, model, blad):
+    """Po 429 dziennym: licznik tej pary staje na limicie (co najmniej)."""
+
+    ile = _ile_na_dzien(blad)
+
+    if not ile:
+        return
+
+    try:
+        stan = _stan_modeli()
+        para = str(klucz) + "|" + str(model)
+        dzis = _dzien_pt()
+        uzycie = stan.setdefault("uzycie", {}).setdefault(dzis, {})
+        uzycie[para] = max(int(uzycie.get(para, 0)), ile)
+        _zapisz_stan_modeli(stan)
+    except Exception:
+        pass
+
+
+def _kolejnosc_modeli(drabinka, stan):
+    """
+    Modele w kolejnosci, w jakiej maja sens dla TEGO programu.
+
+    v456: drabinka z v449 szla po samej randze (najnowsze, pro > flash
+    > flash-lite). Biegi 2026-09-27 20:18 i 20:49: gemini-3.8-flash i
+    gemini-3.7-flash maja w darmowej wersji po 20 zapytan na dzien —
+    kazdy z nich zjadl jedno zadanie i padl w polowie. Zadanie to do 25
+    wywolan, wiec liczy sie najpierw limit, potem ranga:
+      1. modele ze ZNANYM limitem, ktory starcza na zadanie (po randze),
+      2. modele o nieznanym limicie — flash-lite przed flash przed pro,
+         bo w darmowej wersji limity rosna w te strone,
+      3. modele za male — wcale (patrz _model_za_maly).
+    """
+
+    limity = stan.get("limity_dzienne") or {}
+
+    def _znany_ok(m):
+        try:
+            return int(limity.get(str(m)) or 0) >= _MODEL_ZA_MALY_NA_ZADANIE
+        except (TypeError, ValueError):
+            return False
+
+    def _wariant(m):
+        n = str(m).lower()
+        if "flash-lite" in n:
+            return 0
+        if "flash" in n:
+            return 1
+        return 2
+
+    znane = [m for m in drabinka if _znany_ok(m)]
+    nieznane = [
+        m for m in drabinka
+        if str(m) not in limity and m not in znane
+    ]
+    nieznane.sort(key=_wariant)
+
+    return znane + nieznane
+
+
+def _model_za_maly(model, stan=None):
+    stan = _stan_modeli() if stan is None else stan
+    ile = (stan.get("limity_dzienne") or {}).get(str(model))
+
+    try:
+        za_maly = bool(ile) and int(ile) < _MODEL_ZA_MALY_NA_ZADANIE
+    except (TypeError, ValueError):
+        return False
+
+    if za_maly and str(model) not in _powiedziane_o_malym_limicie:
+        _powiedziane_o_malym_limicie.add(str(model))
+        log(
+            "GEMINI",
+            "Model " + str(model) + " ma " + str(ile) + " zapytań na "
+            "dzień w darmowej wersji — za mało na jedno zadanie ("
+            + str(GEMINI_MAX_TOOL_CALLS) + " wywołań); pomijam go."
+        )
+
+    return za_maly
 
 
 def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
@@ -13688,8 +15555,22 @@ def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
     teraz = time.time() if teraz is None else teraz
     tekst = str(blad or "")
 
-    if re.search(r"PerDay", tekst):
-        return _polnoc_pacyfik_po(teraz) + 60, "limit dzienny", 0.0
+    # v455: Google mowi to dzis po ludzku — "Rate limit exceeded for
+    # model gemini-3.8-flash (limit: 20 requests per day on Free Tier).
+    # Please retry in 29s" (bieg 2026-09-27 20:18). "PerDay" nie
+    # padalo, "retry in 29s" tak — wiec para wracala po 29 s do limitu,
+    # ktory odnawia sie o polnocy, i dwa zadania z rzedu padly w
+    # polowie roboty.
+    if _limit_dzienny(tekst):
+        return (
+            _polnoc_pacyfik_po(teraz) + 60,
+            "limit dzienny"
+            + (
+                " (" + str(_ile_na_dzien(tekst)) + " zapytań/dzień)"
+                if _ile_na_dzien(tekst) else ""
+            ),
+            0.0
+        )
 
     m = re.search(
         r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
@@ -13725,6 +15606,14 @@ def _odstaw_pare(klucz, model, blad, sekund=None, powod=None):
 
     stan["odstawione"][para] = {"do": do, "powod": powod, "odstep": odstep}
     _zapisz_stan_modeli(stan)
+
+    # v455: po zapisie odstawienia — ta funkcja czyta stan z pliku od
+    # nowa, wiec musi isc PO _zapisz_stan_modeli, inaczej jej wpis
+    # zostalby nadpisany.
+    if sekund is None:
+        _zapamietaj_limit_dzienny(model, blad)
+        if _limit_dzienny(blad):
+            _wyczerpany_dzis(klucz, model, blad)
 
     log(
         "GEMINI",
@@ -13808,10 +15697,18 @@ def _wybierz_pare():
     odstawiona. None, gdy wszystko odstawione.
     """
 
-    for model in _drabinka_modeli():
+    _stan = _stan_modeli()
+
+    for model in _kolejnosc_modeli(_drabinka_modeli(), _stan):
+        if _model_za_maly(model, _stan):
+            continue
         for klucz, _ in load_gemini_keys():
             client = gemini_clients.get(klucz)
-            if client is not None and not _para_odstawiona(klucz, model):
+            if (
+                client is not None
+                and not _para_odstawiona(klucz, model)
+                and _zostalo_na_zadanie(klucz, model, _stan)
+            ):
                 return klucz, client, model
 
     return None
@@ -13874,9 +15771,18 @@ def init_gemini():
 
         try:
 
-            client = genai.Client(
-                api_key=key
-            )
+            # v462: limit 60 s na jedno zapytanie. Bieg 2026-09-28 18:28:
+            # serwer trzymal polaczenie 2-4 min, zanim oddal 503 —
+            # cztery takie proby to 11 minut stania calego programu.
+            try:
+                client = genai.Client(
+                    api_key=key,
+                    http_options=types.HttpOptions(timeout=60000)
+                )
+            except Exception:
+                client = genai.Client(
+                    api_key=key
+                )
 
             gemini_clients[
                 name
@@ -13910,23 +15816,6 @@ def init_gemini():
     )
 
     return False
-
-
-def get_gemini_client():
-
-    for name, _ in load_gemini_keys():
-
-        if key_disabled(name):
-            continue
-
-        client = gemini_clients.get(
-            name
-        )
-
-        if client is not None:
-            return name, client
-
-    return None, None
 
 
 # ============================================================
@@ -14201,7 +16090,8 @@ def _gemini_tools_legacy():
             "type": "function",
             "name": "chrome_open",
             "description": (
-                "Otwórz URL w istniejącej karcie Chrome. " + _OPIS_STRONY
+                "Otwórz adres http(s) w istniejącej karcie Chrome. "
+                + _OPIS_STRONY
             ),
             "parameters": {
                 "type": "object",
@@ -14259,9 +16149,49 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "chrome_upload_file",
+            "description": (
+                "Włóż plik do pola wyboru pliku na stronie (input type=file), "
+                "np. zdjęcie do ogłoszenia. path: plik w Termuxie albo na "
+                "/sdcard; nr: numer pola z listy strony albo selector CSS; "
+                "bez nich — pierwsze pole pliku. Wynik mówi, jakie pliki są "
+                "w polu. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "nr": {"type": "string"},
+                    "selector": {"type": "string"},
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "type": "function",
             "name": "chrome_back",
             "description": (
                 "Wstecz w karcie, jak przycisk w przeglądarce. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                }
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "chrome_close",
+            "description": (
+                "Zamknij kartę Chrome (tab_id z chrome_tabs albo contains — "
+                "fragment adresu/tytułu). Karty w tle są zamrażane i nie "
+                "odpowiadają; kilka kart to porządek, kilkanaście to kłopot. "
+                "Wynik: która karta zamknięta i jakie zostały."
             ),
             "parameters": {
                 "type": "object",
@@ -14283,7 +16213,12 @@ def _gemini_tools_legacy():
                 "w przeglądarce, zadziała tak samo jak w konsoli "
                 "deweloperskiej. Użyj tego, gdy chrome_click/chrome_type "
                 "nie wystarczą (np. trzeba wywołać wewnętrzne API strony "
-                "bezpośrednio). Ten kod żyje tylko w karcie — zapisany "
+                "bezpośrednio). Do pól formularzy służy chrome_type: "
+                "przypisanie el.value = '…' nie wysyła zdarzeń klawiatury "
+                "i formularze w React/Vue (OLX, Useme) tego nie widzą — "
+                "pole wygląda na wypełnione, a „Dalej” nic nie robi. Kod "
+                "ma 10 s; await na coś, co nie nadchodzi, kończy się "
+                "timeoutem. Ten kod żyje tylko w karcie — zapisany "
                 "do pliku .js nie ma się gdzie uruchomić. Osobny "
                 "przypadek: navigator.clipboard.readText()/writeText() "
                 "prosi o zgodę w okienku, którego nikt tu nie kliknie, "
@@ -14517,6 +16452,28 @@ def _gemini_tools_legacy():
             }
         },
 
+        {
+            "type": "function",
+            "name": "android_look",
+            "description": (
+                "Gemini OGLĄDA ekran telefonu (zrzut) i opisuje, co widzi: "
+                "aplikację/stronę, widoczny tekst, przyciski, pola i linki z "
+                "przybliżonymi współrzędnymi (x, y) w pikselach ekranu, oraz "
+                "czy jest klawiatura, dialog, baner albo błąd. Używaj, gdy "
+                "android_state albo chrome_inspect nie pokazują tego, co jest "
+                "na ekranie (WebView, gra, obrazki, klawiatura zasłania czat), "
+                "albo gdy kliknięcia trafiają nie tam. question: na co "
+                "odpowiedzieć patrząc na ekran. Jedno wywołanie = jedno "
+                "zapytanie z dziennego limitu Gemini."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "path": {"type": "string"}
+                }
+            }
+        },
         {
             "type": "function",
             "name": "android_screenshot_ocr",
@@ -15252,7 +17209,12 @@ def termux_write_file(path, content, append=False):
         except Exception:
             _is_custom_tool = False
 
-        if (_code_suffix or _has_shebang) and not _is_custom_tool:
+        # v461: w RUN pisze MAIN (DeepSeek) — to kod zespolu, nie Gemini.
+        if (
+            (_code_suffix or _has_shebang)
+            and not _is_custom_tool
+            and not _wykonuje_main
+        ):
 
             # Gemini siega po zapis kodu. Podzial rol zostaje: kod
             # pisze Bartek, na dysk kladzie go Python, Gemini
@@ -15482,6 +17444,11 @@ def termux_write_file(path, content, append=False):
 
         _track_project_path(p)
         _zapamietaj_gdzie(p)
+
+        if _wykonuje_main and (_code_suffix or _has_shebang):
+            _autor_pliku[p.name] = "MAIN"
+            _zapisz_autoryzacje_kodu(p, autor="MAIN")
+            log("MAIN", "Kod MAIN-a zapisany: " + p.name + " (RUN).")
 
         result = {
             "ok": True,
@@ -16214,13 +18181,17 @@ def _reset_irreversible_memory():
 
 def _irreversible_kind(command):
     """Ktora czynnosc nieodwracalna to jest (albo None)."""
-
     text = str(command or "")
-
+    # v461: slowo "termux-sms-send" w notatce zapisywanej heredokiem
+    # to nie wyslanie SMS-a (bieg 2026-09-28 16:54: "POWTORZONA
+    # CZYNNOSC NIEODWRACALNA" przy `cat > research.md <<EOF`).
+    text = re.sub(
+        r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\s*(?=\n|$)",
+        " ", text, flags=re.DOTALL
+    )
     for marker in _IRREVERSIBLE_MARKERS:
-        if marker in text:
+        if re.search(r"(^|[;&|(`\s])" + re.escape(marker) + r"(\s|$)", text):
             return marker
-
     return None
 
 
@@ -17993,6 +19964,67 @@ def _gemini_pisze_kod(command_str):
     return None
 
 
+_INPUT_TEXT_RE = re.compile(
+    r"^\s*adb(?:\s+-s\s+\S+)?\s+shell\s+input\s+text\s+(.+?)\s*$"
+)
+
+
+def _zamiast_input_text(command_str):
+    """
+    Gdy komenda to SAMO `adb shell input text <tekst>` z tekstem, ktorego
+    `input text` nie przeniesie (znaki spoza ASCII albo spacje pisane
+    %s), wpisujemy go przez schowek. None = to nie ten przypadek.
+    """
+
+    if "&&" in command_str or ";" in command_str or "|" in command_str:
+        return None
+
+    m = _INPUT_TEXT_RE.match(command_str)
+
+    if not m:
+        return None
+
+    try:
+        czesci = shlex.split(m.group(1))
+    except ValueError:
+        return None
+
+    tekst = re.sub(r" {2,}", " ", " ".join(czesci).replace("%s", " "))
+
+    if not tekst.strip():
+        return None
+
+    if tekst.isascii() and "%s" not in m.group(1):
+        return None
+
+    schowek = execute_shell(
+        "termux-clipboard-set " + shlex.quote(tekst), timeout=20
+    )
+
+    if not schowek.get("ok"):
+        return None
+
+    wklej = execute_shell("adb shell input keyevent 279", timeout=20)
+
+    return {
+        "ok": bool(wklej.get("ok")),
+        "returncode": wklej.get("returncode"),
+        "stdout": "",
+        "stderr": str(wklej.get("stderr") or ""),
+        "command": command_str,
+        "wpisane_przez_schowek": (
+            "`input text` gubi polskie znaki, więc tekst („"
+            + short(tekst, 80) + "”) poszedł przez schowek "
+            "(termux-clipboard-set + KEYCODE_PASTE) do pola, które ma "
+            "kursor. Co jest w polu, pokaże android_state."
+        ),
+        "duration_s": round(
+            float(schowek.get("duration_s") or 0)
+            + float(wklej.get("duration_s") or 0), 1
+        )
+    }
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -18006,11 +20038,27 @@ def termux_run(command):
         #   _gemini_zmienia_cudzy_kod — zmienia w miejscu plik z
         #                               kodem, ktorego nikt nie
         #                               autoryzowal (sed -i itp.)
-        _tworzy = _gemini_pisze_kod(command_str)
-        _pisze_kod = (
-            _tworzy
-            or _gemini_zmienia_cudzy_kod(command_str)
-        )
+        # v461: w RUN komende pisze MAIN (DeepSeek) — jego heredoc z
+        # kodem to kod zespolu; zapisujemy autora i puszczamy dalej.
+        if _wykonuje_main:
+            _tworzy = None
+            _pisze_kod = None
+            try:
+                for _sciezka_m, _tresc_m in _pliki_pisane_komenda(command_str):
+                    _pm = _resolve_home_relative_path(_sciezka_m)
+                    if (
+                        _pm.suffix.lower() in _KOD_SUFIKSY
+                        or str(_tresc_m or "").lstrip().startswith("#!")
+                    ):
+                        _autor_pliku[_pm.name] = "MAIN"
+            except Exception:
+                pass
+        else:
+            _tworzy = _gemini_pisze_kod(command_str)
+            _pisze_kod = (
+                _tworzy
+                or _gemini_zmienia_cudzy_kod(command_str)
+            )
 
         if _pisze_kod:
 
@@ -18075,6 +20123,36 @@ def termux_run(command):
         # Otwieranie strony, ktora juz wisi w Chrome, tylko mnozy
         # karty — patrz _przelacz_na_karte(). Zamiast tego wyciagamy
         # na wierzch te, ktora jest.
+        # v457: `adb shell uiautomator dump` na tym telefonie nie tylko
+        # ginie (kod 137, v445) — zrywa tez polaczenie uiautomator2, z
+        # ktorego zyja android_state/android_click/android_swipe. Bieg
+        # 2026-09-27 21:19: dump w kroku 6, a w kroku 14 android_swipe
+        # "urzadzenie nie odpowiedzialo w 20 s". Nie uruchamiamy go.
+        if "uiautomator dump" in command_str:
+            return {
+                "ok": False,
+                "error": "uiautomator_dump",
+                "command": command_str,
+                "na_tym_telefonie": (
+                    "`uiautomator dump` jest tu ubijany (kod 137) i zrywa "
+                    "połączenie, z którego korzystają android_state i "
+                    "android_click. Drzewo ekranu — teksty, opisy, czy "
+                    "klikalne, położenie — daje android_state; nie "
+                    "uruchomiłem tej komendy."
+                ),
+                "duration_s": 0.0
+            }
+
+        # v457: `adb shell input text` gubi polskie znaki (i wymaga %s
+        # za spacje). Bieg 2026-09-27 21:19, krok 8: tytul "Excel%s i%s
+        # Google%s Sheets" wszedl bez ogonkow, po czym wykonanie samo
+        # przeszlo na schowek. Robimy to od razu: termux-clipboard-set
+        # + KEYCODE_PASTE (279) w skupionym polu.
+        _przez_schowek = _zamiast_input_text(command_str)
+
+        if _przez_schowek is not None:
+            return _przez_schowek
+
         if "termux-open-url" in command_str:
 
             _adres = _ADRES_W_KOMENDZIE_RE.search(command_str)
@@ -18597,6 +20675,8 @@ def termux_run_background(
         if (
             _looks_like_delete_command(command)
             and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+            and not _usuwa_tylko_wlasne_katalogi(command)
+            and not _usuwa_wlasny_plik_tymczasowy(command)
         ):
 
             if not _confirm_destructive_action(
@@ -18684,20 +20764,28 @@ def termux_run_background(
         # chodzi, bo tam podajemy bash jawnie. Ta sama komenda raz
         # dziala, raz nie, zaleznie od tego, czy poszla w tlo —
         # i nikt nie ma jak zgadnac dlaczego.
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            executable=_SHELL_EXECUTABLE,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=open(
-                log,
-                "a",
-                encoding="utf-8"
-            ),
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
+        # v451: uchwyt do logu otwieramy na czas uruchomienia i
+        # zamykamy u siebie — dziecko ma wlasna kopie deskryptora.
+        # Dotad kazde uruchomienie w tle zostawialo w agencie jeden
+        # otwarty plik na zawsze.
+        _log_fh = open(log, "a", encoding="utf-8")
+
+        try:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                executable=_SHELL_EXECUTABLE,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=_log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
+        finally:
+            try:
+                _log_fh.close()
+            except Exception:
+                pass
 
         # v226: trzymamy uchwyt do procesu, zeby dalo sie na niego
         # POCZEKAC i poznac jego kod wyjscia — patrz
@@ -19613,6 +21701,12 @@ def dispatch_tool(
 
     started = datetime.now()
 
+    # v463: ostatnie narzedzie — patrz _pisanie_do_wlasnego_terminala().
+    globals()["_poprzednie_narzedzie"] = str(globals().get("_ostatnie_narzedzie") or "")
+    globals()["_ostatnie_narzedzie"] = str(name or "")
+
+    _uwaga_o_karcie[0] = None
+
     result = _dispatch_tool_inner(
         name,
         args
@@ -19622,6 +21716,25 @@ def dispatch_tool(
         (datetime.now() - started).total_seconds(),
         2
     )
+
+    if isinstance(result, dict) and _uwaga_o_karcie[0]:
+        result.setdefault("karta", _uwaga_o_karcie[0])
+
+    # v473: bieg 2026-10-04 12:24, krok 26 — chrome_open zwrocil karte
+    # 71B4… (strona juz byla otwarta, wiec tylko na nia przelaczyl), a
+    # zaraz potem dwa chrome_execute_js bez tab_id poszly w karte
+    # 0920… z /pl/login/ — te, ktora find_tab() zapamietal wczesniej.
+    # Formularz "nie istnial", MAIN wypelnial go od nowa w kroku 27.
+    # Karta, ktora narzedzie Chrome zwraca, jest ta, na ktorej teraz
+    # pracujemy.
+    if (
+        isinstance(result, dict)
+        and str(name or "").startswith("chrome_")
+        and name != "chrome_close"
+        and result.get("ok") is True
+        and result.get("tab_id")
+    ):
+        _ostatnio_aktywna_karta[0] = str(result.get("tab_id"))
 
     if isinstance(result, dict):
 
@@ -19706,6 +21819,9 @@ _TOOL_NAME_ALIASES = {
     "android_start_app": "android_launch_app",
     "android_run_new_window": "android_run_in_new_window",
     "android_new_window": "android_run_in_new_window",
+    # v470: bieg 2026-10-03, krok 16 — MAIN wolal chrome_screenshot.
+    # Zrzut ekranu z Chrome na wierzchu to zrzut Androida.
+    "chrome_screenshot": "android_screenshot",
 }
 
 
@@ -20137,6 +22253,9 @@ def _dispatch_tool_inner(
 
         # Gemini: android_screenshot_ocr
         # Python: android_screenshot_ocr
+        if name == "android_look":
+            return _call_tool_function(android_look, args)
+
         if name == "android_screenshot_ocr":
 
             fn = globals().get(
@@ -20420,9 +22539,16 @@ def _dispatch_tool_inner(
                 args
             )
 
+        if name == "chrome_upload_file":
+            return _call_tool_function(chrome_upload_file, args)
+
         if name == "chrome_back":
 
             return _call_tool_function(chrome_back, args)
+
+        if name == "chrome_close":
+
+            return _call_tool_function(chrome_close, args)
 
         if name == "chrome_execute_js":
 
@@ -21877,6 +24003,19 @@ def _brak_to_odpowiedz(name, args, result):
     if name == "chrome_type" and result.get("pola"):
         return True
 
+    # v452: kod JS nie oddal wyniku — strona stoi, praca idzie dalej.
+    if name == "chrome_execute_js" and result.get("skrypt_nie_skonczyl_sie"):
+        return True
+
+    # v457: uiautomator dump nie uruchomiony — fakt, praca idzie dalej.
+    if str(name).startswith("termux_run") and blad == "uiautomator_dump":
+        return True
+
+    # v452: chrome_open dostal nie-adres (file://, sciezke do PNG) —
+    # bieg 2026-09-26 14:04, krok 7.
+    if name == "chrome_open" and result.get("nie_adres_http"):
+        return True
+
     # v442: strona "nie znaleziona" — z widokiem, dokad z niej przejsc.
     if name == "chrome_open" and blad == "page_not_found":
         return True
@@ -21928,7 +24067,11 @@ def _brak_to_odpowiedz(name, args, result):
 
 
 # v447: odstepy miedzy ponowieniami, gdy Gemini jest chwilowo przeciazony.
-_GEMINI_PRZECIAZONY_PONOW_S = (5, 10)
+# v461: jedna ponowka — bieg 2026-09-28 16:46: trzy proby po ~100 s
+# to 6 minut stania na jednym zadaniu.
+# v462: zero ponowek w tej samej parze — przy przeciazeniu zadanie
+# idzie od razu na inny model (patrz _odstaw_model_wszedzie).
+_GEMINI_PRZECIAZONY_PONOW_S = ()
 
 
 def _gemini_przeciazony(blad):
@@ -21942,6 +24085,11 @@ def _gemini_przeciazony(blad):
         or "UNAVAILABLE" in tekst
         or "high demand" in tekst
         or "overloaded" in tekst.lower()
+        # v462: limit czasu klienta (60 s) to ten sam przypadek —
+        # serwer nie odpowiada.
+        or "timeout" in tekst.lower()
+        or "timed out" in tekst.lower()
+        or "504" in tekst
     )
 
 
@@ -21959,12 +24107,38 @@ def _gemini_create(client, **kwargs):
     zmian, bo tam czekanie nie pomaga.
     """
 
+    # v455: 429 z limitem NA MINUTE tez sie ponawia — te sama wiadomosc,
+    # po tylu sekundach, ile Google podal (do 90 s), najwyzej dwa razy.
+    # Zadne narzedzie nie uruchamia sie przy tym drugi raz: ponawiamy
+    # WYSLANIE wynikow, ktore nie doszlo. Limit dzienny idzie w gore od
+    # razu — czekanie 29 s na polnoc nie ma sensu.
+    _ponowien_429 = 0
+
     for proba, przerwa in enumerate(_GEMINI_PRZECIAZONY_PONOW_S + (None,)):
+
+        _policz_zapytanie()
 
         try:
             return client.interactions.create(**kwargs)
 
         except Exception as e:
+
+            if (
+                _to_limit(e)
+                and not _limit_dzienny(e)
+                and _ponowien_429 < 2
+                and 0 < _sekundy_ponowienia(e) <= 90
+            ):
+                _ponowien_429 += 1
+                _czekaj = _sekundy_ponowienia(e) + 1
+                log(
+                    "GEMINI",
+                    "Limit na minutę (429) — ponawiam tę samą wiadomość "
+                    "za " + str(int(_czekaj)) + " s (" + str(_ponowien_429)
+                    + "/2), nic nie uruchamia się drugi raz."
+                )
+                time.sleep(_czekaj)
+                continue
 
             if przerwa is None or not _gemini_przeciazony(e):
                 raise
@@ -21998,15 +24172,15 @@ def _raport_po_limicie(client, model, interaction, interaction_id, tools):
     """
 
     if interaction is None:
-        return ""
+        return "", None
 
     wywolania = _wywolania_w_interakcji(interaction)
 
     if not wywolania:
-        return _tekst_interakcji(interaction).strip()
+        return _tekst_interakcji(interaction).strip(), interaction
 
     if not interaction_id:
-        return ""
+        return "", None
 
     odpowiedzi = [
         _odpowiedz_narzedzia(
@@ -22025,18 +24199,205 @@ def _raport_po_limicie(client, model, interaction, interaction_id, tools):
         for call in wywolania
     ]
 
+    # v452: bez narzedzi — po limicie Gemini moze juz tylko napisac
+    # raport, a rozmowa zostaje domknieta i nadaje sie do ciagniecia
+    # w nastepnym zadaniu.
     try:
         ostatnia = _gemini_create(client,
             model=model,
             input=odpowiedzi,
-            previous_interaction_id=interaction_id,
-            tools=tools
+            previous_interaction_id=interaction_id
         )
     except Exception as e:
         log("GEMINI", "Raport po limicie: " + short(str(e), 200))
-        return ""
+        return "", None
 
-    return _tekst_interakcji(ostatnia).strip()
+    return (
+        _tekst_interakcji(ostatnia).strip(),
+        None if _wywolania_w_interakcji(ostatnia) else ostatnia
+    )
+
+
+# ============================================================
+# PAMIEC WYKONAWCY NA CALY CEL (v452)
+# ============================================================
+#
+# Do v451 kazde zadanie bylo NOWA rozmowa z Gemini: w 14 z 76 zadan
+# pierwszym ruchem bylo chrome_tabs ("gdzie ja jestem?"), a MAIN
+# przepisywal do kazdego zadania stan strony, numer karty i to, co juz
+# bylo probowane (biegi 2026-09-25 16:15, 2026-09-26 14:04 i 14:53).
+#
+# Interactions API przechowuje rozmowy po stronie Google (darmowa
+# wersja: 1 dzien, platna: 55 dni) i pozwala je ciagnac przez
+# previous_interaction_id — z niejawnym cache'em historii, czyli
+# taniej niz wysylac ja od nowa. Wiec jeden cel = jedna rozmowa
+# wykonawcy: kolejne zadanie idzie jako kolejna wiadomosc w tej samej
+# rozmowie, a zasady pracy (8 punktow) ida raz, na jej poczatku.
+#
+# Rozmowe ciagniemy tylko wtedy, gdy:
+#   - to ten sam cel, ta sama para klucz+model (rozmowa nalezy do
+#     klucza, na innym jej nie ma),
+#   - ostatnia wiadomosc jest mlodsza niz _GEMINI_PAMIEC_GODZIN,
+#   - kontekst nie urosl ponad GEMINI_PAMIEC_TOKENY (limit na minute
+#     w darmowej wersji liczy tokeny wejscia, takze te z cache'u),
+#   - ostatnia interakcja jest DOMKNIETA: kazde wywolanie narzedzia
+#     dostalo wynik. Po bledzie narzedzia zamykamy runde jedna
+#     wiadomoscia bez narzedzi (_domknij_runde) — Gemini pisze, co o
+#     tym mysli, a MAIN dostaje te slowa razem ze sladem.
+# Gdy Google nie zna juz tej rozmowy (wygasla), zadanie idzie od nowa
+# z pelnym promptem. GEMINI_PAMIEC=0 wylacza calosc.
+
+GEMINI_PAMIEC = os.environ.get("GEMINI_PAMIEC", "1").strip().lower() not in (
+    "0", "nie", "off", "false"
+)
+
+GEMINI_PAMIEC_TOKENY = int(os.environ.get("GEMINI_PAMIEC_TOKENY", "80000"))
+
+_GEMINI_PAMIEC_GODZIN = 20
+
+
+def _pamiec_wykonawcy():
+    stan = read_json(GEMINI_STATE_FILE, {})
+    return stan if isinstance(stan, dict) else {}
+
+
+def _pamiec_wykonawcy_dla(klucz, model):
+    """
+    interaction_id domknietej rozmowy z tego celu na tej parze
+    klucz+model, gdy da sie ja ciagnac dalej — inaczej None.
+    """
+
+    if not GEMINI_PAMIEC:
+        return None
+
+    stan = _pamiec_wykonawcy()
+    ident = str(stan.get("interaction_id") or "")
+
+    if not ident:
+        return None
+
+    if stan.get("cel") != _odcisk_tresci(str(_current_goal_text or "")):
+        return None
+
+    if stan.get("klucz") != str(klucz) or stan.get("model") != str(model):
+        return None
+
+    try:
+        if time.time() - float(stan.get("czas") or 0) > _GEMINI_PAMIEC_GODZIN * 3600:
+            return None
+        if int(stan.get("tokeny") or 0) > GEMINI_PAMIEC_TOKENY:
+            log(
+                "GEMINI",
+                "Rozmowa wykonawcy urosla do " + str(stan.get("tokeny"))
+                + " tokenow kontekstu — zaczynam nowa (limit "
+                + str(GEMINI_PAMIEC_TOKENY) + ")."
+            )
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    return ident
+
+
+def _tokeny_kontekstu(interaction):
+    """Ile tokenow wejscia mial ostatni obrot — czyli ile wazy historia."""
+
+    uzycie = getattr(interaction, "usage", None)
+
+    for pole in ("total_input_tokens", "total_tokens"):
+        try:
+            wartosc = int(getattr(uzycie, pole, None) or 0)
+        except (TypeError, ValueError):
+            wartosc = 0
+        if wartosc:
+            return wartosc
+
+    return 0
+
+
+def _zapamietaj_rozmowe_wykonawcy(task_id, klucz, model, interaction, interaction_id):
+    """
+    Zapisuje DOMKNIETA interakcje jako punkt, od ktorego pojdzie
+    nastepne zadanie. Wolane tylko tam, gdzie kazde wywolanie
+    narzedzia dostalo juz wynik.
+    """
+
+    if not interaction_id:
+        return
+
+    write_json(
+        GEMINI_STATE_FILE,
+        {
+            "task_id": task_id,
+            "interaction_id": interaction_id,
+            "cel": _odcisk_tresci(str(_current_goal_text or "")),
+            "klucz": str(klucz),
+            "model": str(model),
+            "tokeny": _tokeny_kontekstu(interaction),
+            "czas": time.time(),
+            "updated": datetime.now().isoformat()
+        }
+    )
+
+
+def _rozmowa_wykonawcy_wygasla(blad):
+    """Czy serwer nie zna juz interakcji, ktora chcielismy ciagnac."""
+
+    tekst = str(blad or "").lower()
+
+    return (
+        "previous_interaction" in tekst
+        or "not found" in tekst
+        or "404" in tekst
+        or "no longer" in tekst
+        or "expired" in tekst
+        or ("interaction" in tekst and "invalid" in tekst)
+    )
+
+
+def _domknij_runde(client, model, interaction_id, odpowiedzi, bez_wyniku, powod):
+    """
+    Zamyka runde po przerwaniu zadania: wywolania, ktore nie dostaly
+    wyniku, dostaja fakt o przerwaniu, i idzie jedna wiadomosc BEZ
+    narzedzi — Gemini moze tylko napisac, co o tym mysli.
+
+    Zwraca (tekst, domknieta interakcja albo None).
+    """
+
+    if not interaction_id:
+        return "", None
+
+    wszystkie = list(odpowiedzi)
+
+    for call in bez_wyniku:
+        wszystkie.append(
+            _odpowiedz_narzedzia(
+                call,
+                str(getattr(call, "name", "") or "?").split(":")[-1],
+                {"ok": False, "error": "PRZERWANE", "message": powod}
+            )
+        )
+
+    if not wszystkie:
+        return "", None
+
+    try:
+        ostatnia = _gemini_create(
+            client,
+            model=model,
+            input=wszystkie,
+            previous_interaction_id=interaction_id
+        )
+    except Exception as e:
+        log("GEMINI", "Domkniecie rundy: " + short(str(e), 200))
+        return "", None
+
+    tekst = _tekst_interakcji(ostatnia).strip()
+
+    if _wywolania_w_interakcji(ostatnia):
+        return tekst, None
+
+    return tekst, ostatnia
 
 
 def _stan_telefonu_dla_wykonawcy():
@@ -22128,7 +24489,8 @@ def gemini_execute_task(task_id, task, success_condition=''):
         return {
             "ok": False,
             "status": "NO_GEMINI_CLIENT",
-            "error": "Nie ma czym tego wykonać."
+            "error": "Brak klucza Gemini — zadanie nie poszło.",
+            "message": "RUN wykonuje akcje bez Gemini."
         }
 
     # v449: najwyzszy stopien drabinki modeli, ktory ma teraz limit.
@@ -22156,7 +24518,13 @@ def gemini_execute_task(task_id, task, success_condition=''):
 
     key_name, client, _model = _para
 
-    log("GEMINI", "model: " + _model + " (klucz " + key_name + ")")
+    _para_w_uzyciu[0], _para_w_uzyciu[1] = key_name, _model
+
+    log(
+        "GEMINI",
+        "model: " + _model + " (klucz " + key_name + ", dziś "
+        + str(_zapytan_dzis(key_name, _model)) + " zapytań)"
+    )
     zapisz_zdarzenie("gemini_model", model=_model, klucz=key_name)
 
     # ========================================================
@@ -22288,6 +24656,29 @@ def gemini_execute_task(task_id, task, success_condition=''):
     if _stan_telefonu:
         _stan_telefonu += "\n\n"
 
+    # v452: ciagniemy rozmowe z poprzednich zadan tego celu — zasady
+    # juz w niej sa, idzie samo zadanie.
+    _poprzednia_rozmowa = _pamiec_wykonawcy_dla(key_name, _model)
+
+    prompt_kontynuacji = f"""
+Nowe zadanie w tej samej robocie — zasady pracy jak dotąd. To, co
+zrobiłeś i zobaczyłeś w poprzednich zadaniach, masz w tej rozmowie.
+
+{_stan_telefonu}WARUNEK SUKCESU:
+{success_condition}
+
+TASK ID:
+{task_id}
+
+TASK:
+{task}
+
+Na koniec napisz zwyczajnie, jak koledze z zespołu: co zrobiłeś, co
+z tego wyszło, co się nie udało i jak to teraz wygląda. Powiedz
+wprost, czy warunek sukcesu jest spełniony, a jeśli coś zostało do
+zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
+"""
+
     prompt = f"""
 Jesteś wykonawcą autonomicznego agenta. DeepSeek to mózg, Ty
 wykonujesz REALNIE jego zadania dostępnymi narzędziami (Termux,
@@ -22331,6 +24722,10 @@ Jak się tu pracuje:
 8. Do usuwania plików i katalogów służy termux_delete: pokazuje
    operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
    operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
+
+CEL, do którego zmierza cały zespół (Twoje zadania to jego kolejne
+kroki):
+{short(str(_current_goal_text or ""), 1200)}
 
 {_stan_telefonu}WARUNEK SUKCESU:
 {success_condition}
@@ -22386,14 +24781,40 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
     collected_confirmed_texts = []
 
     try:
-        interaction = _gemini_create(client,
-            model=_model,
-            input=prompt,
-            tools=gemini_tools(_task_haystack)
-        )
+        if _poprzednia_rozmowa:
 
-        # Klucz odpowiedzial — jesli byl odstawiony, wraca.
-        mark_key_ok(key_name)
+            log(
+                "GEMINI",
+                "pamięć: ciągnę rozmowę wykonawcy z tego celu ("
+                + str(_pamiec_wykonawcy().get("tokeny") or 0)
+                + " tokenów kontekstu)."
+            )
+
+            try:
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=prompt_kontynuacji,
+                    previous_interaction_id=_poprzednia_rozmowa,
+                    tools=gemini_tools(_task_haystack)
+                )
+            except Exception as e:
+                if not _rozmowa_wykonawcy_wygasla(e):
+                    raise
+                log(
+                    "GEMINI",
+                    "pamięć: serwer nie zna już tej rozmowy ("
+                    + short(str(e), 120) + ") — zaczynam nową."
+                )
+                _poprzednia_rozmowa = None
+
+        if not _poprzednia_rozmowa:
+            interaction = _gemini_create(client,
+                model=_model,
+                input=prompt,
+                tools=gemini_tools(_task_haystack)
+            )
+
+        # Para klucz+model odpowiedziala — jesli byla odstawiona, wraca.
         _para_dziala(key_name, _model)
 
         interaction_id = getattr(
@@ -22401,16 +24822,6 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             "id",
             None
         )
-
-        if interaction_id:
-            write_json(
-                GEMINI_STATE_FILE,
-                {
-                    "task_id": task_id,
-                    "interaction_id": interaction_id,
-                    "updated": datetime.now().isoformat()
-                }
-            )
 
         tool_calls = 0
 
@@ -22591,6 +25002,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # wykonywanie TASK-a sie skonczylo. Czy cel zostal
                 # osiagniety, rozstrzyga MAIN — na podstawie
                 # raportu, sladu narzedzi i "dowodow" ponizej.
+                # v452: kazde wywolanie ma wynik, Gemini skonczylo
+                # tekstem — od tej interakcji pojdzie nastepne zadanie.
+                _zapamietaj_rozmowe_wykonawcy(
+                    task_id, key_name, _model, interaction, interaction_id
+                )
+
                 return {
                     "ok": True,
                     "status": "TASK_EXECUTION_FINISHED",
@@ -23010,13 +25427,24 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 
                 if _identical_streak >= GEMINI_IDENTICAL_CALL_STOP:
 
+                    # v451: ten straznik od v371 NICZEGO nie przerywa —
+                    # oddaje wynik z uwaga i konczy sama runde. Log
+                    # mowil "przerywam… nie pale reszty limitu", a
+                    # limit szedl dalej; w sladzie dla MAIN-a rosly
+                    # kolejne "4 razy", "5 razy"… — zostaje ostatnia.
                     log(
                         "GEMINI",
-                        "przerywam: " + str(name) + " zwrocilo "
+                        "straznik: " + str(name) + " zwrocilo "
                         + str(_identical_streak) + " razy pod rzad "
-                        "DOKLADNIE ten sam wynik. To czekanie, nie "
-                        "praca — nie pale na to reszty limitu."
+                        "DOKLADNIE ten sam wynik — to czekanie, nie "
+                        "praca. Mowie to wykonawcy przy tym wyniku; "
+                        "co dalej, decyduje on."
                     )
+
+                    collected_warnings[:] = [
+                        w for w in collected_warnings
+                        if not str(w).startswith("gemini [petla_czekania]: ")
+                    ]
 
                     collected_warnings.append(
                         "gemini [petla_czekania]: " + str(name)
@@ -23282,6 +25710,25 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         else ""
                     )
 
+                    # v452: runda nie zostaje otwarta. Wynik tego
+                    # wywolania i fakt o przerwaniu dla pozostalych ida
+                    # do Gemini bez narzedzi; jego slowa o tym bledzie
+                    # trafiaja do MAIN-a, a rozmowa nadaje sie do
+                    # ciagniecia w nastepnym zadaniu.
+                    _idx = function_calls.index(call)
+                    _slowa, _domknieta = _domknij_runde(
+                        client, _model, interaction_id,
+                        responses + [_odpowiedz_narzedzia(call, name, result)],
+                        function_calls[_idx + 1:],
+                        "zadanie przerwane po błędzie narzędzia " + str(name)
+                    )
+
+                    if _domknieta is not None:
+                        _zapamietaj_rozmowe_wykonawcy(
+                            task_id, key_name, _model, _domknieta,
+                            getattr(_domknieta, "id", None)
+                        )
+
                     error_report = {
                         "task_id": task_id,
                         "status": "GEMINI_TOOL_ERROR",
@@ -23291,6 +25738,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "tool": name,
                         "arguments": args,
                         "tool_result": result,
+                        **({"report": short(_slowa, RESULT_LIMIT)} if _slowa else {}),
                         # v429: bez "Narzedzie zakonczylo sie bledem." —
                         # to nic nie mowi; zostaje tylko podpowiedz przy
                         # grep/test z kodem 1, gdy jest.
@@ -23430,23 +25878,20 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             if new_id:
                 interaction_id = new_id
 
-                write_json(
-                    GEMINI_STATE_FILE,
-                    {
-                        "task_id": task_id,
-                        "interaction_id": interaction_id,
-                        "updated": datetime.now().isoformat()
-                    }
-                )
-
         # ====================================================
         # LIMIT NARZĘDZI
         # ====================================================
 
-        _raport = _raport_po_limicie(
+        _raport, _domknieta = _raport_po_limicie(
             client, _model, interaction, interaction_id,
             gemini_tools(_task_haystack)
         )
+
+        if _domknieta is not None:
+            _zapamietaj_rozmowe_wykonawcy(
+                task_id, key_name, _model, _domknieta,
+                getattr(_domknieta, "id", None)
+            )
 
         return {
             "ok": False,
@@ -23494,12 +25939,21 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             if _limit:
                 _odstaw_pare(key_name, _model, error_text)
             else:
-                _odstaw_pare(
-                    key_name, _model, error_text,
-                    sekund=120, powod="serwer przeciążony"
-                )
+                # v462: przeciazony jest MODEL, nie klucz — ten sam
+                # model na drugim kluczu dal 503 po kolejnych 4 min.
+                for _k in list(gemini_clients.keys()):
+                    _odstaw_pare(
+                        _k, _model, error_text,
+                        sekund=120, powod="serwer przeciążony"
+                    )
 
-            if tool_calls == 0 and _wybierz_pare() is not None:
+            _przeskoki = globals().setdefault("_przeskoki_zadan", {})
+            if (
+                tool_calls == 0
+                and _wybierz_pare() is not None
+                and _przeskoki.get(task_id, 0) < 1
+            ):
+                _przeskoki[task_id] = _przeskoki.get(task_id, 0) + 1
 
                 log(
                     "GEMINI",
@@ -23513,8 +25967,40 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     success_condition
                 )
 
-            if _wybierz_pare() is None:
+            _nastepna = _wybierz_pare()
+
+            if _nastepna is None:
                 gemini_disabled = True
+
+            # v456: MAIN czytal surowe "limit: 20 requests per day" jako
+            # "wykonawca na dzis skonczony" i zlecal robote uzytkownikowi
+            # (bieg 2026-09-27 20:49, krok 3) — a program mial jeszcze
+            # inne modele. Idzie fakt: na czym pojdzie nastepne zadanie.
+            if _nastepna is not None:
+                _co_dalej = (
+                    "Limit dotyczy tylko modelu " + str(_model)
+                    + " na kluczu " + str(key_name)
+                    + "; następne zadanie pójdzie na " + str(_nastepna[2])
+                    + " (klucz " + str(_nastepna[0]) + ")."
+                )
+            else:
+                _najbl = _najblizsze_odnowienie()
+                _co_dalej = (
+                    "Wszystkie modele wykonawcy mają teraz wyczerpany limit"
+                    + (
+                        " — najbliższy wraca o "
+                        + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+                        + " (" + _najbl[2] + ")"
+                        if _najbl else ""
+                    )
+                    + "; program czeka sam i wraca, gdy limit się odnowi."
+                )
+            if not _limit:
+                _co_dalej = (
+                    "Wykonawca nie odpowiedział (" + str(_model)
+                    + "). RUN wykonuje akcje bez Gemini."
+                    + (" " + _co_dalej if _co_dalej else "")
+                )
 
             return {
                 "ok": False,
@@ -23527,8 +26013,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 "model": _model,
                 "error": short(
                     error_text,
-                    3000
+                    600
                 ),
+                "message": _co_dalej,
                 "tool_calls": tool_calls,
                 "tool_warnings": collected_warnings,
                 "tool_trace": collected_tool_trace,
@@ -23670,7 +26157,8 @@ def _checklist_record_result(task_id, result):
         # _dowody_z_wykonania). Weryfikacja warunku sukcesu dziala
         # dokladnie jak przedtem.
         if result.get("status") in (
-            "TASK_EXECUTION_FINISHED", "COMPLETED"
+            "TASK_EXECUTION_FINISHED", "COMPLETED",
+            "RUN_FINISHED", "RUN_TOOL_ERROR"
         ):
             verified, evidence = _verify_success_condition_evidence(
                 item.get("success_condition", ""),
@@ -24444,70 +26932,24 @@ def run_next_task():
 
         result["generic_failure_streak"] = generic_streak
 
+        # v454: same fakty — ile razy ta czynnosc juz padla. Co z tym
+        # zrobic, decyduje MAIN; agent.py nie lata sie sam.
         if attempt_count >= TOOL_REPEAT_LIMIT:
-
-            log(
-                "MAIN",
-                "To samo narzędzie zawiodło "
-                + str(attempt_count)
-                + "x z tymi samymi argumentami -> "
-                "CODE_REVIEWER / CODE_FIXER"
-            )
-
-            review = review_code({
-                "task_id": result.get("task_id"),
-                "tool": result.get("tool"),
-                "arguments": result.get("arguments"),
-                "tool_result": result.get("tool_result"),
-                "interaction_id": result.get("interaction_id"),
-                "attempt_count": attempt_count
-            })
-
-            result["code_review"] = review
-
-            log_event(
-                "code_review_triggered",
-                {
-                    "tool": result.get("tool"),
-                    "attempt_count": attempt_count,
-                    "patch_applied": (
-                        review.get("patch_result", {}).get("applied")
-                        if isinstance(review, dict) else None
-                    )
-                }
-            )
-
-        else:
-
             result["hint"] = (
-                "To próba nr " + str(attempt_count) + " tej "
-                "dokładnej czynności (to samo narzędzie + te same "
-                "argumenty). MAIN: spróbuj innego podejścia w "
-                "zwykłym TASKu. Dopiero po " + str(TOOL_REPEAT_LIMIT)
-                + ". identycznej porażce agent automatycznie "
-                "konsultuje CODE_REVIEWERA."
+                "To samo wywołanie (narzędzie + te same argumenty) "
+                "zawiodło już " + str(attempt_count) + " razy."
             )
 
-            if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
-
-                result["hint"] += (
-                    " DODATKOWO: narzędzie '" + str(result.get("tool"))
-                    + "' zawiodło już " + str(generic_streak) + "x z "
-                    "rzędu w tym celu — za każdym razem z INNYMI "
-                    "argumentami (dlatego to NIE jest jeszcze "
-                    "automatyczna eskalacja do CODE_REVIEWERA powyżej). "
-                    "Jeśli ta robota wymaga prawdziwej logiki "
-                    "(parsowanie, dopasowywanie danych, obsługa "
-                    "wariantów), zamiast kolejnej komendy powłoki "
-                    "opłaca się napisać własne narzędzie: zwykły plik "
-                    ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME "
-                    "(nazwa), TOOL_DESCRIPTION (co robi), "
-                    "TOOL_PARAMETERS (JSON Schema, jak przy "
-                    "pozostałych narzędziach) i funkcją run(...) "
-                    "zwracającą słownik. Python wczytuje taki plik "
-                    "sam, raz na krok, bez restartu — od tej chwili "
-                    "jest na liście narzędzi jak każde inne."
-                )
+        if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
+            result["hint"] = (
+                (result.get("hint", "") + " ").strip() + " Narzędzie "
+                + str(result.get("tool")) + " zawiodło " + str(generic_streak)
+                + " razy z rzędu w tym celu, za każdym razem z innymi "
+                "argumentami. Zespół może dopisać własne narzędzie: plik "
+                ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME, "
+                "TOOL_DESCRIPTION, TOOL_PARAMETERS (JSON Schema) i run(...) "
+                "zwracającym słownik — program wczytuje go sam, co krok."
+            ).strip()
 
     elif result.get("ok"):
 
@@ -24629,50 +27071,6 @@ def run_next_task():
 # ============================================================
 # DEEPSEEK TEAM
 # ============================================================
-
-
-def extract_function_source(source, function_name):
-    """
-    Wyciąga kod jednej funkcji top-level po nazwie — od
-    'def <nazwa>(' do kolejnego 'def '/'class ' na poziomie
-    wcięcia 0. Plik nie ma klas i funkcje top-level nie są
-    zagnieżdżane w sobie na tym poziomie, więc to wystarczy —
-    dzięki temu CODE_REVIEWER dostaje RZECZYWIŚCIE potrzebny
-    fragment zamiast przypadkowej końcówki pliku (poprzednio
-    source[-16000:] — dla pliku >120KB to ostatnie ~12%; błąd w
-    execute_shell() czy termux_run(), które leżą znacznie
-    wcześniej w pliku, w ogóle nie trafiał do CODE_REVIEWERA).
-    """
-
-    if not function_name:
-        return ""
-
-    pattern = re.compile(
-        r"^def "
-        + re.escape(str(function_name))
-        + r"\(",
-        re.MULTILINE
-    )
-
-    match = pattern.search(source)
-
-    if not match:
-        return ""
-
-    start = match.start()
-
-    next_def = re.search(
-        r"^(?:def |class )",
-        source[match.end():],
-        re.MULTILINE
-    )
-
-    if next_def:
-        end = match.end() + next_def.start()
-    else:
-        end = len(source)
-
-    return source[start:end].rstrip()
 
 
 # Shebang mowi o jezyku pliku dokladniej niz znacznik po ```.
@@ -25691,6 +28089,237 @@ def _uruchom_jako_usluge(path, command, powod):
     }
 
 
+# ============================================================
+# RUN — MAIN WYKONUJE SAM, PYTHON JEST REKAMI (v459)
+# ============================================================
+#
+# Uzytkownik: "czy lepiej, jak MAIN bedzie sam wykonywal? dalo by sie
+# tak napisac program, by Python z wszystkim sobie radzil sam, przez
+# MAIN-a?". Da sie — i to nie zamiast Gemini, tylko obok.
+#
+# MAIN (DeepSeek) rozumuje lepiej niz Gemini flash-lite i widzi caly
+# cel, ale kazda jego wiadomosc to 6-60 s i jedna z ~90 na godzine na
+# konto. Gemini jest szybszy na pojedynczym wywolaniu, ale gubi sie na
+# stronach i ma limity. Wiec MAIN dostaje wybor: RUN = lista do
+# _RUN_MAX_AKCJI akcji, wykonana tu, od razu, tymi samymi narzedziami
+# co u Gemini (dispatch_tool), z pelnymi wynikami z powrotem — w tym
+# numerowana lista elementow strony, po ktorej klika chrome_click(nr).
+# TASK zostaje dla dluzszej roboty. Bez klucza Gemini program dziala
+# dalej — przez RUN.
+
+_RUN_MAX_AKCJI = int(os.environ.get("RUN_MAX_AKCJI", "12"))
+
+
+def _wykonaj_akcje_maina(decision, step):
+    """Wykonuje akcje z decyzji RUN po kolei; zatrzymuje sie na bledzie."""
+
+    akcje = decision.get("actions")
+    if akcje is None:
+        akcje = decision.get("akcje")
+    if isinstance(akcje, dict):
+        akcje = [akcje]
+    if not isinstance(akcje, list) or not akcje:
+        return {
+            "ok": False,
+            "status": "RUN_BEZ_AKCJI",
+            "executed_by": "main_run",
+            "message": "RUN bez listy actions — nic nie wykonałem.",
+            "tool_calls": 0, "tool_trace": [], "tool_warnings": [],
+            "confirmed_texts": [], "wyniki_run": []
+        }
+
+    trace, wyniki, warnings = [], [], []
+    ok_all, status, pominiete = True, "RUN_FINISHED", 0
+
+    globals()["_wykonuje_main"] = True
+
+    for i, akcja in enumerate(akcje[:_RUN_MAX_AKCJI]):
+
+        if not isinstance(akcja, dict):
+            continue
+
+        name = str(
+            akcja.get("tool") or akcja.get("narzedzie") or akcja.get("name") or ""
+        ).split(":")[-1].strip()
+
+        args = akcja.get("args")
+        if args is None:
+            args = akcja.get("arguments", akcja.get("argumenty", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+
+        if not name:
+            continue
+
+        log("MAIN", "RUN #" + str(i + 1) + ": " + name)
+        zapisz_zdarzenie("narzedzie", nazwa=name, argumenty=args)
+
+        try:
+            result = dispatch_tool(name, args)
+        except Exception as e:
+            result = {"ok": False, "error": str(e), "error_type": type(e).__name__}
+
+        if isinstance(result, dict):
+            result = _bez_ostrzezen_pythona(result)
+            for _v in result.values():
+                if isinstance(_v, str):
+                    _znane_dodaj(_v)
+
+        _zapisz_uruchomienie(name, args, result)
+
+        log(
+            "MAIN",
+            "wynik: " + short(json.dumps(result, ensure_ascii=False, default=str), 1000)
+        )
+
+        zapisz_zdarzenie(
+            "wynik", nazwa=name,
+            ok=bool(result.get("ok", True) if isinstance(result, dict) else True),
+            wynik=result
+        )
+
+        trace.append({
+            "tool": name,
+            "ok": result.get("ok") if isinstance(result, dict) else None,
+            "evidence": _short_tool_evidence(result),
+            "cel_akcji": _cel_akcji_narzedzia(name, args, result),
+            "komenda": (
+                str(args.get("command") or "")
+                if name.startswith("termux_run") else ""
+            )
+        })
+
+        wyniki.append({"tool": name, "args": args, "wynik": result})
+
+        padlo = isinstance(result, dict) and result.get("ok") is False
+
+        if padlo and (
+            _shell_failure_is_just_missing_file(name, result)
+            or _brak_to_odpowiedz(name, args, result)
+        ):
+            padlo = False
+
+        if padlo:
+            ok_all, status = False, "RUN_TOOL_ERROR"
+            pominiete = len(akcje) - (i + 1)
+            break
+
+    globals()["_wykonuje_main"] = False
+
+    if len(akcje) > _RUN_MAX_AKCJI and status == "RUN_FINISHED":
+        warnings.append(
+            "RUN miał " + str(len(akcje)) + " akcji; wykonałem "
+            + str(_RUN_MAX_AKCJI) + " (limit na jedno RUN)."
+        )
+        pominiete = len(akcje) - _RUN_MAX_AKCJI
+
+    wynik = {
+        "ok": ok_all,
+        "status": status,
+        "executed_by": "main_run",
+        "tool_calls": len(wyniki),
+        "tool_trace": trace,
+        "wyniki_run": wyniki,
+        "tool_warnings": warnings,
+        "confirmed_texts": [],
+        "pominiete_akcje": pominiete,
+        "dowody": _dowody_z_wykonania(trace, warnings),
+        "report": (
+            # v460: z powodem MAIN-a — Ela widziala tylko "MAIN wykonal
+            # 4 z 4 akcji" i nie wiedziala, o co w tych akcjach szlo.
+            (short(str(decision.get("reason") or ""), 240) + " — "
+             if decision.get("reason") else "")
+            + "wykonano " + str(len(wyniki)) + " z " + str(len(akcje))
+            + " akcji" + (" — zatrzymano na błędzie " + str(wyniki[-1]["tool"])
+                          if status == "RUN_TOOL_ERROR" and wyniki else "")
+            + "."
+        )
+    }
+
+    _run_id = (
+        "run_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_"
+        + uuid.uuid4().hex[:6]
+    )
+
+    try:
+        write_json(
+            RESULTS_DIR / (_run_id + ".json"),
+            dict(wynik, task=str(decision.get("reason") or ""))
+        )
+        write_json(LAST_RESULT_FILE, wynik)
+    except Exception:
+        pass
+
+    # v460: RUN liczy sie jak zadanie — dowody z narzedzi ida do
+    # checklisty, z ktorej czerpia Ela (_co_narzedzia_naprawde_zrobily)
+    # i verify_final ("czy cokolwiek realnie zadzialalo").
+    try:
+        _checklist_add(_run_id, "RUN: " + str(decision.get("reason") or ""), "")
+        _checklist_record_result(_run_id, wynik)
+    except Exception:
+        pass
+
+    try:
+        skopiuj_przebieg_na_telefon()
+    except Exception:
+        pass
+
+    return wynik
+
+
+def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
+    """Pelne wyniki akcji RUN dla MAIN-a — to on na nich pracuje."""
+
+    wyniki = (last_result or {}).get("wyniki_run") or []
+    czesci = []
+    ile = 0
+
+    # v468: gdy calosc nie miesci sie w limicie, kazdy wynik dostaje
+    # rowna czesc, ale ZADEN nie wypada — bieg 2026-09-30, krok 67:
+    # "wynik ostatnich akcji jest uciety" i MAIN powtarzal zapis.
+    if wyniki:
+        _pelne = sum(
+            len(json.dumps(w.get("wynik"), ensure_ascii=False, default=str)) + 400
+            for w in wyniki
+        )
+        if _pelne > razem:
+            na_akcje = max(700, min(na_akcje, (razem - 300 * len(wyniki)) // len(wyniki)))
+
+    for i, w in enumerate(wyniki):
+        _wynik = w.get("wynik")
+        # v460: "snapshot" (lista kart) powtarzal sie w kazdym wyniku
+        # i zjadal miejsce, przez co "strona" (tekst + elementy) po
+        # chrome_open byla ucieta — MAIN dokladal chrome_inspect po
+        # kazdym chrome_open. Karty MAIN dostaje osobno.
+        if isinstance(_wynik, dict) and "snapshot" in _wynik:
+            _wynik = {k: v for k, v in _wynik.items() if k != "snapshot"}
+        tekst = (
+            str(i + 1) + ". " + str(w.get("tool")) + " "
+            + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
+            + "\n" + short(json.dumps(_wynik, ensure_ascii=False, default=str), na_akcje)
+        )
+        ile += len(tekst)
+        if ile > razem:
+            czesci.append("(dalsze wyniki pominięte — za długie)")
+            break
+        czesci.append(tekst)
+
+    if not czesci:
+        return ""
+
+    pominiete = int(last_result.get("pominiete_akcje") or 0)
+
+    return (
+        "Wyniki akcji RUN:\n" + "\n\n".join(czesci)
+        + ("\nNie wykonałem " + str(pominiete) + " kolejnych akcji." if pominiete else "")
+    )
+
+
 def _run_script_directly(path, task_text):
     """
     Uruchamia zapisany skrypt przez to samo execute_shell, ktorego
@@ -26067,7 +28696,18 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         "Bartek, potem wykonanie."
     )
 
-    odp = deepseek("ENGINEER", task_text)
+    # v452: jeden fakt przed zleceniem — kto je wykonuje i co z jego
+    # odpowiedzi trafi na dysk. Bez tego Bartek czytal zadanie jako
+    # polecenie dla siebie i pytal "kto to robi?" (bieg 2026-09-25
+    # 16:15, krok 10).
+    odp = deepseek(
+        "ENGINEER",
+        "MAIN zlecił programowi poniższe zadanie. Do "
+        + ", ".join(Path(x).name for x in pliki)
+        + " nikt z zespołu nie napisał jeszcze kodu — program położy "
+        "na dysk to, co napiszesz do tych plików, i je uruchomi.\n\n"
+        + task_text
+    )
 
     if not str(odp or "").strip():
         return []
@@ -28115,337 +30755,20 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
     }
 
 
-def apply_patch_from_fixer_text(fixer_text):
-    """
-    Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
-    NAPRAWDĘ nakłada go na agent.py:
-
-        1. backup z znacznikiem czasu (agent.py.bak_YYYYMMDD_HHMMSS),
-        2. dokładna, jednoznaczna podmiana tekstu (musi wystąpić
-           w pliku dokładnie raz — inaczej patch jest odrzucany),
-        3. python -m py_compile na wynikowym pliku,
-        4. jeżeli kompilacja się nie powiedzie — automatyczny
-           rollback z backupu.
-
-    To jest właśnie ten mechanizm, który wcześniej istniał
-    WYŁĄCZNIE jako punkty w CODE_FIXER_PROMPT ("1. backup,
-    2. patch, 3. py_compile, 4. rollback") — bez żadnego kodu,
-    który by to faktycznie robił. CODE_FIXER pisał, że to zrobi;
-    nic tego nie wykonywało.
-
-    WAŻNE OGRANICZENIE: modyfikuje plik NA DYSKU. Już uruchomiony
-    proces Pythona ma stary kod załadowany w pamięci i będzie go
-    używać do końca bieżącej sesji — nowa wersja zacznie
-    obowiązywać dopiero przy KOLEJNYM uruchomieniu agent.py. To
-    świadoma decyzja: bezpieczne, przewidywalne "napraw plik,
-    zrestartuj" jest dużo pewniejsze niż próba podmiany kodu
-    żywego procesu w trakcie działania (otwarte sesje ADB/CDP,
-    kolejka, stan Gemini).
-    """
-
-    match = re.search(
-        r"<<<<<<<\s*SZUKAJ\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>>\s*ZAMIEŃ",
-        fixer_text or "",
-        re.DOTALL
-    )
-
-    if not match:
-        return {
-            "applied": False,
-            "reason": (
-                "Nie znaleziono bloku <<<<<<< SZUKAJ / ======= / "
-                ">>>>>>> ZAMIEŃ w odpowiedzi CODE_FIXERA — patch "
-                "nienałożony."
-            )
-        }
-
-    old_block = match.group(1)
-    new_block = match.group(2)
-
-    target = Path(__file__)
-
-    try:
-        source = target.read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się odczytać pliku: " + str(e)
-        }
-
-    occurrences = source.count(old_block)
-
-    if occurrences == 0:
-        return {
-            "applied": False,
-            "reason": (
-                "Fragment SZUKAJ nie występuje w pliku dokładnie "
-                "(CODE_FIXER prawdopodobnie nie skopiował go "
-                "1:1, np. inne wcięcia)."
-            )
-        }
-
-    if occurrences > 1:
-        return {
-            "applied": False,
-            "reason": (
-                "Fragment SZUKAJ występuje w pliku "
-                + str(occurrences)
-                + " razy — patch odrzucony dla bezpieczeństwa "
-                "(musi być jednoznaczny)."
-            )
-        }
-
-    backup_path = target.with_name(
-        target.name
-        + ".bak_"
-        + datetime.now().strftime("%Y%m%d_%H%M%S")
-    )
-
-    try:
-        backup_path.write_text(
-            source,
-            encoding="utf-8"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się utworzyć backupu: " + str(e)
-        }
-
-    new_source = source.replace(old_block, new_block, 1)
-
-    try:
-        target.write_text(
-            new_source,
-            encoding="utf-8"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się zapisać patcha: " + str(e),
-            "backup": str(backup_path)
-        }
-
-    try:
-        compile_check = subprocess.run(
-            [sys.executable, "-m", "py_compile", str(target)],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-    except Exception as e:
-        compile_check = None
-        compile_error = str(e)
-    else:
-        compile_error = compile_check.stderr
-
-    compile_ok = bool(
-        compile_check is not None
-        and compile_check.returncode == 0
-    )
-
-    if not compile_ok:
-
-        # ROLLBACK — nigdy nie zostawiamy uszkodzonego pliku.
-        target.write_text(
-            source,
-            encoding="utf-8"
-        )
-
-        log(
-            "CODE_FIXER",
-            "py_compile nie przeszedł — rollback z "
-            + str(backup_path)
-        )
-
-        return {
-            "applied": False,
-            "rolled_back": True,
-            "reason": "py_compile nie przeszedł — przywrócono backup.",
-            "compile_error": short(compile_error or "", 2000),
-            "backup": str(backup_path)
-        }
-
-    log(
-        "CODE_FIXER",
-        "Patch nałożony i zweryfikowany (py_compile OK). "
-        "Backup: " + str(backup_path)
-        + " — zacznie obowiązywać po restarcie agenta."
-    )
-
-    log_event(
-        "patch_applied",
-        {
-            "backup": str(backup_path),
-            "old_block_preview": short(old_block, 300),
-            "new_block_preview": short(new_block, 300)
-        }
-    )
-
-    return {
-        "applied": True,
-        "backup": str(backup_path),
-        "note": (
-            "Plik na dysku jest naprawiony i przechodzi "
-            "py_compile. Bieżący, już uruchomiony proces nadal "
-            "działa na starym kodzie w pamięci — zrestartuj "
-            "agent.py, żeby poprawka zaczęła obowiązywać."
-        )
-    }
-
-
-def review_code(context=None):
-    """
-    CODE_REVIEWER analizuje RZECZYWIŚCIE relewantny fragment
-    agent.py (konkretne funkcje, nie przypadkową końcówkę pliku).
-    CODE_FIXER przygotowuje patch w formacie SZUKAJ/ZAMIEŃ, a
-    apply_patch_from_fixer_text() nakłada go naprawdę: backup ->
-    patch -> py_compile -> rollback przy błędzie.
-
-    `context` to słownik, najczęściej dokładnie ten error_report,
-    jaki gemini_execute_task() już i tak buduje przy
-    GEMINI_TOOL_ERROR: task_id, tool, arguments, tool_result,
-    interaction_id, attempt_count.
-    """
-
-    context = context or {}
-
-    try:
-
-        source = Path(__file__).read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-
-        tool = context.get("tool", "")
-
-        # Zawsze patrzymy na miejsca statystycznie najbardziej
-        # prawdopodobne przy błędach narzędzi Gemini, plus
-        # konkretną funkcję zgłoszonego narzędzia, jeśli istnieje
-        # pod tą samą nazwą w pliku.
-        candidate_names = [
-            tool,
-            "dispatch_tool",
-            "_dispatch_tool_inner",
-            "execute_shell",
-            "termux_run",
-        ]
-
-        code_context = []
-        seen = set()
-
-        for fn_name in candidate_names:
-
-            if not fn_name or fn_name in seen:
-                continue
-
-            seen.add(fn_name)
-
-            snippet = extract_function_source(
-                source,
-                fn_name
-            )
-
-            if snippet:
-                code_context.append(
-                    "### " + fn_name + "()\n\n" + snippet
-                )
-
-        if not code_context:
-            # Fallback — nic nie rozpoznaliśmy po nazwie,
-            # lepszy przypadkowy kontekst niż żaden.
-            code_context = [source[-16000:]]
-
-        joined_context = short(
-            "\n\n".join(code_context),
-            16000
-        )
-
-        # v349: Piotr dostaje fakty i kod, bez formatki.
-        #
-        # Bylo tu "Zwroc: PLIK / PROBLEM / DOKLADNE MIEJSCE / PRZYCZYNA
-        # / PROPONOWANA ZMIANA / RYZYKO / TEST" plus "Nie wykonuj
-        # zmian" — czyli formularz do wypelnienia i zakaz. Dokladnie
-        # to, czego pozbylismy sie wszedzie indziej; przetrwalo
-        # tylko dlatego, ze Piotr stoi poza glownym obiegiem.
-        #
-        # Zmian i tak nie wykonuje — nie ma czym. Poprawke nanosi
-        # Python z tego, co napisze Ania.
-        reviewer_message = f"""
-Ta sama czynność zawiodła {context.get('attempt_count', '?')} razy
-z rzędu.
-
-Narzędzie: {tool}
-Argumenty: {short(json.dumps(context.get('arguments', {}), ensure_ascii=False, default=str), 1500)}
-Co zwróciło: {short(json.dumps(context.get('tool_result', {}), ensure_ascii=False, default=str), 3000)}
-
-Plik: {Path(__file__)}
-
-{joined_context}
-"""
-
-        review = deepseek(
-            "CODE_REVIEWER",
-            _wspolne_dla_wolanego("CODE_REVIEWER") + reviewer_message
-        )
-
-        append_memory(
-            MEMORY_DIR / "code_reviewer.md",
-            datetime.now().isoformat(),
-            review
-        )
-
-        fixer_message = f"""
-MAIN potrzebuje przygotowania poprawki.
-
-ANALIZA CODE_REVIEWERA:
-{short(review, 9000)}
-
-KONTEKST BŁĘDU:
-{short(json.dumps(context, ensure_ascii=False, default=str), 3000)}
-
-Napisz patch. Gdy bezpiecznej poprawki nie ma, powiedz to.
-"""
-
-        fixer = deepseek(
-            "CODE_FIXER",
-            _wspolne_dla_wolanego("CODE_FIXER") + fixer_message
-        )
-
-        append_memory(
-            MEMORY_DIR / "code_fixer.md",
-            datetime.now().isoformat(),
-            fixer
-        )
-
-        patch_result = {
-            "applied": False,
-            "reason": "CODE_FIXER nie zaproponował patcha."
-        }
-
-        # v330: nie ma juz hasla do wklepania. Gdy Ania nie dala
-        # zadnej poprawki, po prostu nie bedzie z czego jej wyjac —
-        # extract_search_replace_blocks() zwroci pusto i
-        # apply_patch_from_fixer_text() powie to wprost. Haslo
-        # zostaje obslugiwane dla starszych sesji, ktore maja je
-        # jeszcze w historii.
-        patch_result = apply_patch_from_fixer_text(fixer)
-
-        return {
-            "review": short(review, 4000),
-            "fixer": short(fixer, 4000),
-            "patch_result": patch_result
-        }
-
-    except Exception as e:
-
-        return {
-            "error": str(e)
-        }
-
+# ============================================================
+# v454: BEZ LATANIA agent.py W TRAKCIE BIEGU
+# ============================================================
+#
+# Do v453 druga identyczna porazka narzedzia wolala Piotra i Anie do
+# PRZEGLADU SAMEGO agent.py: Ania pisala patch, Python nakladal go na
+# wlasny plik (backup, py_compile, rollback) i mial obowiazywac po
+# restarcie. To przeczylo dwom zasadom z jak_to_dziala.txt: "zmiana w
+# programie tylko z konkretnego problemu w logach" i "Python jest
+# rekami" — a kosztowalo dwie wiadomosci DeepSeeka i ryzyko, ze
+# program po restarcie wstanie inny, niz go zostawiono. Piotr i Ania
+# zostaja przy kodzie ZESPOLU (review_and_fix_project_file); MAIN
+# dostaje fakt o powtorzonej porazce i sam decyduje o innej drodze.
+# ============================================================
 
 
 # ============================================================
@@ -28846,6 +31169,9 @@ _HUMAN_STATUS_LABELS = {
     "DONE_REJECTED_VERIFICATION_FAILED": "zgłoszony DONE odrzucony (brak dowodu)",
     "TASK_DUPLICATE_OF_VERIFIED_POINT": "powtórka już zweryfikowanego punktu",
     "TASK_ALREADY_SATISFIED_ON_DISK": "już spełnione na dysku",
+    # v460
+    "RUN_FINISHED": "MAIN wykonał sam",
+    "RUN_TOOL_ERROR": "MAIN wykonał sam, narzędzie padło",
 }
 
 
@@ -29119,7 +31445,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     # v432: relacje z krokow i fakty, bez komentarza Pythona do nich
     # i bez listy punktow celu (patrz _checklist_summary_block).
     prompt = f"""
-Gemini po kolejnych krokach:
+Kolejne kroki (co się wykonało):
 {_human_task_summary_lines(summaries)}
 {narzedzia_block}
 {device_state_block}"""
@@ -29134,8 +31460,12 @@ Gemini po kolejnych krokach:
     if not parsed or "percent" not in parsed:
         return None
 
+    # v451: "50%" albo "ok. 50" to tez liczba — int("50%") rzucal i
+    # pasek pokazywal 0.
+    _liczba = re.search(r"-?\d+(?:[.,]\d+)?", str(parsed.get("percent", 0)))
+
     try:
-        percent = int(parsed.get("percent", 0))
+        percent = int(float(_liczba.group().replace(",", "."))) if _liczba else 0
     except Exception:
         percent = 0
 
@@ -29915,7 +32245,16 @@ def _condense_last_result_for_team(last_result, limit=2500):
         # powiedziec, CZYM ta tresc jest, nie mowiac czyja jest.
         # v432: "Gemini napisal:" zamiast "relacja z wykonania (opis
         # slowami, nie pomiar…)".
-        parts.append("Gemini napisał:\n" + short(str(report), 1200))
+        # v460: po RUN raport pisze Python (powod MAIN-a + ile akcji),
+        # nie Gemini.
+        parts.append(
+            (
+                "MAIN wykonał sam (RUN): "
+                if last_result.get("executed_by") == "main_run"
+                else "Gemini napisał:\n"
+            )
+            + short(str(report), 1200)
+        )
 
     tool_calls = last_result.get("tool_calls")
 
@@ -32022,7 +34361,6 @@ def consult_team(
     # v432: bez "⚠️ UWAGA: narzedzie X zawiodlo Nx… Czas na inne
     # podejscie" i bez ramy "Przy okazji zauwazylem w narzedziach…".
     # Ostrzezenia z wykonania i tak ida w relacji z kroku.
-    tool_hint = ""
 
     # v435: fakty z _pending_team_warnings ida do MAIN-a (patrz
     # main_decide). Od v413 byly tu zbierane i wyrzucane — nie
@@ -32042,15 +34380,9 @@ def consult_team(
     # w OSTATNIM RAPORCIE i w surowym wyniku — checklista ma go nie
     # powtarzac po raz trzeci. Ona jest od tego, zeby nie zginely
     # punkty STARE.
-    _biezace_zadanie = (
-        last_result.get("task")
-        if isinstance(last_result, dict) else None
-    )
-
     # v432: bez listy punktow celu ("Z 8 punktow: 5 zrobily sie na
     # narzedziach…", "Do tych warto wrocic…") i bez "Tego juz
     # probowalismy…" — Python sam dzielil cel na punkty i je oceniał.
-    checklist_block = ""
 
     # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu od
     # v116/v132 rozmawia po ludzku, ale sam OSTATNI RAPORT był
@@ -32284,7 +34616,13 @@ def consult_team(
         "\nMAIN:\n"
         + _main_decision_for_team
         + (
-            "\n\nTreść zlecenia:\n"
+            # v452: "Tresc zlecenia" Bartek czytal jako zlecenie dla
+            # siebie ("Nie mam narzedzi chrome_open", "nie mam
+            # terminala" — bieg 2026-09-25 16:15, krok 10) i odmawial
+            # kodu. Zlecenie wykonuje program; to jest fakt, ktory
+            # zmienia, jak sie je czyta.
+            "\n\nZlecenie MAIN-a dla programu (wykonuje je program, "
+            "nie zespół):\n"
             # Jednolinijkowa komenda JEST zleceniem ("cat ~/plik") — od v423
             # zostaje w tekscie. Zwijamy skrypty.
             + _kod_na_jedna_linie(str(_main_task_for_team))
@@ -32332,7 +34670,6 @@ def consult_team(
     # checklista przypomina o NIEDOKONCZONYCH punktach, a wypisywala
     # tez ten, ktory wlasnie padl i jest opisany dwie linijki nizej.
     # To ja tniemy — patrz _checklist_summary_block(skip_task).
-    report_body = readable_report or raw_report_material
 
     # v193: kazda rola dostaje TYLKO to, czego jeszcze nie widziala.
     # Bloki identyczne z poprzednim krokiem sa juz w historii jej
@@ -34079,6 +36416,17 @@ def _main_human_line(decision, dtype):
         instructions = str(decision.get("instructions") or "").strip()
         return instructions or reason or "Potrzebna Twoja pomoc."
 
+    if dtype == "RUN":
+        akcje = decision.get("actions") or decision.get("akcje") or []
+        nazwy = [
+            str((a or {}).get("tool") or (a or {}).get("narzedzie") or "?")
+            for a in (akcje if isinstance(akcje, list) else [akcje])
+        ]
+        return (
+            "Wykonuję sam (" + str(len(nazwy)) + "): " + ", ".join(nazwy[:12])
+            + (" — " + reason if reason else "")
+        )
+
     return reason or (dtype or "(brak decyzji)")
 
 
@@ -34137,6 +36485,17 @@ def main_decide(
         android_text if android_text is not None else android_summary()
     )
 
+    # v461: po RUN z android_state MAIN ma juz ekran w wynikach —
+    # bieg 2026-09-28: blok "android" dla MAIN-a wazyl 55 tys. znakow.
+    _run_mial_ekran = (
+        isinstance(last_result, dict)
+        and last_result.get("executed_by") == "main_run"
+        and any(
+            (w or {}).get("tool") == "android_state"
+            for w in (last_result.get("wyniki_run") or [])
+        )
+    )
+
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(
@@ -34144,6 +36503,7 @@ def main_decide(
             3500
         ) + "\n"
         if (_ekran_w_grze(last_result)
+            and not _run_mial_ekran
             and _odczyt_sie_udal(_resolved_android_text)) else ""
     )
 
@@ -34171,6 +36531,11 @@ def main_decide(
         _czesci = []
         for _odp in (asked_followup.get("odpowiedzi") or [asked_followup]):
             _kto_odp = _ROLE_DISPLAY_NAME.get(_odp['role'], _odp['role'])
+            # v454: odpowiedz koledze, nie MAIN-owi — widac, na co.
+            if _odp.get("na_slowa"):
+                _kto_odp += " (na słowa " + _ROLE_DISPLAY_NAME.get(
+                    _odp["na_slowa"], _odp["na_slowa"]
+                ) + ")"
             _czesci.append(
                 (_kto_odp + ":\n" + str(_odp['answer']).strip())
                 if str(_odp['answer'] or "").strip() else
@@ -34231,7 +36596,26 @@ def main_decide(
     #
     # code_review/checks/attempt_count dokładamy osobno — kondensator
     # ich nie zna, a to na nie wskazują wyjaśnienia statusów wyżej.
-    _facts = _condense_last_result_for_team(last_result, 3000)
+    # v459: po RUN MAIN pracuje na pelnych wynikach, nie na skrocie.
+    # v460: bez skrotu sladu i bez raportu (to jego wlasny powod) —
+    # w biegu 2026-09-27 22:59 kazdy wynik szedl do MAIN-a dwa razy.
+    if isinstance(last_result, dict) and last_result.get("executed_by") == "main_run":
+        _facts = _condense_last_result_for_team(
+            {
+                k: v for k, v in last_result.items()
+                if k not in ("tool_trace", "report", "dowody")
+            },
+            3000
+        )
+        _blok_run = _wyniki_run_blok(last_result)
+        if _blok_run:
+            _facts += "\n" + _blok_run
+    else:
+        _facts = _condense_last_result_for_team(last_result, 3000)
+
+    # v465: po FAILED MAIN-a — co powiedzieli Tomek i Marek, w calosci.
+    if isinstance(last_result, dict) and last_result.get("glosy_zespolu"):
+        _facts += "\n" + str(last_result["glosy_zespolu"])
 
     # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
     # poprawki Ani) — raz, do MAIN-a.
@@ -34522,6 +36906,19 @@ def main_decide(
         else "Co się właśnie stało:\n" + _facts + "\n"
     )
 
+    # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
+    # czekal na wyniki RUN sprzed restartu.
+    if (
+        int(step or 0) <= 1
+        and "MAIN" in globals().get("_wznowione_sesje", set())
+    ):
+        globals()["_wznowione_sesje"].discard("MAIN")
+        _co_sie_stalo_main = (
+            "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
+            "— jego ostatnie wyniki nie wracają; to, co się teraz "
+            "wykona, dostaniesz tutaj.\n" + _co_sie_stalo_main
+        )
+
     prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
 {_co_sie_stalo_main}
 
@@ -34536,7 +36933,20 @@ def main_decide(
     )
 
 
-_MAIN_ASK_MAX = 4
+_MAIN_ASK_MAX = 5
+
+# v458: pytania MAIN-a, ktore nie zmiescily sie w kroku — ida jako
+# pierwsze w nastepnym (patrz _handle_main_ask i run_agent).
+_ask_przeniesione = []
+
+# v454: gdy zapytany zwroci sie w odpowiedzi do kolegi po imieniu
+# ("Bartku, napisz…"), kolega odpowiada OD RAZU, w tym samym kroku —
+# najwyzej tylu na krok. Do v453 taka wiadomosc lezala w skrzynce do
+# chwili, az MAIN sam zapytal adresata (osobne ASK, osobny obieg), a w
+# trybie MAIN-a nikt inny nie budzil adresata. Bieg 2026-09-25 16:15,
+# krok 10-11: Bartek prosil o wynik `ls`, dostal go dopiero po
+# kolejnym pytaniu MAIN-a.
+_ROZMOWA_HOP_MAX = 2
 
 
 def _pytania_ask(raw):
@@ -34594,6 +37004,8 @@ def _handle_main_ask(
     """
 
     zadane = 0
+    _hopy = 0
+    _juz_hop = set()
 
     while isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -34603,24 +37015,19 @@ def _handle_main_ask(
 
         if zadane >= _MAIN_ASK_MAX:
 
-            # Sam fakt o limicie — nie "niepoprawny JSON", bo JSON byl
-            # poprawny.
+            # v458: pytanie ponad limit NIE przepada i nie konczy kroku
+            # "niepoprawnym JSON-em". Bieg 2026-09-27 22:11, krok 1:
+            # MAIN po czterech pytaniach chcial jeszcze kodu od Bartka,
+            # Python trzy razy odmowil, MAIN trzy razy powtorzyl to samo
+            # i osiem minut rozmowy skonczylo sie UNKNOWN_DECISION.
+            # Pytanie idzie na poczatek nastepnego kroku.
             log(
                 "MAIN",
                 "ASK ponad " + str(_MAIN_ASK_MAX) + " pytania w tym "
-                "kroku — nie wysyłam, mówię o tym MAIN-owi."
+                "kroku — to pytanie idzie na początek następnego kroku."
             )
 
-            decision = parse_json(deepseek(
-                "MAIN",
-                "Pytań w tym kroku było już " + str(_MAIN_ASK_MAX)
-                + " — tego nie wysłałem."
-            ))
-
-            if isinstance(decision, dict) and decision.get("type") == "ASK":
-                return None
-
-            return decision
+            return {"type": "ASK_DALEJ", "pytania": pytania}
 
         odpowiedzi = []
         niewyslane = 0
@@ -34690,6 +37097,54 @@ def _handle_main_ask(
                 "question": ask_question,
                 "answer": answer
             })
+
+            # v454: adresat odpowiada od razu — patrz _ROZMOWA_HOP_MAX.
+            for _kogo, _co in _zawolania(answer):
+
+                if _hopy >= _ROZMOWA_HOP_MAX:
+                    break
+
+                if (
+                    _kogo == ask_role
+                    or _kogo not in _MAIN_ASK_ALLOWED_ROLES
+                    or _kogo in _juz_hop
+                    or not str(_co or "").strip()
+                ):
+                    continue
+
+                _hopy += 1
+                _juz_hop.add(_kogo)
+
+                log(
+                    "MAIN",
+                    _ROLE_DISPLAY_NAME.get(ask_role, ask_role)
+                    + " zwrócił się do "
+                    + _ROLE_DISPLAY_NAME.get(_kogo, _kogo)
+                    + " — pytam go od razu."
+                )
+
+                _t2 = consult_team(
+                    goal, last_result, step, chrome_text, android_text,
+                    wolani={_kogo}
+                )
+
+                _odp2 = str(
+                    ((_t2 or {}).get("kod_full") or {}).get(_kogo) or ""
+                )
+
+                if _kogo == "ENGINEER" and _odp2.strip():
+                    team["engineer_full"] = _odp2
+                    globals()["_kod_bartka_teraz"] = _odp2
+
+                if isinstance(team.get("kod_full"), dict):
+                    team["kod_full"][_kogo] = _odp2
+
+                odpowiedzi.append({
+                    "role": _kogo,
+                    "question": str(_co),
+                    "answer": _odp2,
+                    "na_slowa": ask_role
+                })
 
         if not odpowiedzi:
             log(
@@ -34766,10 +37221,64 @@ def _extract_last_balanced_json_object(text):
     return None
 
 
+def _dsml_na_run(text):
+    """
+    v467: DeepSeek potrafi odpowiedziec swoim natywnym formatem
+    wywolan narzedzi zamiast JSON-em:
+      <|DSML| invoke name="chrome_execute_js">
+      <|DSML| parameter name="args" string="false">{...}</|DSML| parameter>
+      </|DSML| invoke>
+    Bieg 2026-09-30: cztery kroki (38, 55, 58, 66) poszly jako
+    UNKNOWN_DECISION, choc kazdy byl gotowa lista akcji. To jest RUN.
+    """
+    tekst = str(text or "")
+    if "DSML" not in tekst or "invoke" not in tekst:
+        return None
+    akcje = []
+    for m in re.finditer(
+        r'invoke\s+name="([A-Za-z0-9_]+)"\s*>(.*?)</[^>]*invoke\s*>',
+        tekst, re.DOTALL
+    ):
+        nazwa = m.group(1).strip()
+        cialo = m.group(2)
+        args = {}
+        pm = re.search(
+            r'parameter\s+name="args"[^>]*>(.*?)</[^>]*parameter\s*>',
+            cialo, re.DOTALL
+        )
+        if pm:
+            surowe = pm.group(1).strip()
+            try:
+                args = json.loads(surowe)
+            except Exception:
+                obj = _extract_last_balanced_json_object(surowe)
+                args = obj if isinstance(obj, dict) else {}
+        else:
+            for pm2 in re.finditer(
+                r'parameter\s+name="([A-Za-z0-9_]+)"[^>]*>(.*?)</[^>]*parameter\s*>',
+                cialo, re.DOTALL
+            ):
+                args[pm2.group(1)] = pm2.group(2).strip()
+        if nazwa:
+            akcje.append({"tool": nazwa, "args": args if isinstance(args, dict) else {}})
+    if not akcje:
+        return None
+    przed = re.split(r"<[^>]*DSML", tekst, 1)[0].strip()
+    return {
+        "type": "RUN",
+        "reason": short(przed, 600) if przed else "(wywołania narzędzi w formacie DSML)",
+        "actions": akcje,
+        "_z_dsml": True
+    }
+
+
 def parse_json(text):
 
     if not text:
         return None
+    _d = _dsml_na_run(text)
+    if _d:
+        return _d
 
     text = str(
         text
@@ -35648,7 +38157,11 @@ _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
     "dostajecie, co z tego wyszło. Kod, który napiszecie, program "
-    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje."
+    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje. Gdy "
+    "zwrócicie się do kogoś po imieniu, dostanie to i odpowie. "
+    "Użytkownik chce, żeby program działał sam: loguje się, daje "
+    "dostęp do kont i podaje dane, których nikt z was nie ma — "
+    "resztę ustala zespół."
 )
 
 _ROLE_ZNAJACE_PROGRAM = (
@@ -35671,6 +38184,19 @@ _ROLE_ZNAJACE_PROGRAM = (
 #   - glosy po kolei: v406; ASK w tym samym kroku: v363,
 #   - sciezki kodu na dysku: v419; ekran po dzialaniu na nim: v419.
 # Tylko MAIN: v345 dalej trzyma zespol z dala od tego, kto wykonuje.
+def _lista_narzedzi_dla_maina():
+    """41 narzedzi z nazwami argumentow — raz, w pierwszej wiadomosci."""
+
+    try:
+        czesci = []
+        for t in _gemini_tools_legacy():
+            props = list((t.get("parameters") or {}).get("properties", {}).keys())
+            czesci.append(str(t.get("name")) + "(" + ", ".join(props) + ")")
+        return "; ".join(czesci)
+    except Exception:
+        return ""
+
+
 _JAK_TO_DZIALA = (
     "Kilka słów o tym, jak to wszystko działa.\n\n"
     "Program chodzi na telefonie z Androidem, w Termuxie. To zwykły "
@@ -35695,15 +38221,44 @@ _JAK_TO_DZIALA = (
     + str(GEMINI_MAX_TOOL_CALLS) + " wywołań narzędzi. Kod do plików "
     "kładzie Python — dokładnie ten, który napisał ktoś z zespołu. "
     "Gdy podasz write_engineer_code_to, ten kod ląduje pod tą "
-    "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia.\n\n"
+    "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia. Gemini "
+    "pamięta poprzednie zadania z tego celu — to jedna rozmowa na "
+    "cały cel — więc w zadaniu nie trzeba powtarzać tego, co już "
+    "widział i robił.\n\n"
+    "RUN to wykonanie bez Gemini: podajesz listę akcji (do "
+    + str(_RUN_MAX_AKCJI) + "), a program wykonuje je po kolei tymi "
+    "samymi narzędziami i oddaje Ci pełne wyniki — także numerowaną "
+    "listę elementów strony, po której działa chrome_click(nr) i "
+    "chrome_type(pole). Na błędzie narzędzia zatrzymuje się i mówi, "
+    "które akcje pominął. RUN działa zawsze, także gdy Gemini ma "
+    "wyczerpany limit. Kod, który sam napiszesz w RUN (termux_write_file "
+    "albo heredoc w termux_run), program kładzie na dysk jako Twój; "
+    "kod Bartka w RUN wklejasz 1:1 do termux_write_file, a w TASK "
+    "podajesz write_engineer_code_to. TASK zostaje, "
+    "gdy chcesz oddać Gemini dłuższą robotę na własną rękę. Narzędzia "
+    "(te same dla RUN i Gemini): "
+    + _lista_narzedzi_dla_maina() + ".\n\n"
     "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
     "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
     "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
     "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu. W jednym "
-    "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. "
-    "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
-    "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
-    "cel.\n\n"
+    "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. Gdy "
+    "zapytany zwróci się w odpowiedzi do kogoś po imieniu, ten ktoś "
+    "odpowiada mu od razu i dostajesz obie odpowiedzi. "
+    "NEED_USER_LOGIN to prośba do użytkownika. Użytkownik chce, żeby "
+    "program działał sam: on loguje się na stronach, daje dostęp do "
+    "kont i podaje to, czego nikt z nas nie ma — hasła, kody, dane "
+    "osobowe, konto do wypłaty. Nie odpowie na pytania o plan, wybór "
+    "drogi ani o to, co umie lub ma — to ustala zespół. Formularze, "
+    "profile i ustawienia na stronach wypełnia RUN (chrome_type, "
+    "chrome_click, chrome_execute_js) albo Gemini. DONE i FAILED "
+    "kończą cel.\n\n"
+    "Zrzut ekranu (android_screenshot) to plik PNG, którego zespół nie "
+    "ogląda; co widać na stronie, mówi chrome_inspect, a co na ekranie "
+    "— android_state, oba tekstem. Gdy one nie widzą (WebView, gra, "
+    "obrazki, klawiatura zasłania czat) albo kliknięcia trafiają nie "
+    "tam, android_look daje ekran oczom Gemini: opis, widoczny tekst i "
+    "elementy z przybliżonymi współrzędnymi. "
     "Po wykonaniu dostajesz fakty z narzędzi: co wypisały, co się "
     "udało, co padło. Kod, który leży już na dysku, widzisz jako "
     "ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na dysku] — "
@@ -38290,6 +40845,140 @@ def _sam_wyciagnij_na_wierzch(decision):
     }
 
 
+# v472: prosba do czlowieka o instalacje ze Sklepu Google Play.
+#
+# Bieg 2026-10-04 11:51, krok 11: MAIN zatrzymal bieg prosba "zainstaluj
+# apkę Facebook (...) Wejdź do Play Store -> Facebook -> Zainstaluj.
+# Po instalacji zaloguj się (...)". Uzytkownik: "google play mógł sam
+# sobie pobrać". Instalacje ze Sklepu robi program sam (patrz
+# _zainstaluj_ze_sklepu); czlowiekowi zostaje to, czego program nie
+# ma — logowanie.
+_PROSBA_O_SKLEP_RE = re.compile(
+    r"play\s*store|sklep\w*\s+(?:google\s+)?play|google\s+play",
+    re.IGNORECASE
+)
+_PROSBA_O_INSTALACJE_RE = re.compile(
+    r"zainstaluj|instal|pobierz|install", re.IGNORECASE
+)
+_ZNANE_APLIKACJE_SKLEPU = (
+    (r"facebook\s+lite", "com.facebook.lite"),
+    (r"messenger", "com.facebook.orca"),
+    (r"facebook", "com.facebook.katana"),
+    (r"instagram", "com.instagram.android"),
+    (r"whats\s*app", "com.whatsapp"),
+    (r"telegram", "org.telegram.messenger"),
+    (r"tik\s*tok", "com.zhiliaoapp.musically"),
+    (r"linkedin", "com.linkedin.android"),
+    (r"discord", "com.discord"),
+    (r"signal", "org.thoughtcrime.securesms"),
+    (r"\bolx\b", "pl.tablica"),
+    (r"allegro", "pl.allegro"),
+    (r"vinted", "fr.vinted"),
+    (r"fiverr", "com.fiverr.fiverr"),
+    (r"upwork", "com.upwork.android.apps.main"),
+    (r"revolut", "com.revolut.revolut"),
+)
+
+
+def _aplikacje_z_prosby(tekst):
+    """Pakiety, o ktorych instalacje prosi tekst — po kolei, bez powtorzen."""
+
+    pakiety = []
+
+    for m in _PAKIET_W_TEKSCIE_RE.finditer(tekst):
+        # Adres strony (m.facebook.com, useme.com/pl/...) to nie pakiet.
+        if (
+            m.group(0).rsplit(".", 1)[-1] in ("com", "pl", "net", "org", "io", "eu", "me", "app", "dev")
+            or tekst[m.end():m.end() + 1] == "/"
+            or tekst[max(0, m.start() - 2):m.start()] == "//"
+        ):
+            continue
+        if m.group(0) not in pakiety:
+            pakiety.append(m.group(0))
+
+    # Nazwy wlasne tylko w zdaniu o Sklepie/instalacji — "Messenger
+    # masz" nie jest prosba o Messengera, a "nie Messenger" tym
+    # bardziej.
+    for zdanie in re.split(r"[.\n!?]", tekst):
+        if not (_PROSBA_O_INSTALACJE_RE.search(zdanie) or _PROSBA_O_SKLEP_RE.search(zdanie)):
+            continue
+        reszta = zdanie
+        for wzor, pakiet in _ZNANE_APLIKACJE_SKLEPU:
+            if re.search(r"\bnie\s+" + wzor, reszta, re.IGNORECASE):
+                reszta = re.sub(wzor, " ", reszta, flags=re.IGNORECASE)
+                continue
+            if re.search(wzor, reszta, re.IGNORECASE):
+                if pakiet not in pakiety:
+                    pakiety.append(pakiet)
+                reszta = re.sub(wzor, " ", reszta, flags=re.IGNORECASE)
+
+    return pakiety
+
+
+def _sam_zainstaluj_ze_sklepu(decision):
+    """
+    Instaluje aplikacje, o ktore MAIN prosi czlowieka. Zwraca
+    (gotowy last_result albo None, lista zainstalowanych pakietow).
+    last_result jest tylko wtedy, gdy w prosbie nie zostalo nic dla
+    czlowieka (bez logowania i kont).
+    """
+
+    tekst = (
+        str(decision.get("reason") or "")
+        + "\n"
+        + str(decision.get("instructions") or "")
+    )
+
+    if not (_PROSBA_O_SKLEP_RE.search(tekst) and _PROSBA_O_INSTALACJE_RE.search(tekst)):
+        return None, []
+
+    zainstalowane = []
+    wyniki = []
+
+    for pakiet in _aplikacje_z_prosby(tekst)[:3]:
+
+        if _pakiet_jest_na_telefonie(pakiet) is not False:
+            continue
+
+        log(
+            "MAIN",
+            "Prośba do użytkownika o instalację " + pakiet + " ze "
+            "Sklepu Google Play — instaluję sam."
+        )
+
+        try:
+            wynik = _zainstaluj_ze_sklepu(pakiet)
+        except Exception as e:
+            wynik = {"ok": False, "error": str(e)}
+
+        wyniki.append(dict(wynik, package=pakiet))
+
+        if wynik.get("ok"):
+            zainstalowane.append(pakiet)
+
+    if not zainstalowane:
+        return None, []
+
+    _pending_team_warnings.append(
+        "MAIN prosił użytkownika o instalację ze Sklepu Google Play — "
+        "program zainstalował sam: " + ", ".join(zainstalowane) + "."
+    )
+
+    if re.search(r"zaloguj|logowan|has[łl]o|konto", tekst, re.IGNORECASE):
+        return None, zainstalowane
+
+    return {
+        "status": "ZAINSTALOWANO_ZE_SKLEPU",
+        "ok": True,
+        "zainstalowane": zainstalowane,
+        "wyniki": wyniki,
+        "message": (
+            "Nie pytałem użytkownika — zainstalowałem ze Sklepu Google "
+            "Play: " + ", ".join(zainstalowane) + "."
+        )
+    }, zainstalowane
+
+
 def _need_user_login_with_contact_gate(
     decision, contact_gate_redirects, credential_gate_redirects=0
 ):
@@ -38306,6 +40995,29 @@ def _need_user_login_with_contact_gate(
     wywołujący musi nadpisać obie swoje lokalne zmienne licznika
     wynikiem.
     """
+
+    # v472: instalacje ze Sklepu robi program — patrz
+    # _sam_zainstaluj_ze_sklepu().
+    try:
+        _po_instalacji, _zainstalowane = _sam_zainstaluj_ze_sklepu(decision)
+    except Exception as e:
+        log("MAIN", "Instalacja ze Sklepu nie wyszła: " + str(e))
+        _po_instalacji, _zainstalowane = None, []
+
+    if _po_instalacji is not None:
+        return (
+            _po_instalacji,
+            contact_gate_redirects,
+            credential_gate_redirects
+        )
+
+    if _zainstalowane:
+        decision = dict(decision)
+        decision["instructions"] = (
+            "Program sam zainstalował ze Sklepu Google Play: "
+            + ", ".join(_zainstalowane) + " — tę część prośby możesz "
+            "pominąć.\n\n" + str(decision.get("instructions") or "")
+        )
 
     sam_zrobione = _sam_wyciagnij_na_wierzch(decision)
 
@@ -38980,7 +41692,7 @@ def run_agent(goal):
     # faktycznie doczeka realnego resetu zamiast zamykać się na próżno.
     step = 0
 
-    while step < MAX_STEPS:
+    while MAX_STEPS is None or step < MAX_STEPS:
 
         # ------------------------------------------------------
         # Jeśli Gemini quota jest wyczerpana, NIE twórz kolejnych
@@ -39003,27 +41715,62 @@ def run_agent(goal):
                 if _najbl else "czas odnowienia nieznany"
             )
 
-            log(
-                "GEMINI",
-                "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
-            )
+            # v459: MAIN moze wykonywac sam (RUN), wiec blokada Gemini
+            # nie zatrzymuje programu. Czekamy dopiero wtedy, gdy MAIN
+            # mimo faktu dwa razy z rzedu zlecil TASK.
+            if globals().get("_taski_przy_blokadzie", 0) < 2:
 
-            last_result = {
-                "status":
-                    "GEMINI_QUOTA_EXHAUSTED",
-                "message":
-                    "Limit wykonawcy wyczerpany — " + _kiedy
-                    + ". Nowy klucz API można dodać do "
-                    + str(GEMINI_KEYS_DIR) + "."
-            }
+                # Po RUN MAIN pracuje na wynikach swoich akcji — nie
+                # zastepujemy ich komunikatem o blokadzie (o niej juz wie).
+                if (
+                    isinstance(last_result, dict)
+                    and last_result.get("executed_by") == "main_run"
+                ):
+                    pass
+
+                elif (
+                    not isinstance(last_result, dict)
+                    or last_result.get("status") != "GEMINI_QUOTA_EXHAUSTED"
+                ):
+                    log(
+                        "GEMINI",
+                        "WYKONAWCA ZABLOKOWANY — " + _kiedy
+                        + ". MAIN może wykonywać sam (RUN)."
+                    )
+
+                    last_result = {
+                        "status": "GEMINI_QUOTA_EXHAUSTED",
+                        "message": (
+                            "Limit wykonawcy wyczerpany — " + _kiedy
+                            + ". RUN wykonuje akcje bez Gemini. Nowy "
+                            "klucz API można dodać do "
+                            + str(GEMINI_KEYS_DIR) + "."
+                        )
+                    }
+
+            else:
+
+                log(
+                    "GEMINI",
+                    "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
+                )
+
+                last_result = {
+                    "status":
+                        "GEMINI_QUOTA_EXHAUSTED",
+                    "message":
+                        "Limit wykonawcy wyczerpany — " + _kiedy
+                        + ". Nowy klucz API można dodać do "
+                        + str(GEMINI_KEYS_DIR) + "."
+                }
 
             # v450: bez lokalnego "import time" — robilo z `time`
             # zmienna lokalna CALEGO run_agent, wiec time.sleep(1) nizej
             # (Gemini zablokowany przy nowym zadaniu) rzucilby
             # UnboundLocalError, gdyby ta galaz nie przeszla wczesniej.
-            time.sleep(30)
+                time.sleep(30)
 
-            continue
+                continue
 
         # v266: to samo dla awarii KONTA DeepSeek. Bezpiecznik juz
         # istnial i dzialal poprawnie, ale odczekiwal DOPIERO przy
@@ -39251,16 +41998,28 @@ def run_agent(goal):
         # MAIN
         # ------------------------------------------------------
 
-        raw = main_decide(
-            goal,
-            step,
-            team,
-            last_result,
-            step_chrome_text,
-            step_android_text
-        )
+        if _ask_przeniesione:
 
-        decision = parse_json(raw)
+            # v458: najpierw pytania z poprzedniego kroku — MAIN dostaje
+            # odpowiedzi razem z tym, co sie stalo, i wtedy decyduje.
+            _pyt = list(_ask_przeniesione)
+            del _ask_przeniesione[:]
+
+            raw = json.dumps(_pyt, ensure_ascii=False)
+            decision = dict(_pyt[0])
+
+        else:
+
+            raw = main_decide(
+                goal,
+                step,
+                team,
+                last_result,
+                step_chrome_text,
+                step_android_text
+            )
+
+            decision = parse_json(raw)
 
         if isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -39274,6 +42033,30 @@ def run_agent(goal):
                 step_android_text,
                 raw=raw
             )
+
+        # v458: pytania ponad limit — na poczatek nastepnego kroku.
+        if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
+
+            _ask_przeniesione[:] = list(decision.get("pytania") or [])
+
+            _kogo = ", ".join(
+                _ROLE_DISPLAY_NAME.get(
+                    str(q.get("ask_role") or "").upper(),
+                    str(q.get("ask_role") or "")
+                )
+                for q in _ask_przeniesione
+            )
+
+            last_result = {
+                "status": "ASK_PRZENIESIONE",
+                "message": (
+                    "W kroku " + str(step) + " MAIN zadał już "
+                    + str(_MAIN_ASK_MAX) + " pytań; pytanie do " + _kogo
+                    + " poszło na początek kroku " + str(step + 1) + "."
+                )
+            }
+
+            continue
 
         if decision is not None:
 
@@ -40133,23 +42916,44 @@ def run_agent(goal):
                         engineer_code.encode("utf-8")
                     )
 
+                    # v454: bylo "nie nadpisalem, krok przepada". Autor
+                    # ma prawo skrocic wlasny plik; Python jest rekami.
+                    # Stara wersja zostaje obok jako kopia, a zespol
+                    # dostaje liczby — z nich widac, czy to skrot, czy
+                    # urwany fragment.
                     if (
                         existing_size > 200
                         and new_size < existing_size * 0.4
                     ):
 
-                        last_result = {
-                            "status":
-                                "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
-                            "message": (
-                                "Nie nadpisałem " + str(target_path)
-                                + " — na dysku ma " + str(existing_size)
-                                + " B, nowy blok " + str(new_size)
-                                + " B."
-                            )
-                        }
+                        _kopia = target_path.with_name(
+                            target_path.name + ".bak_"
+                            + datetime.now().strftime("%Y%m%d_%H%M%S")
+                        )
 
-                        continue
+                        try:
+                            shutil.copy2(str(target_path), str(_kopia))
+                        except Exception:
+                            _kopia = None
+
+                        log(
+                            "MAIN",
+                            target_path.name + ": nowy kod ma "
+                            + str(new_size) + " B, na dysku było "
+                            + str(existing_size) + " B — zapisuję, "
+                            + ("stara wersja: " + _kopia.name
+                               if _kopia else "bez kopii (nie udało się)")
+                            + "."
+                        )
+
+                        _pending_team_warnings.append(
+                            _sciezka_od_domu(str(target_path))
+                            + ": nowa wersja ma " + str(new_size)
+                            + " B, poprzednia miała " + str(existing_size)
+                            + " B"
+                            + (" (kopia: " + _kopia.name + ")" if _kopia else "")
+                            + "."
+                        )
 
                 # v358: sciezka wskazujaca KATALOG, nie plik.
                 #
@@ -40439,11 +43243,16 @@ def run_agent(goal):
                     "Nie tworzę nowego taska."
                 )
 
+                globals()["_taski_przy_blokadzie"] = (
+                    globals().get("_taski_przy_blokadzie", 0) + 1
+                )
+
                 last_result = {
                     "status":
                         "GEMINI_QUOTA_EXHAUSTED",
                     "message":
-                        "Brak wykonawcy."
+                        "Brak wykonawcy — to zadanie nie poszło. RUN "
+                        "wykonuje akcje bez Gemini."
                 }
 
                 # Nie wpadaj w pętlę.
@@ -40490,6 +43299,31 @@ def run_agent(goal):
                     _po_uruchomieniu_kodu_bartka(
                         _code_ready_path, result
                     )
+
+            continue
+
+        # ------------------------------------------------------
+        # RUN — MAIN wykonuje sam (v459)
+        # ------------------------------------------------------
+
+        if dtype == "RUN":
+
+            last_result = _wykonaj_akcje_maina(decision, step)
+            globals()["_taski_przy_blokadzie"] = 0
+
+            _w_kolko = _zauwaz_powtarzane_ruchy(last_result)
+
+            if _w_kolko:
+                log("MAIN", _w_kolko)
+                _pending_team_warnings.append(_w_kolko)
+
+            sep = "─" * 60
+            print()
+            print(sep)
+            print("  WYKONAŁ: Python na polecenie MAIN-a (RUN)")
+            print("  AKCJE: " + str(last_result.get("tool_calls")) + "  STATUS: " + str(last_result.get("status")))
+            print(sep)
+            print()
 
             continue
 
@@ -40640,15 +43474,84 @@ def run_agent(goal):
             # turze, a MAIN decyduje jeszcze raz — juz z tym, co
             # powiedzieli. Powtorzony ten sam powod konczy cel,
             # zeby to nie bylo krecenie w kolko.
-            if not _zespol_slyszal_juz_ten_powod(reason):
+            # v466: bieg 2026-09-29 16:18 — MAIN zamknal cel, bo padla
+            # JEDNA sciezka (Useme), ktora Tomek sam nazwal w kroku 1;
+            # Tomek i Marek w tej samej odpowiedzi wskazali inne drogi
+            # (Fiverr, wlasny klient), a program i tak sie zamknal.
+            # Program chodzi, poki cel nie jest zrobiony: FAILED konczy
+            # bieg dopiero wtedy, gdy zespol mowi wprost, ze innej drogi
+            # nie ma — albo gdy MAIN upiera sie czwarty raz.
+            _failed_z_droga = int(globals().get("_failed_z_droga") or 0)
+            _zespol_bez_drogi = bool(globals().get("_zespol_bez_drogi"))
 
-                # v423: w relacji z kroku — sam fakt. Uzasadnienie to
-                # slowa MAIN-a i zespol dostaje je pod jego imieniem
-                # ("MAIN: FAILED — ..."). Bieg 2026-09-22 23:24, kroki
-                # 6-7: to samo uzasadnienie ("petla trwa juz szosta
-                # runde", "Ela 0%") szlo drugi raz pod "Co sie wlasnie
-                # stalo", czyli jako wynik kroku — a zespol je
-                # "jednomyslnie" potwierdzal. Brak kodu byl raz.
+            if not _zespol_bez_drogi and _failed_z_droga < 3:
+
+                _glosy = []
+                _ktos_widzi_droge = False
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Uważam, że tego celu nie da się zrealizować "
+                            "i chcę go zamknąć jako FAILED. Powód:\n"
+                            + str(reason)
+                            + "\n\nJeśli widzisz inną drogę do celu użytkownika "
+                            "(nie tej ścieżki, która padła), opisz ją. Jeśli "
+                            "nie ma żadnej, napisz wprost: NIE MA INNEJ DROGI."
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O FAILED MAIN-A: " + short(_t, 300))
+                            if "nie ma innej drogi" not in " ".join(_t.lower().split()):
+                                _ktos_widzi_droge = True
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o FAILED: " + str(_e))
+
+                if _ktos_widzi_droge:
+                    globals()["_failed_z_droga"] = _failed_z_droga + 1
+                    log(
+                        "MAIN",
+                        "Zespół widzi inną drogę — cel trwa (FAILED nie "
+                        "zamyka biegu, próba " + str(_failed_z_droga + 1) + "/3)."
+                    )
+                    last_result = {
+                        "status": "ZESPOL_WIDZI_INNA_DROGE",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zamknąć cel "
+                            "(FAILED). Nic się w tym kroku nie wykonało. Tomek "
+                            "i Marek usłyszeli powód i widzą inną drogę do celu "
+                            "użytkownika — ich odpowiedzi niżej. Cel trwa."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+                if _glosy:
+                    globals()["_zespol_bez_drogi"] = True
+                    last_result = {
+                        "status": "WNIOSEK_ZE_SIE_NIE_DA",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN uznał, że "
+                            "dalej się nie da. Nic się w tym kroku nie "
+                            "wykonało. Tomek i Marek nie widzą innej drogi "
+                            "— ich odpowiedzi niżej. Powtórzony FAILED "
+                            "zamknie cel."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+            # Gdy zespol juz powiedzial, ze innej drogi nie ma, powtorzony
+            # FAILED konczy cel od razu — bez kolejnych ech.
+            if not _zespol_bez_drogi and not _zespol_slyszal_juz_ten_powod(reason):
+
                 last_result = {
                     "status": "WNIOSEK_ZE_SIE_NIE_DA",
                     "message": (
@@ -40708,6 +43611,11 @@ def run_agent(goal):
     print("=" * 72)
     print("OSIĄGNIĘTO LIMIT KROKÓW")
     print("=" * 72)
+    log(
+        "MAIN",
+        "Osiągnięto limit " + str(MAX_STEPS) + " kroków (AGENT_MAX_STEPS) "
+        "— program kończy bieg sam; cel nie jest ani DONE, ani FAILED."
+    )
 
     pokaz_podsumowanie_biegu()
 
