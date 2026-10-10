@@ -43344,10 +43344,11 @@ def run_agent(goal):
             # postep na 5% i level_3_not_started. Program sie zakonczyl.
             # Tak jak przy FAILED (v466): zanim DONE zamknie bieg, Tomek
             # i Marek mowia, czy cel uzytkownika jest zrobiony. Gdy zaden
-            # nie mowi tego wprost — cel trwa (najwyzej trzy razy).
+            # nie mowi tego wprost — cel trwa. Bez limitu odbic: program
+            # chodzi, poki cel nie jest zrobiony (decyzja uzytkownika).
             _done_odrzucone = int(globals().get("_done_odrzucone") or 0)
 
-            if _done_odrzucone < 3:
+            if True:
 
                 _glosy = []
                 _ktos_mowi_zrobione = False
@@ -43385,8 +43386,8 @@ def run_agent(goal):
                     log(
                         "MAIN",
                         "Zespół nie potwierdza, że cel jest zrobiony — cel "
-                        "trwa (DONE nie zamyka biegu, próba "
-                        + str(_done_odrzucone + 1) + "/3)."
+                        "trwa (DONE nie zamyka biegu, odbicie "
+                        + str(_done_odrzucone + 1) + ")."
                     )
                     last_result = {
                         "status": "CEL_NIE_JEST_ZROBIONY",

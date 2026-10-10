@@ -1059,7 +1059,8 @@ zakonczylo sie dzialanie?")
   - DONE dziala jak FAILED z v466: zanim zamknie bieg, Tomek i Marek
     mowia, czy cel uzytkownika (caly) jest zrobiony. Gdy zaden nie
     napisze wprost "CEL ZROBIONY", cel trwa, a MAIN dostaje ich
-    odpowiedzi (status CEL_NIE_JEST_ZROBIONY). Najwyzej trzy takie
-    odbicia na cel — czwarte DONE konczy bieg.
+    odpowiedzi (status CEL_NIE_JEST_ZROBIONY). Bez limitu odbic — bieg
+    konczy sie tylko po wyraznym "CEL ZROBIONY" (albo gdy zespolu nie da
+    sie zapytac).
 
 =========================================================================
