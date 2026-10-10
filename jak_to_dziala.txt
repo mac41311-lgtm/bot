@@ -1064,3 +1064,22 @@ zakonczylo sie dzialanie?")
     sie zapytac).
 
 =========================================================================
+
+CZESC 35. CO ZMIENILO v475 (bieg 2026-10-10 23:03, krok 22)
+=========================================================================
+
+  termux_run padl z "No closing quotation", zanim komenda w ogole
+  ruszyla. Komenda byla poprawna dla basha (python3 -c "...; ...; ..."
+  i dalej `rm -f selfcode_engine.state.json`), ale bramka usuwania
+  dzielila ja po kazdym ";" — takze w srodku cudzyslowu — i shlex
+  wywracal sie na rozcietym kawalku. MAIN stracil krok na przepisanie
+  komendy.
+
+  CO ZMIENIONE:
+  - _czlony_komendy(): podzial po &&, ||, ;, | i nowej linii tylko poza
+    cudzyslowami; uzywaja go obie bramki usuwania
+    (_usuwa_tylko_wlasne_katalogi, _usuwa_wlasny_plik_tymczasowy)
+  - blad shlex w bramce = "nie wiem" (zwykle pytanie), nie wywrotka
+    narzedzia
+
+=========================================================================

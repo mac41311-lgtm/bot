@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v474
+AEL-MINI AUTONOMOUS AGENT v475
 
-ARCHITEKTURA (stan na v474 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v475 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v474")
+    print("             AEL-MINI AUTONOMOUS AGENT v475")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -11583,6 +11583,53 @@ def _usuwa_tylko_nasze_logi_z_tego_biegu(command):
     return usuwajace > 0
 
 
+def _czlony_komendy(command):
+    """
+    v475: komenda podzielona na czlony po &&, ||, ;, | i nowej linii —
+    ale tylko POZA cudzyslowami. Bieg 2026-10-10 23:03, krok 22:
+    `python3 -c "...; c = r.count('echo text'); ..."; rm -f stan.json`
+    — podzial po kazdym ";" rozcinal cudzyslow, shlex.split rzucal
+    "No closing quotation" i termux_run padal, zanim komenda ruszyla.
+    """
+    tekst = str(command or "")
+    czlony, biezacy, i, cudzyslow = [], [], 0, None
+    while i < len(tekst):
+        z = tekst[i]
+        if cudzyslow:
+            biezacy.append(z)
+            if z == "\\" and cudzyslow == '"' and i + 1 < len(tekst):
+                biezacy.append(tekst[i + 1])
+                i += 2
+                continue
+            if z == cudzyslow:
+                cudzyslow = None
+            i += 1
+            continue
+        if z in "'\"":
+            cudzyslow = z
+            biezacy.append(z)
+            i += 1
+            continue
+        if z == "\\" and i + 1 < len(tekst):
+            biezacy.append(tekst[i:i + 2])
+            i += 2
+            continue
+        if tekst[i:i + 2] in ("&&", "||"):
+            czlony.append("".join(biezacy))
+            biezacy = []
+            i += 2
+            continue
+        if z in ";|\n":
+            czlony.append("".join(biezacy))
+            biezacy = []
+            i += 1
+            continue
+        biezacy.append(z)
+        i += 1
+    czlony.append("".join(biezacy))
+    return czlony
+
+
 def _usuwa_tylko_wlasne_katalogi(command):
     """
     v465: czy ta komenda usuwa WYLACZNIE rzeczy wewnatrz katalogow, ktore
@@ -11612,8 +11659,11 @@ def _usuwa_tylko_wlasne_katalogi(command):
 
     cwd = Path.home()
     usuwajace = 0
-    for czlon in re.split(r"&&|\|\||[;|]|\n", str(command or "")):
-        slowa = shlex.split(czlon) if czlon.strip() else []
+    for czlon in _czlony_komendy(command):
+        try:
+            slowa = shlex.split(czlon) if czlon.strip() else []
+        except ValueError:
+            return False
         if not slowa:
             continue
         if slowa[0] == "cd":
@@ -11707,7 +11757,7 @@ def _usuwa_wlasny_plik_tymczasowy(command):
     tekst = str(command or "")
     usuwajace = 0
     pozycja = 0
-    for czlon in re.split(r"&&|\|\||[;|]|\n", tekst):
+    for czlon in _czlony_komendy(tekst):
         start = tekst.find(czlon, pozycja)
         if start < 0:
             start = pozycja
