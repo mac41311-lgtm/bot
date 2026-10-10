@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v473
+AEL-MINI AUTONOMOUS AGENT v474
 
-ARCHITEKTURA (stan na v473 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v474 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v473")
+    print("             AEL-MINI AUTONOMOUS AGENT v474")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4227,6 +4227,7 @@ def _reset_powody_zakonczenia():
     del _powody_zakonczenia[:]
     globals()["_failed_z_droga"] = 0
     globals()["_zespol_bez_drogi"] = False
+    globals()["_done_odrzucone"] = 0
 
 
 def _zespol_slyszal_juz_ten_powod(reason, ile_prob=2):
@@ -6614,6 +6615,7 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "TASK_ALREADY_SATISFIED_ON_DISK",
     "WNIOSEK_ZE_SIE_NIE_DA",
     "ZESPOL_WIDZI_INNA_DROGE",
+    "CEL_NIE_JEST_ZROBIONY",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
     "ASK_PRZENIESIONE",
@@ -43334,6 +43336,70 @@ def run_agent(goal):
         if dtype == "DONE":
 
             reason = decision.get("reason") or ""
+
+            # v474: bieg 2026-10-10 23:03 (cel: MISJA RSI — "kontynuuje
+            # prace bez koniecznosci otrzymywania nowego polecenia po
+            # kazdym etapie"). W kroku 33 MAIN dal DONE, bo zespol
+            # "zamknal sesje" — choc Marek w tej samej rozmowie ocenil
+            # postep na 5% i level_3_not_started. Program sie zakonczyl.
+            # Tak jak przy FAILED (v466): zanim DONE zamknie bieg, Tomek
+            # i Marek mowia, czy cel uzytkownika jest zrobiony. Gdy zaden
+            # nie mowi tego wprost — cel trwa (najwyzej trzy razy).
+            _done_odrzucone = int(globals().get("_done_odrzucone") or 0)
+
+            if _done_odrzucone < 3:
+
+                _glosy = []
+                _ktos_mowi_zrobione = False
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Uważam, że cel użytkownika jest zrobiony, i "
+                            "chcę zakończyć bieg (DONE). Powód:\n"
+                            + str(reason)
+                            + "\n\nPo DONE program się wyłącza i nic "
+                            "więcej się nie dzieje, dopóki użytkownik nie "
+                            "uruchomi go od nowa. Jeśli cel użytkownika "
+                            "(cały, tak jak go napisał) jest zrobiony, "
+                            "napisz wprost: CEL ZROBIONY. Jeśli nie — "
+                            "napisz, czego brakuje i co robimy dalej."
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O DONE MAIN-A: " + short(_t, 300))
+                            if "cel zrobiony" in " ".join(_t.lower().split()):
+                                _ktos_mowi_zrobione = True
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o DONE: " + str(_e))
+
+                if _glosy and not _ktos_mowi_zrobione:
+                    globals()["_done_odrzucone"] = _done_odrzucone + 1
+                    log(
+                        "MAIN",
+                        "Zespół nie potwierdza, że cel jest zrobiony — cel "
+                        "trwa (DONE nie zamyka biegu, próba "
+                        + str(_done_odrzucone + 1) + "/3)."
+                    )
+                    last_result = {
+                        "status": "CEL_NIE_JEST_ZROBIONY",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zakończyć "
+                            "bieg (DONE). Nic się w tym kroku nie wykonało. "
+                            "Tomek i Marek nie potwierdzili, że cel "
+                            "użytkownika jest zrobiony — ich odpowiedzi "
+                            "niżej. Program dalej działa, cel trwa."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
 
             # v432: DONE nalezy do MAIN-a. Bez "W celu pada jeszcze…"
             # (zgadywane po slowach celu) i bez odrzucania DONE przez

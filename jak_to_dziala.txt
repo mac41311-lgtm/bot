@@ -1044,3 +1044,22 @@ gorzej radzi")
     plywajacym oknie z v471)
 
 =========================================================================
+
+CZESC 34. CO ZMIENILO v474 (bieg 2026-10-10 23:03 — "czemu
+zakonczylo sie dzialanie?")
+=========================================================================
+
+  OCENA BIEGU (33 kroki, 154 wywolania narzedzi): bieg nie padl. W kroku
+  33 MAIN dal DONE, bo zespol uznal, ze "zamyka sesje" po FAZIE 14 —
+  choc cel (MISJA RSI) kaze pracowac dalej bez nowego polecenia, a
+  Marek w tej samej rozmowie ocenil postep na 5% (level_3_not_started).
+  Od v432 DONE konczylo program bez pytania.
+
+  CO ZMIENIONE:
+  - DONE dziala jak FAILED z v466: zanim zamknie bieg, Tomek i Marek
+    mowia, czy cel uzytkownika (caly) jest zrobiony. Gdy zaden nie
+    napisze wprost "CEL ZROBIONY", cel trwa, a MAIN dostaje ich
+    odpowiedzi (status CEL_NIE_JEST_ZROBIONY). Najwyzej trzy takie
+    odbicia na cel — czwarte DONE konczy bieg.
+
+=========================================================================
