@@ -1408,3 +1408,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - po kazdej komendzie sprawdzamy, czy jej grupa procesow jeszcze
        zyje; jesli tak, zapamietujemy ja i przy zamknieciu programu
        zatrzymujemy razem z reszta (cicha aktualizacja jej nie rusza)
+
+ 20. (bieg 2026-10-11 20:32) Trening szedl w tle, a MAIN wyslal
+     `sleep 1500; cat log` — 25 minut czekania bez wzgledu na to,
+     kiedy trening sie skonczy.
+
+     CO ZMIENIONE:
+     - komendy dostaja w PATH wlasny `sleep` programu (dziala jak
+       zwykly); gdy w trakcie takiego czekania skonczy sie albo
+       wysypie proces w tle, ktory juz wczesniej szedl, program konczy
+       samo czekanie, a reszta komendy (`cat log`) idzie normalnie
+     - tylko wtedy na koncu wyniku tej komendy jest jedno zdanie, np.
+       "Czekanie (sleep) skończone wcześniej, bo proces w tle (...)
+       się zakończył."

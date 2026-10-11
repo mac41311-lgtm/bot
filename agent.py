@@ -516,6 +516,138 @@ def _podstaw_unlock_zespolu():
         log("ANDROID", "Nie podstawiłem termux-wake-unlock: " + str(e))
 
 
+# v480t: `sleep` w komendach zespolu, ktore program moze skonczyc
+# wczesniej — patrz _czekanie_na_proces_w_tle().
+#
+# Dziala jak zwykly sleep. Gdy program wysle mu SIGUSR1, konczy sie
+# z kodem 0, wiec reszta komendy (`; cat log`, `&& tail log`) idzie
+# dalej normalnie.
+def _podstaw_sleep_zespolu():
+
+    try:
+        import shutil
+
+        katalog = AGENT_DIR / "bin_programu"
+        prawdziwy = shutil.which(
+            "sleep",
+            path=os.pathsep.join(
+                k for k in os.environ.get("PATH", "").split(os.pathsep)
+                if k and k != str(katalog)
+            )
+        )
+        if not prawdziwy:
+            return
+
+        katalog.mkdir(parents=True, exist_ok=True)
+        atrapa = katalog / "sleep"
+        atrapa.write_text(
+            "#!" + (shutil.which("sh") or "/system/bin/sh") + "\n"
+            "trap 'kill $! 2>/dev/null; exit 0' USR1\n"
+            + prawdziwy + " \"$@\" &\n"
+            "wait $!\n",
+            encoding="utf-8"
+        )
+        atrapa.chmod(0o755)
+
+        sciezka = os.environ.get("PATH", "")
+        if str(katalog) not in sciezka.split(os.pathsep):
+            os.environ["PATH"] = str(katalog) + os.pathsep + sciezka
+
+    except Exception as e:
+        log("TERMUX", "Nie podstawiłem sleep: " + str(e))
+
+
+def _pid_sleepow_programu(pgid):
+    """v480t: pid-y naszego `sleep` (atrapy) w grupie procesow pgid."""
+    znalezione = []
+    atrapa = str(AGENT_DIR / "bin_programu" / "sleep")
+    try:
+        katalogi = os.listdir("/proc")
+    except Exception:
+        return znalezione
+    for nazwa in katalogi:
+        if not nazwa.isdigit():
+            continue
+        try:
+            with open("/proc/" + nazwa + "/stat", encoding="utf-8",
+                      errors="replace") as f:
+                pola = f.read().rsplit(")", 1)[1].split()
+            if int(pola[2]) != int(pgid):
+                continue
+            with open("/proc/" + nazwa + "/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")
+            if any(a.decode("utf-8", "replace") == atrapa for a in argv[:2]):
+                znalezione.append(int(nazwa))
+        except Exception:
+            continue
+    return znalezione
+
+
+def _zywe_w_tle():
+    """
+    v480t: {klucz: opis} procesow w tle, ktore teraz zyja — i tych z
+    termux_run_background, i grup, ktore zostaly po zwyklej komendzie.
+    """
+    zywe = {}
+    for pid, proces in list(_procesy_w_tle.items()):
+        try:
+            if proces.poll() is None:
+                zywe[("p", pid)] = str(getattr(proces, "args", ""))
+        except Exception:
+            pass
+    for grupa, (komenda, _start) in list(_grupy_z_komend.items()):
+        try:
+            os.killpg(grupa, 0)
+            zywe[("g", grupa)] = komenda
+        except Exception:
+            pass
+    return zywe
+
+
+def _czekanie_na_proces_w_tle(przed, pgid):
+    """
+    v480t: jesli ktorys z procesow `przed` (z _zywe_w_tle() sprzed
+    komendy) juz nie zyje, konczy `sleep` tej komendy i zwraca zdanie
+    do jej wyniku. Inaczej zwraca "".
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 20:32). Trening
+    szedl w tle, a MAIN wyslal `sleep 1500; cat
+    rsi_core_min_v6_seed42.log` — 25 minut czekania, niezaleznie od
+    tego, kiedy trening sie skonczy. Uzytkownik: zespol ma sie
+    dowiedziec, ze czekanie skonczylo sie wczesniej, ale tylko wtedy,
+    gdy tak sie stanie — jednym zdaniem w wyniku tej komendy.
+    """
+    if not przed or not pgid:
+        return ""
+    teraz = _zywe_w_tle()
+    skonczone = [k for k in przed if k not in teraz]
+    if not skonczone:
+        return ""
+    sleepy = _pid_sleepow_programu(pgid)
+    if not sleepy:
+        return ""
+    for pid in sleepy:
+        try:
+            os.kill(pid, signal.SIGUSR1)
+        except Exception:
+            pass
+
+    klucz = skonczone[0]
+    opis = short(przed[klucz], 80)
+    jak = "się zakończył"
+    if klucz[0] == "p":
+        proces = _procesy_w_tle.get(klucz[1])
+        kod = getattr(proces, "returncode", None)
+        if kod not in (None, 0):
+            jak = "przerwał się z błędem (kod " + str(kod) + ")"
+        elif kod == 0:
+            jak = "się zakończył (kod 0)"
+    return (
+        "Czekanie (sleep) skończone wcześniej, bo proces w tle ("
+        + opis + ") " + jak + "."
+    )
+
+
 def agent_wake_unlock():
     """
     Zwolnienie wake-lock po zakończeniu agenta.
@@ -20162,6 +20294,11 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         except Exception:
             pgid = None
 
+        # v480t: patrz _czekanie_na_proces_w_tle().
+        _w_tle_przed = _zywe_w_tle() if _sekundy_spania(command) else {}
+        _zdanie_o_czekaniu = ""
+        _nastepne_spojrzenie_w_tlo = time.time() + 5
+
         # v294: pierwsze zdanie po dziesieciu sekundach, nie po
         # minucie — i dla KAZDEJ komendy, nie tylko dla dlugiej.
         # Patrz PODGLAD_OD_SEKUND.
@@ -20203,6 +20340,17 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
             teraz = time.time()
             czuwa = time.monotonic()
+
+            if (
+                _w_tle_przed and not _zdanie_o_czekaniu
+                and teraz >= _nastepne_spojrzenie_w_tlo
+            ):
+                _nastepne_spojrzenie_w_tlo = teraz + 5
+                _zdanie_o_czekaniu = _czekanie_na_proces_w_tle(
+                    _w_tle_przed, pgid
+                )
+                if _zdanie_o_czekaniu:
+                    log("TERMUX", _zdanie_o_czekaniu)
 
             _skok = (teraz - _poprzedni_sciany) - (czuwa - _poprzedni_mono)
             _poprzedni_sciany = teraz
@@ -20418,7 +20566,11 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         return {
             "ok": proces.returncode == 0,
             "returncode": proces.returncode,
-            "stdout": short(stdout, 6000),
+            "stdout": (
+                short(stdout, 6000 - len(_zdanie_o_czekaniu) - 2).rstrip("\n")
+                + "\n" + _zdanie_o_czekaniu + "\n"
+                if _zdanie_o_czekaniu else short(stdout, 6000)
+            ),
             "stderr": short(stderr, 6000),
             "command": command,
             # v477b: bylo "timeout": 120. Bieg 2026-10-11 rano: MAIN
@@ -45645,6 +45797,7 @@ def main():
     # ----------------------------------------------------------
 
     agent_wake_lock()
+    _podstaw_sleep_zespolu()
 
     # ----------------------------------------------------------
     # Uprawnienia Termux:API — PRZED załadowaniem DeepSeek/Gemini,
