@@ -1277,3 +1277,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        systemu"; brak takiej linii na koncu urwanego logu znaczy, ze
        Android ubil proces bez ostrzezenia (SIGKILL, zwykle brak
        pamieci)
+
+  9. (bieg 2026-10-11 14:02) Kroki 6, 10, 14, 16 ubite jako "stoi":
+     `sleep 45; tail ...` po 168 s z pustym wyjsciem, trening po 149 s
+     "ciszy". Meldunki "Leci" przychodzily co 15-93 s zamiast co kilka
+     — telefon zasypial (wake-lock zdjety w kroku 3), a z nim komenda
+     i nasza petla. Po przebudzeniu zegar scienny przeskakiwal, a my
+     liczylismy przespany czas jako cisze komendy.
+
+     CO ZMIENIONE:
+     - cisze komendy liczymy time.monotonic(), ktory w uspieniu stoi
+     - przeskok zegara > 5 s jest logowany: "Telefon spał przez ok.
+       N s — ... tego czasu nie liczę jako ciszy."; gdy komende i tak
+       trzeba przerwac, opis mowi, ile z tego czasu telefon spal

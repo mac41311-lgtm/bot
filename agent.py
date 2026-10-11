@@ -19636,7 +19636,22 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
         # Stan "czy on cokolwiek robi" — patrz komentarz przy
         # SUFIT_CZASU.
-        ostatni_ruch = time.time()
+        # v480i: cisze liczymy zegarem, ktory stoi, gdy telefon spi.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11, kroki 6,
+        # 10, 14, 16). `sleep 45; tail ...` ubite po 168 s z pustym
+        # wyjsciem, trening ubity po 149 s "ciszy". Meldunki "Leci"
+        # przychodzily co 15, 27, 93 s zamiast co kilka — telefon
+        # zasypial (wake-lock zdjety w kroku 3). Wtedy stoi wszystko:
+        # `sleep`, trening i my. Po przebudzeniu zegar scienny
+        # przeskakiwal o minuty i braklismy przespany czas za cisze.
+        # time.monotonic() na Linuksie/Androidzie nie biegnie w
+        # uspieniu — liczy tylko czas, w ktorym komenda mogla cos
+        # zrobic.
+        ostatni_ruch = time.monotonic()
+        _poprzedni_sciany = time.time()
+        _poprzedni_mono = ostatni_ruch
+        _przespane = 0.0
         ostatni_rozmiar = 0
         ostatni_cpu = 0.0
         nastepne_sprawdzenie_petli = time.time() + 1.0
@@ -19654,6 +19669,20 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 break
 
             teraz = time.time()
+            czuwa = time.monotonic()
+
+            _skok = (teraz - _poprzedni_sciany) - (czuwa - _poprzedni_mono)
+            _poprzedni_sciany = teraz
+            _poprzedni_mono = czuwa
+
+            if _skok > 5:
+                _przespane += _skok
+                log(
+                    "TERMUX",
+                    "Telefon spał przez ok. " + str(int(_skok))
+                    + " s — komenda wtedy stała razem z nim; tego czasu"
+                    " nie liczę jako ciszy."
+                )
 
             # --- czy cos sie ruszylo? ---
 
@@ -19666,9 +19695,9 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
             if rozmiar > ostatni_rozmiar:
                 ostatni_rozmiar = rozmiar
-                ostatni_ruch = teraz
+                ostatni_ruch = czuwa
 
-            elif (teraz - ostatni_ruch) > krok:
+            elif (czuwa - ostatni_ruch) > krok:
 
                 # Milczy — ale moze po prostu liczy. CPU sprawdzamy
                 # dopiero tutaj, zeby nie chodzic po /proc co
@@ -19677,15 +19706,20 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 if cpu > ostatni_cpu + 0.1:
                     ostatni_cpu = cpu
-                    ostatni_ruch = teraz
+                    ostatni_ruch = czuwa
 
             # --- kiedy przerywamy ---
 
-            if (teraz - ostatni_ruch) > limit:
+            if (czuwa - ostatni_ruch) > limit:
                 powod = "stoi"
                 szczegol = (
-                    "przez " + str(int(teraz - ostatni_ruch))
+                    "przez " + str(int(czuwa - ostatni_ruch))
                     + " s nic nie wypisał i nie zużył procesora"
+                    + (
+                        " (nie licząc ok. " + str(int(_przespane))
+                        + " s, gdy telefon spał)"
+                        if _przespane > 5 else ""
+                    )
                 )
 
             elif teraz > sufit:
@@ -19799,7 +19833,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                     log(
                         "TERMUX",
                         "Leci " + _jak_dlugo + ": nic nowego od "
-                        + str(int(teraz - ostatni_ruch)) + " s ("
+                        + str(int(czuwa - ostatni_ruch)) + " s ("
                         + short(na_czym, 60) + ")"
                     )
 
