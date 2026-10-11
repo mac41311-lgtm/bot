@@ -1256,3 +1256,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - _sekundy_timeoutu(): gdy komenda ma `timeout N` (takze -s KILL,
        --preserve-status, 10m), limit ciszy to co najmniej N + 15 s
        (tak jak `sleep N` od v477)
+
+  7. (bieg 2026-10-11 12:34) Kamil (RESEARCHER) na jedno pytanie MAIN-a
+     dostal caly cel (12 kB) i zdania uzytkownika dwa razy ("Uzytkownik
+     powiedzial nam..." i "Uzytkownik:") — ~25 kB, z czego jego
+     dotyczylo tylko pytanie.
+
+     CO ZMIENIONE:
+     - _ROLE_TYLKO_PYTANIE = {"RESEARCHER"}: Kamil dostaje swoja role
+       ("Jestes Kamilem...") i pytanie, bez celu i bez zdan uzytkownika
+     - u pozostalych rol zdania uzytkownika ida juz tylko raz, w
+       "Uzytkownik:" (blok "Uzytkownik powiedzial nam..." usuniety)

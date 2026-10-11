@@ -4466,7 +4466,10 @@ def _wspolne_dla_wolanego(rola):
 
     kawalki = []
 
-    uzytkownik = _co_powiedzial_uzytkownik(rola)
+    uzytkownik = (
+        "" if rola in _ROLE_TYLKO_PYTANIE
+        else _co_powiedzial_uzytkownik(rola)
+    )
 
     if uzytkownik:
         kawalki.append(
@@ -4700,6 +4703,11 @@ def _set_current_goal(goal):
     _main_override_for_critic = None
 
 
+# v480: role, ktore dostaja tylko swoja tozsamosc i pytanie do siebie —
+# bez celu i bez zdan uzytkownika. Patrz _goal_briefing_for().
+_ROLE_TYLKO_PYTANIE = {"RESEARCHER"}
+
+
 def _goal_briefing_for(name):
     """
     Blok CEL doklejany WYŁĄCZNIE do pierwszej wiadomości do danej
@@ -4713,6 +4721,13 @@ def _goal_briefing_for(name):
         return ""
 
     if name in _goal_briefed:
+        return ""
+
+    # v480: Kamil szuka w sieci tego, o co go pytaja. Calego celu
+    # (12 kB misji) nie potrzebuje — dostaje swoja role i pytanie.
+    # Bieg 2026-10-11 12:34: na jedno pytanie MAIN-a o grokking
+    # poszlo do niego ~25 kB, w tym cel i dwa razy slowa uzytkownika.
+    if name in _ROLE_TYLKO_PYTANIE:
         return ""
 
     _goal_briefed.add(name)
@@ -35419,11 +35434,11 @@ def consult_team(
             # Przez _only_if_new, więc mówimy to raz — ale plik żyje
             # do końca celu, więc nowe zdanie użytkownika dotrze
             # wtedy, gdy padnie.
-            _only_if_new(
-                role_name,
-                "uzytkownik_powiedzial",
-                _co_powiedzial_uzytkownik_block()
-            ),
+            # v480: te same zdania szly tez nizej, w "Uzytkownik:"
+            # (_team_context) — Kamil w biegu 2026-10-11 12:34 dostal je
+            # w jednej wiadomosci dwa razy. Zostaje tamten blok: idzie
+            # do kazdej roli raz na rozmowe (_jeszcze_niewyslane_zdania).
+            "",
             # v381: ile z celu jest naprawde zrobione — ta sama liczba,
             # ktora dostaje MAIN. Zespol tez ma prawo wiedziec, czy to,
             # co robi od kilku krokow, cokolwiek posuwa. Patrz
@@ -35530,7 +35545,10 @@ def consult_team(
         # dostaje. Patrz _co_powiedzial_uzytkownik(): dotad te
         # zdania lezaly w pliku, z ktorego czytalismy wylacznie
         # numery telefonow.
-        _od_uzytkownika = _co_powiedzial_uzytkownik(role_name)
+        _od_uzytkownika = (
+            "" if role_name in _ROLE_TYLKO_PYTANIE
+            else _co_powiedzial_uzytkownik(role_name)
+        )
 
         if _od_uzytkownika:
             pieces.append(
