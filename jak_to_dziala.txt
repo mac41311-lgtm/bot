@@ -1125,5 +1125,8 @@ CZESC 37. CO ZMIENILO v477 (pytanie "czy oni maja problem czasowy?")
   - _sekundy_spania(): komenda z `sleep N` (N, Ns, Nm, Nh) ma na cisze
     N + COMMAND_TIMEOUT sekund (najwyzej SUFIT_CZASU), wiec `sleep 600 &&
     tail log` czeka do konca w jednym kroku
+  - udany wynik termux_run nie mowi juz "timeout": 120 (MAIN bral to za
+    limit dlugosci komendy), tylko "limit_ciszy_s" i "maks_czas_s"
+    (SUFIT_CZASU, 7200 s)
 
 =========================================================================

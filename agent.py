@@ -19587,7 +19587,14 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             "stdout": short(stdout, 6000),
             "stderr": short(stderr, 6000),
             "command": command,
-            "timeout": limit,
+            # v477b: bylo "timeout": 120. Bieg 2026-10-11 rano: MAIN
+            # czekal na 10 epok treningu (~18 min) kawalkami `sleep 60`
+            # / `sleep 90` w osobnych turach, bo kazdy wynik mowil
+            # "timeout: 120". To nie jest limit dlugosci komendy, tylko
+            # limit ciszy (v293) — komenda, ktora pracuje albo spi
+            # zamierzenie (v477), moze trwac do SUFIT_CZASU.
+            "limit_ciszy_s": limit,
+            "maks_czas_s": SUFIT_CZASU,
             "duration_s": round(
                 (datetime.now() - started).total_seconds(), 1
             )
