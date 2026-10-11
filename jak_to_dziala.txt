@@ -1267,3 +1267,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        ("Jestes Kamilem...") i pytanie, bez celu i bez zdan uzytkownika
      - u pozostalych rol zdania uzytkownika ida juz tylko raz, w
        "Uzytkownik:" (blok "Uzytkownik powiedzial nam..." usuniety)
+
+  8. (bieg 2026-10-11 12:42) Log urwal sie po kroku 5 bez zadnego
+     komunikatu — telefon zamknal wszystkie aplikacje. Nie dalo sie
+     powiedziec, czy program dostal sygnal, czy zostal ubity od razu.
+
+     CO ZMIENIONE:
+     - SIGTERM/SIGHUP zapisuja w logu linie "Dostałem sygnał ... od
+       systemu"; brak takiej linii na koncu urwanego logu znaczy, ze
+       Android ubil proces bez ostrzezenia (SIGKILL, zwykle brak
+       pamieci)

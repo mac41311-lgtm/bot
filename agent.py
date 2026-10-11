@@ -10717,6 +10717,25 @@ def _zamknij_po_sygnale(signum, frame):
     tych sygnalach wychodzil bez atexit i procesy w tle zostawaly.
     """
 
+    # v480: slad w logu. Bieg 2026-10-11 12:42 urwal sie w pol slowa
+    # (telefon zamknal wszystkie aplikacje) i z logu nie dalo sie
+    # powiedziec, czy program dostal sygnal, czy zostal zabity od razu.
+    # Teraz sygnal zostawia linie; brak tej linii = SIGKILL (Android
+    # ubil proces bez ostrzezenia, np. przy braku pamieci).
+    try:
+        _nazwa = signal.Signals(signum).name
+    except Exception:
+        _nazwa = str(signum)
+    try:
+        log(
+            "PROGRAM",
+            "Dostałem sygnał " + _nazwa + " od systemu — zamykam się "
+            "(SIGHUP: zamknięto okno/sesję Termuksa; SIGTERM: ktoś "
+            "albo Android poprosił o zamknięcie)."
+        )
+    except Exception:
+        pass
+
     raise SystemExit(128 + int(signum))
 
 
