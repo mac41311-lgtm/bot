@@ -4878,8 +4878,8 @@ def start_session(name, system_prompt):
         # sie tego, co sam wczesniej napisal. Ela nie prowadzi
         # rozmowy z zespolem — cel dostaje na poczatku kazdego
         # uruchomienia, a stan co krok — wiec nic nie traci, gdy
-        # zaczyna czysta rozmowa. Reszta
-        # zespolu wznawia swoje rozmowy jak dotad.
+        # zaczyna czysta rozmowa. Reszta zespolu wznawia swoje
+        # rozmowy jak dotad.
         if saved and name == "PROGRESS_ESTIMATOR":
             log(
                 "DEEPSEEK",
@@ -10478,25 +10478,21 @@ def _zatrzymaj_to_co_zostawilismy():
     Osobno zwalniamy urzadzenia, ktore zostaly zajete — ale tylko te,
     ktore NAPRAWDE sa zajete. Patrz _zwolnij_zajete_urzadzenia().
 
-    v480: gasimy tylko to, co trzyma urzadzenie (mikrofon, glosnik,
-    aparat, telefon). Reszta pracuje dalej.
+    v480: to, co zatrzymujemy, zapisujemy (pid, komenda, plik logu)
+    w _PLIK_ZATRZYMANYCH. Nastepne uruchomienie mowi o tym MAIN-owi
+    raz, na poczatku — patrz _zatrzymane_przy_zamknieciu_blok().
 
     ZAOBSERWOWANY REALNY PRZYPADEK (biegi 2026-10-11 08:45-09:30).
-    Trening perceptronu szedl w tle po 5-30 min. Uzytkownik
-    zamykal agenta, zeby wgrac nowa wersje — a my przy wyjsciu
-    ubijalismy trening. Trzy razy z rzedu, za kazdym razem w innej
-    epoce. Zespol po restarcie widzial tylko urwany log i szukal
-    winnego w Androidzie (doze, wake-lock), bo o naszym sprzataniu
-    nie mial skad wiedziec. Obliczenia, serwer, test nikomu nie
-    przeszkadzaja, gdy agent nie dziala — a zamkniecie agenta na
-    chwile nie znaczy, ze ich wynik juz nikogo nie obchodzi.
-    To, co zostawiamy, zapisujemy w _PLIK_ZOSTAWIONYCH — nastepne
-    uruchomienie pokazuje to w termux_processes.
+    Trening perceptronu szedl w tle. Uzytkownik zamykal agenta, zeby
+    wgrac nowa wersje, a my przy wyjsciu ubijalismy trening — tak
+    jak powinnismy. Ale zespol po restarcie widzial tylko urwany log
+    i szukal winnego w Androidzie (doze, wake-lock), bo nikt mu nie
+    powiedzial, ze to my zatrzymalismy proces razem z programem.
 
     Nigdy nie rzuca — to sprzatanie przy wyjsciu, nie robota.
     """
 
-    _zostawione = []
+    _zatrzymane = []
 
     for pid, proces in list(_procesy_w_tle.items()):
 
@@ -10504,24 +10500,16 @@ def _zatrzymaj_to_co_zostawilismy():
             if proces.poll() is not None:
                 continue
 
-            if not _trzyma_urzadzenie(proces):
-                _log_procesu = ""
-                for _sciezka, _wpis in list(_logi_w_tle.items()):
-                    if _wpis and _wpis[0] == pid:
-                        _log_procesu = _sciezka
-                _zostawione.append({
-                    "pid": pid,
-                    "komenda": str(getattr(proces, "args", ""))[:500],
-                    "log_file": _log_procesu,
-                    "zostawiony_o": datetime.now().strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
-                })
-                print(
-                    "Zostawiam pracujacy w tle (pid " + str(pid)
-                    + ") — nie trzyma mikrofonu ani glosnika."
-                )
-                continue
+            _log_procesu = ""
+            for _sciezka, _wpis in list(_logi_w_tle.items()):
+                if _wpis and _wpis[0] == pid:
+                    _log_procesu = _sciezka
+            _zatrzymane.append({
+                "pid": pid,
+                "komenda": str(getattr(proces, "args", ""))[:300],
+                "log_file": _log_procesu,
+                "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
 
             print(
                 "Zatrzymuje to, co uruchomilem w tle (pid "
@@ -10556,67 +10544,82 @@ def _zatrzymaj_to_co_zostawilismy():
 
     _zwolnij_zajete_urzadzenia()
 
-    try:
-        _poprzednie = [
-            w for w in _wczytaj_zostawione()
-            if w.get("pid") not in _procesy_w_tle
-        ]
-        _PLIK_ZOSTAWIONYCH.write_text(
-            json.dumps(_poprzednie + _zostawione, ensure_ascii=False),
-            encoding="utf-8"
-        )
-    except Exception:
-        pass
+    if _zatrzymane:
+        try:
+            _PLIK_ZATRZYMANYCH.write_text(
+                json.dumps(_zatrzymane, ensure_ascii=False),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
 
 
-# v480: urzadzenia, ktorych proces w tle nie powinien trzymac, gdy
-# agent juz nie dziala. Patrz _zatrzymaj_to_co_zostawilismy().
-_URZADZENIE_W_KOMENDZIE_RE = re.compile(
-    r"termux-(?:microphone-record|tts-speak|media-player|camera-photo"
-    r"|telephony-call|speech-to-text|torch|vibrate)"
-    r"|\b(?:mpv|ffplay|play-audio|aplay|arecord|rec|sox)\b"
-)
+_PLIK_ZATRZYMANYCH = AGENT_DIR / "zatrzymane_przy_zamknieciu.json"
 
 
-def _trzyma_urzadzenie(proces):
-    """True, gdy komenda albo uruchamiany przez nia skrypt siega po
-    mikrofon, glosnik, aparat lub telefon. Przy watpliwosci True."""
-
-    try:
-        komenda = str(getattr(proces, "args", "") or "")
-        tresc = komenda + "\n" + _tresc_uruchamianego_skryptu(komenda)
-        return bool(_URZADZENIE_W_KOMENDZIE_RE.search(tresc))
-    except Exception:
-        return True
-
-
-_PLIK_ZOSTAWIONYCH = AGENT_DIR / "zostawione_w_tle.json"
-
-
-def _wczytaj_zostawione():
-    """Procesy zostawione w tle przez poprzednie uruchomienia, ktore
-    nadal zyja. Nigdy nie rzuca."""
+def _zatrzymane_przy_zamknieciu_blok():
+    """
+    v480: jednorazowa wiadomosc dla MAIN-a po starcie — co poprzednie
+    uruchomienie zatrzymalo przy zamknieciu i gdzie zostaly logi.
+    Plik kasujemy po odczytaniu, wiec to samo nie wraca. Pusty tekst,
+    gdy niczego nie zatrzymalismy. Nigdy nie rzuca.
+    """
 
     try:
         wpisy = json.loads(
-            _PLIK_ZOSTAWIONYCH.read_text(encoding="utf-8")
+            _PLIK_ZATRZYMANYCH.read_text(encoding="utf-8")
         )
     except Exception:
-        return []
+        return ""
 
-    zywe = []
+    try:
+        _PLIK_ZATRZYMANYCH.unlink()
+    except Exception:
+        pass
+
+    linie = []
 
     for w in wpisy if isinstance(wpisy, list) else []:
         try:
-            os.kill(int(w.get("pid")), 0)
-            zywe.append(w)
+            linie.append(
+                "- pid " + str(w.get("pid")) + " ("
+                + short(str(w.get("komenda") or ""), 200) + ")"
+                + (", log: " + str(w["log_file"])
+                   if w.get("log_file") else "")
+            )
         except Exception:
             continue
 
-    return zywe
+    if not linie:
+        return ""
+
+    czas = str((wpisy[0] or {}).get("czas") or "")
+
+    return (
+        "Przy zamknięciu programu" + (" (" + czas + ")" if czas else "")
+        + " zatrzymałem to, co działało w tle:\n" + "\n".join(linie) + "\n"
+    )
 
 
 atexit.register(_zatrzymaj_to_co_zostawilismy)
+
+
+def _zamknij_po_sygnale(signum, frame):
+    """
+    v480: `pkill -f agent.py` (SIGTERM) i zamkniecie okna Termuksa
+    (SIGHUP) koncza program tak samo jak Ctrl+C — przez sys.exit,
+    wiec atexit sprzata to, co puscilismy w tle. Dotad Python przy
+    tych sygnalach wychodzil bez atexit i procesy w tle zostawaly.
+    """
+
+    raise SystemExit(128 + int(signum))
+
+
+for _sygnal in ("SIGTERM", "SIGHUP"):
+    try:
+        signal.signal(getattr(signal, _sygnal), _zamknij_po_sygnale)
+    except Exception:
+        pass
 
 
 atexit.register(_cleanup_screenshots_silently)
@@ -21104,20 +21107,11 @@ def termux_processes():
             timeout=10
         )
 
-        wynik = {
+        return {
             "ok": r.returncode == 0,
             "stdout": r.stdout[:15000],
             "stderr": r.stderr[:4000]
         }
-
-        # v480: to, co poprzednie uruchomienie agenta zostawilo
-        # pracujace w tle — z komenda i plikiem logu.
-        _z_poprzedniego = _wczytaj_zostawione()
-
-        if _z_poprzedniego:
-            wynik["z_poprzedniego_uruchomienia"] = _z_poprzedniego
-
-        return wynik
 
     except Exception as e:
         return {
@@ -37329,6 +37323,12 @@ def main_decide(
             "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
             "— jego ostatnie wyniki nie wracają; to, co się teraz "
             "wykona, dostaniesz tutaj.\n" + _co_sie_stalo_main
+        )
+
+    # v480: co poprzedni bieg zatrzymal przy zamknieciu — raz.
+    if int(step or 0) <= 1:
+        _co_sie_stalo_main = (
+            _zatrzymane_przy_zamknieciu_blok() + _co_sie_stalo_main
         )
 
     prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}

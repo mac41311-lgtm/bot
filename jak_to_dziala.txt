@@ -1179,21 +1179,23 @@ CZESC 39. CO ZMIENILO v479 (bieg 2026-10-11 09:10 — czekanie na trening)
 CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 =========================================================================
 
-  1. Treningi i testy w tle ginely przy zamknieciu agenta.
-     Perceptron padl trzy razy (epoka 7, 2, 1), za kazdym razem miedzy
-     uruchomieniami agenta. Przy wyjsciu program ubijal wszystko, co
-     sam puscil w tle (termux_run_background i dlugie komendy
-     przeniesione w tlo). Zespol widzial tylko urwany log i szukal
-     przyczyny w Androidzie (doze, wake-lock).
+  1. Treningi i testy w tle ginely przy zamknieciu agenta — i nikt
+     zespolowi o tym nie mowil. Perceptron padl trzy razy (epoka 7,
+     2, 1), za kazdym razem miedzy uruchomieniami agenta. Przy
+     wyjsciu program gasi wszystko, co sam puscil w tle (tak ma
+     zostac — po zamknieciu nie zostaja procesy). Zespol widzial
+     tylko urwany log i szukal przyczyny w Androidzie (doze,
+     wake-lock).
 
      CO ZMIENIONE:
-     - przy wyjsciu gasimy tylko procesy, ktore siegaja po mikrofon,
-       glosnik, aparat albo telefon (komenda lub tresc skryptu);
-       reszta pracuje dalej
-     - zostawione procesy (pid, komenda, plik logu) ida do
-       ~/agent/zostawione_w_tle.json; termux_processes w nastepnym
-       uruchomieniu pokazuje te, ktore nadal zyja, w polu
-       "z_poprzedniego_uruchomienia"
+     - przy wyjsciu zapisujemy, co zatrzymalismy (pid, komenda, plik
+       logu) do ~/agent/zatrzymane_przy_zamknieciu.json
+     - po starcie MAIN dostaje to raz, w pierwszym kroku: "Przy
+       zamknieciu programu (czas) zatrzymalem to, co dzialalo w tle:
+       - pid ... (komenda), log: ..."; plik jest potem kasowany
+     - `pkill -f agent.py` (SIGTERM) i zamkniecie okna Termuksa
+       (SIGHUP) sprzataja tak samo jak Ctrl+C — dotad wtedy procesy
+       w tle zostawaly
 
   2. Ela dalej pisala 99%, choc w tym samym podsumowaniu wyliczala
      kilkanascie rzeczy niezrobionych. Nowy promt z v478 doszedl do
