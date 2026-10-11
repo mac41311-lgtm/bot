@@ -5994,6 +5994,9 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     kontynuacja = (action == "continue")
     sciezka = "/chat/continue" if kontynuacja else "/chat/completion"
 
+    # v480q: patrz koniec funkcji — pusta odpowiedz nie przesuwa rozmowy.
+    _rodzic_przed = getattr(session, "parent_message_id", None)
+
     if kontynuacja:
         payload = {
             "chat_session_id": session.chat_session_id,
@@ -6554,6 +6557,25 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             "strumienia — treść z nich przepadła. Pierwszy: "
             + pierwszy_blad[0]
         )
+
+    # v480q: pusta odpowiedz (bez tresci i bez myslenia) nie przesuwa
+    # rozmowy dalej.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 16:58). O 18:28
+    # Tomek dostal pusta odpowiedz; strumien zdazyl podac jej id, wiec
+    # kolejna wiadomosc szla "w odpowiedzi" na wiadomosc, ktorej serwer
+    # nie zapisal. Ponowienie i nastepna wiadomosc o 19:00: biz_code 26
+    # "invalid message id" — i program zakladal NOWA rozmowe, gubiac
+    # cala historie Tomka. To samo z Markiem o 19:03. Wracamy wiec do
+    # ostatniej prawdziwej wiadomosci w rozmowie, tak jak strona po
+    # nieudanej odpowiedzi.
+    if (
+        not kontynuacja
+        and not full_text.strip()
+        and not znakow_myslenia[0]
+        and getattr(session, "parent_message_id", None) != _rodzic_przed
+    ):
+        session.parent_message_id = _rodzic_przed
 
     if not full_text.strip() and znakow_myslenia[0]:
         # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.

@@ -1378,3 +1378,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - przy bledzie cialo odpowiedzi dociagamy z samego strumienia; gdy
        i tam nic nie ma, piszemy to wprost razem z kodem HTTP
+
+ 17. (bieg 2026-10-11 16:58, 19:00 i 19:03) Dzieki punktowi 16 widac
+     bylo powod odmow: biz_code 26 "invalid message id". Po pustej
+     odpowiedzi DeepSeeka rozmowa wskazywala na wiadomosc, ktorej
+     serwer nie zapisal. Nastepne pytanie do niej bylo odrzucane i
+     Tomek (19:00) oraz Marek (19:03) dostali NOWE rozmowy.
+
+     CO ZMIENIONE:
+     - gdy odpowiedz nie ma ani tekstu, ani myslenia, rozmowa wraca do
+       poprzedniej wiadomosci (parent_message_id sprzed pytania), wiec
+       ponowienie idzie w tej samej rozmowie
