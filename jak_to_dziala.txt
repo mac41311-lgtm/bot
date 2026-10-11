@@ -1151,3 +1151,22 @@ CZESC 38. CO ZMIENILO v478 (bieg 2026-10-11 08:45 — Ela "99% celu")
   Prompt idzie raz, na poczatku rozmowy z Ela w danym uruchomieniu.
 
 =========================================================================
+
+CZESC 39. CO ZMIENILO v479 (bieg 2026-10-11 09:10 — czekanie na trening)
+=========================================================================
+
+  Po v477 komenda `sleep N` moze czekac do 2 h, ale MAIN dalej
+  sprawdzal trening co 90 s (`sleep 90 && tail log && ls ckpt`) i dwa
+  razy z rzedu dostal slowo w slowo ten sam wynik. Kazde puste
+  sprawdzenie to tura MAIN-a i wiadomosc do DeepSeeka.
+
+  CO ZMIENIONE:
+  - _czekaj_az_sie_zmieni(): gdy komenda MAIN-a tylko czeka i czyta
+    (sleep + cd/tail/cat/ls/ps/grep/echo..., bez zapisu do plikow) i jej
+    wynik jest identyczny jak przy poprzednim takim samym sprawdzeniu
+    (te same komendy, liczby dowolne), program powtarza ja sam, az wynik
+    sie zmieni albo komenda padnie — dopiero wtedy oddaje go MAIN-owi,
+    z polami "czekalem_na_zmiane_s" i "sprawdzen_bez_zmiany"
+  - najdluzej CZEKANIE_NA_ZMIANE_S (domyslnie 1800 s) za jednym razem
+
+=========================================================================

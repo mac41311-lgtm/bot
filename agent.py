@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v478
+AEL-MINI AUTONOMOUS AGENT v479
 
-ARCHITEKTURA (stan na v478 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v479 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v478")
+    print("             AEL-MINI AUTONOMOUS AGENT v479")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -21798,6 +21798,116 @@ def _bez_ostrzezen_pythona(result):
     return {k: v for k, v in result.items() if k not in _OSTRZEZENIA_PYTHONA}
 
 
+# ============================================================
+# CZEKANIE NA ZMIANE (v479)
+# ============================================================
+#
+# Bieg 2026-10-11 09:10: trening w tle, epoka ~350 s. MAIN sprawdzal
+# go komenda `sleep 90 && tail log && ls ckpt` — i dwa razy z rzedu
+# dostal slowo w slowo ten sam wynik. Kazde takie sprawdzenie to tura
+# MAIN-a i wiadomosc do DeepSeeka, ktora nic nie wnosi.
+#
+# Gdy komenda tylko czeka i czyta (sleep + tail/cat/ls/ps/grep...) i
+# jej wynik jest taki sam jak przy poprzednim takim samym sprawdzeniu,
+# program powtarza ja sam, az wynik sie zmieni — i dopiero wtedy
+# oddaje go MAIN-owi. Najdluzej CZEKANIE_NA_ZMIANE_S naraz.
+CZEKANIE_NA_ZMIANE_S = int(
+    os.environ.get("CZEKANIE_NA_ZMIANE_S", "1800")
+)
+
+_SAMO_CZYTANIE = {
+    "sleep", "cd", "tail", "head", "cat", "ls", "ps", "grep", "egrep",
+    "echo", "wc", "date", "stat", "du", "df", "pgrep", "test", "[",
+    "true", "uptime", "free", "nproc", "pidof", "sort", "uniq", "cut",
+    "awk", "sed", "tr", "printf", "find", "jq", "top",
+}
+
+_ostatnie_sprawdzenie = {}
+
+
+def _tylko_czeka_i_czyta(command):
+    """Komenda z `sleep`, ktorej kazdy czlon tylko czyta."""
+    if not _sekundy_spania(command):
+        return False
+    _bez_null = re.sub(r"\d*>>?\s*/dev/null", "", str(command))
+    if re.search(r">[^&]|\bsed\s+-i|\bfind\b.*-(?:delete|exec)", _bez_null):
+        return False
+    for czlon in _czlony_komendy(command):
+        try:
+            slowa = shlex.split(czlon)
+        except ValueError:
+            return False
+        if not slowa:
+            continue
+        if os.path.basename(slowa[0]) not in _SAMO_CZYTANIE:
+            return False
+    return True
+
+
+def _czekaj_az_sie_zmieni(name, args, result):
+    if (
+        name != "termux_run"
+        or not _wykonuje_main
+        or not isinstance(result, dict)
+        or result.get("ok") is not True
+    ):
+        return result
+
+    komenda = str((args or {}).get("command") or "")
+
+    if not _tylko_czeka_i_czyta(komenda):
+        return result
+
+    # Ta sama komenda z innym `sleep N` / `tail -N` to to samo
+    # sprawdzenie.
+    klucz = re.sub(r"\d+", "#", komenda)
+    wynik = str(result.get("stdout") or "") + str(result.get("stderr") or "")
+
+    if _ostatnie_sprawdzenie.get(klucz) != wynik:
+        _ostatnie_sprawdzenie[klucz] = wynik
+        return result
+
+    start = time.time()
+    razy = 0
+
+    log(
+        "TERMUX",
+        "Wynik taki sam jak przy poprzednim sprawdzeniu — sprawdzam "
+        "dalej sam, aż coś się zmieni (najdłużej "
+        + str(CZEKANIE_NA_ZMIANE_S // 60) + " min)."
+    )
+
+    while time.time() - start < CZEKANIE_NA_ZMIANE_S:
+
+        nowy = _dispatch_tool_inner(name, args)
+        razy += 1
+
+        if not isinstance(nowy, dict):
+            return result
+
+        tekst = str(nowy.get("stdout") or "") + str(nowy.get("stderr") or "")
+
+        if nowy.get("ok") is not True or tekst != wynik:
+            result = nowy
+            break
+
+    _ostatnie_sprawdzenie[klucz] = (
+        str(result.get("stdout") or "") + str(result.get("stderr") or "")
+    )
+
+    _czekal = int(time.time() - start)
+    result["czekalem_na_zmiane_s"] = _czekal
+    result["sprawdzen_bez_zmiany"] = razy
+
+    log(
+        "TERMUX",
+        "Po " + str(_czekal) + " s i " + str(razy)
+        + " sprawdzeniach — oddaję wynik MAIN-owi."
+    )
+
+    return result
+
+
 def dispatch_tool(
     name,
     args
@@ -21826,6 +21936,8 @@ def dispatch_tool(
         name,
         args
     )
+
+    result = _czekaj_az_sie_zmieni(name, args, result)
 
     duration_s = round(
         (datetime.now() - started).total_seconds(),
