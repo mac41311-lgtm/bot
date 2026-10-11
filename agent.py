@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v475
+AEL-MINI AUTONOMOUS AGENT v476
 
-ARCHITEKTURA (stan na v475 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v476 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v475")
+    print("             AEL-MINI AUTONOMOUS AGENT v476")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4219,6 +4219,25 @@ def _reset_progress_memory():
 # Powody, dla ktorych MAIN chcial juz zakonczyc cel. Zespol slyszy
 # kazdy z nich RAZ — patrz galaz FAILED w run_agent().
 _powody_zakonczenia = []
+
+
+def _mowi_cel_zrobiony(tekst):
+    """
+    v476: czy odpowiedz potwierdza "CEL ZROBIONY" — a nie tylko cytuje
+    te slowa. Bieg 2026-10-11 00:13, krok 36: Tomek napisal "CEL NIE
+    JEST ZROBIONY (...) z cala pewnoscia nie jest to „CEL ZROBIONY”",
+    Marek "DONE jest falszywe" — a v474 szukal samego napisu i bieg
+    sie zakonczyl.
+    """
+    t = " ".join(str(tekst or "").lower().split())
+    if re.search(r"\bcel\W+(?:\w+\W+){0,2}nie\W+(?:jest\W+)?zrobiony", t):
+        return False
+    for m in re.finditer(r"cel\W{0,3}zrobiony", t):
+        przed = t[max(0, m.start() - 40):m.start()]
+        if re.search(r"\bnie\b|\bani\b|\bnigdy\b|\bzanim\b|\bjeśli\b|\bjesli\b|\bgdy\b", przed):
+            continue
+        return True
+    return False
 
 
 def _reset_powody_zakonczenia():
@@ -21274,8 +21293,14 @@ def termux_patch_file(path, search, replace):
     # jedynym narzedziem zapisu bez tej zasady. Zmiana w pliku z kodem
     # przechodzi tylko wtedy, gdy jej tresc padla w wypowiedzi kogos z
     # zespolu (to samo sprawdzenie, co kopia kodu w zleceniu).
+    # v476: w RUN zmiane pisze MAIN — kod zespolu, tak jak przy
+    # termux_write_file i termux_run od v461. Bieg 2026-10-11 00:13,
+    # krok 29 (i 2026-10-10 23:03, krok 19): patch MAIN-a odrzucony,
+    # krok pozniej ta sama zmiana przeszla przez termux_run z Pythonem
+    # w heredocu — strata kroku, nic wiecej.
     if (
         target.suffix.lower() in _KOD_SUFIKSY
+        and not _wykonuje_main
         and not _kopia_kodu_zespolu(str(replace if replace is not None else ""))
     ):
         _msg = (
@@ -43402,6 +43427,7 @@ def run_agent(goal):
 
                 _glosy = []
                 _ktos_mowi_zrobione = False
+                _ktos_mowi_niezrobione = False
                 try:
                     for _rola in ("PLANNER", "CRITIC"):
                         _role_inbox.setdefault(_rola, []).append((
@@ -43426,12 +43452,18 @@ def run_agent(goal):
                         if _t:
                             _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
                             log("MAIN", _rola + " O DONE MAIN-A: " + short(_t, 300))
-                            if "cel zrobiony" in " ".join(_t.lower().split()):
+                            if _mowi_cel_zrobiony(_t):
                                 _ktos_mowi_zrobione = True
+                            elif re.search(
+                                r"\bcel\W+(?:\w+\W+){0,2}nie\W+(?:jest\W+)?zrobiony",
+                                " ".join(_t.lower().split())
+                            ):
+                                _ktos_mowi_niezrobione = True
                 except Exception as _e:
                     log("MAIN", "Nie udało się zapytać zespołu o DONE: " + str(_e))
 
-                if _glosy and not _ktos_mowi_zrobione:
+                # Jeden "nie" wystarcza, zeby cel trwal.
+                if _glosy and (_ktos_mowi_niezrobione or not _ktos_mowi_zrobione):
                     globals()["_done_odrzucone"] = _done_odrzucone + 1
                     log(
                         "MAIN",

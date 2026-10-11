@@ -1083,3 +1083,28 @@ CZESC 35. CO ZMIENILO v475 (bieg 2026-10-10 23:03, krok 22)
     narzedzia
 
 =========================================================================
+
+CZESC 36. CO ZMIENILO v476 (bieg 2026-10-11 00:13)
+=========================================================================
+
+  OCENA BIEGU (36 krokow, 94 wywolania narzedzi): sprawdzenie DONE z
+  v474 zadzialalo w kroku 11 (Tomek i Marek: cel nie jest zrobiony, bieg
+  szedl dalej jeszcze 25 krokow). W kroku 36 bieg sie jednak zakonczyl,
+  choc obaj znowu powiedzieli "nie": Tomek napisal "CEL NIE JEST
+  ZROBIONY (...) nie jest to „CEL ZROBIONY”", a v474 szukal samego
+  napisu "cel zrobiony".
+
+  Drugie ograniczenie: krok 29 — termux_patch_file MAIN-a odrzucony jako
+  "kod spoza zespolu" (BRAK_KODU_DO_ZAPISU). Od v461 kod, ktory MAIN pisze
+  w RUN, jest kodem zespolu (termux_write_file, termux_run) — patch o tym
+  nie wiedzial. MAIN zrobil to samo krok pozniej przez termux_run.
+
+  CO ZMIENIONE:
+  - _mowi_cel_zrobiony(): "CEL ZROBIONY" liczy sie tylko jako
+    potwierdzenie, nie w zdaniu z "nie", "ani", "jesli", "zanim" tuz
+    przed; "cel nie jest zrobiony" = nie
+  - wystarczy, ze jeden z dwoch (Tomek albo Marek) mowi wprost "cel nie
+    jest zrobiony" — bieg trwa
+  - termux_patch_file w RUN MAIN-a dziala jak termux_write_file
+
+=========================================================================
