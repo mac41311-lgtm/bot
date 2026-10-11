@@ -1429,3 +1429,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 
      CO ZMIENIONE:
      - w trakcie dlugiej komendy kopia odswieza sie co minute
+
+ 22. (bieg 2026-10-11 22:05, krok 139) Komenda sama ubila stary
+     trening (pkill), puscila nowy (nohup ... &) i dala mu chwile na
+     start (sleep 3). Program (punkt 20) uznal, ze stary proces sie
+     skonczyl, skrocil ten sleep i dopisal mylace zdanie.
+
+     CO ZMIENIONE:
+     - czekanie jest skracane tylko w komendzie, ktora sama nic nie
+       puszcza w tlo (&) i niczego nie zabija (kill/pkill/killall)

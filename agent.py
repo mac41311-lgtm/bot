@@ -604,6 +604,33 @@ def _zywe_w_tle():
     return zywe
 
 
+# v480v: komenda, ktora sama puszcza cos w tlo albo cos zabija, nie
+# jest czekaniem na cudzy proces — patrz _tylko_czeka().
+_PUSZCZA_W_TLO_RE = re.compile(r"(?<![&>|])&(?![&>])")
+_ZABIJA_RE = re.compile(r"\b(?:pkill|kill|killall)\b")
+
+
+def _tylko_czeka(command):
+    """
+    v480v: czy `sleep` w tej komendzie to czekanie na proces, ktory juz
+    idzie w tle (tylko wtedy _czekanie_na_proces_w_tle moze je skrocic).
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 22:05, krok 139).
+    Komenda sama ubila stary trening (`pkill -f ...`), puscila nowy
+    (`nohup ... &`) i dala mu chwile na start (`sleep 3`, `sleep 8`).
+    Program zobaczyl, ze stary proces zniknal, i skrocil `sleep` — tyle
+    ze ten sleep czekal na NOWY proces, a starego zabila ta sama
+    komenda. Do wyniku trafilo mylace zdanie "proces w tle sie
+    zakonczyl".
+    """
+    c = str(command or "")
+    return bool(
+        _sekundy_spania(c)
+        and not _PUSZCZA_W_TLO_RE.search(c)
+        and not _ZABIJA_RE.search(c)
+    )
+
+
 def _czekanie_na_proces_w_tle(przed, pgid):
     """
     v480t: jesli ktorys z procesow `przed` (z _zywe_w_tle() sprzed
@@ -20295,7 +20322,9 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             pgid = None
 
         # v480t: patrz _czekanie_na_proces_w_tle().
-        _w_tle_przed = _zywe_w_tle() if _sekundy_spania(command) else {}
+        _w_tle_przed = (
+            _zywe_w_tle() if _tylko_czeka(command) else {}
+        )
         _zdanie_o_czekaniu = ""
         _nastepne_spojrzenie_w_tlo = time.time() + 5
         # v480u: patrz nizej, przy time.sleep(krok).
