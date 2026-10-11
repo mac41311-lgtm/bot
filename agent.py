@@ -3268,7 +3268,11 @@ ENGINEER_PROMPT = (
 # rozstrzygniety eksperyment (perceptron, FAZA 19), gdy cel to cala
 # MISJA RSI, a Marek oceniał ja na 5%. Na prosbe uzytkownika
 # przepisany w calosci: co Ela robi i co wpisuje.
-PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego celu użytkownika jest już rzeczywiście zrobiona — całego, od pierwszego do ostatniego punktu, tak jak go napisał. Bieżący etap to jedna z tych części. W "percent" wpisujesz ten udział jako liczbę od 0 do 100. W "summary" piszesz krótko, które części celu są zrobione i na jakiej podstawie, a które jeszcze zostały.\n\n{\n  "percent": 0,\n  "summary": ""\n}"""
+# v480r: na prosbe uzytkownika (bieg 2026-10-11 19:20, "dwa kamienie
+# milowe" za test, ktory zespol sam opisal jako niesprawdzajacy
+# kompozycji) przepisany w calosci: wynik liczy sie razem z
+# ograniczeniem, ktore zespol przy nim zapisal.
+PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego celu użytkownika jest już rzeczywiście zrobiona — całego, od pierwszego do ostatniego punktu, tak jak go napisał. Bieżący etap to jedna z tych części. Każdy wynik bierzesz razem z tym, co zespół sam o nim zapisał: jeśli przy wyniku stoi uwaga, że sprawdza on mniej, niż sugeruje jego nazwa, liczysz go w tej mniejszej mierze. W "percent" wpisujesz ten udział jako liczbę od 0 do 100. W "summary" piszesz krótko, które części celu są zrobione, na jakiej podstawie i z jakimi zapisanymi ograniczeniami, a które jeszcze zostały.\n\n{\n  \"percent\": 0,\n  \"summary\": \"\"\n}"""
 
 
 WOJTEK_PROMPT = (
