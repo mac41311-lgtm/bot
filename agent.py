@@ -20298,6 +20298,8 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         _w_tle_przed = _zywe_w_tle() if _sekundy_spania(command) else {}
         _zdanie_o_czekaniu = ""
         _nastepne_spojrzenie_w_tlo = time.time() + 5
+        # v480u: patrz nizej, przy time.sleep(krok).
+        _nastepna_kopia_logu = time.time() + 60
 
         # v294: pierwsze zdanie po dziesieciu sekundach, nie po
         # minucie — i dla KAZDEJ komendy, nie tylko dla dlugiej.
@@ -20526,6 +20528,18 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                         "Leci " + _jak_dlugo + ", nic jeszcze nie "
                         "wypisał (" + short(command, 70) + ")"
                     )
+
+            # v480u: kopia logu na telefon takze W TRAKCIE dlugiej
+            # komendy, co minute. Uzytkownik (bieg 2026-10-11 21:29):
+            # logi "nie zapisuja sie na biezaco" — kopia w
+            # storage/shared/AEL-MINI odswiezala sie tylko miedzy
+            # krokami, wiec przy `sleep 1500` byla starsza o 25 minut.
+            if teraz >= _nastepna_kopia_logu:
+                _nastepna_kopia_logu = teraz + 60
+                try:
+                    skopiuj_przebieg_na_telefon()
+                except Exception:
+                    pass
 
             time.sleep(krok)
 

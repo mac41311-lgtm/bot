@@ -1421,3 +1421,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - tylko wtedy na koncu wyniku tej komendy jest jedno zdanie, np.
        "Czekanie (sleep) skończone wcześniej, bo proces w tle (...)
        się zakończył."
+
+ 21. (bieg 2026-10-11 21:29) Kopia logu do wyciagniecia z telefonu
+     (storage/shared/AEL-MINI) odswiezala sie tylko miedzy krokami.
+     Przy dlugiej komendzie (np. `sleep 1500`) byla starsza o
+     kilkadziesiat minut.
+
+     CO ZMIENIONE:
+     - w trakcie dlugiej komendy kopia odswieza sie co minute
