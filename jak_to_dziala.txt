@@ -1359,3 +1359,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (chat_session_id) dostala ktory cel (odcisk sha1); wznowiona
        rozmowa z tym samym celem nie dostaje go drugi raz, nowa
        rozmowa albo zmieniony cel — dostaje
+
+ 15. Nowa rozmowa roli (zerwana, limit na stronie, zmieniony prompt)
+     dostawala od nowa cel, ale nie stan: bloki postepu, plikow i
+     wypowiedzi kolegow byly "widziane" jeszcze w starym czacie, wiec
+     _only_if_new je pomijal.
+
+     CO ZMIENIONE:
+     - gdy start_session zaklada NOWY czat, czyscimy _role_seen_blocks
+       tej roli — dostaje caly obecny stan raz; wznowiony czat nadal
+       dostaje tylko to, co nowe

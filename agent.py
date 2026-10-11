@@ -5281,6 +5281,14 @@ def start_session(name, system_prompt):
                 f"Sesja {name}: OK"
             )
 
+            # v480n: nowa rozmowa nie widziala niczego. Bez tego po
+            # zerwanej rozmowie albo limicie na stronie rola dostawala
+            # cel, ale bloki stanu (postep, pliki, wyniki, co mowili
+            # koledzy) byly juz "widziane" w poprzednim czacie i
+            # _only_if_new je pomijal. Teraz dostaje je od nowa, raz.
+            for _slot in [k for k in _role_seen_blocks if k[0] == name]:
+                _role_seen_blocks.pop(_slot, None)
+
         sessions[name] = session
 
         return session
