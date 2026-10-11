@@ -4634,6 +4634,9 @@ _URUCHOMIENIE_ID = (
     os.environ.pop("AEL_URUCHOMIENIE_ID", "") or str(int(time.time()))
 )
 
+# v480n: ktora rozmowa roli dostala ktory cel — patrz _goal_briefing_for().
+_CEL_WYSLANY_FILE = STATE_DIR / "cel_wyslany.json"
+
 
 def _jeszcze_niewyslane_zdania(rola, zdania):
     """
@@ -4822,6 +4825,41 @@ def _goal_briefing_for(name):
         return ""
 
     _goal_briefed.add(name)
+
+    # v480n: wznowiona rozmowa, ktora ten cel juz dostala, nie dostaje
+    # go drugi raz.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 16:58). Po cichej
+    # aktualizacji o 17:16 rozmowa MAIN-a zostala wznowiona ("Sesja
+    # MAIN: OK (wznowiona...)"), a i tak poszlo do niej 17 kB — caly
+    # cel od nowa. Tak samo przy kazdym zwyklym restarcie programu:
+    # pierwsza wiadomosc roli w uruchomieniu skreslala ja z
+    # _goal_briefed, bo kiedys (v191) restart znaczyl pusta historie.
+    # Od wznawiania rozmow to juz nieprawda. Pamietamy wiec na dysku,
+    # ktora rozmowa (chat_session_id) dostala ktory cel.
+    try:
+        _s = sessions.get(name)
+        _rozmowa = getattr(_s, "chat_session_id", None) if _s is not None else None
+        _odcisk_celu = hashlib.sha1(
+            _current_goal_text.encode("utf-8")
+        ).hexdigest()[:16]
+        _wyslane = read_json(_CEL_WYSLANY_FILE, {})
+        if not isinstance(_wyslane, dict):
+            _wyslane = {}
+        _wpis = _wyslane.get(name) or {}
+
+        if (
+            _rozmowa
+            and _wpis.get("rozmowa") == _rozmowa
+            and _wpis.get("cel") == _odcisk_celu
+        ):
+            return ""
+
+        if _rozmowa:
+            _wyslane[name] = {"rozmowa": _rozmowa, "cel": _odcisk_celu}
+            write_json(_CEL_WYSLANY_FILE, _wyslane)
+    except Exception:
+        pass
 
     # v335: sam cel, jego slowami. "CEL, nad ktorym pracujemy:" i
     # "(Mowie to raz, na poczatku...)" to byly nasze zdania o naszej

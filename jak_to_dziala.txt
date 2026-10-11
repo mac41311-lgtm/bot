@@ -1346,3 +1346,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - galaz do porownania bierzemy z BRANCH w ~/update_agent.sh (albo
        ze zmiennej BRANCH), tej samej, ktora skrypt pobiera
+
+ 14. (bieg 2026-10-11 16:58) Po cichej aktualizacji wszystkie role
+     wznowily swoje rozmowy (zadnej nowej sesji), ale kazda przy
+     pierwszej wiadomosci dostala znowu caly cel (~16 kB) — tak samo
+     jak przy kazdym zwyklym restarcie programu. Pierwsza wiadomosc
+     roli w uruchomieniu skreslala ja z _goal_briefed (v191: restart =
+     pusta historia), choc rozmowa jest wznawiana.
+
+     CO ZMIENIONE:
+     - STATE_DIR/cel_wyslany.json pamieta, ktora rozmowa
+       (chat_session_id) dostala ktory cel (odcisk sha1); wznowiona
+       rozmowa z tym samym celem nie dostaje go drugi raz, nowa
+       rozmowa albo zmieniony cel — dostaje
