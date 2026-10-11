@@ -10830,9 +10830,23 @@ def _sprawdz_nowa_wersje():
         if not _SKRYPT_AKTUALIZACJI.exists():
             return ""
 
-        galaz = _git_telefonu("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        # v480m: galaz bierzemy z ~/update_agent.sh, a nie z nazwy
+        # galezi w ~/.ael-repo. Bieg 2026-10-11 16:58: klon na telefonie
+        # nazywa sie wciaz claude/android-termux-agent-repair-18dvrp
+        # (stara v450), a skrypt od dawna pobiera inna galaz (fetch +
+        # reset nie zmienia nazwy). Porownywalismy wiec z obca galezia:
+        # "nowa wersja 3a034ba" co 15 minut i przeladowanie na ten sam
+        # kod.
+        galaz = os.environ.get("BRANCH", "").strip()
 
-        if not galaz or galaz == "HEAD":
+        if not galaz:
+            _m = re.search(
+                r'BRANCH="\$\{BRANCH:-([^}"]+)\}"',
+                _SKRYPT_AKTUALIZACJI.read_text(encoding="utf-8", errors="replace")
+            )
+            galaz = _m.group(1).strip() if _m else ""
+
+        if not galaz:
             return ""
 
         wgrany = _git_telefonu("rev-parse", "HEAD").stdout.strip()

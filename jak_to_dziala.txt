@@ -1334,3 +1334,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - gdy serwer odda cala odpowiedz od poczatku, bierzemy ja w
        calosci zamiast sklejac
      - gdy i to sie nie uda, zostaje dotychczasowe dopytanie
+
+ 13. (bieg 2026-10-11 16:58) Cicha aktualizacja zadzialala (17:16 i
+     17:33, bieg ciagnal sie dalej od nastepnego kroku), ale za kazdym
+     razem jako "nowa wersja 3a034ba". Klon ~/.ael-repo na telefonie
+     ma nazwe galezi claude/android-termux-agent-repair-18dvrp (stara
+     v450), a update_agent.sh pobiera inna galaz — fetch + reset nie
+     zmienia nazwy. Sprawdzanie porownywalo wiec z obca galezia i co
+     15 min przeladowywalo program na ten sam kod.
+
+     CO ZMIENIONE:
+     - galaz do porownania bierzemy z BRANCH w ~/update_agent.sh (albo
+       ze zmiennej BRANCH), tej samej, ktora skrypt pobiera
