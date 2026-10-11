@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v477
+AEL-MINI AUTONOMOUS AGENT v478
 
-ARCHITEKTURA (stan na v477 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v478 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v477")
+    print("             AEL-MINI AUTONOMOUS AGENT v478")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -3175,7 +3175,11 @@ ENGINEER_PROMPT = (
 
 # v352: tak samo jak u MAIN-a — kontrakt zostaje, tozsamosc
 # staje przed nim.
-PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, ile celu zostało rzeczywiście wykonane.\n\n{\n  "percent": 0,\n  "summary": ""\n}"""
+# v478: bieg 2026-10-11 08:45 — Ela dawala "99% celu" za jeden
+# rozstrzygniety eksperyment (perceptron, FAZA 19), gdy cel to cala
+# MISJA RSI, a Marek oceniał ja na 5%. Na prosbe uzytkownika
+# przepisany w calosci: co Ela robi i co wpisuje.
+PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego celu użytkownika jest już rzeczywiście zrobiona — całego, od pierwszego do ostatniego punktu, tak jak go napisał. Bieżący etap to jedna z tych części. W "percent" wpisujesz ten udział jako liczbę od 0 do 100. W "summary" piszesz krótko, które części celu są zrobione i na jakiej podstawie, a które jeszcze zostały.\n\n{\n  "percent": 0,\n  "summary": ""\n}"""
 
 
 WOJTEK_PROMPT = (

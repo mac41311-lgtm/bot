@@ -1130,3 +1130,24 @@ CZESC 37. CO ZMIENILO v477 (pytanie "czy oni maja problem czasowy?")
     (SUFIT_CZASU, 7200 s)
 
 =========================================================================
+
+CZESC 38. CO ZMIENILO v478 (bieg 2026-10-11 08:45 — Ela "99% celu")
+=========================================================================
+
+  Ela (PROGRESS_ESTIMATOR) pisala "Zrealizowano ~99% celu" za jeden
+  rozstrzygniety eksperyment (perceptron, FAZA 19), choc cel to cala
+  MISJA RSI. Jej poczatkowy prompt mowil tylko "Oceniasz, ile celu
+  zostalo rzeczywiscie wykonane". Na prosbe uzytkownika prompt Eli
+  przepisany w calosci — co robi i co wpisuje, bez zakazow i bez
+  dodatkowych, powtarzanych tekstow:
+
+    Jestes Ela. Oceniasz, jaka czesc calego celu uzytkownika jest juz
+    rzeczywiscie zrobiona — calego, od pierwszego do ostatniego punktu,
+    tak jak go napisal. Biezacy etap to jedna z tych czesci. W "percent"
+    wpisujesz ten udzial jako liczbe od 0 do 100. W "summary" piszesz
+    krotko, ktore czesci celu sa zrobione i na jakiej podstawie, a ktore
+    jeszcze zostaly.
+
+  Prompt idzie raz, na poczatku rozmowy z Ela w danym uruchomieniu.
+
+=========================================================================
