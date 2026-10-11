@@ -1221,3 +1221,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        a jest zapisana na dysku, MAIN dostaje to zdanie (raz na
        uruchomienie), a zaraz po nim liste tego, co zatrzymalismy przy
        zamknieciu
+
+  4. (bieg 2026-10-11 11:07, krok 21) Odpowiedz uzytkownika szla do
+     MAIN-a dwa razy w jednej wiadomosci ("Uzytkownik:" i "wartosc
+     wklejona przez uzytkownika"), a blok "Uzytkownik:" przy kazdym
+     nowym zdaniu niosl wszystkie dawne, i po kazdym restarcie znowu.
+
+     CO ZMIENIONE:
+     - _jeszcze_niewyslane_zdania(): kazde zdanie uzytkownika idzie do
+       roli raz na rozmowe; pamiec na dysku
+       (state/zdania_uzytkownika_wyslane.json) przy identyfikatorze
+       rozmowy — nowa rozmowa dostaje zdania od nowa
+     - gdy pelny tekst jest w "Uzytkownik:", linia "wartosc wklejona"
+       w "Co sie wlasnie stalo" znika (sciezka do pliku zostaje)

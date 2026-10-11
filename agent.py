@@ -4450,7 +4450,7 @@ def _wspolne_dla_wolanego(rola):
 
     kawalki = []
 
-    uzytkownik = _co_powiedzial_uzytkownik()
+    uzytkownik = _co_powiedzial_uzytkownik(rola)
 
     if uzytkownik:
         kawalki.append(
@@ -4471,7 +4471,7 @@ def _wspolne_dla_wolanego(rola):
     return "".join(k for k in kawalki if k)
 
 
-def _co_powiedzial_uzytkownik():
+def _co_powiedzial_uzytkownik(rola=None):
     """
     Zdania, ktore uzytkownik napisal w tym celu — do przekazania
     zespolowi (v341).
@@ -4509,10 +4509,83 @@ def _co_powiedzial_uzytkownik():
         if l.strip() and not l.startswith(_CEL_ZDAN_PREFIX)
     ]
 
+    if rola:
+        zdania = _jeszcze_niewyslane_zdania(rola, zdania)
+
     if not zdania:
         return ""
 
     return "\n\n".join(zdania)
+
+
+# v480: ktore zdania uzytkownika ktora rola juz dostala — w ktorej
+# rozmowie. Patrz _jeszcze_niewyslane_zdania().
+_ZDANIA_WYSLANE_FILE = STATE_DIR / "zdania_uzytkownika_wyslane.json"
+
+_URUCHOMIENIE_ID = str(int(time.time()))
+
+
+def _jeszcze_niewyslane_zdania(rola, zdania):
+    """
+    v480: kazde zdanie uzytkownika idzie do roli raz.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 11:07, krok 21).
+    Blok "Uzytkownik:" niosl WSZYSTKIE zdania z tego celu i wracal w
+    calosci, gdy tylko doszlo nowe — a po restarcie programu znowu,
+    bo pamiec "juz widziala" zyla tylko w jednym uruchomieniu, choc
+    rozmowa z DeepSeekiem trwa dalej. Teraz pamietamy to na dysku,
+    przy identyfikatorze rozmowy: nowa rozmowa (reset, czysta Ela)
+    dostaje zdania od nowa, wznowiona tylko te, ktorych jeszcze nie
+    miala. Nigdy nie rzuca.
+    """
+
+    try:
+        if rola == "PROGRESS_ESTIMATOR":
+            # Ela zaczyna czysta rozmowe w kazdym uruchomieniu (v480).
+            rozmowa = "uruchomienie-" + _URUCHOMIENIE_ID
+        else:
+            _s = sessions.get(rola)
+            rozmowa = (
+                getattr(_s, "chat_session_id", None)
+                if _s is not None
+                else (_load_session_state(rola) or {}).get(
+                    "chat_session_id"
+                )
+            )
+
+        wszystko = read_json(_ZDANIA_WYSLANE_FILE, {})
+        if not isinstance(wszystko, dict):
+            wszystko = {}
+
+        wpis = wszystko.get(rola) or {}
+        poprzednia = wpis.get("rozmowa")
+
+        if poprzednia and rozmowa and poprzednia != rozmowa:
+            wpis = {}
+
+        wyslane = set(wpis.get("zdania") or [])
+
+        def _odcisk(z):
+            return hashlib.sha1(z.encode("utf-8")).hexdigest()[:16]
+
+        nowe = [z for z in zdania if _odcisk(z) not in wyslane]
+
+        if nowe:
+            wyslane.update(_odcisk(z) for z in nowe)
+            wszystko[rola] = {
+                "rozmowa": rozmowa or poprzednia,
+                "zdania": sorted(wyslane),
+            }
+            _ZDANIA_WYSLANE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _ZDANIA_WYSLANE_FILE.write_text(
+                json.dumps(wszystko, ensure_ascii=False),
+                encoding="utf-8"
+            )
+
+        return nowe
+
+    except Exception:
+        return zdania
 
 
 def _przypnij_zdania_uzytkownika_do_celu(goal):
@@ -35407,7 +35480,7 @@ def consult_team(
         # dostaje. Patrz _co_powiedzial_uzytkownik(): dotad te
         # zdania lezaly w pliku, z ktorego czytalismy wylacznie
         # numery telefonow.
-        _od_uzytkownika = _co_powiedzial_uzytkownik()
+        _od_uzytkownika = _co_powiedzial_uzytkownik(role_name)
 
         if _od_uzytkownika:
             pieces.append(
@@ -37282,7 +37355,7 @@ def main_decide(
     # v341: MAIN tez musi wiedziec, co powiedzial uzytkownik —
     # to on decyduje, czy jeszcze raz kazac sprawdzac instalacje.
     # Patrz _co_powiedzial_uzytkownik().
-    _od_uzytkownika_dla_maina = _co_powiedzial_uzytkownik()
+    _od_uzytkownika_dla_maina = _co_powiedzial_uzytkownik("MAIN")
 
     _uzytkownik_block = (
         _only_if_new(
@@ -37292,6 +37365,23 @@ def main_decide(
         )
         if _od_uzytkownika_dla_maina else ""
     )
+
+    # v480: odpowiedz uzytkownika na NEED_USER_LOGIN szla w kroku 21
+    # dwa razy w tej samej wiadomosci — w "Uzytkownik:" i jeszcze raz
+    # w "Co sie wlasnie stalo" jako "wartosc wklejona przez
+    # uzytkownika". Gdy pelny tekst jest juz wyzej, nizej zostaje
+    # tylko sciezka do pliku z nim.
+    if _uzytkownik_block and isinstance(last_result, dict):
+        _wklejone = " ".join(
+            str(last_result.get("user_provided_value") or "").split()
+        )
+        if _wklejone and _wklejone[:200] in " ".join(
+            _uzytkownik_block.split()
+        ):
+            _facts = "\n".join(
+                l for l in str(_facts).split("\n")
+                if not l.startswith("wartość wklejona przez użytkownika: ")
+            )
 
     # v348: co powstalo na dysku w tym kroku — zeby MAIN mial to
     # przed oczami, gdy decyduje, co uruchomic. Patrz
