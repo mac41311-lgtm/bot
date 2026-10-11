@@ -1208,3 +1208,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wznawia swoje rozmowy bez zmian.
 
 =========================================================================
+
+  3. (bieg 2026-10-11 11:07) Zdanie "Nowe uruchomienie programu.
+     Poprzedni bieg zostal przerwany..." z v463 nie dochodzilo do MAIN-a
+     nigdy: program sprawdzal, czy rozmowa zostala wznowiona, zanim ja
+     w ogole wznowil (rozmowa startuje dopiero przy wysylce). MAIN
+     dostawal w kroku 1 sam cel i pisal "Poprzedni RUN nie zwrocil
+     wyniku - powtarzam diagnostyke".
+
+     CO ZMIENIONE:
+     - krok 1: jesli rozmowy MAIN-a nie ma jeszcze w tym uruchomieniu,
+       a jest zapisana na dysku, MAIN dostaje to zdanie (raz na
+       uruchomienie), a zaraz po nim liste tego, co zatrzymalismy przy
+       zamknieciu

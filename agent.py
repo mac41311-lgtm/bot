@@ -37312,23 +37312,38 @@ def main_decide(
         else "Co się właśnie stało:\n" + _facts + "\n"
     )
 
-    # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
-    # czekal na wyniki RUN sprzed restartu.
-    if (
-        int(step or 0) <= 1
-        and "MAIN" in globals().get("_wznowione_sesje", set())
-    ):
-        globals()["_wznowione_sesje"].discard("MAIN")
-        _co_sie_stalo_main = (
-            "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
-            "— jego ostatnie wyniki nie wracają; to, co się teraz "
-            "wykona, dostaniesz tutaj.\n" + _co_sie_stalo_main
-        )
-
     # v480: co poprzedni bieg zatrzymal przy zamknieciu — raz.
     if int(step or 0) <= 1:
         _co_sie_stalo_main = (
             _zatrzymane_przy_zamknieciu_blok() + _co_sie_stalo_main
+        )
+
+    # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
+    # czekal na wyniki RUN sprzed restartu.
+    #
+    # v480: rozmowe MAIN-a program zaklada dopiero przy wysylce tej
+    # wiadomosci (deepseek -> start_session), czyli PO zbudowaniu
+    # promtu — wiec _wznowione_sesje w kroku 1 bylo zawsze puste i to
+    # zdanie nie doszlo ani razu. Bieg 2026-10-11 11:07: MAIN dostal
+    # sam cel i napisal "Poprzedni RUN nie zwrocil wyniku - powtarzam
+    # diagnostyke". Patrzymy wiec wprost: rozmowy jeszcze nie ma w tym
+    # uruchomieniu, a na dysku jest zapisana — zostanie wznowiona.
+    if (
+        int(step or 0) <= 1
+        and not globals().get("_restart_powiedziany")
+        and (
+            "MAIN" in globals().get("_wznowione_sesje", set())
+            or (
+                sessions.get("MAIN") is None
+                and _load_session_state("MAIN")
+            )
+        )
+    ):
+        globals()["_restart_powiedziany"] = True
+        _co_sie_stalo_main = (
+            "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
+            "— jego ostatnie wyniki nie wracają; to, co się teraz "
+            "wykona, dostaniesz tutaj.\n" + _co_sie_stalo_main
         )
 
     prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
