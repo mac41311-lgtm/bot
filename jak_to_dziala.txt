@@ -1290,3 +1290,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - przeskok zegara > 5 s jest logowany: "Telefon spał przez ok.
        N s — ... tego czasu nie liczę jako ciszy."; gdy komende i tak
        trzeba przerwac, opis mowi, ile z tego czasu telefon spal
+
+ 10. (ten sam bieg) Wake-lock wlaczany przez program na starcie
+     zdejmowal MAIN (`termux-wake-unlock` w kroku 3) i skrypty
+     zespolu (meta_learn.py na koncu run()). Blokada w Termuxie jest
+     jedna, wiec przy wygaszonym ekranie telefon zasypial.
+
+     CO ZMIENIONE:
+     - po wlaczeniu blokady program podstawia w PATH wlasne
+       ~/agent/bin_programu/termux-wake-unlock: nic nie zdejmuje,
+       wypisuje, ze blokade trzyma program przez caly bieg
+     - prawdziwe termux-wake-unlock wola tylko program przy
+       zamknieciu (sciezka zapamietana przed podstawieniem)

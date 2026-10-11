@@ -426,6 +426,7 @@ def agent_wake_lock():
 
         if result.returncode == 0:
             _WAKE_LOCK_ACTIVE = True
+            _podstaw_unlock_zespolu()
 
             log(
                 "ANDROID",
@@ -453,6 +454,54 @@ def agent_wake_lock():
         }
 
 
+# v480j: blokade usypiania trzyma program przez caly bieg.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 14:02). Program
+# wlaczyl wake-lock na starcie, ale MAIN w kroku 3 puscil
+# `termux-wake-unlock`, a skrypty zespolu (meta_learn.py) wolaly go
+# same na koncu run(). Blokada w Termuxie jest jedna na wszystkich —
+# po pierwszym takim wywolaniu telefon przy wygaszonym ekranie
+# zasypial, a z nim treningi i sam program.
+#
+# Nie zmieniamy tresci komend. Komendom i skryptom zespolu
+# podstawiamy w PATH wlasne `termux-wake-unlock`, ktore blokady nie
+# zdejmuje i mowi dlaczego. Prawdziwe zdejmuje ja dopiero program
+# przy zamknieciu (agent_wake_unlock).
+_PRAWDZIWY_WAKE_UNLOCK = None
+
+
+def _podstaw_unlock_zespolu():
+
+    global _PRAWDZIWY_WAKE_UNLOCK
+
+    try:
+        import shutil
+
+        if _PRAWDZIWY_WAKE_UNLOCK is None:
+            _PRAWDZIWY_WAKE_UNLOCK = shutil.which("termux-wake-unlock")
+
+        katalog = AGENT_DIR / "bin_programu"
+        katalog.mkdir(parents=True, exist_ok=True)
+        atrapa = katalog / "termux-wake-unlock"
+        atrapa.write_text(
+            "#!" + (shutil.which("sh") or "/system/bin/sh") + "\n"
+            "echo 'termux-wake-unlock: blokade usypiania trzyma program "
+            "agenta przez caly bieg (zeby praca szla przy wygaszonym "
+            "ekranie) — zostaje wlaczona, zdejmie ja program przy "
+            "zamknieciu.'\n"
+            "exit 0\n",
+            encoding="utf-8"
+        )
+        atrapa.chmod(0o755)
+
+        sciezka = os.environ.get("PATH", "")
+        if str(katalog) not in sciezka.split(os.pathsep):
+            os.environ["PATH"] = str(katalog) + os.pathsep + sciezka
+
+    except Exception as e:
+        log("ANDROID", "Nie podstawiłem termux-wake-unlock: " + str(e))
+
+
 def agent_wake_unlock():
     """
     Zwolnienie wake-lock po zakończeniu agenta.
@@ -470,7 +519,7 @@ def agent_wake_unlock():
         import shutil
         import subprocess
 
-        cmd = shutil.which("termux-wake-unlock")
+        cmd = _PRAWDZIWY_WAKE_UNLOCK or shutil.which("termux-wake-unlock")
 
         if not cmd:
             _WAKE_LOCK_ACTIVE = False
