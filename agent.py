@@ -21812,8 +21812,40 @@ def _bez_ostrzezen_pythona(result):
 # program powtarza ja sam, az wynik sie zmieni — i dopiero wtedy
 # oddaje go MAIN-owi. Najdluzej CZEKANIE_NA_ZMIANE_S naraz.
 CZEKANIE_NA_ZMIANE_S = int(
-    os.environ.get("CZEKANIE_NA_ZMIANE_S", "1800")
+    os.environ.get("CZEKANIE_NA_ZMIANE_S", "900")
 )
+
+
+def _procesy_od_plikow(komenda):
+    """
+    v479b: procesy, ktorych linia polecen ma w sobie nazwe pliku z tej
+    komendy (faza19b_seed42.log -> "faza19b_seed42"), jako
+    {pid: "pid czas_dzialania polecenie"}. Tak program widzi, czy
+    sprawdzany trening jeszcze zyje — bez pytania MAIN-a.
+    """
+    tokeny = set()
+    for slowo in re.findall(r"[\w.~/-]+\.\w{2,5}\b", str(komenda)):
+        rdzen = os.path.basename(slowo).split(".")[0]
+        if len(rdzen) >= 4:
+            tokeny.add(rdzen)
+    if not tokeny:
+        return {}
+    try:
+        wyj = subprocess.run(
+            ["ps", "-eo", "pid,etime,args"],
+            capture_output=True, text=True, timeout=10
+        ).stdout
+    except Exception:
+        return {}
+    wynik = {}
+    for linia in wyj.splitlines()[1:]:
+        if "agent.py" in linia or " ps -eo" in linia:
+            continue
+        if any(t in linia for t in tokeny):
+            czesci = linia.split(None, 1)
+            if czesci and czesci[0].isdigit():
+                wynik[czesci[0]] = " ".join(linia.split())[:200]
+    return wynik
 
 _SAMO_CZYTANIE = {
     "sleep", "cd", "tail", "head", "cat", "ls", "ps", "grep", "egrep",
@@ -21869,6 +21901,8 @@ def _czekaj_az_sie_zmieni(name, args, result):
 
     start = time.time()
     razy = 0
+    procesy_na_starcie = _procesy_od_plikow(komenda)
+    skonczone = []
 
     log(
         "TERMUX",
@@ -21891,6 +21925,17 @@ def _czekaj_az_sie_zmieni(name, args, result):
             result = nowy
             break
 
+        # Proces, na ktory czekamy, skonczyl sie — wynik juz sie nie
+        # zmieni, wiec MAIN ma sie o tym dowiedziec teraz.
+        _teraz = _procesy_od_plikow(komenda)
+        skonczone = [
+            procesy_na_starcie[pid] for pid in procesy_na_starcie
+            if pid not in _teraz
+        ]
+        if skonczone:
+            result = nowy
+            break
+
     _ostatnie_sprawdzenie[klucz] = (
         str(result.get("stdout") or "") + str(result.get("stderr") or "")
     )
@@ -21898,6 +21943,22 @@ def _czekaj_az_sie_zmieni(name, args, result):
     _czekal = int(time.time() - start)
     result["czekalem_na_zmiane_s"] = _czekal
     result["sprawdzen_bez_zmiany"] = razy
+    result["co_sie_dzialo"] = (
+        "Ta sama komenda dała ten sam wynik co poprzednio, więc "
+        "powtarzałem ją sam przez " + str(_czekal) + " s ("
+        + str(razy) + " razy). "
+        + (
+            "Przerwałem, bo zakończył się proces: "
+            + "; ".join(skonczone) + "."
+            if skonczone else
+            "Wynik się zmienił." if _czekal < CZEKANIE_NA_ZMIANE_S
+            else "Wynik dalej ten sam po " + str(CZEKANIE_NA_ZMIANE_S // 60)
+            + " min."
+        )
+    )
+    _procesy = _procesy_od_plikow(komenda)
+    if _procesy or procesy_na_starcie:
+        result["procesy_teraz"] = list(_procesy.values()) or "żaden z wcześniej działających"
 
     log(
         "TERMUX",

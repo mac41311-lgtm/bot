@@ -1167,6 +1167,11 @@ CZESC 39. CO ZMIENILO v479 (bieg 2026-10-11 09:10 — czekanie na trening)
     (te same komendy, liczby dowolne), program powtarza ja sam, az wynik
     sie zmieni albo komenda padnie — dopiero wtedy oddaje go MAIN-owi,
     z polami "czekalem_na_zmiane_s" i "sprawdzen_bez_zmiany"
-  - najdluzej CZEKANIE_NA_ZMIANE_S (domyslnie 1800 s) za jednym razem
+  - najdluzej CZEKANIE_NA_ZMIANE_S (domyslnie 900 s) za jednym razem
+  - MAIN nie jest slepy: program sledzi procesy, ktorych polecenie
+    zawiera nazwe pliku z komendy (faza19b_seed42.log -> proces z
+    "faza19b_seed42"); gdy ktorys sie skonczy, czekanie konczy sie od
+    razu. W wyniku: "co_sie_dzialo" (ile czekal, ile razy, dlaczego
+    przestal) i "procesy_teraz" (pid, czas dzialania, polecenie)
 
 =========================================================================
