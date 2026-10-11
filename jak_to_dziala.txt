@@ -1175,3 +1175,34 @@ CZESC 39. CO ZMIENILO v479 (bieg 2026-10-11 09:10 — czekanie na trening)
     przestal) i "procesy_teraz" (pid, czas dzialania, polecenie)
 
 =========================================================================
+
+CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
+=========================================================================
+
+  1. Treningi i testy w tle ginely przy zamknieciu agenta.
+     Perceptron padl trzy razy (epoka 7, 2, 1), za kazdym razem miedzy
+     uruchomieniami agenta. Przy wyjsciu program ubijal wszystko, co
+     sam puscil w tle (termux_run_background i dlugie komendy
+     przeniesione w tlo). Zespol widzial tylko urwany log i szukal
+     przyczyny w Androidzie (doze, wake-lock).
+
+     CO ZMIENIONE:
+     - przy wyjsciu gasimy tylko procesy, ktore siegaja po mikrofon,
+       glosnik, aparat albo telefon (komenda lub tresc skryptu);
+       reszta pracuje dalej
+     - zostawione procesy (pid, komenda, plik logu) ida do
+       ~/agent/zostawione_w_tle.json; termux_processes w nastepnym
+       uruchomieniu pokazuje te, ktore nadal zyja, w polu
+       "z_poprzedniego_uruchomienia"
+
+  2. Ela dalej pisala 99%, choc w tym samym podsumowaniu wyliczala
+     kilkanascie rzeczy niezrobionych. Nowy promt z v478 doszedl do
+     jej starej rozmowy jako aktualizacja, a w historii miala dziesiatki
+     wlasnych "99%".
+
+     CO ZMIENIONE:
+     - Ela (PROGRESS_ESTIMATOR) zaczyna czysta rozmowe w kazdym
+       uruchomieniu; cel i stan dostaje jak dotad. Reszta zespolu
+       wznawia swoje rozmowy bez zmian.
+
+=========================================================================

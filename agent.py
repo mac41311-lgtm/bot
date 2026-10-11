@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v479
+AEL-MINI AUTONOMOUS AGENT v480
 
-ARCHITEKTURA (stan na v479 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v480 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v479")
+    print("             AEL-MINI AUTONOMOUS AGENT v480")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -4865,6 +4865,26 @@ def start_session(name, system_prompt):
                 "DEEPSEEK",
                 name + ": poprzednia rozmowa zaczynala sie inaczej "
                 "niz ta — zaczynam nowa."
+            )
+            saved = None
+
+        # v480: Ela ocenia od nowa przy kazdym uruchomieniu.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 09:20).
+        # Po v478 Ela dostala nowy promt jako aktualizacje w starej
+        # rozmowie — i dalej pisala "percent": 99, choc w tym samym
+        # "summary" wyliczala kilkanascie rzeczy NIE ZROBIONYCH.
+        # Jej historia to dziesiatki wlasnych "99%", a model trzyma
+        # sie tego, co sam wczesniej napisal. Ela nie prowadzi
+        # rozmowy z zespolem — cel dostaje na poczatku kazdego
+        # uruchomienia, a stan co krok — wiec nic nie traci, gdy
+        # zaczyna czysta rozmowa. Reszta
+        # zespolu wznawia swoje rozmowy jak dotad.
+        if saved and name == "PROGRESS_ESTIMATOR":
+            log(
+                "DEEPSEEK",
+                name + ": ocena postępu zaczyna się od czystej "
+                "rozmowy w każdym uruchomieniu."
             )
             saved = None
 
@@ -10458,13 +10478,49 @@ def _zatrzymaj_to_co_zostawilismy():
     Osobno zwalniamy urzadzenia, ktore zostaly zajete — ale tylko te,
     ktore NAPRAWDE sa zajete. Patrz _zwolnij_zajete_urzadzenia().
 
+    v480: gasimy tylko to, co trzyma urzadzenie (mikrofon, glosnik,
+    aparat, telefon). Reszta pracuje dalej.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (biegi 2026-10-11 08:45-09:30).
+    Trening perceptronu szedl w tle po 5-30 min. Uzytkownik
+    zamykal agenta, zeby wgrac nowa wersje — a my przy wyjsciu
+    ubijalismy trening. Trzy razy z rzedu, za kazdym razem w innej
+    epoce. Zespol po restarcie widzial tylko urwany log i szukal
+    winnego w Androidzie (doze, wake-lock), bo o naszym sprzataniu
+    nie mial skad wiedziec. Obliczenia, serwer, test nikomu nie
+    przeszkadzaja, gdy agent nie dziala — a zamkniecie agenta na
+    chwile nie znaczy, ze ich wynik juz nikogo nie obchodzi.
+    To, co zostawiamy, zapisujemy w _PLIK_ZOSTAWIONYCH — nastepne
+    uruchomienie pokazuje to w termux_processes.
+
     Nigdy nie rzuca — to sprzatanie przy wyjsciu, nie robota.
     """
+
+    _zostawione = []
 
     for pid, proces in list(_procesy_w_tle.items()):
 
         try:
             if proces.poll() is not None:
+                continue
+
+            if not _trzyma_urzadzenie(proces):
+                _log_procesu = ""
+                for _sciezka, _wpis in list(_logi_w_tle.items()):
+                    if _wpis and _wpis[0] == pid:
+                        _log_procesu = _sciezka
+                _zostawione.append({
+                    "pid": pid,
+                    "komenda": str(getattr(proces, "args", ""))[:500],
+                    "log_file": _log_procesu,
+                    "zostawiony_o": datetime.now().strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                })
+                print(
+                    "Zostawiam pracujacy w tle (pid " + str(pid)
+                    + ") — nie trzyma mikrofonu ani glosnika."
+                )
                 continue
 
             print(
@@ -10499,6 +10555,65 @@ def _zatrzymaj_to_co_zostawilismy():
             continue
 
     _zwolnij_zajete_urzadzenia()
+
+    try:
+        _poprzednie = [
+            w for w in _wczytaj_zostawione()
+            if w.get("pid") not in _procesy_w_tle
+        ]
+        _PLIK_ZOSTAWIONYCH.write_text(
+            json.dumps(_poprzednie + _zostawione, ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+# v480: urzadzenia, ktorych proces w tle nie powinien trzymac, gdy
+# agent juz nie dziala. Patrz _zatrzymaj_to_co_zostawilismy().
+_URZADZENIE_W_KOMENDZIE_RE = re.compile(
+    r"termux-(?:microphone-record|tts-speak|media-player|camera-photo"
+    r"|telephony-call|speech-to-text|torch|vibrate)"
+    r"|\b(?:mpv|ffplay|play-audio|aplay|arecord|rec|sox)\b"
+)
+
+
+def _trzyma_urzadzenie(proces):
+    """True, gdy komenda albo uruchamiany przez nia skrypt siega po
+    mikrofon, glosnik, aparat lub telefon. Przy watpliwosci True."""
+
+    try:
+        komenda = str(getattr(proces, "args", "") or "")
+        tresc = komenda + "\n" + _tresc_uruchamianego_skryptu(komenda)
+        return bool(_URZADZENIE_W_KOMENDZIE_RE.search(tresc))
+    except Exception:
+        return True
+
+
+_PLIK_ZOSTAWIONYCH = AGENT_DIR / "zostawione_w_tle.json"
+
+
+def _wczytaj_zostawione():
+    """Procesy zostawione w tle przez poprzednie uruchomienia, ktore
+    nadal zyja. Nigdy nie rzuca."""
+
+    try:
+        wpisy = json.loads(
+            _PLIK_ZOSTAWIONYCH.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return []
+
+    zywe = []
+
+    for w in wpisy if isinstance(wpisy, list) else []:
+        try:
+            os.kill(int(w.get("pid")), 0)
+            zywe.append(w)
+        except Exception:
+            continue
+
+    return zywe
 
 
 atexit.register(_zatrzymaj_to_co_zostawilismy)
@@ -20989,11 +21104,20 @@ def termux_processes():
             timeout=10
         )
 
-        return {
+        wynik = {
             "ok": r.returncode == 0,
             "stdout": r.stdout[:15000],
             "stderr": r.stderr[:4000]
         }
+
+        # v480: to, co poprzednie uruchomienie agenta zostawilo
+        # pracujace w tle — z komenda i plikiem logu.
+        _z_poprzedniego = _wczytaj_zostawione()
+
+        if _z_poprzedniego:
+            wynik["z_poprzedniego_uruchomienia"] = _z_poprzedniego
+
+        return wynik
 
     except Exception as e:
         return {
