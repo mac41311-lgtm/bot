@@ -4244,6 +4244,22 @@ def _mowi_cel_zrobiony(tekst):
     return False
 
 
+def _mowi_tylko_uzytkownik(tekst):
+    """
+    v480: czy odpowiedz mowi wprost, ze to moze zrobic TYLKO
+    uzytkownik — a nie cytuje albo zaprzecza ("to nie jest cos, co
+    tylko uzytkownik moze zrobic"). Ta sama ostroznosc co
+    _mowi_cel_zrobiony().
+    """
+    t = " ".join(str(tekst or "").lower().split())
+    for m in re.finditer(r"tylko\W{0,3}u[żz]ytkownik", t):
+        przed = t[max(0, m.start() - 40):m.start()]
+        if re.search(r"\bnie\b|\bani\b|\bnigdy\b|\bzanim\b|\bjeśli\b|\bjesli\b|\bgdy\b", przed):
+            continue
+        return True
+    return False
+
+
 def _reset_powody_zakonczenia():
     """Nowy cel = wnioski o niewykonalnosci poprzedniego nie licza sie."""
 
@@ -6732,6 +6748,7 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "WNIOSEK_ZE_SIE_NIE_DA",
     "ZESPOL_WIDZI_INNA_DROGE",
     "CEL_NIE_JEST_ZROBIONY",
+    "PYTANIE_ZOSTAJE_W_ZESPOLE",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
     "ASK_PRZENIESIONE",
@@ -43980,6 +43997,69 @@ def run_agent(goal):
         # też przy alternatywie po FAILED niżej.
 
         if dtype == "NEED_USER_LOGIN":
+
+            # v480: bieg 2026-10-11 11:07, kroki 10 i 20. MAIN uzyl
+            # NEED_USER_LOGIN bez zadnej strony, zeby zapytac
+            # uzytkownika o decyzje i dane ("POTRZEBUJEMY DECYZJI
+            # UZYTKOWNIKA ... dostarcz 200+ rozmow"). Uzytkownik
+            # odpisal: "Masz dostep do przegladarki Chrome, Termuxa i
+            # narzedzi systemowych. Sprawdz, czy mozesz sam" — i zespol
+            # zrobil to sam. Wiec gdy to nie jest logowanie na stronie,
+            # najpierw pytaja Tomek i Marek. Do uzytkownika pytanie
+            # idzie dopiero, gdy obaj napisza, ze to moze zrobic tylko
+            # on (albo gdy zaden nie odpowie).
+            if not str(decision.get("url") or "").strip():
+                _pytanie = str(
+                    decision.get("instructions")
+                    or decision.get("reason") or ""
+                )
+                _glosy = []
+                _tylko_on = 0
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Chcę zatrzymać pracę i zapytać użytkownika. "
+                            "Moje pytanie do niego:\n" + _pytanie
+                            + "\n\nMamy Chrome, Termuxa, internet i "
+                            "narzędzia telefonu. Jeśli to może zrobić "
+                            "albo rozstrzygnąć tylko użytkownik, napisz "
+                            "wprost: TYLKO UŻYTKOWNIK. Jeśli damy radę "
+                            "sami — napisz jak."
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O PYTANIU DO UŻYTKOWNIKA: " + short(_t, 300))
+                            if _mowi_tylko_uzytkownik(_t):
+                                _tylko_on += 1
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o pytanie do użytkownika: " + str(_e))
+
+                if _glosy and _tylko_on < len(_glosy):
+                    log(
+                        "MAIN",
+                        "Zespół uważa, że da radę bez użytkownika — "
+                        "pytanie zostaje w zespole."
+                    )
+                    last_result = {
+                        "status": "PYTANIE_ZOSTAJE_W_ZESPOLE",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zapytać "
+                            "użytkownika. Nic się w tym kroku nie wykonało. "
+                            "Tomek i Marek nie napisali obaj, że to może "
+                            "zrobić tylko użytkownik — ich odpowiedzi "
+                            "niżej. Pytanie nie poszło do użytkownika."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
 
             last_result, contact_gate_redirects, credential_gate_redirects = (
                 _need_user_login_with_contact_gate(
