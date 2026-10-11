@@ -1108,3 +1108,22 @@ CZESC 36. CO ZMIENILO v476 (bieg 2026-10-11 00:13)
   - termux_patch_file w RUN MAIN-a dziala jak termux_write_file
 
 =========================================================================
+
+CZESC 37. CO ZMIENILO v477 (pytanie "czy oni maja problem czasowy?")
+=========================================================================
+
+  Program nie ogranicza calkowitego czasu komendy, tylko czas CISZY:
+  COMMAND_TIMEOUT = 120 s bez wyjscia i bez CPU (v293), przy pracy do
+  SUFIT_CZASU = 7200 s; pobieranie/kompilacja: 1800 s ciszy. Limit 600 s
+  w biegu RSI to warunek samego zespolu (Tomka) w ich skrypcie.
+
+  Ale `sleep` milczy i nie liczy — wiec MAIN, czekajac na trening w tle,
+  dzielil czekanie na `sleep 60 && tail` / `sleep 90 && tail`, kazde w
+  osobnej turze (osobna wiadomosc do DeepSeeka).
+
+  CO ZMIENIONE:
+  - _sekundy_spania(): komenda z `sleep N` (N, Ns, Nm, Nh) ma na cisze
+    N + COMMAND_TIMEOUT sekund (najwyzej SUFIT_CZASU), wiec `sleep 600 &&
+    tail log` czeka do konca w jednym kroku
+
+=========================================================================

@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v476
+AEL-MINI AUTONOMOUS AGENT v477
 
-ARCHITEKTURA (stan na v476 — patrz jak_to_dziala.txt):
+ARCHITEKTURA (stan na v477 — patrz jak_to_dziala.txt):
 
                     UZYTKOWNIK
                         |  cel; potem odpowiedzi, gdy program zapyta
@@ -2807,7 +2807,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v476")
+    print("             AEL-MINI AUTONOMOUS AGENT v477")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -12067,6 +12067,20 @@ def execute_shell(command, timeout=None):
     else:
         effective_timeout = COMMAND_TIMEOUT
 
+    # v477: `sleep` to zamierzone czekanie, nie zawieszenie. Bieg
+    # 2026-10-11 rano: trening w tle, a MAIN sprawdzal go komendami
+    # `sleep 60 && tail log` / `sleep 90 && tail` — bo sleep nie pisze
+    # i nie liczy, wiec po 120 s ciszy (COMMAND_TIMEOUT, patrz v293)
+    # zostalby przerwany. Kazde sprawdzenie to osobna tura MAIN-a.
+    # Komenda z `sleep N` dostaje na cisze tyle, ile sama zamierza
+    # czekac, plus zwykly zapas.
+    if not timeout:
+        _spanie = _sekundy_spania(command)
+        if _spanie:
+            effective_timeout = max(
+                effective_timeout, _spanie + COMMAND_TIMEOUT
+            )
+
     started = datetime.now()
 
     try:
@@ -19658,6 +19672,19 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 os.unlink(_plik_skryptu)
             except Exception:
                 pass
+
+
+_SLEEP_RE = re.compile(
+    r"(?:^|[\s;&|(])sleep\s+(\d+(?:\.\d+)?)([smh]?)(?=$|[\s;&|)])"
+)
+
+
+def _sekundy_spania(command):
+    """v477: suma `sleep N` (N, Ns, Nm, Nh) w komendzie, w sekundach."""
+    razem = 0.0
+    for liczba, jednostka in _SLEEP_RE.findall(str(command or "")):
+        razem += float(liczba) * {"": 1, "s": 1, "m": 60, "h": 3600}[jednostka]
+    return int(min(razem, SUFIT_CZASU))
 
 
 def _to_dluga_robota(command):
