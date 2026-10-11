@@ -1246,3 +1246,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wprost "TYLKO UŻYTKOWNIK" (albo gdy zaden nie odpowie). Inaczej
        krok konczy sie statusem PYTANIE_ZOSTAJE_W_ZESPOLE z ich
        odpowiedziami dla MAIN-a. Logowanie na stronie (z url) bez zmian.
+
+  6. (bieg 2026-10-11 11:07, krok 67) `timeout 300 python3
+     faza24_wildchat.py fetch` czekal na serwer (HTTP 429), nic nie
+     wypisywal i nie liczyl — po 120 s ciszy program go przerwal, choc
+     komenda sama dawala sobie 300 s.
+
+     CO ZMIENIONE:
+     - _sekundy_timeoutu(): gdy komenda ma `timeout N` (takze -s KILL,
+       --preserve-status, 10m), limit ciszy to co najmniej N + 15 s
+       (tak jak `sleep N` od v477)

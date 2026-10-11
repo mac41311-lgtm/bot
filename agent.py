@@ -12292,6 +12292,11 @@ def execute_shell(command, timeout=None):
             effective_timeout = max(
                 effective_timeout, _spanie + COMMAND_TIMEOUT
             )
+        # v480: `timeout N` — tyle ciszy, ile komenda sama sobie daje.
+        # Patrz _sekundy_timeoutu().
+        _wlasny_limit = _sekundy_timeoutu(command)
+        if _wlasny_limit:
+            effective_timeout = max(effective_timeout, _wlasny_limit + 15)
 
     started = datetime.now()
 
@@ -19904,6 +19909,34 @@ def _sekundy_spania(command):
     for liczba, jednostka in _SLEEP_RE.findall(str(command or "")):
         razem += float(liczba) * {"": 1, "s": 1, "m": 60, "h": 3600}[jednostka]
     return int(min(razem, SUFIT_CZASU))
+
+
+# v480: `timeout N polecenie` — agent sam mowi, ile to moze trwac.
+_TIMEOUT_CMD_RE = re.compile(
+    r"(?:^|[\s;&|(])timeout\s+(?:-[a-zA-Z]+(?:\s+[A-Z0-9]+)?\s+|--[\w-]+(?:=\S+)?\s+)*"
+    r"(\d+(?:\.\d+)?)([smhd]?)(?=\s)"
+)
+
+
+def _sekundy_timeoutu(command):
+    """
+    v480: najwiekszy `timeout N` w komendzie, w sekundach (0, gdy nie
+    ma).
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 11:07, krok 67).
+    `timeout 300 python3 faza24_wildchat.py fetch` pobieral dane z
+    sieci: czekal na serwer, ktory odpowiadal HTTP 429 i kazal
+    zwolnic. Nic nie wypisywal i prawie nie liczyl, wiec po 120 s
+    ciszy program go przerwal — choc komenda sama mowila, ze moze
+    trwac 300 s i sama sie po nich zakonczy.
+    """
+    najwiecej = 0.0
+    for liczba, jednostka in _TIMEOUT_CMD_RE.findall(str(command or "")):
+        najwiecej = max(
+            najwiecej,
+            float(liczba) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[jednostka]
+        )
+    return int(min(najwiecej, SUFIT_CZASU))
 
 
 def _to_dluga_robota(command):
