@@ -5937,7 +5937,27 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
     model = session.model
 
-    payload = {
+    # v480l: "Kontynuuj" ze strony DeepSeeka to osobny adres, nie pole
+    # "action" w /chat/completion (stad 422 przy kazdej probie od v75).
+    # Strona wysyla POST /api/v0/chat/continue z id uciętej odpowiedzi
+    # (response_message_id, u nas session.parent_message_id po
+    # strumieniu) i fallback_to_resume. Strumien wraca w tym samym
+    # formacie, wiec reszta tej funkcji czyta go bez zmian. Zrodlo:
+    # ds2api (CJackHwang/ds2api, internal/deepseek/client/
+    # client_continue.go) — wznawia tak, gdy status to INCOMPLETE.
+    kontynuacja = (action == "continue")
+    sciezka = "/chat/continue" if kontynuacja else "/chat/completion"
+
+    if kontynuacja:
+        payload = {
+            "chat_session_id": session.chat_session_id,
+            "message_id": session.parent_message_id,
+            "fallback_to_resume": True,
+        }
+    else:
+        payload = None
+
+    payload = payload or {
         "chat_session_id": session.chat_session_id,
         "parent_message_id": session.parent_message_id,
         "prompt": prompt,
@@ -5961,7 +5981,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         pow_resp = model.session.post(
             _ods_config.base_url + "/chat/create_pow_challenge",
             headers=headers,
-            json={"target_path": "/api/v0/chat/completion"},
+            json={"target_path": "/api/v0" + sciezka},
             timeout=_limit_dla_sesji(model.session),
         )
 
@@ -5980,7 +6000,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         pass
 
     response = model.session.post(
-        _ods_config.base_url + "/chat/completion",
+        _ods_config.base_url + sciezka,
         headers=headers,
         json=payload,
         stream=True,
@@ -7549,9 +7569,20 @@ def deepseek(name, message):
                         )
 
                         if continue_text:
-                            text = _stitch_continuation(
-                                text, continue_text
-                            )
+                            # v480l: serwer moze oddac przy wznowieniu
+                            # cala odpowiedz od poczatku (stara czesc +
+                            # nowa) — wtedy bierzemy ja w calosci.
+                            _stary = str(text or "").strip()
+                            _nowy = str(continue_text).strip()
+                            if (
+                                _stary and len(_nowy) > len(_stary)
+                                and _nowy[:200] == _stary[:200]
+                            ):
+                                text = continue_text
+                            else:
+                                text = _stitch_continuation(
+                                    text, continue_text
+                                )
                             truncated, reason = (
                                 _deepseek_looks_truncated(
                                     text, continue_status

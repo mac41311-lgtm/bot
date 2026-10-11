@@ -1320,3 +1320,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wiadomosci o aktualizacji
      - gdy aktualizacja albo przeladowanie nie wyjdzie, bieg idzie
        dalej na starej wersji
+
+ 12. (bieg 2026-10-11 16:58, krok 9) ENGINEER: status INCOMPLETE,
+     action='continue' -> 422, wiec program dopytywal zwykla
+     wiadomoscia "Ucięło Cię...". Przycisk "Kontynuuj" na stronie
+     DeepSeeka to osobny adres, nie pole action w /chat/completion.
+
+     CO ZMIENIONE:
+     - action="continue" idzie teraz na POST /api/v0/chat/continue z
+       {chat_session_id, message_id: id ucietej odpowiedzi,
+       fallback_to_resume: true}, PoW liczony dla tej sciezki
+       (wzor: ds2api, internal/deepseek/client/client_continue.go)
+     - gdy serwer odda cala odpowiedz od poczatku, bierzemy ja w
+       calosci zamiast sklejac
+     - gdy i to sie nie uda, zostaje dotychczasowe dopytanie
