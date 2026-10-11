@@ -1302,3 +1302,21 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wypisuje, ze blokade trzyma program przez caly bieg
      - prawdziwe termux-wake-unlock wola tylko program przy
        zamknieciu (sciezka zapamietana przed podstawieniem)
+
+ 11. Cicha aktualizacja w trakcie biegu (prosba uzytkownika: "niech
+     sprawdza co 15 min", "cicho, bez zmian w czacie", "jakby caly
+     czas dzialal, ale z aktualizacja").
+
+     CO ZMIENIONE:
+     - watek w tle co 15 min porownuje commit w ~/.ael-repo z galezia
+       na GitHubie (git ls-remote)
+     - gdy jest nowszy: na granicy krokow ~/update_agent.sh, zapis
+       stanu biegu do ~/agent/stan_przed_aktualizacja.json i os.execv
+       — ten sam pid, wiec robota w tle zyje dalej i zostaje nasza
+     - nowa wersja startuje bez pytan (cel wznowiony, nic nie
+       czyszczone), wczytuje krok, ostatni wynik, co ktora rola juz
+       widziala, procesy i logi w tle, pisze dalej do tego samego
+       logu biegu; Ela zachowuje rozmowe, agenci nie dostaja zadnej
+       wiadomosci o aktualizacji
+     - gdy aktualizacja albo przeladowanie nie wyjdzie, bieg idzie
+       dalej na starej wersji

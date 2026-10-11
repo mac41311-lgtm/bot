@@ -69,6 +69,12 @@ import urllib.error
 from pathlib import Path
 from urllib.parse import urlparse
 
+# v480k: program przeladowal sie sam po wgraniu nowej wersji (patrz
+# _przeladuj_po_aktualizacji). Wtedy start idzie bez pytan, a bieg
+# ciagnie sie dalej: ten sam krok, te same rozmowy, ten sam log.
+_PO_AKTUALIZACJI = os.environ.pop("AEL_PO_AKTUALIZACJI", "") == "1"
+_SCIEZKA_PROGRAMU = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+
 # ============================================================
 # CO POSZLO DO AGENTOW (v313)
 # ============================================================
@@ -477,10 +483,18 @@ def _podstaw_unlock_zespolu():
     try:
         import shutil
 
-        if _PRAWDZIWY_WAKE_UNLOCK is None:
-            _PRAWDZIWY_WAKE_UNLOCK = shutil.which("termux-wake-unlock")
-
         katalog = AGENT_DIR / "bin_programu"
+
+        if _PRAWDZIWY_WAKE_UNLOCK is None:
+            # Po cichej aktualizacji PATH ma juz nasza atrape —
+            # prawdziwego szukamy z pominieciem jej katalogu.
+            _PRAWDZIWY_WAKE_UNLOCK = shutil.which(
+                "termux-wake-unlock",
+                path=os.pathsep.join(
+                    k for k in os.environ.get("PATH", "").split(os.pathsep)
+                    if k and k != str(katalog)
+                )
+            )
         katalog.mkdir(parents=True, exist_ok=True)
         atrapa = katalog / "termux-wake-unlock"
         atrapa.write_text(
@@ -672,6 +686,23 @@ except Exception as e:
 
 HOME = Path.home()
 AGENT_DIR = HOME / "agent"
+
+# v480k: stan biegu zapisany tuz przed przeladowaniem na nowa wersje
+# (patrz _przeladuj_po_aktualizacji). Czytany raz i kasowany.
+_PLIK_STANU_AKTUALIZACJI = AGENT_DIR / "stan_przed_aktualizacja.json"
+_stan_przed_aktualizacja = {}
+
+if _PO_AKTUALIZACJI:
+    try:
+        _stan_przed_aktualizacja = json.loads(
+            _PLIK_STANU_AKTUALIZACJI.read_text(encoding="utf-8")
+        ) or {}
+    except Exception:
+        _stan_przed_aktualizacja = {}
+    try:
+        _PLIK_STANU_AKTUALIZACJI.unlink()
+    except Exception:
+        pass
 
 TOKEN_FILE = HOME / "api_token.txt"
 
@@ -1304,6 +1335,15 @@ def zacznij_zapis_biegu(cel=""):
         PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
 
         stempel = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # v480k: po cichej aktualizacji piszemy dalej do tych samych
+        # plikow — to wciaz ten sam bieg.
+        _dalej = _stan_przed_aktualizacja.get("pliki_biegu") or []
+
+        if len(_dalej) == 2 and all(os.path.exists(x) for x in _dalej):
+            _plik_przebiegu = Path(_dalej[0])
+            _plik_zdarzen = Path(_dalej[1])
+            return
 
         _plik_przebiegu = PRZEBIEG_DIR / (stempel + ".log")
         _plik_zdarzen = PRZEBIEG_DIR / (stempel + ".jsonl")
@@ -4590,7 +4630,9 @@ def _co_powiedzial_uzytkownik(rola=None):
 # rozmowie. Patrz _jeszcze_niewyslane_zdania().
 _ZDANIA_WYSLANE_FILE = STATE_DIR / "zdania_uzytkownika_wyslane.json"
 
-_URUCHOMIENIE_ID = str(int(time.time()))
+_URUCHOMIENIE_ID = (
+    os.environ.pop("AEL_URUCHOMIENIE_ID", "") or str(int(time.time()))
+)
 
 
 def _jeszcze_niewyslane_zdania(rola, zdania):
@@ -5033,7 +5075,7 @@ def start_session(name, system_prompt):
         # uruchomienia, a stan co krok — wiec nic nie traci, gdy
         # zaczyna czysta rozmowa. Reszta zespolu wznawia swoje
         # rozmowy jak dotad.
-        if saved and name == "PROGRESS_ESTIMATOR":
+        if saved and name == "PROGRESS_ESTIMATOR" and not _PO_AKTUALIZACJI:
             log(
                 "DEEPSEEK",
                 name + ": ocena postępu zaczyna się od czystej "
@@ -10709,6 +10751,265 @@ def _zatrzymaj_to_co_zostawilismy():
 
 
 _PLIK_ZATRZYMANYCH = AGENT_DIR / "zatrzymane_przy_zamknieciu.json"
+
+
+# ============================================================
+# v480k: CICHA AKTUALIZACJA W TRAKCIE BIEGU
+# ============================================================
+#
+# Uzytkownik: "w programie najlepiej niech sprawdza co 15 min",
+# "i sie cicho resetuje bez zmian w czacie", "jakby caly czas
+# dzialal, ale z aktualizacja".
+#
+# Co 15 minut watek w tle pyta GitHuba, czy na galezi, z ktorej
+# telefon bierze program (~/.ael-repo), jest nowszy commit. Gdy jest,
+# na granicy krokow puszczamy ~/update_agent.sh (pobiera, sprawdza
+# skladnie, podmienia ~/agent/agent.py) i przeladowujemy program
+# os.execv — ten sam pid, wiec robota w tle (treningi) zyje dalej i
+# dalej jest nasza. Przed przeladowaniem zapisujemy stan biegu (krok,
+# ostatni wynik, co ktora rola juz widziala, pliki logu, procesy w
+# tle); nowa wersja go wczytuje i ciagnie bieg dalej. Agentom nic
+# nie mowimy — ich rozmowy sa wznawiane, nic sie w nich nie zmienia.
+
+AKTUALIZACJA_CO_SEKUND = 15 * 60
+_REPO_TELEFONU = HOME / ".ael-repo"
+_SKRYPT_AKTUALIZACJI = HOME / "update_agent.sh"
+_nowa_wersja = {"commit": ""}
+
+
+def _git_telefonu(*argumenty, czas=60):
+
+    return subprocess.run(
+        ["git", "-C", str(_REPO_TELEFONU)] + list(argumenty),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        timeout=czas
+    )
+
+
+def _sprawdz_nowa_wersje():
+    """Commit z GitHuba, gdy rozni sie od wgranego; inaczej ""."""
+
+    try:
+        if not (_REPO_TELEFONU / ".git").exists():
+            return ""
+
+        if not _SKRYPT_AKTUALIZACJI.exists():
+            return ""
+
+        galaz = _git_telefonu("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+        if not galaz or galaz == "HEAD":
+            return ""
+
+        wgrany = _git_telefonu("rev-parse", "HEAD").stdout.strip()
+
+        zdalny = _git_telefonu(
+            "ls-remote", "origin", "refs/heads/" + galaz
+        ).stdout.split()
+
+        if not zdalny or not wgrany:
+            return ""
+
+        return zdalny[0] if zdalny[0] != wgrany else ""
+
+    except Exception:
+        return ""
+
+
+def _pilnuj_aktualizacji():
+
+    while True:
+
+        time.sleep(AKTUALIZACJA_CO_SEKUND)
+
+        if _nowa_wersja["commit"]:
+            continue
+
+        _commit = _sprawdz_nowa_wersje()
+
+        if _commit:
+            _nowa_wersja["commit"] = _commit
+            log(
+                "AKTUALIZACJA",
+                "Na GitHubie jest nowa wersja (" + _commit[:7]
+                + ") — wgram ją po tym kroku."
+            )
+
+
+def uruchom_pilnowanie_aktualizacji():
+
+    try:
+        import threading
+
+        threading.Thread(
+            target=_pilnuj_aktualizacji,
+            name="aktualizacja",
+            daemon=True
+        ).start()
+
+    except Exception as e:
+        log("AKTUALIZACJA", "Nie ruszyło sprawdzanie wersji: " + str(e))
+
+
+class _ProcesPoAktualizacji:
+    """
+    Proces w tle uruchomiony przed przeladowaniem. Po os.execv to
+    wciaz nasze dziecko (ten sam pid programu), ale obiektu Popen juz
+    nie ma — ten udaje go na tyle, na ile reszta programu go uzywa.
+    """
+
+    def __init__(self, pid, args=""):
+        self.pid = int(pid)
+        self.args = args
+        self.returncode = None
+
+    def poll(self):
+
+        if self.returncode is not None:
+            return self.returncode
+
+        try:
+            _pid, _status = os.waitpid(self.pid, os.WNOHANG)
+
+            if _pid == 0:
+                return None
+
+            self.returncode = os.waitstatus_to_exitcode(_status)
+
+        except ChildProcessError:
+            # Nie nasze dziecko (juz odebrane albo obcy pid) — nie
+            # udajemy, ze dziala, i nigdy go nie ubijamy.
+            self.returncode = 0
+
+        return self.returncode
+
+    def wait(self, timeout=None):
+
+        _start = time.time()
+
+        while self.poll() is None:
+
+            if timeout is not None and time.time() - _start > timeout:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+
+            time.sleep(0.2)
+
+        return self.returncode
+
+    def send_signal(self, sig):
+        try:
+            os.kill(self.pid, sig)
+        except Exception:
+            pass
+
+    def terminate(self):
+        self.send_signal(signal.SIGTERM)
+
+    def kill(self):
+        self.send_signal(signal.SIGKILL)
+
+
+def _przywroc_procesy_w_tle():
+
+    for _wpis in _stan_przed_aktualizacja.get("procesy_w_tle") or []:
+        try:
+            _p = _ProcesPoAktualizacji(_wpis["pid"], _wpis.get("args", ""))
+            _procesy_w_tle[_p.pid] = _p
+        except Exception:
+            pass
+
+    for _sciezka, _wpis in (_stan_przed_aktualizacja.get("logi_w_tle") or {}).items():
+        try:
+            _logi_w_tle[_sciezka] = (int(_wpis[0]), float(_wpis[1]))
+        except Exception:
+            pass
+
+
+def _przeladuj_po_aktualizacji(step, last_result, signatures):
+    """
+    Wgrywa nowa wersje i przeladowuje program w tym samym procesie.
+    Gdy cokolwiek nie wyjdzie — zostajemy na starej wersji i bieg
+    idzie dalej. Nigdy nie rzuca.
+    """
+
+    _commit = _nowa_wersja["commit"]
+    _nowa_wersja["commit"] = ""
+
+    try:
+        wynik = subprocess.run(
+            ["bash", str(_SKRYPT_AKTUALIZACJI)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            timeout=600
+        )
+    except Exception as e:
+        log("AKTUALIZACJA", "Aktualizacja nie przeszła: " + str(e))
+        return
+
+    if wynik.returncode != 0 or not _SCIEZKA_PROGRAMU:
+        log(
+            "AKTUALIZACJA",
+            "Aktualizacja nie przeszła — zostaję na obecnej wersji: "
+            + short(str(wynik.stdout or "").strip(), 400)
+        )
+        return
+
+    stan = {
+        "commit": _commit,
+        "krok": int(step or 0),
+        "last_result": last_result,
+        "signatures": signatures,
+        "goal_briefed": sorted(_goal_briefed),
+        "role_seen_blocks": [
+            [k[0], k[1], v] for k, v in _role_seen_blocks.items()
+        ],
+        "pliki_biegu": (
+            [str(_plik_przebiegu), str(_plik_zdarzen)]
+            if _plik_przebiegu and _plik_zdarzen else []
+        ),
+        "procesy_w_tle": [
+            {"pid": pid, "args": str(getattr(p, "args", ""))[:300]}
+            for pid, p in list(_procesy_w_tle.items())
+            if p.poll() is None
+        ],
+        "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
+    }
+
+    try:
+        _PLIK_STANU_AKTUALIZACJI.write_text(
+            json.dumps(stan, ensure_ascii=False, default=str),
+            encoding="utf-8"
+        )
+    except Exception as e:
+        log("AKTUALIZACJA", "Nie zapisałem stanu biegu — nie przeładowuję: " + str(e))
+        return
+
+    log(
+        "AKTUALIZACJA",
+        "Wgrana nowa wersja (" + _commit[:7] + ") — przeładowuję program, "
+        "bieg idzie dalej od kroku " + str(int(step or 0) + 1) + "."
+    )
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+    os.environ["AEL_PO_AKTUALIZACJI"] = "1"
+    os.environ["AEL_URUCHOMIENIE_ID"] = _URUCHOMIENIE_ID
+
+    try:
+        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
+    except Exception as e:
+        os.environ.pop("AEL_PO_AKTUALIZACJI", None)
+        os.environ.pop("AEL_URUCHOMIENIE_ID", None)
+        log("AKTUALIZACJA", "Przeładowanie nie wyszło — zostaję na starej wersji: " + str(e))
 
 
 def _zatrzymane_przy_zamknieciu_blok():
@@ -42379,6 +42680,30 @@ def run_agent(goal):
     # faktycznie doczeka realnego resetu zamiast zamykać się na próżno.
     step = 0
 
+    # v480k: po cichej aktualizacji bieg idzie dalej tam, gdzie stal.
+    if _stan_przed_aktualizacja:
+        try:
+            step = int(_stan_przed_aktualizacja.get("krok") or 0)
+            if isinstance(_stan_przed_aktualizacja.get("last_result"), dict):
+                last_result = _stan_przed_aktualizacja["last_result"]
+            if isinstance(_stan_przed_aktualizacja.get("signatures"), list):
+                signatures = _stan_przed_aktualizacja["signatures"]
+            _goal_briefed.update(_stan_przed_aktualizacja.get("goal_briefed") or [])
+            for _r, _k, _v in _stan_przed_aktualizacja.get("role_seen_blocks") or []:
+                _role_seen_blocks[(_r, _k)] = _v
+            _przywroc_procesy_w_tle()
+            globals()["_restart_powiedziany"] = True
+            ustaw_krok(step)
+            log(
+                "AKTUALIZACJA",
+                "Działa nowa wersja (" + str(_stan_przed_aktualizacja.get("commit", ""))[:7]
+                + ") — ciągnę bieg dalej od kroku " + str(step + 1) + "."
+            )
+        except Exception as e:
+            log("AKTUALIZACJA", "Nie odtworzyłem całego stanu biegu: " + str(e))
+
+    uruchom_pilnowanie_aktualizacji()
+
     while MAX_STEPS is None or step < MAX_STEPS:
 
         # ------------------------------------------------------
@@ -42517,6 +42842,10 @@ def run_agent(goal):
                 "krok_bez_wykonania",
                 status=str(_powod_przepadku)
             )
+
+        # v480k: nowa wersja z GitHuba — wgrywamy na granicy krokow.
+        if _nowa_wersja["commit"]:
+            _przeladuj_po_aktualizacji(step, last_result, signatures)
 
         step += 1
 
@@ -44939,7 +45268,8 @@ def prompt_adb_target():
             + " > "
         )
 
-        typed = input(prompt_text).strip()
+        # v480k: po cichej aktualizacji — zapisany adres, bez pytania.
+        typed = "" if _PO_AKTUALIZACJI else input(prompt_text).strip()
 
     except (EOFError, KeyboardInterrupt):
 
@@ -45126,7 +45456,8 @@ def main():
 
     try:
 
-        typed_perm_check = input(
+        # v480k: po cichej aktualizacji start idzie bez pytan.
+        typed_perm_check = "" if _PO_AKTUALIZACJI else input(
             "Sprawdzić/aktywować uprawnienia Termux:API przed "
             "startem? [t/N] > "
         ).strip().lower()
@@ -45155,11 +45486,14 @@ def main():
     # powyżej po prostu znaczy, że założy ją od zera.
     # ----------------------------------------------------------
 
-    maybe_clear_previous_session_data()
-    maybe_clear_generated_project_files()
-    maybe_clear_stale_final_ok_evidence()
-    maybe_clear_custom_tools()
-    maybe_restart_team_sessions_for_new_goal()
+    # v480k: po cichej aktualizacji to ten sam bieg — niczego nie
+    # czyscimy i o nic nie pytamy (jak odpowiedz NIE na kazde pytanie).
+    if not _PO_AKTUALIZACJI:
+        maybe_clear_previous_session_data()
+        maybe_clear_generated_project_files()
+        maybe_clear_stale_final_ok_evidence()
+        maybe_clear_custom_tools()
+        maybe_restart_team_sessions_for_new_goal()
 
     init_team()
 
@@ -45275,6 +45609,11 @@ def main():
     try:
 
         while True:
+
+            # v480k: po cichej aktualizacji — ten sam cel, bez pytania.
+            if _PO_AKTUALIZACJI and saved_goal:
+                goal = saved_goal
+                break
 
             if saved_goal:
 
