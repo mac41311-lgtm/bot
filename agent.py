@@ -6057,10 +6057,27 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # "invalid message id" / "Messages too frequent" (patrz
     # _ZERWANA_ROZMOWA_RE, _PRZECIAZENIE_RE).
     def _cialo():
+        # v480p: przy stream=True .text bywa pusty, choc serwer cos
+        # przyslal — bieg 2026-10-11 18:21-18:31: siedem razy
+        # "Unexpected Content-Type: application/json | " bez slowa,
+        # dlaczego DeepSeek odmowil. Dociagamy cialo z samego strumienia.
+        _t = ""
         try:
-            return short(str(response.text or ""), 600)
+            _t = str(response.text or "")
         except Exception:
-            return ""
+            _t = ""
+        if not _t.strip():
+            try:
+                _t = b"".join(
+                    c for c in response.iter_content(chunk_size=1024) if c
+                ).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+        if not _t.strip():
+            _t = "(serwer nie przyslal tresci; HTTP " + str(
+                getattr(response, "status_code", "?")
+            ) + ")"
+        return short(_t, 600)
 
     try:
         response.raise_for_status()

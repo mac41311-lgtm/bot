@@ -1369,3 +1369,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - gdy start_session zaklada NOWY czat, czyscimy _role_seen_blocks
        tej roli — dostaje caly obecny stan raz; wznowiony czat nadal
        dostaje tylko to, co nowe
+
+ 16. (bieg 2026-10-11 16:58, 18:21-18:31) Role na koncie 2 (Ela,
+     Marek, Tomek) dostawaly od DeepSeeka "Unexpected Content-Type:
+     application/json | " — odmowe bez slowa wyjasnienia, bo przy
+     stream=True .text byl pusty. Konto 1 (MAIN) dzialalo.
+
+     CO ZMIENIONE:
+     - przy bledzie cialo odpowiedzi dociagamy z samego strumienia; gdy
+       i tam nic nie ma, piszemy to wprost razem z kodem HTTP
