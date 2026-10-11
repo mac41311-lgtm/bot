@@ -1389,3 +1389,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - gdy odpowiedz nie ma ani tekstu, ani myslenia, rozmowa wraca do
        poprzedniej wiadomosci (parent_message_id sprzed pytania), wiec
        ponowienie idzie w tej samej rozmowie
+
+ 18. (bieg 2026-10-11 19:20 i 19:52) Ela liczyla jako "kamienie
+     milowe" test, ktory zespol sam opisal jako niesprawdzajacy
+     kompozycji, i samo puszczenie treningu, bez wyniku.
+
+     CO ZMIENIONE:
+     - poczatkowy promt Eli przepisany w calosci: wynik liczy sie
+       razem z ograniczeniem, ktore zespol przy nim zapisal, a to, co
+       dopiero ruszylo, jest opisane jako rozpoczete
+
+ 19. (bieg 2026-10-11 19:52, krok 105) Zespol puscil trening przez
+     zwykle termux_run z "nohup ... &". Powloka skonczyla od razu, a
+     trening szedl dalej poza lista procesow w tle, wiec zamkniecie
+     programu by go nie zatrzymalo.
+
+     CO ZMIENIONE:
+     - po kazdej komendzie sprawdzamy, czy jej grupa procesow jeszcze
+       zyje; jesli tak, zapamietujemy ja i przy zamknieciu programu
+       zatrzymujemy razem z reszta (cicha aktualizacja jej nie rusza)

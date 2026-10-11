@@ -3271,8 +3271,10 @@ ENGINEER_PROMPT = (
 # v480r: na prosbe uzytkownika (bieg 2026-10-11 19:20, "dwa kamienie
 # milowe" za test, ktory zespol sam opisal jako niesprawdzajacy
 # kompozycji) przepisany w calosci: wynik liczy sie razem z
-# ograniczeniem, ktore zespol przy nim zapisal.
-PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego celu użytkownika jest już rzeczywiście zrobiona — całego, od pierwszego do ostatniego punktu, tak jak go napisał. Bieżący etap to jedna z tych części. Każdy wynik bierzesz razem z tym, co zespół sam o nim zapisał: jeśli przy wyniku stoi uwaga, że sprawdza on mniej, niż sugeruje jego nazwa, liczysz go w tej mniejszej mierze. W "percent" wpisujesz ten udział jako liczbę od 0 do 100. W "summary" piszesz krótko, które części celu są zrobione, na jakiej podstawie i z jakimi zapisanymi ograniczeniami, a które jeszcze zostały.\n\n{\n  \"percent\": 0,\n  \"summary\": \"\"\n}"""
+# ograniczeniem, ktore zespol przy nim zapisal, a to, co dopiero
+# ruszylo (19:52: "kamien milowy" za samo puszczenie treningu), jako
+# rozpoczete.
+PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego celu użytkownika jest już rzeczywiście zrobiona — całego, od pierwszego do ostatniego punktu, tak jak go napisał. Bieżący etap to jedna z tych części. Każdy wynik bierzesz razem z tym, co zespół sam o nim zapisał: jeśli przy wyniku stoi uwaga, że sprawdza on mniej, niż sugeruje jego nazwa, liczysz go w tej mniejszej mierze. Część celu liczysz jako zrobioną, gdy jest już jej sprawdzony wynik; to, co dopiero ruszyło, opisujesz jako rozpoczęte. W "percent" wpisujesz ten udział jako liczbę od 0 do 100. W "summary" piszesz krótko, które części celu są zrobione, na jakiej podstawie i z jakimi zapisanymi ograniczeniami, a które jeszcze zostały.\n\n{\n  \"percent\": 0,\n  \"summary\": \"\"\n}"""
 
 
 WOJTEK_PROMPT = (
@@ -10858,6 +10860,33 @@ def _zatrzymaj_to_co_zostawilismy():
         except Exception:
             continue
 
+    # v480s: to, co zostalo w tle po zwyklych komendach.
+    for _grupa, (_komenda, _start) in list(_grupy_z_komend.items()):
+        try:
+            if not _grupa or _grupa == os.getpgrp():
+                continue
+            os.killpg(_grupa, 0)
+        except Exception:
+            continue
+        _zatrzymane.append({
+            "pid": _grupa,
+            "komenda": _komenda,
+            "log_file": "",
+            "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        print(
+            "Zatrzymuje to, co zostalo w tle po komendzie (grupa "
+            + str(_grupa) + ")."
+        )
+        try:
+            os.killpg(_grupa, signal.SIGTERM)
+            for _ in range(50):
+                time.sleep(0.1)
+                os.killpg(_grupa, 0)
+            os.killpg(_grupa, signal.SIGKILL)
+        except Exception:
+            pass
+
     _zwolnij_zajete_urzadzenia()
 
     if _zatrzymane:
@@ -11061,6 +11090,12 @@ def _przywroc_procesy_w_tle():
         except Exception:
             pass
 
+    for _grupa, _wpis in (_stan_przed_aktualizacja.get("grupy_z_komend") or {}).items():
+        try:
+            _grupy_z_komend[int(_grupa)] = (str(_wpis[0]), float(_wpis[1]))
+        except Exception:
+            pass
+
 
 def _przeladuj_po_aktualizacji(step, last_result, signatures):
     """
@@ -11112,6 +11147,9 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
             if p.poll() is None
         ],
         "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
+        "grupy_z_komend": {
+            str(k): list(v) for k, v in _grupy_z_komend.items()
+        },
     }
 
     try:
@@ -19262,6 +19300,17 @@ AUTO_BACKGROUND_WAIT = 90
 # pid -> Popen, zeby dalo sie poczekac i poznac kod wyjscia.
 _procesy_w_tle = {}
 
+# v480s: grupy procesow, ktore przezyly zwykla komende termux_run, bo
+# cos w niej poszlo w tle ("nohup ... &"). {pgid: (komenda, start)}.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 19:52, krok 105).
+# Zespol puscil trening przez termux_run: "nohup python3 -u
+# rsi_core_min.py ... & echo PID=$!". Powloka skonczyla od razu, a
+# trening szedl dalej we wlasnej grupie (start_new_session) — ale
+# poza _procesy_w_tle, wiec przy zamknieciu programu nikt by go nie
+# zatrzymal, a uzytkownik chce, zeby zamkniecie konczylo wszystko.
+_grupy_z_komend = {}
+
 
 def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
     """
@@ -20331,6 +20380,22 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                     )
 
             time.sleep(krok)
+
+        # v480s: patrz _grupy_z_komend. Wygasle grupy wypadaja od razu,
+        # zeby przy zamknieciu nie trafic w numer uzyty juz przez kogos
+        # innego.
+        for _stara in list(_grupy_z_komend):
+            try:
+                os.killpg(_stara, 0)
+            except Exception:
+                _grupy_z_komend.pop(_stara, None)
+
+        if pgid and pgid != os.getpgrp():
+            try:
+                os.killpg(pgid, 0)
+                _grupy_z_komend[pgid] = (short(command, 300), time.time())
+            except Exception:
+                pass
 
         wy.flush()
         bl.flush()
