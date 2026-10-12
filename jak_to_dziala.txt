@@ -1438,3 +1438,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - czekanie jest skracane tylko w komendzie, ktora sama nic nie
        puszcza w tlo (&) i niczego nie zabija (kill/pkill/killall)
+
+ 23. (bieg 2026-10-11 16:58, od 02:17 12.10) Rozmowa MAIN-a doszla do
+     limitu dlugosci na stronie DeepSeeka. Strumien niosl tylko
+     "Length limit reached. Please start a new chat."
+     (context_length_exceeded). Program bral to za pusta odpowiedz,
+     ponawial w tej samej rozmowie i tak przez 282 kroki (3,5 godziny),
+     spalajac budzet konta 1. Nic sie nie dzialo.
+
+     CO ZMIENIONE:
+     - taka odpowiedz jest bledem "rozmowa zerwana": program od razu
+       zaklada roli nowa rozmowe, w ktorej dostaje cel i pelny stan,
+       i ponawia w niej to samo pytanie

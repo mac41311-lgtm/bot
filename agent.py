@@ -5698,7 +5698,10 @@ _PRZECIAZENIE_RE = re.compile(
 #                           i to TERAZ, nie przy nastepnym starcie.
 _ZERWANA_ROZMOWA_RE = re.compile(
     r"invalid\s+message\s+id|biz_code\"?\s*:\s*26|"
-    r"session\s+not\s+found|chat\s+session.*not\s+exist",
+    r"session\s+not\s+found|chat\s+session.*not\s+exist|"
+    # v480w: rozmowa dobila do limitu dlugosci na stronie — patrz
+    # _deepseek_raw_post_with_action().
+    r"context_length_exceeded|length\s+limit\s+reached",
     re.IGNORECASE
 )
 
@@ -6355,6 +6358,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # od jednego do dwoch znakow. To sa dwie rozne sciezki w tym
     # czytniku i trzeba zobaczyc, ktora.
     poczatek_strumienia = []
+    _limit_rozmowy = [""]
 
     # Pierwszy kawalek tresci, ktory realnie doszedl do odpowiedzi.
     pierwsza_tresc = [""]
@@ -6392,6 +6396,21 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
             data = json.loads(raw_data)
             content = ""
+
+            # v480w: patrz koniec funkcji.
+            if (
+                isinstance(data, dict)
+                and (
+                    data.get("finish_reason") == "context_length_exceeded"
+                    or (
+                        data.get("type") == "error"
+                        and "length limit" in str(data.get("content", "")).lower()
+                    )
+                )
+            ):
+                _limit_rozmowy[0] = str(
+                    data.get("content") or "context_length_exceeded"
+                )
 
             if "response_message_id" in data:
                 session.parent_message_id = (
@@ -6741,6 +6760,23 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         and getattr(session, "parent_message_id", None) != _rodzic_przed
     ):
         session.parent_message_id = _rodzic_przed
+
+    # v480w: rozmowa doszla do limitu dlugosci na stronie.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 16:58, od 02:17
+    # 12.10). Strumien MAIN-a niosl tylko:
+    #   {"type":"error","content":"Length limit reached. Please start
+    #    a new chat.","finish_reason":"context_length_exceeded"}
+    # Program bral to za pusta odpowiedz, ponawial w tej samej
+    # rozmowie i tak przez 282 kroki (3,5 godziny), spalajac budzet
+    # konta 1 — nikt nic nie robil. Ta rozmowa juz nigdy nie
+    # odpowie, wiec traktujemy ja jak zerwana: deepseek() zaklada
+    # nowa (patrz _rozmowa_zerwana), a rola dostaje w niej cel i
+    # pelny stan, jak przy kazdej nowej rozmowie.
+    if _limit_rozmowy[0] and not full_text.strip():
+        raise RuntimeError(
+            "DeepSeek: context_length_exceeded — " + _limit_rozmowy[0]
+        )
 
     if not full_text.strip() and znakow_myslenia[0]:
         # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.
