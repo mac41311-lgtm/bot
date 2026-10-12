@@ -24326,9 +24326,19 @@ def _czego_brakuje_do_uruchomienia(sciezka, kod):
 
     try:
 
+        # v480x: obok skryptu moga lezec jego wlasne moduly
+        # (hyp_gen.py importuje hyp_dedup.py z tego samego katalogu).
+        # Python uruchamiajacy skrypt widzi jego katalog, wiec
+        # sprawdzamy z tym samym katalogiem na sciezce.
+        _katalog = os.path.dirname(
+            os.path.abspath(os.path.expanduser(str(sciezka)))
+        )
+
         wynik = execute_shell(
             "python -c "
             + shlex.quote(
+                "import sys\n"
+                "sys.path.insert(0, " + repr(_katalog) + ")\n"
                 "import importlib.util as u\n"
                 "for n in " + repr(nazwy) + ":\n"
                 "    print(n) if u.find_spec(n) is None else None\n"
@@ -39582,8 +39592,12 @@ _JAK_ROZMAWIAMY = (
     "resztę ustala zespół."
 )
 
+# v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela
+# wpisala zdanie o logowaniu i dostepie do kont do "celu
+# uzytkownika" i liczyla postep wzgledem niego. Ela ocenia cel tak,
+# jak go napisal uzytkownik — opis programu jej w tym nie pomaga.
 _ROLE_ZNAJACE_PROGRAM = (
-    "PLANNER", "CRITIC", "BROWSER", "PROGRESS_ESTIMATOR",
+    "PLANNER", "CRITIC", "BROWSER",
 )
 
 

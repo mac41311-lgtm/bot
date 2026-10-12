@@ -1450,3 +1450,20 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - taka odpowiedz jest bledem "rozmowa zerwana": program od razu
        zaklada roli nowa rozmowe, w ktorej dostaje cel i pelny stan,
        i ponawia w niej to samo pytanie
+
+ 24. (bieg 2026-10-12 18:35) Bartek zapisal cztery moduly (hyp_dedup.py,
+     hyp_rules.py ...), potem hyp_gen.py, ktory je importuje z tego
+     samego katalogu. Program napisal zespolowi, ze "ten Python nie ma"
+     tych modulow — nieprawda, sprawdzal bez katalogu skryptu.
+
+     CO ZMIENIONE:
+     - sprawdzenie importow widzi katalog zapisanego skryptu, tak jak
+       Python, ktory go potem uruchomi
+
+ 25. (ten sam bieg) Cel byl krotki (sama "piaskownica"). Ela wpisala do
+     "celu uzytkownika" zdanie z opisu programu ("sam sie loguje, daje
+     dostep do kont") i liczyla postep wzgledem niego.
+
+     CO ZMIENIONE:
+     - Ela nie dostaje juz na start opisu, jak dziala program; ocenia
+       cel tak, jak go napisal uzytkownik
