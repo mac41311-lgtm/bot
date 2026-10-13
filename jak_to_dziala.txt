@@ -1467,3 +1467,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - Ela nie dostaje juz na start opisu, jak dziala program; ocenia
        cel tak, jak go napisal uzytkownik
+
+ 26. (bieg 2026-10-12 18:35, o 23:57) MAIN zapisal nowa sekcje do 186 KB
+     pliku z notatkami zespolu bez dopisywania (append) — zostalo 2,9 KB.
+     Program tylko ostrzegl "Nadpisany: mial ..., teraz ma ...".
+     Najswiezsza kopia zespolu byla z 20:04, wiec 24 sekcje przepadly.
+
+     CO ZMIENIONE:
+     - zanim plik zostanie nadpisany wyraznie mniejsza trescia,
+       program odklada poprzednia tresc obok jako
+       <plik>.przed_nadpisaniem (jedna kopia na plik) i mowi o tym
+       w tym samym ostrzezeniu

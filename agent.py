@@ -18488,6 +18488,23 @@ def termux_write_file(path, content, append=False):
 
         else:
 
+            # v480y: zanim nadpiszemy plik wyraznie mniejsza trescia,
+            # odkladamy poprzednia obok (jedna kopia na plik). Bieg
+            # 2026-10-12 23:57: MAIN zapisal sekcje do 186 KB pliku z
+            # notatkami bez append i zostalo 2,9 KB; najswiezsza kopia
+            # zespolu byla sprzed 4 godzin — 24 sekcje przepadly.
+            _poprzednia = None
+            if (
+                previous_size is not None
+                and previous_size > 200
+                and len(data.encode("utf-8")) < previous_size * 0.5
+            ):
+                try:
+                    _poprzednia = p.with_name(p.name + ".przed_nadpisaniem")
+                    shutil.copy2(str(p), str(_poprzednia))
+                except Exception:
+                    _poprzednia = None
+
             p.write_text(
                 data,
                 encoding="utf-8"
@@ -18559,6 +18576,10 @@ def termux_write_file(path, content, append=False):
                 "Nadpisany: miał " + str(previous_size) + " B, teraz ma "
                 + str(new_size) + " B."
             )
+            if _poprzednia is not None:
+                result["warning"] += (
+                    " Poprzednia treść leży w " + str(_poprzednia) + "."
+                )
 
         # Niespójność naprawiona: termux_patch_file od dawna
         # sprawdza py_compile po każdej edycji .py i zwraca
