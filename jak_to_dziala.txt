@@ -1504,3 +1504,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        trwa tyle, co najwolniejszy z nich)
      - gdy zadanie dla Gemini przyjdzie przed koncem sprawdzania,
        czeka tylko na jego wynik
+
+ 29. (uzytkownik 13.10.2026: "musimy informowac Main, jak zamkne
+     program, zeby wiedzial, ze zamknalem") Po ponownym starcie MAIN
+     dostawal tylko "Poprzedni bieg zostal przerwany", a liste
+     zatrzymanych procesow jedynie wtedy, gdy cos dzialalo w tle.
+
+     CO ZMIENIONE:
+     - gdy program zamyka uzytkownik (Ctrl+C, zamkniete okno, pkill),
+       przy nastepnym starcie MAIN dostaje raz: "Uzytkownik zamknal
+       program (czas)" i co sie wtedy zatrzymalo w tle albo ze w tle
+       nic nie dzialalo; po DONE albo bledzie programu tego zdania nie
+       ma

@@ -11084,10 +11084,24 @@ def _zatrzymaj_to_co_zostawilismy():
 
     _zwolnij_zajete_urzadzenia()
 
-    if _zatrzymane:
+    # v480ab: zapis takze wtedy, gdy nic nie dzialalo w tle — nastepne
+    # uruchomienie mowi MAIN-owi, ze program zamknal uzytkownik (a nie
+    # ze urwal sie sam). Uzytkownik: "musimy informowac Main, jak
+    # zamkne program, zeby wiedzial, ze zamknalem".
+    # Tylko przy zamknieciu przez uzytkownika (Ctrl+C, zamkniete okno,
+    # pkill) — po DONE albo po bledzie programu to nieprawda.
+    _przez_uzytkownika = bool(globals().get("_zamkniete_przez_uzytkownika"))
+
+    if _przez_uzytkownika or _zatrzymane:
         try:
             _PLIK_ZATRZYMANYCH.write_text(
-                json.dumps(_zatrzymane, ensure_ascii=False),
+                json.dumps({
+                    "zamkniete": (
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        if _przez_uzytkownika else ""
+                    ),
+                    "zatrzymane": _zatrzymane,
+                }, ensure_ascii=False),
                 encoding="utf-8"
             )
         except Exception:
@@ -11399,6 +11413,13 @@ def _zatrzymane_przy_zamknieciu_blok():
     except Exception:
         pass
 
+    # v480ab: {"zamkniete": czas, "zatrzymane": [...]}; stary zapis to
+    # sama lista.
+    zamkniete = ""
+    if isinstance(wpisy, dict):
+        zamkniete = str(wpisy.get("zamkniete") or "")
+        wpisy = wpisy.get("zatrzymane") or []
+
     linie = []
 
     for w in wpisy if isinstance(wpisy, list) else []:
@@ -11411,6 +11432,17 @@ def _zatrzymane_przy_zamknieciu_blok():
             )
         except Exception:
             continue
+
+    if zamkniete:
+        return (
+            "Użytkownik zamknął program (" + zamkniete + ")"
+            + (
+                " — razem z nim zatrzymało się to, co działało w tle:\n"
+                + "\n".join(linie) + "\n"
+                if linie else
+                ". W tle nic wtedy nie działało.\n"
+            )
+        )
 
     if not linie:
         return ""
@@ -11443,6 +11475,7 @@ def _zamknij_po_sygnale(signum, frame):
         _nazwa = signal.Signals(signum).name
     except Exception:
         _nazwa = str(signum)
+    globals()["_zamkniete_przez_uzytkownika"] = True
     try:
         log(
             "PROGRAM",
@@ -46280,6 +46313,7 @@ def main():
 
     except KeyboardInterrupt:
 
+        globals()["_zamkniete_przez_uzytkownika"] = True
         print()
         print(
             "[AGENT] Zatrzymany przez użytkownika."
