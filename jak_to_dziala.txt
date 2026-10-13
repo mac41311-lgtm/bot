@@ -1553,3 +1553,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        linia "Modele jeszcze sprawdzam w tle — na razie: ...";
      - sprawdzanie konczy sie najpozniej po 90 s; model, ktory nie
        odpowiedzial, liczy sie jako chwilowo zajety.
+
+ 34. (bieg 2026-10-13 19:50) Przy sprawdzaniu modeli szesc z osmiu bylo
+     "przeciazonych", a na szczycie drogi modeli stanal przeciazony model;
+     do drogi trafil tez model do transkrypcji mowy.
+
+     CO ZMIENIONE:
+     - model przeciazony przy sprawdzaniu jest odstawiony na 2 minuty na
+       kazdym kluczu, jak przy zadaniu — zadanie idzie od razu na
+       pierwszy, ktory odpowiada;
+     - linia "Sprawdzam model ..." pokazuje krotko, co odpisal serwer;
+     - modele "transcribe" nie sa brane do zadan.

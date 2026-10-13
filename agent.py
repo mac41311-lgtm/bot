@@ -16265,7 +16265,7 @@ _GEMINI_ILU_KANDYDATOW = 8
 _NIE_DO_ZADAN = (
     "embedding", "image", "imagen", "veo", "tts", "audio", "live",
     "native", "vision", "aqa", "exp", "computer-use", "robotics",
-    "learnlm", "gemma",
+    "learnlm", "gemma", "transcribe",
 )
 
 
@@ -16895,7 +16895,8 @@ def _drabinka_modeli_bez_blokady():
             "limit": "jest w darmowej wersji, limit chwilowo wyczerpany",
             "zajety": "jest, serwer chwilowo przeciążony",
             "brak": "niedostępny dla tego klucza",
-        }[wynik] + ".")
+        }[wynik] + ("" if wynik == "ok" else " (" + short(str(blad), 120) + ")")
+            + ".")
 
         if wynik == "brak":
             continue
@@ -16904,6 +16905,13 @@ def _drabinka_modeli_bez_blokady():
 
         if wynik == "limit":
             _odstaw_pare(klucz, model, blad)
+        elif wynik == "zajety":
+            # v480ag: jak przy zadaniu (v462) — przeciazony jest model,
+            # wiec odstawiony na chwile na kazdym kluczu. Bieg 2026-10-13
+            # 19:50: na szczycie drabinki stanal przeciazony model i
+            # pierwsze zadanie traciloby na nim swoj jedyny przeskok.
+            for _k in list(gemini_clients.keys()):
+                _odstaw_pare(_k, model, blad, sekund=120, powod="serwer przeciążony")
 
     if not drabinka:
         drabinka = [GEMINI_MODEL]
