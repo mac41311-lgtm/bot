@@ -1526,3 +1526,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - MAIN dostaje ja tylko wtedy, gdy program wznawia ten sam cel
        (rozmowa MAIN-a z poprzedniego uruchomienia zostaje). Przy nowym
        celu (reset rozmow) plik jest odczytany i skasowany bez slowa
+
+ 31. (przeglad uniwersalnosci 13.10.2026) Przy "nowy cel zacznie sie na
+     czysto" program kasowal dane poprzedniego celu, ale zostawial dwa
+     pliki: serie bledow narzedzia i liste tego, co zatrzymal koniec
+     poprzedniego celu.
+
+     CO ZMIENIONE:
+     - oba pliki kasowane razem z reszta danych poprzedniego celu

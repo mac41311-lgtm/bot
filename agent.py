@@ -45523,7 +45523,11 @@ def maybe_clear_previous_session_data():
         APPROACHES_FILE,
         CONTACTS_LOOKUP_ATTEMPTED_FILE,
         USER_PROVIDED_VALUE_FILE,
-        USER_SAID_FILE
+        USER_SAID_FILE,
+        # v480ad: seria bledow narzedzia z poprzedniego celu i to, co
+        # zatrzymal jego koniec, nie dotycza nowego celu.
+        TOOL_FAILURE_STREAK_FILE,
+        _PLIK_ZATRZYMANYCH
     ):
         try:
             extra.unlink(missing_ok=True)
