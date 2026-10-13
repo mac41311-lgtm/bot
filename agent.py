@@ -21805,7 +21805,12 @@ def termux_run(command):
         # Ctrl+O, wyjdz Ctrl+X". To jest dobra instrukcja DLA
         # CZLOWIEKA i zla dla nas — a my mamy tresc tej komendy przed
         # uruchomieniem, wiec nie musimy tracic na nia calego kroku.
-        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(command_str)
+        # v480ai: bez tresci heredoc — bieg 2026-10-13 22:41: linia
+        # "top 150 per dlugosc" w tekscie dopisywanym do pliku zamienila
+        # cala komende zapisu na `top -b -n 1`, a zapis przepadl.
+        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(
+            _bez_heredocow(command_str)
+        )
 
         if _dla_czlowieka:
 

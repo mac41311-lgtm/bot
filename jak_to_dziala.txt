@@ -1576,3 +1576,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        sam port — IP dopisze sam), czeka 120 s, potem pracuje dalej;
      - pytanie pada tylko po utracie i powrocie Wi-Fi, nie gdy ADB padnie
        przy dzialajacym Wi-Fi (wtedy jak dotad: zapamietany adres, mDNS).
+
+ 36. (bieg 2026-10-13 22:41, krok 32) MAIN dopisywal sekcje do pliku
+     przez heredoc. W tekscie byla linia zaczynajaca sie od "top 150 per
+     dlugosc" — program wzial ja za komende `top` i zamiast zapisu
+     uruchomil `top -b -n 1`. Zapis przepadl, MAIN musial go powtarzac.
+
+     CO ZMIENIONE:
+     - komendy "dla czlowieka" (nano, less, top...) sa szukane w komendzie
+       bez tresci heredoc — tekst zapisywany do pliku ich nie wyzwala.
