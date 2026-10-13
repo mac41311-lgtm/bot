@@ -38477,10 +38477,22 @@ def main_decide(
     )
 
     # v480: co poprzedni bieg zatrzymal przy zamknieciu — raz.
-    if int(step or 0) <= 1:
-        _co_sie_stalo_main = (
-            _zatrzymane_przy_zamknieciu_blok() + _co_sie_stalo_main
-        )
+    # v480ac: tylko gdy wznawiamy TEN SAM cel (rozmowa MAIN-a z
+    # poprzedniego uruchomienia). Przy nowym celu to wiadomosc o
+    # cudzej pracy — plik i tak czytamy (i kasujemy), zeby nie wrocil
+    # pozniej. Uzytkownik: "to jest uniwersalny program, a jak bedzie
+    # inny cel?".
+    if int(step or 0) <= 1 and not globals().get("_zamkniecie_powiedziane"):
+        globals()["_zamkniecie_powiedziane"] = True
+        _blok_zamkniecia = _zatrzymane_przy_zamknieciu_blok()
+        if (
+            "MAIN" in globals().get("_wznowione_sesje", set())
+            or (
+                sessions.get("MAIN") is None
+                and _load_session_state("MAIN")
+            )
+        ):
+            _co_sie_stalo_main = _blok_zamkniecia + _co_sie_stalo_main
 
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
     # czekal na wyniki RUN sprzed restartu.

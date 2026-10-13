@@ -1516,3 +1516,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        program (czas)" i co sie wtedy zatrzymalo w tle albo ze w tle
        nic nie dzialalo; po DONE albo bledzie programu tego zdania nie
        ma
+
+ 30. (uzytkownik: "to jest uniwersalny program, a jak bedzie inny
+     cel?") Informacja o zamknieciu i o tym, co sie wtedy zatrzymalo,
+     szla do MAIN-a takze przy nowym celu — czyli wiadomosc o cudzej
+     pracy.
+
+     CO ZMIENIONE:
+     - MAIN dostaje ja tylko wtedy, gdy program wznawia ten sam cel
+       (rozmowa MAIN-a z poprzedniego uruchomienia zostaje). Przy nowym
+       celu (reset rozmow) plik jest odczytany i skasowany bez slowa
