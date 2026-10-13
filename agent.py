@@ -16812,8 +16812,30 @@ def _drabinka_dzisiejsza():
 def _drabinka_modeli():
     """Modele od najlepszego. Raz dziennie sprawdzane, potem z pliku."""
 
-    with _drabinka_lock:
+    # v480af: gdy modele wlasnie sprawdza watek w tle, zadanie nie czeka
+    # na niego. Bieg 2026-10-13 19:39: "TASK -> ..." i potem cisza —
+    # wykonawca stal na tej blokadzie, bo jedno sprawdzenie nie wracalo.
+    # Do czasu wyniku leci wczorajsza drabinka (albo model domyslny).
+    if not _drabinka_lock.acquire(blocking=False):
+        _tymczasowa = list(_stan_modeli().get("drabinka") or []) or [GEMINI_MODEL]
+        if not _drabinka_tymczasowa_powiedziana[0]:
+            _drabinka_tymczasowa_powiedziana[0] = True
+            log("GEMINI", "Modele jeszcze sprawdzam w tle — na razie: "
+                + " > ".join(_tymczasowa) + ".")
+        return _tymczasowa
+
+    try:
         return _drabinka_modeli_bez_blokady()
+    finally:
+        _drabinka_lock.release()
+
+
+_drabinka_tymczasowa_powiedziana = [False]
+
+# v480af: tyle najdluzej czeka sie na sprawdzenie modeli. Klient ma limit
+# 60 s na zapytanie, ale bieg 2026-10-13 pokazal, ze sprawdzenie potrafi
+# nie wrocic wcale — wtedy model liczy sie jako chwilowo zajety.
+_DRABINKA_MAKS_S = 90
 
 
 def _drabinka_modeli_bez_blokady():
@@ -16841,10 +16863,28 @@ def _drabinka_modeli_bez_blokady():
     # v480aa: wszystkie sprawdzenia naraz. Kazde to jedno zapytanie z
     # limitem 60 s; po kolei 8 kandydatow potrafilo trzymac start
     # programu kilka minut (uzytkownik: "dlugo Gemini sie laduje").
-    import concurrent.futures as _cf
+    # v480af: osobne watki-demony zamiast puli — pula czekala na kazde
+    # sprawdzenie, takze na takie, ktore nigdy nie wracalo.
+    _wyniki = [None] * len(kandydaci)
 
-    with _cf.ThreadPoolExecutor(max_workers=max(1, len(kandydaci))) as _pula:
-        _wyniki = list(_pula.map(lambda m: _sprawdz_model(client, m), kandydaci))
+    def _sprawdz_i_zapisz(i, m):
+        _wyniki[i] = _sprawdz_model(client, m)
+
+    _watki = [
+        _threading.Thread(target=_sprawdz_i_zapisz, args=(i, m), daemon=True)
+        for i, m in enumerate(kandydaci)
+    ]
+    for _w in _watki:
+        _w.start()
+    _koniec = time.time() + _DRABINKA_MAKS_S
+    for _w in _watki:
+        _w.join(max(0.0, _koniec - time.time()))
+
+    _wyniki = [
+        w if w is not None
+        else ("zajety", "brak odpowiedzi w " + str(_DRABINKA_MAKS_S) + " s", None)
+        for w in _wyniki
+    ]
 
     for model, (wynik, blad, naprawde) in zip(kandydaci, _wyniki):
 

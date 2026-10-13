@@ -1542,3 +1542,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - gdy nie ma nowych linii, ale procesor pracuje, podglad pisze
        "liczy, bez nowych linii (...)"
+
+ 33. (bieg 2026-10-13 19:39) Po "TASK -> ..." program stanal bez zadnej
+     linii. Zadanie czekalo na sprawdzanie modeli Gemini w tle, a jedno
+     sprawdzenie nie wracalo — wykonawca nie dostawal modelu.
+
+     CO ZMIENIONE:
+     - gdy modele sa jeszcze sprawdzane, zadanie nie czeka: leci na
+       ostatniej znanej drodze modeli (albo modelu domyslnym), z jedna
+       linia "Modele jeszcze sprawdzam w tle — na razie: ...";
+     - sprawdzanie konczy sie najpozniej po 90 s; model, ktory nie
+       odpowiedzial, liczy sie jako chwilowo zajety.
