@@ -1534,3 +1534,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 
      CO ZMIENIONE:
      - oba pliki kasowane razem z reszta danych poprzedniego celu
+
+ 32. (bieg 2026-10-13 19:06, krok 32) Przez 13 minut liczenia bez nowych
+     linii podglad pisal co 15 s "nic nowego od 0 s" — sprzecznie: zero
+     sekund, bo procesor pracowal i to liczylo sie jako ruch.
+
+     CO ZMIENIONE:
+     - gdy nie ma nowych linii, ale procesor pracuje, podglad pisze
+       "liczy, bez nowych linii (...)"

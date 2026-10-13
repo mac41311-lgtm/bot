@@ -20740,6 +20740,17 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                         + (short(na_czym, 60) if na_czym else "cicho")
                     )
 
+                elif na_czym and (czuwa - ostatni_ruch) <= krok + 1:
+                    # v480ae: bez nowych linii, ale procesor pracuje —
+                    # ostatni_ruch odswieza czas CPU. Bylo "nic nowego
+                    # od 0 s" (bieg 2026-10-13 19:06, krok 32, 13 minut
+                    # liczenia).
+                    log(
+                        "TERMUX",
+                        "Leci " + _jak_dlugo + ": liczy, bez nowych "
+                        "linii (" + short(na_czym, 60) + ")"
+                    )
+
                 elif na_czym:
                     log(
                         "TERMUX",
