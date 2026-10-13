@@ -1564,3 +1564,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pierwszy, ktory odpowiada;
      - linia "Sprawdzam model ..." pokazuje krotko, co odpisal serwer;
      - modele "transcribe" nie sa brane do zadan.
+
+ 35. (prosba uzytkownika 2026-10-13) Bezprzewodowe ADB rozlacza sie,
+     gdy telefon traci Wi-Fi, a po powrocie ma nowy port (czasem IP).
+
+     CO ZMIENIONE:
+     - bez Wi-Fi program nie pyta, tylko raz zapisuje w logu, ze zapyta
+       po powrocie do sieci;
+     - po powrocie najpierw sam probuje: nowy IP + stary port;
+     - gdy to nie dziala, RAZ pyta w terminalu o nowy adres (IP:port albo
+       sam port — IP dopisze sam), czeka 120 s, potem pracuje dalej;
+     - pytanie pada tylko po utracie i powrocie Wi-Fi, nie gdy ADB padnie
+       przy dzialajacym Wi-Fi (wtedy jak dotad: zapamietany adres, mDNS).

@@ -8755,7 +8755,120 @@ def find_adb(auto_reconnect=True):
     except Exception:
         pass
 
+    if not device:
+        device = _adb_po_powrocie_wifi(_list_devices)
+
     return device
+
+
+# v480ah: uzytkownik (2026-10-13): "jak mi sie adb rozlaczy albo odejde
+# za daleko od wifi, program zapyta mnie o wpisanie IP, bo za kazdym
+# razem sie zmienia — jak powroce do wifi". Zapamietany adres i mDNS
+# nie wystarczaja, gdy telefon dostal nowy port (a czasem nowy IP).
+# Uzytkownik: "ale tylko po ponownym polaczeniu wifi" — pytanie pada
+# raz, gdy telefon wraca do Wi-Fi po jego utracie, nie co jakis czas.
+_adb_wifi_znikalo = [False]
+_ADB_CZEKAJ_NA_ODPOWIEDZ_S = 120
+
+
+def _ip_wifi_telefonu():
+    """Adres IPv4 telefonu w sieci Wi-Fi albo None, gdy Wi-Fi nie ma."""
+
+    import socket
+
+    try:
+        import fcntl
+        import struct
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _s:
+            _adr = fcntl.ioctl(
+                _s.fileno(), 0x8915, struct.pack("256s", b"wlan0")
+            )[20:24]
+        return socket.inet_ntoa(_adr)
+    except OSError as e:
+        # 99: wlan0 bez adresu, 19: brak wlan0 — Wi-Fi wylaczone.
+        if getattr(e, "errno", None) in (19, 99):
+            return None
+    except Exception:
+        pass
+
+    # Android nie dal zajrzec do wlan0 — adres, przez ktory telefon
+    # wychodzi do sieci; Wi-Fi w domu to prawie zawsze 192.168.x.x.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _s:
+            _s.connect(("8.8.8.8", 80))
+            _adr = _s.getsockname()[0]
+        return _adr if _adr.startswith("192.168.") else None
+    except Exception:
+        return None
+
+
+def _adb_po_powrocie_wifi(_list_devices):
+    """
+    ADB zniknelo, a ani zapamietany adres, ani mDNS nie pomogly. Gdy
+    telefon jest w Wi-Fi, najpierw proba: nowy IP + stary port; potem
+    pytanie uzytkownika o adres (IP:port albo sam port) — tylko raz po
+    powrocie do Wi-Fi, z glownego watku, przy terminalu.
+    """
+
+    zapamietany = adb_connect_target() or ""
+    if not zapamietany:
+        return None
+
+    ip = _ip_wifi_telefonu()
+    if not ip:
+        if not _adb_wifi_znikalo[0]:
+            _adb_wifi_znikalo[0] = True
+            log("ANDROID", "ADB rozłączone, telefon nie ma Wi-Fi — o nowy adres "
+                "zapytam, gdy wróci do sieci.")
+        return None
+
+    stary_ip, _, stary_port = zapamietany.rpartition(":")
+    if stary_port.isdigit() and ip != stary_ip:
+        if adb_try_connect(ip + ":" + stary_port):
+            return _list_devices()
+
+    if (
+        not _adb_wifi_znikalo[0]
+        or _threading.current_thread() is not _threading.main_thread()
+        or not sys.stdin.isatty()
+    ):
+        return None
+    _adb_wifi_znikalo[0] = False
+
+    try:
+        try:
+            import termios
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        except Exception:
+            pass
+        print("\a")
+        print("📶 ADB przez Wi-Fi się rozłączyło. Telefon jest w sieci (IP " + ip + ").")
+        print("   Nowy adres: Ustawienia -> Opcje deweloperskie -> Debugowanie "
+              "bezprzewodowe -> \"Adres IP i port\".")
+        print("   Wpisz IP:port albo sam port (" + str(_ADB_CZEKAJ_NA_ODPOWIEDZ_S)
+              + " s, Enter/brak = pomiń) > ", end="", flush=True)
+        try:
+            gotowe, _, _ = select.select([sys.stdin], [], [], _ADB_CZEKAJ_NA_ODPOWIEDZ_S)
+        except Exception:
+            gotowe = []
+        if not gotowe:
+            print()
+            log("ANDROID", "Brak nowego adresu ADB — praca idzie dalej bez telefonu.")
+            return None
+        wpisane = str(sys.stdin.readline() or "").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+    if not wpisane:
+        return None
+    if wpisane.isdigit():
+        wpisane = ip + ":" + wpisane
+
+    if adb_try_connect(wpisane):
+        return _list_devices()
+
+    return None
 
 
 def init_android():
