@@ -1478,3 +1478,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        program odklada poprzednia tresc obok jako
        <plik>.przed_nadpisaniem (jedna kopia na plik) i mowi o tym
        w tym samym ostrzezeniu
+
+ 27. (8.10.2026, zmiana u Google) gemini-3.7-flash jest teraz
+     przekierowany na gemini-3.8-flash, a gemini-3.5-flash na
+     gemini-3.6-flash. Obie nazwy sa dalej na liscie modeli, ale
+     dziela limit z modelem, na ktory ida. Program bral je za osobne
+     modele: zajmowaly miejsca w codziennym sprawdzaniu, a po
+     wyczerpaniu limitu jednej nazwy probowal drugiej i znow dostawal
+     429. Modele 2.5 sa dostepne tylko dla tych, kto ich ostatnio
+     uzywal — to program juz obsluguje ("niedostepny dla tego klucza").
+
+     CO ZMIENIONE:
+     - gdy Google odpowiada innym modelem albo 429 wymienia inny
+       model niz pytany, program zapamietuje przekierowanie, odstawia
+       obie nazwy razem i w drabince zostawia tylko prawdziwa
+     - codziennie sprawdza 8 kandydatow zamiast 6

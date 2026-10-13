@@ -16224,7 +16224,10 @@ GEMINI_MODELE_FILE = STATE_DIR / "gemini_modele.json"
 _GEMINI_MODEL_WYMUSZONY = os.environ.get("GEMINI_MODEL", "").strip()
 
 # Ilu kandydatow sprawdzamy raz dziennie (kazdy = jedno zapytanie).
-_GEMINI_ILU_KANDYDATOW = 6
+# v480z: 8 — od 8.10.2026 Google przekierowuje gemini-3.7-flash na
+# 3.8-flash i gemini-3.5-flash na 3.6-flash; takie nazwy dalej sa na
+# liscie i zajmowaly miejsca w pierwszej szostce.
+_GEMINI_ILU_KANDYDATOW = 8
 
 _NIE_DO_ZADAN = (
     "embedding", "image", "imagen", "veo", "tts", "audio", "live",
@@ -16324,17 +16327,59 @@ def _poza_darmowa_wersja(blad):
     return bool(re.search(r"limit['\"]?\s*[:=]\s*0\b", str(blad or "")))
 
 
+def _model_z_bledu(blad):
+    """Model, ktory Google wymienia w tresci 429 ("for model X"), albo ""."""
+
+    m = re.search(
+        r"(?:for model|model:)\s*['\"]?(gemini-[\w.\-]+)", str(blad or "")
+    )
+    return m.group(1) if m else ""
+
+
+def _zapamietaj_przekierowanie(model, naprawde):
+    """
+    v480z: Google odpowiada na `model` innym modelem (8.10.2026:
+    gemini-3.7-flash -> 3.8-flash, gemini-3.5-flash -> 3.6-flash). Obie
+    nazwy dziela wtedy jeden limit, wiec liczymy je jako jeden model.
+    """
+
+    model = str(model or "").split("/")[-1]
+    naprawde = str(naprawde or "").split("/")[-1]
+
+    if not model or not naprawde or naprawde == model:
+        return
+
+    if not naprawde.startswith("gemini-"):
+        return
+
+    stan = _stan_modeli()
+    przekierowania = stan.setdefault("przekierowania", {})
+
+    if przekierowania.get(model) == naprawde:
+        return
+
+    przekierowania[model] = naprawde
+    _zapisz_stan_modeli(stan)
+    log(
+        "GEMINI",
+        "Model " + model + " jest przekierowany na " + naprawde
+        + " — ten sam limit, liczę je jako jeden."
+    )
+
+
 def _sprawdz_model(client, model):
     """ok / limit / zajety / brak — co ten model odpowiada temu kluczowi."""
 
     try:
-        client.interactions.create(
+        odp = client.interactions.create(
             model=model,
             input="Odpowiedz jednym słowem: ok"
         )
+        _zapamietaj_przekierowanie(model, getattr(odp, "model", None))
         return "ok", ""
     except Exception as e:
         blad = str(e)
+        _zapamietaj_przekierowanie(model, _model_z_bledu(blad))
 
     if _gemini_przeciazony(blad):
         return "zajety", blad
@@ -16564,6 +16609,14 @@ def _kolejnosc_modeli(drabinka, stan):
             return 1
         return 2
 
+    # v480z: nazwa przekierowana na model, ktory juz jest w drabince,
+    # to ten sam model i ten sam limit — zostaje tylko prawdziwa nazwa.
+    _przekierowania = stan.get("przekierowania") or {}
+    drabinka = [
+        m for m in drabinka
+        if _przekierowania.get(str(m)) not in drabinka
+    ]
+
     znane = [m for m in drabinka if _znany_ok(m)]
     nieznane = [
         m for m in drabinka
@@ -16658,15 +16711,26 @@ def _odstaw_pare(klucz, model, blad, sekund=None, powod=None):
         do, powod, odstep = _czas_odnowienia(blad, poprzedni)
 
     stan["odstawione"][para] = {"do": do, "powod": powod, "odstep": odstep}
+
+    # v480z: 429 mowi o innym modelu niz pytany — to przekierowanie;
+    # limit wyczerpal sie tamtemu, wiec odstawiamy tez tamta pare.
+    _naprawde = _model_z_bledu(blad) if sekund is None else ""
+    if _naprawde and _naprawde != str(model):
+        stan["odstawione"][str(klucz) + "|" + _naprawde] = {
+            "do": do, "powod": powod, "odstep": odstep
+        }
+        stan.setdefault("przekierowania", {})[str(model)] = _naprawde
+
     _zapisz_stan_modeli(stan)
 
     # v455: po zapisie odstawienia — ta funkcja czyta stan z pliku od
     # nowa, wiec musi isc PO _zapisz_stan_modeli, inaczej jej wpis
     # zostalby nadpisany.
     if sekund is None:
-        _zapamietaj_limit_dzienny(model, blad)
-        if _limit_dzienny(blad):
-            _wyczerpany_dzis(klucz, model, blad)
+        for _m in [model] + ([_naprawde] if _naprawde and _naprawde != str(model) else []):
+            _zapamietaj_limit_dzienny(_m, blad)
+            if _limit_dzienny(blad):
+                _wyczerpany_dzis(klucz, _m, blad)
 
     log(
         "GEMINI",
