@@ -16368,26 +16368,31 @@ def _zapamietaj_przekierowanie(model, naprawde):
 
 
 def _sprawdz_model(client, model):
-    """ok / limit / zajety / brak — co ten model odpowiada temu kluczowi."""
+    """
+    (ok / limit / zajety / brak, blad, model, ktory naprawde odpowiedzial).
+
+    v480aa: nic nie zapisuje — sprawdzenia ida rownolegle (patrz
+    _drabinka_modeli), a stan zapisuje potem jeden watek.
+    """
 
     try:
         odp = client.interactions.create(
             model=model,
             input="Odpowiedz jednym słowem: ok"
         )
-        _zapamietaj_przekierowanie(model, getattr(odp, "model", None))
-        return "ok", ""
+        return "ok", "", getattr(odp, "model", None)
     except Exception as e:
         blad = str(e)
-        _zapamietaj_przekierowanie(model, _model_z_bledu(blad))
+
+    naprawde = _model_z_bledu(blad)
 
     if _gemini_przeciazony(blad):
-        return "zajety", blad
+        return "zajety", blad, naprawde
 
     if _to_limit(blad):
-        return ("brak" if _poza_darmowa_wersja(blad) else "limit"), blad
+        return ("brak" if _poza_darmowa_wersja(blad) else "limit"), blad, naprawde
 
-    return "brak", blad
+    return "brak", blad, naprawde
 
 
 def _polnoc_pacyfik_po(teraz):
@@ -16752,8 +16757,33 @@ def _para_odstawiona(klucz, model, teraz=None):
     return bool(info) and float(info.get("do") or 0) > teraz
 
 
+# v480aa: jedno sprawdzanie naraz — startuje w tle przy init_gemini(),
+# a pierwsze zadanie, gdyby przyszlo wczesniej, czeka na jego wynik.
+_drabinka_lock = _threading.Lock()
+
+
+def _drabinka_dzisiejsza():
+    """Dzisiejsza drabinka z pliku albo None, gdy dzis jeszcze nie sprawdzana."""
+
+    if _GEMINI_MODEL_WYMUSZONY:
+        return [_GEMINI_MODEL_WYMUSZONY]
+
+    stan = _stan_modeli()
+
+    if stan.get("dzien") == datetime.now().strftime("%Y-%m-%d") and stan.get("drabinka"):
+        return list(stan["drabinka"])
+
+    return None
+
+
 def _drabinka_modeli():
     """Modele od najlepszego. Raz dziennie sprawdzane, potem z pliku."""
+
+    with _drabinka_lock:
+        return _drabinka_modeli_bez_blokady()
+
+
+def _drabinka_modeli_bez_blokady():
 
     if _GEMINI_MODEL_WYMUSZONY:
         return [_GEMINI_MODEL_WYMUSZONY]
@@ -16775,9 +16805,17 @@ def _drabinka_modeli():
 
     drabinka = []
 
-    for model in kandydaci:
+    # v480aa: wszystkie sprawdzenia naraz. Kazde to jedno zapytanie z
+    # limitem 60 s; po kolei 8 kandydatow potrafilo trzymac start
+    # programu kilka minut (uzytkownik: "dlugo Gemini sie laduje").
+    import concurrent.futures as _cf
 
-        wynik, blad = _sprawdz_model(client, model)
+    with _cf.ThreadPoolExecutor(max_workers=max(1, len(kandydaci))) as _pula:
+        _wyniki = list(_pula.map(lambda m: _sprawdz_model(client, m), kandydaci))
+
+    for model, (wynik, blad, naprawde) in zip(kandydaci, _wyniki):
+
+        _zapamietaj_przekierowanie(model, naprawde)
 
         log("GEMINI", "Sprawdzam model " + model + ": " + {
             "ok": "odpowiada",
@@ -16920,10 +16958,17 @@ def init_gemini():
 
     if gemini_clients:
 
-        log(
-            "GEMINI",
-            "API OK — modele: " + " > ".join(_drabinka_modeli())
-        )
+        # v480aa: dzienne sprawdzanie modeli w tle — start programu na
+        # nie nie czeka.
+        _gotowa = _drabinka_dzisiejsza()
+
+        if _gotowa:
+            log("GEMINI", "API OK — modele: " + " > ".join(_gotowa))
+        else:
+            log("GEMINI", "API OK — modele sprawdzam w tle.")
+            _threading.Thread(
+                target=_drabinka_modeli, name="gemini-modele", daemon=True
+            ).start()
 
         return True
 

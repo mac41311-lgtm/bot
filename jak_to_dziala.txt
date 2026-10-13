@@ -1493,3 +1493,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        model niz pytany, program zapamietuje przekierowanie, odstawia
        obie nazwy razem i w drabince zostawia tylko prawdziwa
      - codziennie sprawdza 8 kandydatow zamiast 6
+
+ 28. (uzytkownik 13.10.2026: "dlugo Gemini sie laduje") Raz dziennie,
+     przy starcie, program sprawdza modele Gemini: po jednym zapytaniu
+     na kandydata, po kolei, kazde do 60 s. Start czekal na wszystkie.
+
+     CO ZMIENIONE:
+     - sprawdzanie idzie w tle, start na nie nie czeka
+     - wszystkie modele sprawdzane naraz, nie po kolei (8 kandydatow
+       trwa tyle, co najwolniejszy z nich)
+     - gdy zadanie dla Gemini przyjdzie przed koncem sprawdzania,
+       czeka tylko na jego wynik
