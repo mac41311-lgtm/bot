@@ -17067,7 +17067,11 @@ _GEMINI_COOLDOWN_MAX = 6 * 3600.0
 #
 # GEMINI_MODEL w srodowisku wymusza jeden model — bez sprawdzania.
 
-GEMINI_MODELE_FILE = STATE_DIR / "gemini_modele.json"
+# v480at: jeden plik dla zwyklego programu i obu druzyn rywalizacji —
+# klucze sa wspolne, wiec limit wyczerpany przez jedna druzyne jest
+# wyczerpany tez dla drugiej. W zwyklym programie to ta sama sciezka co
+# dotad (~/agent/state).
+GEMINI_MODELE_FILE = _AGENT_DIR_WSPOLNY / "state" / "gemini_modele.json"
 
 _GEMINI_MODEL_WYMUSZONY = os.environ.get("GEMINI_MODEL", "").strip()
 
@@ -17093,7 +17097,17 @@ def _stan_modeli():
 
 
 def _zapisz_stan_modeli(stan):
-    write_json(GEMINI_MODELE_FILE, stan)
+    # v480at: zapis przez plik tymczasowy — w rywalizacji czyta go druga
+    # druzyna i nie moze trafic na polowe zapisu.
+    try:
+        GEMINI_MODELE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _tmp = GEMINI_MODELE_FILE.with_name(
+            GEMINI_MODELE_FILE.name + "." + str(os.getpid()) + ".tmp"
+        )
+        _tmp.write_text(json.dumps(stan, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(_tmp, GEMINI_MODELE_FILE)
+    except Exception:
+        write_json(GEMINI_MODELE_FILE, stan)
 
 
 def _ranga_modelu(nazwa):
@@ -24119,6 +24133,74 @@ def _czekaj_az_sie_zmieni(name, args, result):
     return result
 
 
+# v480at: ekran telefonu i Chrome sa jedne dla obu druzyn rywalizacji.
+# Druzyna, ktora zaczela na nich pracowac, trzyma je, dopoki ich uzywa,
+# i jeszcze _EKRAN_TRZYMAJ_S po ostatniej czynnosci — zeby ciag
+# klikniec jednej druzyny nie przeplatal sie z klikaniem drugiej.
+# Druga czeka najwyzej _EKRAN_CZEKAJ_S. Blokada to flock na wspolnym
+# pliku, wiec znika sama, gdy proces padnie.
+_EKRAN_TRZYMAJ_S = 60
+_EKRAN_CZEKAJ_S = 300
+_ekran = {"plik": None, "ostatnio": 0.0, "watek": None}
+_ekran_lock = _threading.Lock()
+
+
+def _puszczaj_ekran():
+    import fcntl
+    while True:
+        time.sleep(5)
+        with _ekran_lock:
+            if _ekran["plik"] is None:
+                continue
+            if time.time() - _ekran["ostatnio"] < _EKRAN_TRZYMAJ_S:
+                continue
+            try:
+                fcntl.flock(_ekran["plik"], fcntl.LOCK_UN)
+                _ekran["plik"].close()
+            except Exception:
+                pass
+            _ekran["plik"] = None
+
+
+def _wez_ekran(name):
+    if not _DRUZYNA or not str(name or "").startswith(("android_", "chrome_")):
+        return
+    try:
+        import fcntl
+    except Exception:
+        return
+    with _ekran_lock:
+        _ekran["ostatnio"] = time.time()
+        if _ekran["plik"] is not None:
+            return
+        try:
+            HOME.joinpath("RYWALIZACJA").mkdir(parents=True, exist_ok=True)
+            plik = open(HOME / "RYWALIZACJA" / "ekran.lock", "a+")
+        except Exception:
+            return
+        start = time.time()
+        powiedziane = False
+        while True:
+            try:
+                fcntl.flock(plik, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if not powiedziane:
+                    powiedziane = True
+                    log("RYWALIZACJA", "Ekran i Chrome używa teraz druga drużyna — czekam, "
+                        "aż skończy (najwyżej " + str(_EKRAN_CZEKAJ_S // 60) + " min).")
+                if time.time() - start > _EKRAN_CZEKAJ_S:
+                    log("RYWALIZACJA", "Druga drużyna trzyma ekran za długo — idę dalej.")
+                    plik.close()
+                    return
+                time.sleep(2)
+        _ekran["plik"] = plik
+        _ekran["ostatnio"] = time.time()
+        if _ekran["watek"] is None:
+            _ekran["watek"] = _threading.Thread(target=_puszczaj_ekran, name="ekran", daemon=True)
+            _ekran["watek"].start()
+
+
 def dispatch_tool(
     name,
     args
@@ -24142,6 +24224,9 @@ def dispatch_tool(
     globals()["_ostatnie_narzedzie"] = str(name or "")
 
     _uwaga_o_karcie[0] = None
+
+    # v480at: w rywalizacji ekranu i Chrome uzywa naraz jedna druzyna.
+    _wez_ekran(name)
 
     result = _dispatch_tool_inner(
         name,

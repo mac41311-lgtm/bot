@@ -1713,3 +1713,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        ~/RYWALIZACJA/ocena_sedziego.json do MAIN-a druzyny 2;
      - w rywalizacji zastepuje automatyczna ocene Eli; Ela odzywa sie tylko,
        gdy MAIN ja zawola; w zwyklym programie wszystko jak dotad.
+
+ 46. (uzytkownik 2026-10-14) Dwie druzyny na jednym telefonie nie moga sie
+     gryzc o ekran i limity Gemini.
+
+     CO ZMIENIONE (tylko w rywalizacji, poza limitami):
+     - narzedzi android_* i chrome_* uzywa naraz jedna druzyna: trzyma ekran,
+       dopoki na nim pracuje, i jeszcze 60 s po ostatniej czynnosci; druga
+       czeka najwyzej 5 min (blokada na ~/RYWALIZACJA/ekran.lock, znika sama,
+       gdy proces padnie);
+     - stan limitow Gemini (gemini_modele.json) jest jeden: ~/agent/state —
+       limit wyczerpany przez jedna druzyne widzi tez druga; w zwyklym
+       programie to ta sama sciezka co dotad; zapis przez plik tymczasowy.
