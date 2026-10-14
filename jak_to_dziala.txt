@@ -1740,3 +1740,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      druzyna 2 dorzuca tam swoj terminal.log (ostatnie 2 MB — ona dziala w
      tle, bez ekranu), a obie kopiuja werdykty i oceny Sedziego z
      ~/RYWALIZACJA do AEL-MINI/rywalizacja. Tryb 1 bez zmian.
+ 49. (uzytkownik 2026-10-14) Ocena Sedziego to wspolny przystanek: kazda
+     druzyna co 5 swoich krokow staje (plik ~/RYWALIZACJA/przystanek_N.json).
+     Druzyna 1 czeka, az stanie tez druzyna 2, Sedzia ocenia obie w tym
+     samym momencie, potem druzyna 1 usuwa przystanki i obie ruszaja razem
+     (druzyna 2 dostaje ocene od razu, zanim jej MAIN zdecyduje). Gdy
+     druzyna 2 nie zyje dluzej niz 90 s, ocena idzie bez czekania; gdy nie
+     zyje druzyna 1 (pid w ~/RYWALIZACJA/pid_1.txt), druzyna 2 rusza sama.

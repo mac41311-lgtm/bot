@@ -44586,8 +44586,9 @@ def run_agent(goal):
         # takze poza kolejka — patrz _o_kogo_prosi_main().
         # v480as: w rywalizacji co 5 krokow ocenia Sedzia (obie druzyny);
         # Ela odzywa sie wtedy tylko na zawolanie MAIN-a.
-        if _DRUZYNA == "1" and step % 5 == 0:
-            ocen_rywalizacje(step)
+        # v480av: obie druzyny staja na ocene i ruszaja razem.
+        if _DRUZYNA and step % 5 == 0:
+            przystanek_sedziego(step)
 
         if (
             (step % 5 == 0 and not _DRUZYNA)
@@ -47405,10 +47406,12 @@ def _sedzia_petla():
         _juz = 0.0
     widziany_wynik = _juz
     widziana_tablica_rywala = 0.0
-    try:
-        widziana_ocena = _PLIK_OCENY_SEDZIEGO.stat().st_mtime
-    except Exception:
-        widziana_ocena = 0.0
+    with _sedzia_lock:
+        if _ocena_widziana[0] is None:
+            try:
+                _ocena_widziana[0] = _PLIK_OCENY_SEDZIEGO.stat().st_mtime
+            except Exception:
+                _ocena_widziana[0] = 0.0
 
     while True:
         try:
@@ -47440,16 +47443,7 @@ def _sedzia_petla():
                     pass
             # v480as: ocene Sedziego druzyna 1 ma od razu; druzyna 2 z pliku.
             if _DRUZYNA == "2":
-                m3 = _mtime(_PLIK_OCENY_SEDZIEGO)
-                if m3 and m3 != widziana_ocena:
-                    widziana_ocena = m3
-                    try:
-                        o = json.loads(_PLIK_OCENY_SEDZIEGO.read_text(encoding="utf-8"))
-                        with _sedzia_lock:
-                            _sedzia_wiadomosci.append(_ocena_zdaniem(o))
-                        log("RYWALIZACJA", _ocena_zdaniem(o))
-                    except Exception:
-                        pass
+                _wez_ocene_sedziego()
         except Exception as e:
             try:
                 log("RYWALIZACJA", "Sędzia: " + str(e))
@@ -47458,12 +47452,137 @@ def _sedzia_petla():
         time.sleep(_SEDZIA_CO_S)
 
 
+# v480av: ocena Sedziego to wspolny przystanek obu druzyn — kazda co 5
+# swoich krokow staje, druzyna 1 czeka, az stanie tez druzyna 2, Sedzia
+# ocenia obie w tym samym momencie, a potem obie ruszaja razem.
+_ocena_widziana = [None]
+
+
+def _wez_ocene_sedziego():
+    """Druzyna 2: nowa ocena z pliku trafia do MAIN-a raz."""
+    try:
+        m3 = _PLIK_OCENY_SEDZIEGO.stat().st_mtime
+    except Exception:
+        return
+    with _sedzia_lock:
+        if _ocena_widziana[0] is not None and m3 == _ocena_widziana[0]:
+            return
+        _ocena_widziana[0] = m3
+    try:
+        o = json.loads(_PLIK_OCENY_SEDZIEGO.read_text(encoding="utf-8"))
+        with _sedzia_lock:
+            _sedzia_wiadomosci.append(_ocena_zdaniem(o))
+        log("RYWALIZACJA", _ocena_zdaniem(o))
+    except Exception:
+        pass
+
+
+def _plik_przystanku(numer):
+    return _RYWALIZACJA_DIR / ("przystanek_" + str(numer) + ".json")
+
+
+def _zyje(pid):
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _stan_przystanku(numer, krok):
+    try:
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        p = _plik_przystanku(numer)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"krok": int(krok or 0), "pid": os.getpid(),
+                                   "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}),
+                       encoding="utf-8")
+        os.replace(tmp, p)
+    except Exception:
+        pass
+
+
+def _sprzatnij_przystanek(numer):
+    try:
+        _plik_przystanku(numer).unlink()
+    except Exception:
+        pass
+
+
+def przystanek_sedziego(step):
+    """
+    Co 5 krokow kazdej druzyny. Druzyna 1: czeka, az druzyna 2 dojdzie do
+    swojego przystanku (albo przestanie zyc), oddaje glos Sedziemu, potem
+    zwalnia obie. Druzyna 2: zglasza sie i czeka, az druzyna 1 ja zwolni
+    (albo przestanie zyc). Nigdy nie rzuca.
+    """
+    if not _DRUZYNA:
+        return
+    try:
+        _stan_przystanku(_DRUZYNA, step)
+        if _DRUZYNA == "1":
+            log("RYWALIZACJA", "Krok " + str(step) + ": przystanek na ocenę Sędziego — czekam na drużynę 2.")
+            martwa_od = None
+            while not _plik_przystanku("2").exists():
+                try:
+                    pid2 = int(_PLIK_PID_DRUZYNY2.read_text().strip())
+                except Exception:
+                    pid2 = 0
+                if _zyje(pid2):
+                    martwa_od = None
+                else:
+                    martwa_od = martwa_od or time.time()
+                    # watchdog ja podnosi; gdy nie wstaje, ocena idzie bez czekania
+                    if time.time() - martwa_od > 90:
+                        log("RYWALIZACJA", "Drużyna 2 nie działa — Sędzia ocenia bez czekania.")
+                        break
+                time.sleep(1)
+            try:
+                ocen_rywalizacje(step)
+            finally:
+                _sprzatnij_przystanek("2")
+                _sprzatnij_przystanek("1")
+            log("RYWALIZACJA", "Ocena gotowa — obie drużyny ruszają.")
+        else:
+            log("RYWALIZACJA", "Krok " + str(step) + ": przystanek na ocenę Sędziego — czekam na drużynę 1.")
+            while _plik_przystanku("2").exists():
+                try:
+                    pid1 = int((_RYWALIZACJA_DIR / "pid_1.txt").read_text().strip())
+                except Exception:
+                    pid1 = 0
+                if not _zyje(pid1):
+                    log("RYWALIZACJA", "Drużyna 1 nie działa — ruszam dalej.")
+                    _sprzatnij_przystanek("2")
+                    break
+                time.sleep(1)
+            _wez_ocene_sedziego()
+    except Exception as e:
+        _sprzatnij_przystanek(_DRUZYNA)
+        try:
+            log("RYWALIZACJA", "Przystanek: " + str(e))
+        except Exception:
+            pass
+
+
 def uruchom_sedziego():
     if not _DRUZYNA or _sedzia_watek[0] is not None:
         return
     for _n in ("1", "2"):
         try:
             _folder_druzyny(_n).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    # v480av: przystanek z poprzedniego startu nie moze nikogo zwolnic ani zatrzymac.
+    _sprzatnij_przystanek(_DRUZYNA)
+    if _DRUZYNA == "1":
+        try:
+            _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+            (_RYWALIZACJA_DIR / "pid_1.txt").write_text(str(os.getpid()))
         except Exception:
             pass
     _sedzia_watek[0] = _threading.Thread(target=_sedzia_petla, name="sedzia", daemon=True)
