@@ -1799,3 +1799,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      razu, gdy Sedzia oceni runde — takze gdy pierwsza doszla druzyna 2
      (wczesniej druzyna 1 pokazywala je dopiero na swoim kroku). MAIN-y
      dostaja ocene bez zmian, kazdy na swoim kroku.
+ 58. (uzytkownik 2026-10-14) Prompt Sedziego: procent opisuje stan celu,
+     a nie ilosc pracy — Sedzia porownuje go ze swoja poprzednia ocena i
+     podnosi o tyle, o ile druzynie przybylo sprawdzonego wyniku.
