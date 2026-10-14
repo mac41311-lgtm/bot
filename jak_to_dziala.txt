@@ -1685,3 +1685,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        na koncie 1 w obu trybach, wiec jego rozmowa trwa dalej;
      - druzyna 2 nie ma terminala: o nic nie pyta, a usuwania cudzych
        plikow, ktore wymagaloby potwierdzenia, nie dostaje.
+
+ 44. (uzytkownik 2026-10-14) Po powrocie do "1" MAIN nie moze miec w
+     rozmowie rywalizacji — przy innych celach wszystko by sie mieszalo.
+
+     CO ZMIENIONE:
+     - druzyna 1 ma wlasny katalog ~/agent_druzyna1 (rozmowy, stan, logi;
+       kopia w AEL-MINI/druzyna_1); po wyborze "2" program startuje od nowa
+       jako druzyna 1, zapisany cel zwyklego programu idzie z nim (Enter
+       go wznawia);
+     - zwykly program (~/agent) nie dostaje nic z rywalizacji: jego
+       rozmowy, stan i logi zostaja takie, jakie byly; obie druzyny
+       zaczynaja od czystych rozmow, a pliki pracy na telefonie sa wspolne.

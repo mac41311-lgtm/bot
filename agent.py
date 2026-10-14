@@ -864,11 +864,20 @@ except Exception as e:
 HOME = Path.home()
 AGENT_DIR = HOME / "agent"
 
-# v480aq: druzyna 2 trzyma stan, rozmowy i logi osobno. Klucze Gemini
-# i adres ADB sa wspolne — to ten sam telefon i te same klucze.
+# v480aq: kazda druzyna trzyma stan, rozmowy i logi osobno. Klucze
+# Gemini i adres ADB sa wspolne — to ten sam telefon i te same klucze.
+#
+# v480ar: druzyna 1 tez ma swoj katalog. Uzytkownik: po powrocie do "1"
+# MAIN nie moze miec w rozmowie rywalizacji, bo przy innych celach
+# wszystko by sie pomieszalo. Rozmowy zwyklego programu (~/agent)
+# zostaja nietkniete, a rywalizacja zaczyna obie druzyny od czystej
+# rozmowy z tym samym celem — pliki pracy na telefonie sa wspolne.
 _AGENT_DIR_WSPOLNY = AGENT_DIR
+_DRUZYNA1_DIR = HOME / "agent_druzyna1"
 _DRUZYNA2_DIR = HOME / "agent_druzyna2"
-if _DRUZYNA == "2":
+if _DRUZYNA == "1":
+    AGENT_DIR = _DRUZYNA1_DIR
+elif _DRUZYNA == "2":
     AGENT_DIR = _DRUZYNA2_DIR
 
 # v480k: stan biegu zapisany tuz przed przeladowaniem na nowa wersje
@@ -925,8 +934,8 @@ PRZEBIEG_DIR = MEMORY_DIR / "przebieg"
 # `termux-setup-storage`; gdy uzytkownik go nie zrobil, po prostu
 # nie ma czego kopiowac i nic sie nie dzieje.
 PRZEBIEG_NA_TELEFONIE = HOME / "storage" / "shared" / "AEL-MINI"
-if _DRUZYNA == "2":
-    PRZEBIEG_NA_TELEFONIE = PRZEBIEG_NA_TELEFONIE / "druzyna_2"
+if _DRUZYNA:
+    PRZEBIEG_NA_TELEFONIE = PRZEBIEG_NA_TELEFONIE / ("druzyna_" + _DRUZYNA)
 
 # Ustawiane raz przy starcie biegu — patrz zacznij_zapis_biegu().
 _plik_przebiegu = None
@@ -46974,8 +46983,6 @@ def _rywal():
 def _wybierz_tryb():
     """Pytanie na starcie: 1 = zwykly program, 2 = rywalizacja."""
 
-    global _DRUZYNA, _BEZ_PYTAN
-
     if _DRUZYNA or _PO_AKTUALIZACJI:
         return
 
@@ -46998,13 +47005,29 @@ def _wybierz_tryb():
         )
         return
 
-    _DRUZYNA = "1"
-    os.environ["AEL_DRUZYNA"] = "1"
-    log(
-        "RYWALIZACJA",
-        "Rywalizacja: ten terminal to drużyna 1 (konto 1, folder ~/MAIN_1); "
-        "drużyna 2 ruszy w tle po wyborze celu."
+    # v480ar: druzyna 1 ma wlasny katalog, a sciezki program liczy przy
+    # imporcie — wiec startujemy od nowa jako druzyna 1. Zapisany cel
+    # zwyklego programu idzie z nami, zeby Enter go wznowil.
+    try:
+        _cel = read_text(_AGENT_DIR_WSPOLNY / "current_goal.txt").strip()
+        if _cel:
+            _DRUZYNA1_DIR.mkdir(parents=True, exist_ok=True)
+            write_text(_DRUZYNA1_DIR / "current_goal.txt", _cel)
+    except Exception:
+        pass
+
+    print(
+        "Rywalizacja: ten terminal to drużyna 1 (konto 1, folder ~/MAIN_1, "
+        "osobne rozmowy w " + str(_DRUZYNA1_DIR) + "); drużyna 2 ruszy w tle "
+        "po wyborze celu."
     )
+    os.environ["AEL_DRUZYNA"] = "1"
+    try:
+        sys.stdout.flush()
+        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
+    except Exception as e:
+        os.environ.pop("AEL_DRUZYNA", None)
+        print("Rywalizacja nie ruszyła (" + str(e) + ") — ruszam zwykły program.")
 
 
 def _rywalizacja_tekst():
