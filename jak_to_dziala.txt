@@ -1779,3 +1779,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (zmienial date pliku), i za kazdym razem MAIN dostawal te sama
      wiadomosc. Teraz Sedzia patrzy na tresc zgloszenia (opis, wynik,
      lepiej, sprawdz), a date po sprawdzeniu bierze jako juz widziana.
+ 54. (uzytkownik 2026-10-14) Sedzia: jedno zdanie w poczatkowym prompcie —
+     liczba potwierdzona przez program mowi tylko, ze komenda ja wypisuje;
+     gdy druzyna sama ustalila, ze jej wynik byl przypadkowy albo nie
+     wytrzymal powtorzenia, Sedzia ocenia ja wedlug tego, co ustalila.
+     Zmiane promptu Sedzia dostaje sam przy wznowieniu rozmowy (po
+     aktualizacji programu) jako aktualizacje instrukcji roli.
