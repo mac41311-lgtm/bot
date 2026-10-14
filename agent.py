@@ -1684,7 +1684,7 @@ def skopiuj_przebieg_na_telefon():
         if _DRUZYNA:
             try:
                 _ryw = HOME / "RYWALIZACJA"
-                for _w in _ryw.glob("*.json"):
+                for _w in list(_ryw.glob("*.json")) + list(_ryw.glob("oceny/*.json")):
                     _cel_w = PRZEBIEG_NA_TELEFONIE.parent / "rywalizacja"
                     _cel_w.mkdir(parents=True, exist_ok=True)
                     (_cel_w / _w.name).write_bytes(_w.read_bytes())
