@@ -31368,12 +31368,23 @@ def _skrypt_do_uruchomienia_ktorego_nie_ma(task_text):
     ratowac i niczego nie nadpisujemy.
     """
 
-    for match in _URUCHOM_SKRYPT_RE.finditer(str(task_text or "")):
+    _tekst = str(task_text or "")
+
+    for match in _URUCHOM_SKRYPT_RE.finditer(_tekst):
 
         kandydat = (match.group(1) or "").strip()
 
         if not kandydat:
             continue
+
+        # v480aw: "cd ~/MAIN_2 && python curriculum_race.py" — nazwa
+        # wzgledna liczy sie od katalogu z ostatniego `cd` przed nia,
+        # nie od domu. Bieg 2026-10-14 19:15 (druzyna 2, krok 6): plik
+        # wyladowal w ~/curriculum_race.py zamiast w ~/MAIN_2.
+        if not kandydat.startswith(("~", "/")):
+            _cd = re.findall(r"\bcd\s+([~/][^\s;&|]*)", _tekst[:match.start()])
+            if _cd:
+                kandydat = _cd[-1].rstrip("/") + "/" + kandydat
 
         try:
             if not _resolve_home_relative_path(kandydat).exists():
@@ -44962,14 +44973,39 @@ def run_agent(goal):
             # i log mowil "MAIN wskazał do zapisu null | tee…". Pole
             # jest puste; plik kladzie droga z v428/v429 — zadanie
             # uruchamia plik, ktorego nie ma.
+            # v480aw: "sciezka\n\nkod" — pierwsza linia to sciezka, reszta
+            # to kod do niej. Bieg 2026-10-14 19:15 (druzyna 2, krok 6):
+            # MAIN dal "~/MAIN_2/curriculum_race.py\n\n#!/usr/bin/env
+            # python3…" (6286 znakow), pole poszlo do kosza, a na dysk
+            # trafil 454-znakowy szkic Bartka z kroku 4, i to w ~.
+            _kod_z_pola = ""
             if "\n" in write_target:
-                log(
-                    "MAIN",
-                    "W polu write_engineer_code_to był kod ("
-                    + str(len(write_target)) + " znaków), nie ścieżka "
-                    "— traktuję pole jako puste."
-                )
-                write_target = ""
+                _pierwsza, _, _reszta = write_target.partition("\n")
+                _pierwsza = _pierwsza.strip().strip("`").strip()
+                _reszta = _reszta.strip("\n")
+                _plot = re.match(r"^```[\w+-]*\n(.*?)\n?```\s*$", _reszta.strip(), re.S)
+                if _plot:
+                    _reszta = _plot.group(1)
+                if (
+                    re.fullmatch(r"[~/.\w-][\w~./-]*\.\w{1,8}", _pierwsza)
+                    and _reszta.strip()
+                ):
+                    log(
+                        "MAIN",
+                        "W polu write_engineer_code_to była ścieżka "
+                        + _pierwsza + " i kod (" + str(len(_reszta))
+                        + " znaków) — kładę ten kod pod tę ścieżkę."
+                    )
+                    write_target = _pierwsza
+                    _kod_z_pola = _reszta.rstrip() + "\n"
+                else:
+                    log(
+                        "MAIN",
+                        "W polu write_engineer_code_to był kod ("
+                        + str(len(write_target)) + " znaków), nie ścieżka "
+                        "— traktuję pole jako puste."
+                    )
+                    write_target = ""
 
             # Bartek odzywa sie w nastepnym kroku, gdy MAIN wlasnie
             # poprosil o kod — patrz consult_team().
@@ -45148,6 +45184,7 @@ def run_agent(goal):
             # gdy nie ma go w ŻADNYM z tych dwóch miejsc.
             if (
                 write_target
+                and not _kod_z_pola
                 and Path(str(write_target)).name
                 not in str(team.get("engineer_full", ""))
                 and Path(str(write_target)).name not in str(task_text)
@@ -45197,6 +45234,11 @@ def run_agent(goal):
                     if _kto not in _autorzy_patcha:
                         _autorzy_patcha.append(_kto)
 
+                # v480aw: MAIN podal caly kod w polu — ten kod idzie na
+                # dysk, bez nakladania czyichs poprawek.
+                if _kod_z_pola:
+                    _autorzy_patcha = []
+
                 _patch_wynik = {"applied": False, "reason": ""}
 
                 for _kto in _autorzy_patcha:
@@ -45241,7 +45283,7 @@ def run_agent(goal):
                         _ROLE_DISPLAY_NAME.get(_patch_wynik.get("autor"), "Ktoś") + ": poprawka SZUKAJ/ZAMIEŃ naniesiona na " + _patch_wynik["path"] + " (" + str(_patch_wynik["size_before"]) + " B -> " + str(_patch_wynik["size_after"]) + " B, backup: " + Path(_patch_wynik["backup"]).name + ")."
                     )
 
-                elif any(
+                elif not _kod_z_pola and any(
                     extract_search_replace_blocks(_t)
                     for _t in (
                         [team.get("engineer_full", "")]
@@ -45293,10 +45335,10 @@ def run_agent(goal):
                 engineer_code = (
                     None
                     if _patch_wynik.get("applied")
-                    else _kod_z_wypowiedzi(
+                    else (_kod_z_pola or _kod_z_wypowiedzi(
                         team.get("engineer_full", ""),
                         write_target
-                    )
+                    ))
                 )
 
                 # v293: Bartek milczal w tym kroku (nikt go nie

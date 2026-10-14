@@ -1747,3 +1747,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (druzyna 2 dostaje ocene od razu, zanim jej MAIN zdecyduje). Gdy
      druzyna 2 nie zyje dluzej niz 90 s, ocena idzie bez czekania; gdy nie
      zyje druzyna 1 (pid w ~/RYWALIZACJA/pid_1.txt), druzyna 2 rusza sama.
+ 50. (bieg 2026-10-14 19:15, druzyna 2, krok 6) MAIN podal w
+     write_engineer_code_to "sciezka, pusta linia, caly kod". Program
+     wyrzucal takie pole jako "kod zamiast sciezki", potem kladl
+     454-znakowy szkic Bartka z kroku 4 i to w ~ zamiast w ~/MAIN_2.
+     Teraz: pierwsza linia pola to sciezka, reszta to kod i ten kod
+     idzie pod te sciezke. A gdy zadanie uruchamia plik wzgledny
+     ("cd ~/MAIN_2 && python x.py"), brakujacego pliku szukamy w
+     katalogu z ostatniego `cd`, nie w domu. Dziala dla kazdego celu.
