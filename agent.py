@@ -47456,9 +47456,9 @@ def uruchom_sedziego():
 # Pracuje w procesie druzyny 1, czyli na koncie 1, po kolei z jej
 # zespolem — jedna rozmowa naraz na koncie. Druzyna 2 dostaje jego
 # ocene przez ~/RYWALIZACJA/ocena_sedziego.json.
-# v480au: Sedzia oddziela wczesniejsza, wspolna prace od tego, co
-# kazda druzyna dodala sama (patrz jak_to_dziala.txt, punkt 47).
-ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Co kilka kroków dostajesz to, co każda drużyna faktycznie wykonała, jej wynik sprawdzony przez program i listę plików w jej folderze. Oceniasz uczciwie, jaka część całego celu jest u każdej drużyny rzeczywiście zrobiona: jako zrobione liczysz to, co ma sprawdzony wynik, a to, co dopiero ruszyło, opisujesz jako rozpoczęte. Wynik potwierdzony przez program waży więcej niż to, co drużyna sama o sobie napisała. Jeśli przed rywalizacją była już wcześniejsza praca nad tym celem, to jest ona wspólnym punktem startu obu drużyn: każdej liczysz tylko to, co sama do niej dodała, a gdy obie zmieniały te same wspólne pliki, rozdzielasz, czyj wkład jest czyj, i piszesz wprost, gdy tego nie da się ustalić. W "ocena" piszesz krótko i konkretnie, co drużyna ma, czego jej brakuje i co najbardziej posunęłoby ją do przodu. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, żeby ją uczciwie rozstrzygnąć, a w "uzasadnienie" piszesz, na jakiej podstawie. Twoją ocenę dostają obie drużyny, więc piszesz ją tak, żeby każda mogła z niej skorzystać.
+# v480av: Sedzia sprawdza tez, czy kazda druzyna pracuje w swoim folderze
+# i nie wchodzi drugiej w droge (patrz jak_to_dziala.txt, punkt 47).
+ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Co kilka kroków dostajesz to, co każda drużyna faktycznie wykonała, jej wynik sprawdzony przez program i listę plików w jej folderze. Oceniasz uczciwie, jaka część całego celu jest u każdej drużyny rzeczywiście zrobiona: jako zrobione liczysz to, co ma sprawdzony wynik, a to, co dopiero ruszyło, opisujesz jako rozpoczęte. Wynik potwierdzony przez program waży więcej niż to, co drużyna sama o sobie napisała. Patrzysz też, gdzie każda drużyna pracuje: według zasad gry swoją pracę buduje we własnym folderze, a folder rywala i wcześniejszą wspólną pracę może czytać. Dostajesz do tego listę komend i plików, których drużyna ostatnio używała. Gdy widzisz, że drużyna zmienia coś w folderze drugiej, przeszkadza jej albo buduje swoją pracę poza swoim folderem, piszesz to wprost w jej ocenie i w uzasadnieniu, a tę część pracy liczysz jej dopiero wtedy, gdy przeniesie ją do siebie. W "ocena" piszesz krótko i konkretnie, co drużyna ma, czego jej brakuje i co najbardziej posunęłoby ją do przodu. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, żeby ją uczciwie rozstrzygnąć, a w "uzasadnienie" piszesz, na jakiej podstawie. Twoją ocenę dostają obie drużyny, więc piszesz ją tak, żeby każda mogła z niej skorzystać.
 
 {
   "druzyna_1": {"procent": 0, "ocena": ""},
@@ -47487,6 +47487,29 @@ def _podsumowania_z(katalog, n=8):
                                 or data.get("error") or ""), 300),
         })
     return _human_task_summary_lines(wpisy)
+
+
+def _gdzie_pracowala(katalog, n=8, ile=30):
+    """v480av: komendy i cele narzedzi z ostatnich krokow druzyny — po nich
+    Sedzia widzi, w jakich folderach druzyna naprawde pracowala."""
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return ""
+    linie = []
+    for f in pliki:
+        data = read_json(f, {})
+        if not isinstance(data, dict):
+            continue
+        for t in data.get("tool_trace") or []:
+            if not isinstance(t, dict):
+                continue
+            co = str(t.get("komenda") or t.get("cel_akcji") or "").strip()
+            if not co:
+                continue
+            linie.append("- " + str(t.get("tool") or "?") + ": " + short(co, 160))
+    linie = linie[-ile:]
+    return "\n".join(linie)
 
 
 def _pliki_druzyny(numer, ile=40):
@@ -47527,6 +47550,8 @@ def _stan_druzyny_dla_sedziego(numer):
         "Ostatnie kroki:\n" + (_podsumowania_z(katalog) or "(jeszcze żadnych)") + "\n"
         "Wynik sprawdzony przez program: " + wynik + "\n"
         "Pliki w folderze: " + _pliki_druzyny(numer) + "\n"
+        "Ostatnio używane komendy i pliki:\n"
+        + (_gdzie_pracowala(katalog) or "(brak)") + "\n"
     )
 
 

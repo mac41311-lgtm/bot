@@ -1726,11 +1726,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        limit wyczerpany przez jedna druzyne widzi tez druga; w zwyklym
        programie to ta sama sciezka co dotad; zapis przez plik tymczasowy.
 
- 47. (uzytkownik 2026-10-14) Sedzia w rywalizacji dostal w poczatkowym
-     prompcie jedno zdanie: praca sprzed rywalizacji (gdy cel jest
-     kontynuacja starego) jest wspolnym punktem startu obu druzyn, kazdej
-     liczy tylko to, co sama dodala, a gdy obie zmienialy te same wspolne
-     pliki — rozdziela, czyj wklad jest czyj, albo pisze wprost, ze tego
-     nie da sie ustalic. Przy nowym celu wczesniejszej pracy nie ma, wiec
-     zdanie po prostu nie ma zastosowania. Nowy prompt dostaje nowa
-     rozmowa Sedziego.
+ 47. (uzytkownik 2026-10-14) Sedzia w rywalizacji pilnuje tez, gdzie
+     druzyny pracuja: przy kazdej ocenie (co 5 krokow) dostaje liste komend
+     i plikow, ktorych kazda druzyna ostatnio uzywala (z tool_trace jej
+     ostatnich wynikow), a w jego poczatkowym prompcie jest zdanie, ze
+     wedlug zasad gry kazda buduje u siebie, folder rywala i wczesniejsza
+     wspolna prace moze czytac; gdy druzyna zmienia cos u drugiej,
+     przeszkadza jej albo buduje poza swoim folderem, Sedzia pisze to w
+     ocenie, a te prace liczy jej dopiero po przeniesieniu do siebie.
+     Dziala dla kazdego celu. Nowy prompt dostaje nowa rozmowa Sedziego.
