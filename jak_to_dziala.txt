@@ -1634,3 +1634,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (ulamek sekundy); gdy nie wyjdzie, zostaje stare przez Wi-Fi;
      - ANDROID_SERIAL wskazuje wybrane urzadzenie, wiec `adb shell` bez -s
        nie trafia na "more than one device".
+
+ 41. (uzytkownik 2026-10-14) ADB dziala tylko przez Wi-Fi, a zapis, przez
+     co program sie wylacza, ma powstawac zawsze.
+
+     CO ZMIENIONE:
+     - memory/przebieg/dziennik_pracy.log: co minute czas, krok, wolna
+       pamiec, swap, rozmiar programu, liczba procesow, co 5 min bateria —
+       bez ADB;
+     - raport zamkniecie_*.txt powstaje od razu przy starcie, takze bez
+       ADB: ostatni slad, ostatnie 20 minut dziennika, logi samej
+       aplikacji Termux; powod od Androida dopisuje sie, gdy ADB wroci;
+     - ochrona Termuksa (punkt 39) wlacza sie tez wtedy, gdy ADB pojawi
+       sie dopiero w trakcie biegu.

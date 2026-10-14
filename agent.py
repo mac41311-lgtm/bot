@@ -8827,6 +8827,16 @@ def _adb_uzywaj(device):
     """
     if device:
         os.environ["ANDROID_SERIAL"] = str(device)
+        # v480an: raport o zamknieciu czekal na ADB.
+        plik = _raport_czeka_na_adb[0]
+        if plik:
+            _raport_czeka_na_adb[0] = None
+            _threading.Thread(target=_dopisz_powod_z_androida, args=(plik,),
+                              name="raport-zamkniecia", daemon=True).start()
+        # v480an: start bez Wi-Fi — ochrona Termuksa, gdy ADB sie pojawi.
+        if not _chron_zrobione[0] and not _PO_AKTUALIZACJI:
+            _threading.Thread(target=chron_termuksa_przed_zamykaniem,
+                              name="ochrona-termuksa", daemon=True).start()
 
 
 def _adb_polacz_lokalnie(timeout=3):
@@ -11781,7 +11791,11 @@ def zacznij_oddech():
     _oddech_zapisz()
 
     def _petla():
+        ostatni_wpis = 0.0
         while True:
+            if time.time() - ostatni_wpis >= 60:
+                ostatni_wpis = time.time()
+                _dziennik_oddechu_dopisz()
             time.sleep(_ODDECH_CO_S)
             if _oddech_zostaw:
                 return
@@ -11840,12 +11854,162 @@ _WAZNOSC_PO_LUDZKU = {
 }
 
 
+# v480an: uzytkownik (2026-10-14): ADB dziala tylko przez Wi-Fi, a
+# chce miec zapisane, co sie dzialo i przez co program sie wylacza.
+# Dziennik pisze sie bez ADB: co minute linia z pamiecia, rozmiarem
+# programu, liczba procesow, co 5 min bateria. Raport po naglym koncu
+# powstaje od razu z tego dziennika; powod od Androida (przez ADB)
+# dopisujemy pozniej, gdy ADB wroci — Android pamieta ostatnie
+# zamkniecia Termuksa, wiec da sie to sprawdzic i po godzinie.
+_DZIENNIK_ODDECHU = PRZEBIEG_DIR / "dziennik_pracy.log"
+_DZIENNIK_MAKS_B = 1500000
+_raport_czeka_na_adb = [None]
+_ostatnia_bateria = [0.0, ""]
+
+
+def _kb_z_pliku(plik, klucz):
+    try:
+        with open(plik, encoding="utf-8") as f:
+            for linia in f:
+                if linia.startswith(klucz):
+                    return int(linia.split()[1])
+    except Exception:
+        pass
+    return None
+
+
+def _bateria_krotko():
+    """Co 5 min: "bateria 54% (ładuje, 31.2°C)"; pomiedzy — ostatni odczyt."""
+    if time.time() - _ostatnia_bateria[0] < 300:
+        return _ostatnia_bateria[1]
+    _ostatnia_bateria[0] = time.time()
+    try:
+        r = subprocess.run(["termux-battery-status"], capture_output=True,
+                           text=True, timeout=8)
+        b = json.loads(r.stdout or "{}")
+        _ostatnia_bateria[1] = (
+            "bateria " + str(b.get("percentage", "?")) + "% ("
+            + str(b.get("status", "?")).lower() + ", "
+            + str(b.get("temperature", "?"))[:4] + "°C)"
+        )
+    except Exception:
+        _ostatnia_bateria[1] = ""
+    return _ostatnia_bateria[1]
+
+
+def _dziennik_oddechu_dopisz():
+    """Jedna linia stanu telefonu i programu. Nigdy nie rzuca."""
+    try:
+        wolna = _kb_z_pliku("/proc/meminfo", "MemAvailable:")
+        swap = _kb_z_pliku("/proc/meminfo", "SwapFree:")
+        rss = _kb_z_pliku("/proc/self/status", "VmRSS:")
+        try:
+            procesow = sum(1 for p in os.listdir("/proc") if p.isdigit())
+        except Exception:
+            procesow = "?"
+        czesci = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "krok " + str(_biezacy_krok),
+            "wolna pamięć " + (str(wolna // 1024) if wolna else "?") + " MB",
+            "swap wolny " + (str(swap // 1024) if swap is not None else "?") + " MB",
+            "program " + (str(rss // 1024) if rss else "?") + " MB",
+            "procesów " + str(procesow),
+        ]
+        bat = _bateria_krotko()
+        if bat:
+            czesci.append(bat)
+        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            if _DZIENNIK_ODDECHU.stat().st_size > _DZIENNIK_MAKS_B:
+                os.replace(_DZIENNIK_ODDECHU,
+                           _DZIENNIK_ODDECHU.with_suffix(".log.1"))
+        except Exception:
+            pass
+        with open(_DZIENNIK_ODDECHU, "a", encoding="utf-8") as f:
+            f.write(" | ".join(czesci) + "\n")
+    except Exception:
+        pass
+
+
+def _ostatnie_linie(plik, ile):
+    try:
+        with open(plik, encoding="utf-8", errors="replace") as f:
+            return f.readlines()[-ile:]
+    except Exception:
+        return []
+
+
+def _na_telefon(plik):
+    """Kopia do AEL-MINI (widac w menedzerze plikow); zwraca, gdzie lezy."""
+    try:
+        if PRZEBIEG_NA_TELEFONIE.parent.exists():
+            PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(plik, PRZEBIEG_NA_TELEFONIE / Path(plik).name)
+            return str(PRZEBIEG_NA_TELEFONIE / Path(plik).name)
+    except Exception:
+        pass
+    return str(plik)
+
+
+def _powod_z_androida():
+    """(linie raportu, jedno zdanie) z dumpsys exit-info i logcat przez ADB."""
+    surowe = _adb_szybko("dumpsys activity exit-info com.termux", 15)
+    wpisy = _wpisy_exit_info(surowe)
+    zabicia = _adb_szybko(
+        "logcat -d -b events,main,system 2>/dev/null | "
+        "grep -iE 'am_kill|am_proc_died|lowmemorykiller|lmkd|"
+        "PhantomProcess|am_anr' | grep -i termux | tail -n 30",
+        20
+    )
+    linie = ["", "Co zapisał Android (najnowsze zamknięcia Termuksa):"]
+    streszczenie = ""
+    if wpisy:
+        for w in wpisy:
+            imp = str(w.get("importance", ""))
+            linie.append(
+                "- " + str(w.get("timestamp", "?"))
+                + " | powód: " + str(w.get("reason", "?"))
+                + " | podpowód: " + str(w.get("subreason", "?"))
+                + " | opis: " + str(w.get("description", "-"))
+                + " | pamięć procesu: " + str(w.get("pss", "?"))
+                + " | stan: " + _WAZNOSC_PO_LUDZKU.get(imp, imp or "?")
+            )
+        n = wpisy[0]
+        streszczenie = (
+            "Android: " + str(n.get("timestamp", "?"))[:16]
+            + ", powód " + str(n.get("reason", "?"))
+            + (", opis " + str(n["description"]) if n.get("description") else "")
+        )
+    else:
+        linie.append("(brak wpisów albo telefon nie odpowiedział)")
+        streszczenie = "Android nie podał powodu"
+    linie += ["", "Logcat (wpisy o zabiciu procesów Termuksa):",
+              (zabicia.strip() or "(nic — bufor mógł się już nadpisać)")]
+    linie += ["", "Surowy dumpsys exit-info:", (surowe or "")[:12000]]
+    return linie, streszczenie
+
+
+def _dopisz_powod_z_androida(plik):
+    """ADB wrocilo: dopisuje do czekajacego raportu powod od Androida."""
+    try:
+        linie, streszczenie = _powod_z_androida()
+        with open(plik, "a", encoding="utf-8") as f:
+            f.write("\n(dopisane po powrocie ADB, "
+                    + datetime.now().strftime("%H:%M") + ")\n"
+                    + "\n".join(linie) + "\n")
+        gdzie = _na_telefon(plik)
+        log("PROGRAM", "Do raportu o zamknięciu dopisałem powód od Androida — "
+            + streszczenie + ". Raport: " + gdzie)
+    except Exception:
+        pass
+
+
 def raport_poprzedniego_zamkniecia():
     """
     Gdy poprzedni bieg nie wyszedl czysto, zapisuje raport: ostatni
-    oddech (kiedy, ktory krok, ile bylo wolnej pamieci) + co Android
-    zapisal o zamknieciu Termuksa. Jedna linia w logu, reszta w pliku.
-    Nigdy nie rzuca.
+    oddech, koncowka dziennika pracy, logi samego Termuksa, a gdy jest
+    ADB — co Android zapisal o zamknieciu. Bez ADB powod od Androida
+    dopisze sie, gdy ADB wroci. Jedna linia w logu. Nigdy nie rzuca.
     """
     global _poprzedni_oddech
 
@@ -11867,55 +12031,35 @@ def raport_poprzedniego_zamkniecia():
         else:
             linie.append("Bez sygnału — proces zabity od razu (SIGKILL).")
 
-        streszczenie = ""
-        if adb_target:
-            surowe = _adb_szybko("dumpsys activity exit-info com.termux", 15)
-            wpisy = _wpisy_exit_info(surowe)
-            zabicia = _adb_szybko(
-                "logcat -d -b events,main,system 2>/dev/null | "
-                "grep -iE 'am_kill|am_proc_died|lowmemorykiller|lmkd|"
-                "PhantomProcess|am_anr' | grep -i termux | tail -n 30",
-                20
-            )
-            linie += ["", "Co zapisał Android (najnowsze zamknięcia Termuksa):"]
-            if wpisy:
-                for w in wpisy:
-                    imp = str(w.get("importance", ""))
-                    linie.append(
-                        "- " + str(w.get("timestamp", "?"))
-                        + " | powód: " + str(w.get("reason", "?"))
-                        + " | podpowód: " + str(w.get("subreason", "?"))
-                        + " | opis: " + str(w.get("description", "-"))
-                        + " | pamięć procesu: " + str(w.get("pss", "?"))
-                        + " | stan: " + _WAZNOSC_PO_LUDZKU.get(imp, imp or "?")
-                    )
-                n = wpisy[0]
-                streszczenie = (
-                    "Android: " + str(n.get("timestamp", "?"))[:16]
-                    + ", powód " + str(n.get("reason", "?"))
-                    + (", opis " + str(n["description"]) if n.get("description") else "")
-                )
-            else:
-                linie.append("(brak wpisów albo telefon nie odpowiedział)")
-            linie += ["", "Logcat (wpisy o zabiciu procesów Termuksa):",
-                      (zabicia.strip() or "(nic — bufor mógł się już nadpisać)")]
-            linie += ["", "Surowy dumpsys exit-info:", (surowe or "")[:12000]]
-        else:
-            linie += ["", "ADB niedostępne — nie zapytałem Androida o powód."]
-            streszczenie = "ADB niedostępne, powodu z Androida brak"
+        linie += ["", "Ostatnie minuty z dziennika pracy (co minutę):"]
+        linie += [l.rstrip("\n") for l in _ostatnie_linie(_DZIENNIK_ODDECHU, 20)] \
+            or ["(pusty)"]
 
-        tekst = "\n".join(linie) + "\n"
-        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
-        plik = PRZEBIEG_DIR / ("zamkniecie_" + teraz + ".txt")
-        plik.write_text(tekst, encoding="utf-8")
-        gdzie = str(plik)
+        # Termux widzi bez ADB wlasne logi Androida (swojej aplikacji).
         try:
-            if PRZEBIEG_NA_TELEFONIE.parent.exists():
-                PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(plik, PRZEBIEG_NA_TELEFONIE / plik.name)
-                gdzie = str(PRZEBIEG_NA_TELEFONIE / plik.name)
+            r = subprocess.run(["logcat", "-d", "-t", "400"],
+                               capture_output=True, text=True, timeout=10)
+            wlasne = [l for l in (r.stdout or "").splitlines()
+                      if re.search(r"termux|kill|destroy|memory|died", l, re.I)]
+            linie += ["", "Logi aplikacji Termux (bez ADB):"]
+            linie += wlasne[-40:] or ["(nic)"]
         except Exception:
             pass
+
+        if adb_target:
+            dalej, streszczenie = _powod_z_androida()
+            linie += dalej
+        else:
+            linie += ["", "ADB teraz niedostępne — powód od Androida dopiszę "
+                      "tutaj, gdy ADB wróci."]
+            streszczenie = "powód od Androida dopiszę, gdy wróci ADB"
+
+        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+        plik = PRZEBIEG_DIR / ("zamkniecie_" + teraz + ".txt")
+        plik.write_text("\n".join(linie) + "\n", encoding="utf-8")
+        gdzie = _na_telefon(plik)
+        if not adb_target:
+            _raport_czeka_na_adb[0] = plik
 
         log(
             "PROGRAM",
@@ -11947,6 +12091,9 @@ _OCHRONA_TERMUKSA = [
 ]
 
 
+_chron_zrobione = [False]
+
+
 def chron_termuksa_przed_zamykaniem():
     """
     Raz na start: przez ADB wylaczamy to, co Android sam moze
@@ -11955,8 +12102,12 @@ def chron_termuksa_przed_zamykaniem():
     a nasz Python i wszystko, co odpala, to wlasnie one). Na brak
     pamieci nie ma ustawienia — to widac potem w raporcie.
     """
-    if _PO_AKTUALIZACJI or not adb_target:
+    if (
+        _PO_AKTUALIZACJI or _chron_zrobione[0]
+        or not (adb_target or os.environ.get("ANDROID_SERIAL"))
+    ):
         return
+    _chron_zrobione[0] = True
     udane, nieudane = [], []
     for nazwa, polecenie in _OCHRONA_TERMUKSA:
         wynik = _adb_szybko(polecenie + " && echo AEL_OK", 10)
