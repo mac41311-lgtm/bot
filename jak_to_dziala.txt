@@ -1808,3 +1808,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  60. (2026-10-14) Druzyna 2 wznowiona po padnieciu liczy kroki od 1 —
      ocena rundy sprzed startu jej biegu jest dla niej stara, wiec Sedzia
      ocenia te runde od nowa (wczesniej dostawala oceny sprzed godziny).
+ 61. (2026-10-14) DONE zamyka bieg tylko wtedy, gdy kazdy z pytanych
+     (Tomek i Marek) wprost potwierdzi "CEL ZROBIONY". Kto nie
+     potwierdza — choc nie pisze "cel nie jest zrobiony" — liczy sie jako
+     "nie" i cel trwa.

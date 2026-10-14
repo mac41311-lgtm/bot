@@ -46087,7 +46087,14 @@ def run_agent(goal):
                             log("MAIN", _rola + " O DONE MAIN-A: " + short(_t, 300))
                             if _mowi_cel_zrobiony(_t):
                                 _ktos_mowi_zrobione = True
-                            elif re.search(
+                            else:
+                                # v480bh: bieg 2026-10-14 22:17 — Tomek
+                                # "CEL ZROBIONY — dla tej sesji", Marek "Nie
+                                # zgadzam sie… Tego nie mamy" bez slow "cel
+                                # nie jest zrobiony", i bieg sie zakonczyl.
+                                # Kto nie potwierdza wprost, ten mowi "nie".
+                                _ktos_mowi_niezrobione = True
+                            if re.search(
                                 r"\bcel\W+(?:\w+\W+){0,2}nie\W+(?:jest\W+)?zrobiony",
                                 " ".join(_t.lower().split())
                             ):
