@@ -1697,3 +1697,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - zwykly program (~/agent) nie dostaje nic z rywalizacji: jego
        rozmowy, stan i logi zostaja takie, jakie byly; obie druzyny
        zaczynaja od czystych rozmow, a pliki pracy na telefonie sa wspolne.
+
+ 45. (uzytkownik 2026-10-14) W rywalizacji osobny, bezstronny agent — Sedzia
+     (rola ARBITER) — co 5 krokow ocenia obie druzyny, tak jak Ela ocenia
+     postep w zwyklym programie.
+
+     JAK DZIALA:
+     - dostaje dla kazdej druzyny: ostatnie 8 wynikow krokow, jej wynik
+       sprawdzony przez program (wynik.json) i liste plikow w ~/MAIN_N;
+     - oddaje procent i krotka ocene dla kazdej druzyny, kto prowadzi (albo
+       remis) i dlaczego; jego prompt mowi wprost, ze ocenia uczciwie i obie
+       druzyny jednakowo;
+     - pracuje w procesie druzyny 1 (konto 1, po kolei z jej zespolem);
+       ocena trafia raz do MAIN-a druzyny 1 i przez
+       ~/RYWALIZACJA/ocena_sedziego.json do MAIN-a druzyny 2;
+     - w rywalizacji zastepuje automatyczna ocene Eli; Ela odzywa sie tylko,
+       gdy MAIN ja zawola; w zwyklym programie wszystko jak dotad.

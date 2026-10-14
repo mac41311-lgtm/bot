@@ -124,6 +124,7 @@ _IMIONA_ROL = {
     "PROGRESS_ESTIMATOR": "Ela",
     "CODE_REVIEWER": "Piotr",
     "CODE_FIXER": "Ania",
+    "ARBITER": "Sędzia",
 }
 
 
@@ -2172,6 +2173,7 @@ _ROLE_SPEAKERS = {
     "CODE_FIXER": (
         _IMIONA_ROL["CODE_FIXER"], "bright_green", "poprawka"
     ),
+    "ARBITER": (_IMIONA_ROL["ARBITER"], "bright_red", "ocena rywalizacji"),
 }
 
 
@@ -3148,6 +3150,7 @@ _ROLE_ACCOUNT = {
     "BROWSER": 2,
     "CODE_REVIEWER": 2,
     "CODE_FIXER": 2,
+    "ARBITER": 1,
 }
 
 # v480aq: podzial zwyklego programu — potrzebny, zeby rozpoznac, na
@@ -5041,7 +5044,7 @@ def _goal_briefing_for(name):
 
     # v480aq: w rywalizacji do celu dochodzi raz opis rywalizacji —
     # takze rozmowie, ktora sam cel dostala juz wczesniej.
-    _rywal = _rywalizacja_tekst()
+    _rywal = "" if name == "ARBITER" else _rywalizacja_tekst()
     _odcisk_rywal = (
         hashlib.sha1(_rywal.encode("utf-8")).hexdigest()[:16] if _rywal else ""
     )
@@ -6865,7 +6868,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
 
 # Role, ktore oddaja goly JSON, nie ludzka proze (v315).
-_ROLE_ODDAJE_JSON = {"MAIN", "PROGRESS_ESTIMATOR"}
+_ROLE_ODDAJE_JSON = {"MAIN", "PROGRESS_ESTIMATOR", "ARBITER"}
 
 
 # Ile znakow SAMEGO myslenia przyszlo w ostatniej odpowiedzi, ktora
@@ -7754,6 +7757,8 @@ def deepseek(name, message):
                     PROGRESS_ESTIMATOR_PROMPT,
                 "WOJTEK":
                     WOJTEK_PROMPT,
+                "ARBITER":
+                    ARBITER_PROMPT,
             }
 
             prompt = prompt_map.get(name)
@@ -8543,6 +8548,8 @@ def deepseek(name, message):
                             PROGRESS_ESTIMATOR_PROMPT,
                         "WOJTEK":
                             WOJTEK_PROMPT,
+                        "ARBITER":
+                            ARBITER_PROMPT,
                     }
 
                     prompt = prompt_map.get(name)
@@ -44470,8 +44477,13 @@ def run_agent(goal):
         # v350: zegarek zostaje (to pasek postepu dla uzytkownika,
         # nie budzenie roli do rozmowy), ale MAIN moze poprosic o to
         # takze poza kolejka — patrz _o_kogo_prosi_main().
+        # v480as: w rywalizacji co 5 krokow ocenia Sedzia (obie druzyny);
+        # Ela odzywa sie wtedy tylko na zawolanie MAIN-a.
+        if _DRUZYNA == "1" and step % 5 == 0:
+            ocen_rywalizacje(step)
+
         if (
-            step % 5 == 0
+            (step % 5 == 0 and not _DRUZYNA)
             or "PROGRESS_ESTIMATOR" in _o_kogo_prosi_main(
                 _main_decision_for_team
             )
@@ -47286,6 +47298,10 @@ def _sedzia_petla():
         _juz = 0.0
     widziany_wynik = _juz
     widziana_tablica_rywala = 0.0
+    try:
+        widziana_ocena = _PLIK_OCENY_SEDZIEGO.stat().st_mtime
+    except Exception:
+        widziana_ocena = 0.0
 
     while True:
         try:
@@ -47315,6 +47331,18 @@ def _sedzia_petla():
                         )
                 except Exception:
                     pass
+            # v480as: ocene Sedziego druzyna 1 ma od razu; druzyna 2 z pliku.
+            if _DRUZYNA == "2":
+                m3 = _mtime(_PLIK_OCENY_SEDZIEGO)
+                if m3 and m3 != widziana_ocena:
+                    widziana_ocena = m3
+                    try:
+                        o = json.loads(_PLIK_OCENY_SEDZIEGO.read_text(encoding="utf-8"))
+                        with _sedzia_lock:
+                            _sedzia_wiadomosci.append(_ocena_zdaniem(o))
+                        log("RYWALIZACJA", _ocena_zdaniem(o))
+                    except Exception:
+                        pass
         except Exception as e:
             try:
                 log("RYWALIZACJA", "Sędzia: " + str(e))
@@ -47333,6 +47361,151 @@ def uruchom_sedziego():
             pass
     _sedzia_watek[0] = _threading.Thread(target=_sedzia_petla, name="sedzia", daemon=True)
     _sedzia_watek[0].start()
+
+
+# v480as: sedzia-agent rywalizacji. Uzytkownik (2026-10-14): tak jak Ela
+# co 5 krokow mowi, ile celu jest zrobione, tak w rywalizacji osobny,
+# bezstronny agent dostaje to, co potrzebne do oceny obu druzyn, i co
+# 5 krokow mowi obu, jak stoja — uczciwie. W rywalizacji zastepuje
+# automatyczna ocene Eli (Ela odzywa sie tylko, gdy MAIN ja zawola).
+# Pracuje w procesie druzyny 1, czyli na koncie 1, po kolei z jej
+# zespolem — jedna rozmowa naraz na koncie. Druzyna 2 dostaje jego
+# ocene przez ~/RYWALIZACJA/ocena_sedziego.json.
+ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Co kilka kroków dostajesz to, co każda drużyna faktycznie wykonała, jej wynik sprawdzony przez program i listę plików w jej folderze. Oceniasz uczciwie, jaka część całego celu jest u każdej drużyny rzeczywiście zrobiona: jako zrobione liczysz to, co ma sprawdzony wynik, a to, co dopiero ruszyło, opisujesz jako rozpoczęte. Wynik potwierdzony przez program waży więcej niż to, co drużyna sama o sobie napisała. W "ocena" piszesz krótko i konkretnie, co drużyna ma, czego jej brakuje i co najbardziej posunęłoby ją do przodu. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, żeby ją uczciwie rozstrzygnąć, a w "uzasadnienie" piszesz, na jakiej podstawie. Twoją ocenę dostają obie drużyny, więc piszesz ją tak, żeby każda mogła z niej skorzystać.
+
+{
+  "druzyna_1": {"procent": 0, "ocena": ""},
+  "druzyna_2": {"procent": 0, "ocena": ""},
+  "prowadzi": "remis",
+  "uzasadnienie": ""
+}"""
+
+_PLIK_OCENY_SEDZIEGO = HOME / "RYWALIZACJA" / "ocena_sedziego.json"
+
+
+def _podsumowania_z(katalog, n=8):
+    """Ostatnie wyniki krokow druzyny (po czasie zapisu) jako zdania."""
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return ""
+    wpisy = []
+    for f in pliki:
+        data = read_json(f, {})
+        if not isinstance(data, dict):
+            continue
+        wpisy.append({
+            "status": data.get("status"),
+            "report": short(str(data.get("report") or data.get("message")
+                                or data.get("error") or ""), 300),
+        })
+    return _human_task_summary_lines(wpisy)
+
+
+def _pliki_druzyny(numer, ile=40):
+    folder = HOME / ("MAIN_" + str(numer))
+    linie = []
+    try:
+        for korzen, katalogi, pliki in os.walk(folder):
+            katalogi[:] = sorted(k for k in katalogi if not k.startswith("."))
+            if len(Path(korzen).relative_to(folder).parts) >= 2:
+                katalogi[:] = []
+            for nazwa in sorted(pliki):
+                if nazwa.startswith("."):
+                    continue
+                p = Path(korzen) / nazwa
+                try:
+                    rozmiar = _po_ludzku_rozmiar(p.stat().st_size)
+                except Exception:
+                    rozmiar = "?"
+                linie.append(str(p.relative_to(folder)) + " (" + rozmiar + ")")
+                if len(linie) >= ile:
+                    return ", ".join(linie) + ", …"
+    except Exception:
+        pass
+    return ", ".join(linie) if linie else "(pusto)"
+
+
+def _stan_druzyny_dla_sedziego(numer):
+    katalog = RESULTS_DIR if numer == _DRUZYNA else (
+        (_DRUZYNA2_DIR if numer == "2" else _DRUZYNA1_DIR) / "results"
+    )
+    try:
+        w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
+        wynik = _werdykt_zdaniem(w, "Ostatni wynik.json")
+    except Exception:
+        wynik = "jeszcze żadnego"
+    return (
+        "Drużyna " + numer + " (folder ~/MAIN_" + numer + "):\n"
+        "Ostatnie kroki:\n" + (_podsumowania_z(katalog) or "(jeszcze żadnych)") + "\n"
+        "Wynik sprawdzony przez program: " + wynik + "\n"
+        "Pliki w folderze: " + _pliki_druzyny(numer) + "\n"
+    )
+
+
+def ocen_rywalizacje(step):
+    """
+    Druzyna 1, co 5 krokow: Sedzia ocenia obie druzyny. Ocena idzie do
+    MAIN-a druzyny 1 i do pliku, z ktorego bierze ja druzyna 2. Nigdy
+    nie rzuca.
+    """
+    if _DRUZYNA != "1":
+        return None
+    try:
+        prompt = (
+            "\n" + _stan_druzyny_dla_sedziego("1") + "\n"
+            + _stan_druzyny_dla_sedziego("2")
+        )
+        parsed = parse_json(deepseek("ARBITER", prompt))
+        if not isinstance(parsed, dict):
+            return None
+
+        def _druz(k):
+            d = parsed.get(k) if isinstance(parsed.get(k), dict) else {}
+            _l = re.search(r"-?\d+(?:[.,]\d+)?", str(d.get("procent", 0)))
+            try:
+                pr = max(0, min(100, int(float(_l.group().replace(",", "."))))) if _l else 0
+            except Exception:
+                pr = 0
+            return {"procent": pr, "ocena": short(str(d.get("ocena") or ""), 400)}
+
+        ocena = {
+            "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "krok_druzyny_1": int(step or 0),
+            "druzyna_1": _druz("druzyna_1"),
+            "druzyna_2": _druz("druzyna_2"),
+            "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
+            "uzasadnienie": short(str(parsed.get("uzasadnienie") or ""), 400),
+        }
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _PLIK_OCENY_SEDZIEGO.with_suffix(".tmp")
+        tmp.write_text(json.dumps(ocena, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, _PLIK_OCENY_SEDZIEGO)
+        with _sedzia_lock:
+            _sedzia_wiadomosci.append(_ocena_zdaniem(ocena))
+        try:
+            print_progress_bar(step, ocena["druzyna_1"]["procent"], ocena["druzyna_1"]["ocena"])
+        except Exception:
+            pass
+        log_event("ocena_sedziego", ocena)
+        return ocena
+    except Exception as e:
+        log("RYWALIZACJA", "Ocena Sędziego nie wyszła (pomijam): " + str(e))
+        return None
+
+
+def _ocena_zdaniem(o):
+    def _zd(t):
+        t = str(t or "").strip()
+        return t if t.endswith((".", "!", "?")) else t + "."
+    _prow = str(o.get("prowadzi", "")).strip()
+    return (
+        "Ocena Sędziego (" + str(o.get("czas", "")) + "): "
+        "drużyna 1 — " + str(o["druzyna_1"]["procent"]) + "%: " + _zd(o["druzyna_1"]["ocena"])
+        + " Drużyna 2 — " + str(o["druzyna_2"]["procent"]) + "%: " + _zd(o["druzyna_2"]["ocena"])
+        + " Prowadzi: " + ("remis" if _prow.lower().startswith("remis") else "drużyna " + _prow)
+        + (" — " + _zd(o["uzasadnienie"]) if o.get("uzasadnienie") else ".")
+    )
 
 
 def _sedzia_blok():
