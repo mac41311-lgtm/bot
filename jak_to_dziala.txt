@@ -1762,3 +1762,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ~/RYWALIZACJA/przystanki_2.txt ze swoim pid — druzyna 1 czeka tylko
      na druzyne 2, ktora przystanki zna; co 2 min pisze w terminalu, ile
      juz czeka i w ktorym kroku jest druzyna 2.
+ 52. (uzytkownik 2026-10-14) ZMIANA punktu 49: druzyny NIE czekaja na
+     siebie. Kazda na swoim kroku 5, 10, 15… staje na chwile i dostaje
+     ocene Sedziego — kto pierwszy dojdzie, ten pierwszy dostaje, druga
+     dostaje swoja pozniej, na swoim kroku. Sedzia jest jeden (konto 1,
+     proces druzyny 1). Druzyna 2 zapisuje prosbe
+     (~/RYWALIZACJA/prosba_oceny_2.json) i czeka; watek druzyny 1 robi
+     ocene w pierwszej wolnej chwili konta 1 — kazda rozmowa z DeepSeek
+     idzie przez jedna blokade (_KOLEJKA_KONTA), wiec na koncie 1 nigdy
+     nie mowia dwaj naraz. Ocena dla 1 trafia do MAIN-a 1, dla 2 do
+     ~/RYWALIZACJA/ocena_sedziego.json i MAIN-a 2. Gdy druzyna 1 nie zyje
+     albo ma wersje bez obslugi prosb, druzyna 2 idzie dalej bez oceny.
+     Przeladowanie po aktualizacji czeka, az Sedzia skonczy odpowiedz.

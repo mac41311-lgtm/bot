@@ -7695,7 +7695,17 @@ def _bez_stopki_deepseeka(text):
     return _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
 
 
+# v480ay: jedna rozmowa naraz na koncie — takze gdy Sedzia odpowiada
+# na prosbe druzyny 2 z osobnego watku (patrz _obsluguj_prosby_druzyny_2).
+_KOLEJKA_KONTA = _threading.RLock()
+
+
 def deepseek(name, message):
+    with _KOLEJKA_KONTA:
+        return _deepseek_jedna_rozmowa(name, message)
+
+
+def _deepseek_jedna_rozmowa(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
 
@@ -11757,9 +11767,12 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
     os.environ["AEL_PO_AKTUALIZACJI"] = "1"
     os.environ["AEL_URUCHOMIENIE_ID"] = _URUCHOMIENIE_ID
 
+    # v480ay: Sedzia nie moze zostac przerwany w pol odpowiedzi.
+    _KOLEJKA_KONTA.acquire()
     try:
         os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
     except Exception as e:
+        _KOLEJKA_KONTA.release()
         os.environ.pop("AEL_PO_AKTUALIZACJI", None)
         os.environ.pop("AEL_URUCHOMIENIE_ID", None)
         log("AKTUALIZACJA", "Przeładowanie nie wyszło — zostaję na starej wersji: " + str(e))
@@ -44600,7 +44613,7 @@ def run_agent(goal):
         # takze poza kolejka — patrz _o_kogo_prosi_main().
         # v480as: w rywalizacji co 5 krokow ocenia Sedzia (obie druzyny);
         # Ela odzywa sie wtedy tylko na zawolanie MAIN-a.
-        # v480av: obie druzyny staja na ocene i ruszaja razem.
+        # v480ay: kazda druzyna na swoim kroku 5, 10… dostaje ocene Sedziego.
         if _DRUZYNA and step % 5 == 0:
             przystanek_sedziego(step)
 
@@ -47497,9 +47510,6 @@ def _sedzia_petla():
         time.sleep(_SEDZIA_CO_S)
 
 
-# v480av: ocena Sedziego to wspolny przystanek obu druzyn — kazda co 5
-# swoich krokow staje, druzyna 1 czeka, az stanie tez druzyna 2, Sedzia
-# ocenia obie w tym samym momencie, a potem obie ruszaja razem.
 _ocena_widziana = [None]
 
 
@@ -47522,10 +47532,6 @@ def _wez_ocene_sedziego():
         pass
 
 
-def _plik_przystanku(numer):
-    return _RYWALIZACJA_DIR / ("przystanek_" + str(numer) + ".json")
-
-
 def _zyje(pid):
     try:
         pid = int(pid)
@@ -47539,98 +47545,93 @@ def _zyje(pid):
         return False
 
 
-def _stan_przystanku(numer, krok):
-    try:
-        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
-        p = _plik_przystanku(numer)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"krok": int(krok or 0), "pid": os.getpid(),
-                                   "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}),
-                       encoding="utf-8")
-        os.replace(tmp, p)
-    except Exception:
-        pass
+# v480ay: uzytkownik (2026-10-14) — druzyny nie czekaja na siebie. Kazda
+# na swoim kroku 5, 10, 15… staje na chwile i dostaje ocene Sedziego:
+# kto pierwszy dojdzie, ten pierwszy dostaje. Sedzia jest jeden, na
+# koncie 1, a na jednym koncie mowi naraz tylko jeden agent — prosbe
+# druzyny 2 obsluguje watek druzyny 1 w pierwszej wolnej chwili konta 1
+# (_KOLEJKA_KONTA, patrz deepseek()).
+_PLIK_PROSBY_2 = _RYWALIZACJA_DIR / "prosba_oceny_2.json"
+_PLIK_OBSLUGI_1 = _RYWALIZACJA_DIR / "obsluga_ocen_1.txt"
 
 
-def _sprzatnij_przystanek(numer):
+def _krok_oceny_2():
     try:
-        _plik_przystanku(numer).unlink()
+        return int(json.loads(_PLIK_OCENY_SEDZIEGO.read_text(encoding="utf-8")).get("krok", -1))
     except Exception:
-        pass
+        return -1
 
 
 def przystanek_sedziego(step):
-    """
-    Co 5 krokow kazdej druzyny. Druzyna 1: czeka, az druzyna 2 dojdzie do
-    swojego przystanku (albo przestanie zyc), oddaje glos Sedziemu, potem
-    zwalnia obie. Druzyna 2: zglasza sie i czeka, az druzyna 1 ja zwolni
-    (albo przestanie zyc). Nigdy nie rzuca.
-    """
+    """Co 5 krokow kazdej druzyny: ocena Sedziego dla niej. Nigdy nie rzuca."""
     if not _DRUZYNA:
         return
     try:
-        _stan_przystanku(_DRUZYNA, step)
         if _DRUZYNA == "1":
-            log("RYWALIZACJA", "Krok " + str(step) + ": przystanek na ocenę Sędziego — czekam na drużynę 2.")
-            martwa_od = None
-            _od = time.time()
-            _ostatni_meldunek = time.time()
-            while not _plik_przystanku("2").exists():
-                try:
-                    pid2 = int(_PLIK_PID_DRUZYNY2.read_text().strip())
-                except Exception:
-                    pid2 = 0
-                # v480ax: na przystanek czekamy tylko na druzyne 2, ktora go
-                # zna (wersja sprzed przystankow nigdy by na nim nie stanela).
-                try:
-                    _zna = int((_RYWALIZACJA_DIR / "przystanki_2.txt").read_text().strip()) == pid2
-                except Exception:
-                    _zna = False
-                if _zyje(pid2) and not _zna:
-                    log("RYWALIZACJA", "Drużyna 2 działa jeszcze na wersji bez przystanków — Sędzia ocenia bez czekania.")
-                    break
-                if time.time() - _ostatni_meldunek >= 120:
-                    _ostatni_meldunek = time.time()
-                    try:
-                        _k2 = json.loads((_DRUZYNA2_DIR / "state" / "ostatni_oddech.json").read_text(encoding="utf-8")).get("krok")
-                    except Exception:
-                        _k2 = None
-                    log("RYWALIZACJA", "Wciąż czekam na drużynę 2 (" + str(int((time.time() - _od) // 60)) + " min"
-                        + (", jest w kroku " + str(_k2) if _k2 else "") + ")" + (" — stanie w swoim kroku " + str(((int(_k2) + 4) // 5) * 5) if _k2 else "") + ".")
-                if _zyje(pid2):
-                    martwa_od = None
-                else:
-                    martwa_od = martwa_od or time.time()
-                    # watchdog ja podnosi; gdy nie wstaje, ocena idzie bez czekania
-                    if time.time() - martwa_od > 90:
-                        log("RYWALIZACJA", "Drużyna 2 nie działa — Sędzia ocenia bez czekania.")
-                        break
-                time.sleep(1)
+            with _KOLEJKA_KONTA:
+                ocen_rywalizacje(step, "1")
+            return
+
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _PLIK_PROSBY_2.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"krok": int(step or 0), "pid": os.getpid()}), encoding="utf-8")
+        os.replace(tmp, _PLIK_PROSBY_2)
+        log("RYWALIZACJA", "Krok " + str(step) + ": czekam na ocenę Sędziego.")
+        _od = time.time()
+        _meldunek = time.time()
+        while _krok_oceny_2() != int(step or 0):
             try:
-                ocen_rywalizacje(step)
-            finally:
-                _sprzatnij_przystanek("2")
-                _sprzatnij_przystanek("1")
-            log("RYWALIZACJA", "Ocena gotowa — obie drużyny ruszają.")
-        else:
-            log("RYWALIZACJA", "Krok " + str(step) + ": przystanek na ocenę Sędziego — czekam na drużynę 1.")
-            while _plik_przystanku("2").exists():
-                try:
-                    pid1 = int((_RYWALIZACJA_DIR / "pid_1.txt").read_text().strip())
-                except Exception:
-                    pid1 = 0
-                if not _zyje(pid1):
-                    log("RYWALIZACJA", "Drużyna 1 nie działa — ruszam dalej.")
-                    _sprzatnij_przystanek("2")
-                    break
-                time.sleep(1)
-            _wez_ocene_sedziego()
-    except Exception as e:
-        _sprzatnij_przystanek(_DRUZYNA)
+                pid1 = int((_RYWALIZACJA_DIR / "pid_1.txt").read_text().strip())
+            except Exception:
+                pid1 = 0
+            try:
+                _obsluguje = int(_PLIK_OBSLUGI_1.read_text().strip()) == pid1
+            except Exception:
+                _obsluguje = False
+            if not (_zyje(pid1) and _obsluguje):
+                log("RYWALIZACJA", "Drużyna 1 nie może teraz dać oceny Sędziego — idę dalej bez niej.")
+                break
+            if not _PLIK_PROSBY_2.exists() and _krok_oceny_2() != int(step or 0):
+                # obsluzona, ale ocena nie wyszla
+                log("RYWALIZACJA", "Ocena Sędziego nie wyszła — idę dalej.")
+                break
+            if time.time() - _meldunek >= 120:
+                _meldunek = time.time()
+                log("RYWALIZACJA", "Wciąż czekam na ocenę Sędziego ("
+                    + str(int((time.time() - _od) // 60)) + " min) — konto 1 jest zajęte rozmową drużyny 1.")
+            time.sleep(2)
         try:
-            log("RYWALIZACJA", "Przystanek: " + str(e))
+            _PLIK_PROSBY_2.unlink()
         except Exception:
             pass
+        _wez_ocene_sedziego()
+    except Exception as e:
+        try:
+            log("RYWALIZACJA", "Ocena Sędziego: " + str(e))
+        except Exception:
+            pass
+
+
+def _obsluguj_prosby_druzyny_2():
+    """Druzyna 1, watek: prosba druzyny 2 -> Sedzia w wolnej chwili konta 1."""
+    while True:
+        try:
+            if _PLIK_PROSBY_2.exists():
+                pr = json.loads(_PLIK_PROSBY_2.read_text(encoding="utf-8"))
+                krok2 = int(pr.get("krok", 0))
+                if krok2 != _krok_oceny_2():
+                    with _KOLEJKA_KONTA:
+                        ocen_rywalizacje(krok2, "2")
+                try:
+                    _PLIK_PROSBY_2.unlink()
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                log("RYWALIZACJA", "Prośba drużyny 2 o ocenę: " + str(e))
+            except Exception:
+                pass
+        time.sleep(2)
 
 
 def uruchom_sedziego():
@@ -47641,20 +47642,20 @@ def uruchom_sedziego():
             _folder_druzyny(_n).mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
-    # v480av: przystanek z poprzedniego startu nie moze nikogo zwolnic ani zatrzymac.
-    _sprzatnij_przystanek(_DRUZYNA)
     if _DRUZYNA == "2":
+        # prosba z poprzedniego startu nie jest juz niczyja
         try:
-            _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
-            (_RYWALIZACJA_DIR / "przystanki_2.txt").write_text(str(os.getpid()))
+            _PLIK_PROSBY_2.unlink()
         except Exception:
             pass
     if _DRUZYNA == "1":
         try:
             _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
             (_RYWALIZACJA_DIR / "pid_1.txt").write_text(str(os.getpid()))
+            _PLIK_OBSLUGI_1.write_text(str(os.getpid()))
         except Exception:
             pass
+        _threading.Thread(target=_obsluguj_prosby_druzyny_2, name="oceny-2", daemon=True).start()
     _sedzia_watek[0] = _threading.Thread(target=_sedzia_petla, name="sedzia", daemon=True)
     _sedzia_watek[0].start()
 
@@ -47766,17 +47767,19 @@ def _stan_druzyny_dla_sedziego(numer):
     )
 
 
-def ocen_rywalizacje(step):
+def ocen_rywalizacje(step, dla="1"):
     """
-    Druzyna 1, co 5 krokow: Sedzia ocenia obie druzyny. Ocena idzie do
-    MAIN-a druzyny 1 i do pliku, z ktorego bierze ja druzyna 2. Nigdy
-    nie rzuca.
+    Druzyna 1 (proces z Sedzia): ocena obu druzyn dla druzyny `dla`, ktora
+    wlasnie doszla do swojego kroku `step`. Dla 1 idzie do jej MAIN-a, dla
+    2 do pliku, z ktorego bierze ja druzyna 2. Nigdy nie rzuca.
     """
     if _DRUZYNA != "1":
         return None
     try:
         prompt = (
-            "\n" + _stan_druzyny_dla_sedziego("1") + "\n"
+            "Ocenę dostaje teraz drużyna " + dla + " — doszła do swojego kroku "
+            + str(step) + ".\n\n"
+            + _stan_druzyny_dla_sedziego("1") + "\n"
             + _stan_druzyny_dla_sedziego("2")
         )
         parsed = parse_json(deepseek("ARBITER", prompt))
@@ -47794,22 +47797,27 @@ def ocen_rywalizacje(step):
 
         ocena = {
             "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "krok_druzyny_1": int(step or 0),
+            "dla": dla,
+            "krok": int(step or 0),
             "druzyna_1": _druz("druzyna_1"),
             "druzyna_2": _druz("druzyna_2"),
             "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
             "uzasadnienie": short(str(parsed.get("uzasadnienie") or ""), 400),
         }
         _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _PLIK_OCENY_SEDZIEGO.with_suffix(".tmp")
+        _plik = _PLIK_OCENY_SEDZIEGO if dla == "2" else _RYWALIZACJA_DIR / "ocena_sedziego_1.json"
+        tmp = _plik.with_suffix(".tmp")
         tmp.write_text(json.dumps(ocena, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, _PLIK_OCENY_SEDZIEGO)
-        with _sedzia_lock:
-            _sedzia_wiadomosci.append(_ocena_zdaniem(ocena))
-        try:
-            print_progress_bar(step, ocena["druzyna_1"]["procent"], ocena["druzyna_1"]["ocena"])
-        except Exception:
-            pass
+        os.replace(tmp, _plik)
+        if dla == "1":
+            with _sedzia_lock:
+                _sedzia_wiadomosci.append(_ocena_zdaniem(ocena))
+            try:
+                print_progress_bar(step, ocena["druzyna_1"]["procent"], ocena["druzyna_1"]["ocena"])
+            except Exception:
+                pass
+        else:
+            log("RYWALIZACJA", "Sędzia ocenił dla drużyny 2 (jej krok " + str(step) + "): " + _ocena_zdaniem(ocena))
         log_event("ocena_sedziego", ocena)
         return ocena
     except Exception as e:
