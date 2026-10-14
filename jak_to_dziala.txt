@@ -1622,3 +1622,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - raz na start przez ADB: Termux bez usypiania (Doze), z praca w tle,
        stale aktywny i bez limitu "procesow-dzieci" (Android 12+); brak
        pamieci nie ma ustawienia — wtedy widac to w raporcie.
+
+ 40. (uzytkownik 2026-10-14) "Bez Wi-Fi teraz jestem, a bez niego [ADB]
+     nie dziala." Android wylacza debugowanie bezprzewodowe razem z Wi-Fi.
+
+     CO ZMIENIONE:
+     - gdy ADB dziala przez Wi-Fi, program raz wlacza `adb tcpip 5555` i
+       laczy sie z telefonem lokalnie (127.0.0.1:5555) — to polaczenie
+       zostaje bez Wi-Fi, az do restartu telefonu;
+     - lokalne polaczenie ma pierwszenstwo i jest probowane najpierw
+       (ulamek sekundy); gdy nie wyjdzie, zostaje stare przez Wi-Fi;
+     - ANDROID_SERIAL wskazuje wybrane urzadzenie, wiec `adb shell` bez -s
+       nie trafia na "more than one device".

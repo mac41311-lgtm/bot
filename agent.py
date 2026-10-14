@@ -8690,6 +8690,8 @@ def find_adb(auto_reconnect=True):
 
     def _list_devices():
 
+        znalezione = []
+
         try:
 
             result = subprocess.run(
@@ -8715,21 +8717,36 @@ def find_adb(auto_reconnect=True):
                     len(parts) >= 2
                     and parts[1] == "device"
                 ):
-                    return parts[0]
+                    # v480am: polaczenie lokalne dziala tez bez Wi-Fi.
+                    if parts[0] == _ADB_LOKALNY:
+                        return parts[0]
+                    znalezione.append(parts[0])
 
         except Exception:
             pass
 
-        return None
+        return znalezione[0] if znalezione else None
 
     device = _list_devices()
 
     if device:
         _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+        if auto_reconnect:
+            device = _adb_przejdz_na_lokalne(device, _list_devices)
+        _adb_uzywaj(device)
         return device
 
     if not auto_reconnect:
         return device
+
+    # v480am: ADB w trybie lokalnym (127.0.0.1:5555) przezywa utrate
+    # Wi-Fi — proba trwa ulamek sekundy, wiec idzie przed przerwa.
+    if _adb_polacz_lokalnie():
+        device = _list_devices()
+        if device:
+            _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+            _adb_uzywaj(device)
+            return device
 
     # v480ak: telefon nieosiagalny — kazdy krok tracil po 10 s na kazde
     # `adb connect` (uzytkownik 2026-10-14: trzy razy po 10 s w jednym
@@ -8747,6 +8764,8 @@ def find_adb(auto_reconnect=True):
         device = _list_devices()
 
     if device:
+        _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+        _adb_uzywaj(device)
         return device
 
     # v467: port debugowania bezprzewodowego zmienia sie po restarcie
@@ -8765,6 +8784,8 @@ def find_adb(auto_reconnect=True):
                 device = _list_devices()
                 if device:
                     log("ANDROID", "ADB polaczone przez mDNS: " + m.group(1))
+                    _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+                    _adb_uzywaj(device)
                     return device
     except Exception:
         pass
@@ -8774,6 +8795,7 @@ def find_adb(auto_reconnect=True):
 
     if device:
         _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+        _adb_uzywaj(device)
     else:
         _adb_offline[1] = min(300.0, max(30.0, _adb_offline[1] * 2))
         _adb_offline[0] = time.time() + _adb_offline[1]
@@ -8785,6 +8807,85 @@ def find_adb(auto_reconnect=True):
 
 # (do kiedy nie probujemy, ostatnia przerwa w s)
 _adb_offline = [0.0, 0.0]
+
+
+# v480am: uzytkownik (2026-10-14): "bez wifi teraz jestem, a bez niego
+# [ADB] nie dziala". Debugowanie bezprzewodowe Android wylacza razem z
+# Wi-Fi. Tryb `adb tcpip 5555` slucha tez na 127.0.0.1 samego telefonu
+# i zostaje do restartu telefonu — Termux laczy sie wtedy sam ze soba,
+# z Wi-Fi albo bez. Przelaczamy raz, gdy ADB dziala przez Wi-Fi.
+_ADB_LOKALNY = "127.0.0.1:5555"
+_adb_lokalne_probowane = [False]
+
+
+def _adb_uzywaj(device):
+    """
+    Kazde `adb ...` bez -s (takze w komendach zespolu) idzie do tego
+    urzadzenia. Po przejsciu na lokalne ADB telefon bywa widoczny dwa
+    razy (lokalnie i przez Wi-Fi) i samo `adb shell` konczyloby sie
+    "more than one device".
+    """
+    if device:
+        os.environ["ANDROID_SERIAL"] = str(device)
+
+
+def _adb_polacz_lokalnie(timeout=3):
+    """`adb connect 127.0.0.1:5555` bez zapisywania adresu i bez logu."""
+    try:
+        r = subprocess.run(
+            ["adb", "connect", _ADB_LOKALNY],
+            capture_output=True, text=True, timeout=timeout
+        )
+        out = ((r.stdout or "") + (r.stderr or "")).lower()
+        return "connected" in out and "cannot" not in out and "failed" not in out
+    except Exception:
+        return False
+
+
+def _adb_przejdz_na_lokalne(device, _list_devices):
+    """
+    ADB dziala przez Wi-Fi: raz na uruchomienie wlaczamy tryb lokalny.
+    Gdy sie nie uda, wracamy do adresu Wi-Fi. Zwraca urzadzenie, ktorego
+    uzywac dalej.
+    """
+    if (
+        device == _ADB_LOKALNY
+        or _adb_lokalne_probowane[0]
+        or ":" not in str(device) and "_adb-tls" not in str(device)
+    ):
+        return device
+    _adb_lokalne_probowane[0] = True
+
+    if _adb_polacz_lokalnie():
+        nowe = _list_devices()
+        if nowe == _ADB_LOKALNY:
+            log("ANDROID", "ADB lokalnie (" + _ADB_LOKALNY + ") — działa też bez Wi-Fi.")
+            return nowe
+
+    try:
+        subprocess.run(
+            ["adb", "-s", str(device), "tcpip", "5555"],
+            capture_output=True, text=True, timeout=10
+        )
+    except Exception:
+        pass
+
+    for _ in range(5):
+        time.sleep(1.5)
+        if _adb_polacz_lokalnie():
+            nowe = _list_devices()
+            if nowe == _ADB_LOKALNY:
+                log("ANDROID", "ADB przełączone na lokalne (" + _ADB_LOKALNY
+                    + ") — działa też bez Wi-Fi, do restartu telefonu.")
+                return nowe
+
+    log("ANDROID", "Lokalne ADB nie wyszło — zostaję przy Wi-Fi.")
+    nowe = _list_devices()
+    if nowe:
+        return nowe
+    if adb_try_connect(device):
+        return _list_devices() or device
+    return _list_devices()
 
 
 # v480ah: uzytkownik (2026-10-13): "jak mi sie adb rozlaczy albo odejde
