@@ -8608,7 +8608,7 @@ def adb_connect_target():
     return saved or None
 
 
-def adb_try_connect(target, timeout=10):
+def adb_try_connect(target, timeout=5):
     """
     Wykonuje `adb connect <host:port>`.
 
@@ -8724,8 +8724,22 @@ def find_adb(auto_reconnect=True):
 
     device = _list_devices()
 
-    if device or not auto_reconnect:
+    if device:
+        _adb_offline[0], _adb_offline[1] = 0.0, 0.0
         return device
+
+    if not auto_reconnect:
+        return device
+
+    # v480ak: telefon nieosiagalny — kazdy krok tracil po 10 s na kazde
+    # `adb connect` (uzytkownik 2026-10-14: trzy razy po 10 s w jednym
+    # kroku). Po nieudanej probie kolejna dopiero po przerwie: 30 s,
+    # potem dluzej, najwyzej 5 min. Powrot telefonu do Wi-Fi skraca
+    # przerwe od razu.
+    if time.time() < _adb_offline[0] and not (
+        _adb_wifi_znikalo[0] and _ip_wifi_telefonu()
+    ):
+        return None
 
     target = adb_connect_target()
 
@@ -8741,7 +8755,7 @@ def find_adb(auto_reconnect=True):
     try:
         mdns = subprocess.run(
             ["adb", "mdns", "services"],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=5
         )
         for line in (mdns.stdout or "").splitlines():
             if "_adb-tls-connect" not in line and "_adb._tcp" not in line:
@@ -8758,7 +8772,19 @@ def find_adb(auto_reconnect=True):
     if not device:
         device = _adb_po_powrocie_wifi(_list_devices)
 
+    if device:
+        _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+    else:
+        _adb_offline[1] = min(300.0, max(30.0, _adb_offline[1] * 2))
+        _adb_offline[0] = time.time() + _adb_offline[1]
+        log("ANDROID", "Telefon przez ADB nieosiągalny — następna próba za "
+            + str(int(_adb_offline[1])) + " s.")
+
     return device
+
+
+# (do kiedy nie probujemy, ostatnia przerwa w s)
+_adb_offline = [0.0, 0.0]
 
 
 # v480ah: uzytkownik (2026-10-13): "jak mi sie adb rozlaczy albo odejde

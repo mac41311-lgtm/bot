@@ -1596,3 +1596,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - gdy kazdy cel rm na pewno nie istnieje (z uwzglednieniem `cd` w tej
        samej komendzie, bez gwiazdek i zmiennych), program nie pyta —
        nie ma czego usuwac.
+
+ 38. (uzytkownik 2026-10-14 13:24) Gdy telefon byl nieosiagalny przez ADB,
+     kazdy krok tracil ok. 30 s: trzy razy `adb connect` po 10 s.
+
+     CO ZMIENIONE:
+     - `adb connect` i szukanie przez mDNS czekaja najwyzej 5 s;
+     - po nieudanej probie kolejna dopiero po przerwie (30 s, 60 s, ...
+       najwyzej 5 min); w tym czasie sprawdzenie trwa chwile (samo
+       `adb devices`); powrot telefonu do Wi-Fi skraca przerwe od razu;
+     - log mowi raz na probe: "Telefon przez ADB nieosiagalny — nastepna
+       proba za N s".
