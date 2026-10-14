@@ -1755,3 +1755,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      idzie pod te sciezke. A gdy zadanie uruchamia plik wzgledny
      ("cd ~/MAIN_2 && python x.py"), brakujacego pliku szukamy w
      katalogu z ostatniego `cd`, nie w domu. Dziala dla kazdego celu.
+ 51. (bieg 2026-10-14 19:18) Druzyna 1 stanela na przystanku w kroku 10,
+     a druzyna 2 dzialala jeszcze na wersji bez przystankow (nowy plik
+     sprawdzala co 15 min). Teraz: druzyna 2 sprawdza date agent.py co
+     30 s (nic nie pobiera, wiec to nic nie kosztuje); po starcie zapisuje
+     ~/RYWALIZACJA/przystanki_2.txt ze swoim pid — druzyna 1 czeka tylko
+     na druzyne 2, ktora przystanki zna; co 2 min pisze w terminalu, ile
+     juz czeka i w ktorym kroku jest druzyna 2.

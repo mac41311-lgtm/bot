@@ -11560,7 +11560,10 @@ def _pilnuj_aktualizacji():
 
     while True:
 
-        time.sleep(AKTUALIZACJA_CO_SEKUND)
+        # v480ax: druzyna 2 sprawdza tylko date pliku na dysku (nic nie
+        # pobiera), wiec moze co pol minuty — nowa wersje, ktora wgrala
+        # druzyna 1, ma od razu, a nie do 15 min pozniej.
+        time.sleep(30 if _DRUZYNA == "2" else AKTUALIZACJA_CO_SEKUND)
 
         if _nowa_wersja["commit"]:
             continue
@@ -47570,11 +47573,30 @@ def przystanek_sedziego(step):
         if _DRUZYNA == "1":
             log("RYWALIZACJA", "Krok " + str(step) + ": przystanek na ocenę Sędziego — czekam na drużynę 2.")
             martwa_od = None
+            _od = time.time()
+            _ostatni_meldunek = time.time()
             while not _plik_przystanku("2").exists():
                 try:
                     pid2 = int(_PLIK_PID_DRUZYNY2.read_text().strip())
                 except Exception:
                     pid2 = 0
+                # v480ax: na przystanek czekamy tylko na druzyne 2, ktora go
+                # zna (wersja sprzed przystankow nigdy by na nim nie stanela).
+                try:
+                    _zna = int((_RYWALIZACJA_DIR / "przystanki_2.txt").read_text().strip()) == pid2
+                except Exception:
+                    _zna = False
+                if _zyje(pid2) and not _zna:
+                    log("RYWALIZACJA", "Drużyna 2 działa jeszcze na wersji bez przystanków — Sędzia ocenia bez czekania.")
+                    break
+                if time.time() - _ostatni_meldunek >= 120:
+                    _ostatni_meldunek = time.time()
+                    try:
+                        _k2 = json.loads((_DRUZYNA2_DIR / "state" / "ostatni_oddech.json").read_text(encoding="utf-8")).get("krok")
+                    except Exception:
+                        _k2 = None
+                    log("RYWALIZACJA", "Wciąż czekam na drużynę 2 (" + str(int((time.time() - _od) // 60)) + " min"
+                        + (", jest w kroku " + str(_k2) if _k2 else "") + ")" + (" — stanie w swoim kroku " + str(((int(_k2) + 4) // 5) * 5) if _k2 else "") + ".")
                 if _zyje(pid2):
                     martwa_od = None
                 else:
@@ -47621,6 +47643,12 @@ def uruchom_sedziego():
             pass
     # v480av: przystanek z poprzedniego startu nie moze nikogo zwolnic ani zatrzymac.
     _sprzatnij_przystanek(_DRUZYNA)
+    if _DRUZYNA == "2":
+        try:
+            _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+            (_RYWALIZACJA_DIR / "przystanki_2.txt").write_text(str(os.getpid()))
+        except Exception:
+            pass
     if _DRUZYNA == "1":
         try:
             _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
