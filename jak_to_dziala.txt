@@ -1585,3 +1585,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - komendy "dla czlowieka" (nano, less, top...) sa szukane w komendzie
        bez tresci heredoc — tekst zapisywany do pliku ich nie wyzwala.
+
+ 37. (bieg 2026-10-14 09:52, krok 13) `rm -f ~/sanity2l.json && python
+     ... --out ~/sanity2l.json` — czyszczenie przed zapisem, a pliku
+     jeszcze nie bylo. Program zapytal uzytkownika o usuniecie, po 120 s
+     bez odpowiedzi odrzucil cala komende i MAIN uslyszal "usuniecie
+     odrzucone".
+
+     CO ZMIENIONE:
+     - gdy kazdy cel rm na pewno nie istnieje (z uwzglednieniem `cd` w tej
+       samej komendzie, bez gwiazdek i zmiennych), program nie pyta —
+       nie ma czego usuwac.

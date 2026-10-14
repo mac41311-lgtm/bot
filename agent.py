@@ -12874,6 +12874,47 @@ def _po_komendzie(command, wynik, effective_timeout):
     return wynik
 
 
+def _usuwa_tylko_nieistniejace(command):
+    """
+    v480aj: `rm -f ~/wynik.json && python skrypt.py --out ~/wynik.json`
+    — czyszczenie przed zapisem, a pliku jeszcze nie ma. Bieg
+    2026-10-14 09:52: bramka zapytala uzytkownika o usuniecie pliku,
+    ktorego nie bylo, a po 120 s bez odpowiedzi odrzucila cala komende.
+    Gdy KAZDY cel rm na pewno nie istnieje, nie ma czego usuwac i nie
+    ma o co pytac. False przy najmniejszej watpliwosci.
+    """
+    tekst = str(command or "")
+    katalog = str(HOME)
+    usuwajace = 0
+    for czlon in _czlony_komendy(tekst):
+        try:
+            slowa = shlex.split(czlon)
+        except Exception:
+            return False
+        if not slowa:
+            continue
+        if slowa[0] == "cd":
+            if len(slowa) != 2 or any(z in slowa[1] for z in "*?$`"):
+                return False
+            katalog = os.path.join(katalog, os.path.expanduser(slowa[1]))
+            continue
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        if slowa[0] != "rm":
+            return False
+        cele = [a for a in slowa[1:] if not a.startswith("-")]
+        if not cele:
+            return False
+        for arg in cele:
+            if any(z in arg for z in "*?$`{"):
+                return False
+            sciezka = os.path.join(katalog, os.path.expanduser(arg))
+            if os.path.lexists(sciezka):
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
 def _usuwa_wlasny_plik_tymczasowy(command):
     """
     v466: `screencap -p /sdcard/_t.png && ... && rm /sdcard/_t.png` —
@@ -13132,6 +13173,7 @@ def execute_shell(command, timeout=None):
         and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
         and not _usuwa_tylko_wlasne_katalogi(command)
         and not _usuwa_wlasny_plik_tymczasowy(command)
+        and not _usuwa_tylko_nieistniejace(command)
     ):
 
         if not _confirm_destructive_action(
