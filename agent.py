@@ -11597,6 +11597,284 @@ def _zatrzymane_przy_zamknieciu_blok():
 atexit.register(_zatrzymaj_to_co_zostawilismy)
 
 
+# ============================================================
+# v480al: DLACZEGO PROGRAM SIE ZAMKNAL
+# ============================================================
+#
+# Bieg 2026-10-14 urwal sie dwa razy w pol linii (08:09 i 09:00) —
+# okno Termuksa zniknelo, w logu ani slowa. Python nie moze zapisac
+# niczego w chwili SIGKILL, wiec slad zostawiamy zawczasu: "oddech"
+# co pol minuty (czas, krok, wolna pamiec). Czyste wyjscie go kasuje.
+# Jesli przy nastepnym starcie oddech wciaz lezy, poprzedni bieg
+# zostal ubity — wtedy pytamy Androida przez ADB, kto i dlaczego
+# (dumpsys activity exit-info + logcat) i zapisujemy raport obok
+# logow przebiegu.
+
+_PLIK_ODDECHU = STATE_DIR / "ostatni_oddech.json"
+_ODDECH_CO_S = 30
+_oddech_zostaw = False
+_oddech_watek = None
+_poprzedni_oddech = None
+
+
+def _wolna_pamiec_mb():
+    """MemAvailable z /proc/meminfo w MB albo None."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for linia in f:
+                if linia.startswith("MemAvailable:"):
+                    return int(linia.split()[1]) // 1024
+    except Exception:
+        pass
+    return None
+
+
+def _oddech_zapisz(**dodatkowe):
+    try:
+        dane = {
+            "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ts": time.time(),
+            "krok": _biezacy_krok,
+            "pid": os.getpid(),
+            "wolna_pamiec_mb": _wolna_pamiec_mb(),
+        }
+        dane.update(dodatkowe)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _PLIK_ODDECHU.with_name(_PLIK_ODDECHU.name + ".tmp")
+        tmp.write_text(json.dumps(dane, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, _PLIK_ODDECHU)
+    except Exception:
+        pass
+
+
+def _oddech_na_wyjsciu():
+    """Czyste wyjscie: oddech znika. Po sygnale zostaje z jego nazwa."""
+    if _oddech_zostaw:
+        return
+    try:
+        _PLIK_ODDECHU.unlink()
+    except Exception:
+        pass
+
+
+def zacznij_oddech():
+    """
+    Odczytuje oddech poprzedniego biegu (jesli zostal) i zaczyna
+    wlasny. Po cichej aktualizacji (execv) to ten sam bieg, wiec
+    stary oddech niczego nie znaczy.
+    """
+    global _oddech_watek, _poprzedni_oddech
+
+    if _oddech_watek is not None:
+        return
+
+    if not _PO_AKTUALIZACJI:
+        try:
+            if _PLIK_ODDECHU.exists():
+                _poprzedni_oddech = json.loads(
+                    _PLIK_ODDECHU.read_text(encoding="utf-8")
+                )
+        except Exception:
+            _poprzedni_oddech = {}
+
+    _oddech_zapisz()
+
+    def _petla():
+        while True:
+            time.sleep(_ODDECH_CO_S)
+            if _oddech_zostaw:
+                return
+            _oddech_zapisz()
+
+    _oddech_watek = _threading_bootstrap.Thread(
+        target=_petla, name="oddech", daemon=True
+    )
+    _oddech_watek.start()
+
+
+atexit.register(_oddech_na_wyjsciu)
+
+
+def _adb_szybko(polecenie, timeout=10):
+    """adb shell na nasz telefon; stdout albo "" przy bledzie."""
+    try:
+        cmd = ["adb"]
+        if adb_target:
+            cmd += ["-s", str(adb_target)]
+        cmd += ["shell", polecenie]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout or "") + ((r.stderr or "") if r.returncode else "")
+    except Exception as e:
+        return "(" + str(e) + ")"
+
+
+def _wpisy_exit_info(tekst, ile=5):
+    """Najnowsze wpisy ApplicationExitInfo jako slowniki."""
+    wpisy = []
+    for blok in re.split(r"ApplicationExitInfo #\d+:", tekst or "")[1:]:
+        w = {}
+        for klucz in ("timestamp", "pid", "process", "reason", "subreason",
+                      "importance", "pss", "rss", "description", "state"):
+            m = re.search(
+                r"\b" + klucz + r"=(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?"
+                r"|\d+ \([A-Z_ ]+\)|\S+)",
+                blok
+            )
+            if m:
+                w[klucz] = m.group(1)
+        if w:
+            wpisy.append(w)
+        if len(wpisy) >= ile:
+            break
+    return wpisy
+
+
+_WAZNOSC_PO_LUDZKU = {
+    "100": "na wierzchu",
+    "125": "usługa na pierwszym planie (powiadomienie Termuksa)",
+    "200": "widoczny",
+    "230": "dostrzegalny",
+    "300": "usługa w tle",
+    "400": "w tle (zapamiętany)",
+}
+
+
+def raport_poprzedniego_zamkniecia():
+    """
+    Gdy poprzedni bieg nie wyszedl czysto, zapisuje raport: ostatni
+    oddech (kiedy, ktory krok, ile bylo wolnej pamieci) + co Android
+    zapisal o zamknieciu Termuksa. Jedna linia w logu, reszta w pliku.
+    Nigdy nie rzuca.
+    """
+    global _poprzedni_oddech
+
+    oddech = _poprzedni_oddech
+    if oddech is None:
+        return None
+    _poprzedni_oddech = None
+
+    try:
+        teraz = datetime.now().strftime("%Y%m%d_%H%M%S")
+        linie = ["Poprzednie uruchomienie nie zamknęło się samo.", ""]
+        linie.append("Ostatni ślad programu: " + str(oddech.get("czas"))
+                     + ", krok " + str(oddech.get("krok"))
+                     + ", wolna pamięć " + str(oddech.get("wolna_pamiec_mb"))
+                     + " MB, pid " + str(oddech.get("pid")))
+        if oddech.get("sygnal"):
+            linie.append("Program dostał sygnał " + str(oddech["sygnal"])
+                         + " (zamknięcie okna/sesji albo prośba systemu).")
+        else:
+            linie.append("Bez sygnału — proces zabity od razu (SIGKILL).")
+
+        streszczenie = ""
+        if adb_target:
+            surowe = _adb_szybko("dumpsys activity exit-info com.termux", 15)
+            wpisy = _wpisy_exit_info(surowe)
+            zabicia = _adb_szybko(
+                "logcat -d -b events,main,system 2>/dev/null | "
+                "grep -iE 'am_kill|am_proc_died|lowmemorykiller|lmkd|"
+                "PhantomProcess|am_anr' | grep -i termux | tail -n 30",
+                20
+            )
+            linie += ["", "Co zapisał Android (najnowsze zamknięcia Termuksa):"]
+            if wpisy:
+                for w in wpisy:
+                    imp = str(w.get("importance", ""))
+                    linie.append(
+                        "- " + str(w.get("timestamp", "?"))
+                        + " | powód: " + str(w.get("reason", "?"))
+                        + " | podpowód: " + str(w.get("subreason", "?"))
+                        + " | opis: " + str(w.get("description", "-"))
+                        + " | pamięć procesu: " + str(w.get("pss", "?"))
+                        + " | stan: " + _WAZNOSC_PO_LUDZKU.get(imp, imp or "?")
+                    )
+                n = wpisy[0]
+                streszczenie = (
+                    "Android: " + str(n.get("timestamp", "?"))[:16]
+                    + ", powód " + str(n.get("reason", "?"))
+                    + (", opis " + str(n["description"]) if n.get("description") else "")
+                )
+            else:
+                linie.append("(brak wpisów albo telefon nie odpowiedział)")
+            linie += ["", "Logcat (wpisy o zabiciu procesów Termuksa):",
+                      (zabicia.strip() or "(nic — bufor mógł się już nadpisać)")]
+            linie += ["", "Surowy dumpsys exit-info:", (surowe or "")[:12000]]
+        else:
+            linie += ["", "ADB niedostępne — nie zapytałem Androida o powód."]
+            streszczenie = "ADB niedostępne, powodu z Androida brak"
+
+        tekst = "\n".join(linie) + "\n"
+        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+        plik = PRZEBIEG_DIR / ("zamkniecie_" + teraz + ".txt")
+        plik.write_text(tekst, encoding="utf-8")
+        gdzie = str(plik)
+        try:
+            if PRZEBIEG_NA_TELEFONIE.parent.exists():
+                PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(plik, PRZEBIEG_NA_TELEFONIE / plik.name)
+                gdzie = str(PRZEBIEG_NA_TELEFONIE / plik.name)
+        except Exception:
+            pass
+
+        log(
+            "PROGRAM",
+            "Poprzedni bieg urwał się o " + str(oddech.get("czas", "?"))[11:16]
+            + " (krok " + str(oddech.get("krok", "?")) + ", wolna pamięć "
+            + str(oddech.get("wolna_pamiec_mb", "?")) + " MB"
+            + (", sygnał " + str(oddech["sygnal"]) if oddech.get("sygnal") else ", bez sygnału")
+            + "). " + streszczenie + ". Raport: " + gdzie
+        )
+        return gdzie
+    except Exception as e:
+        try:
+            log("PROGRAM", "Raportu o zamknięciu nie zapisałem: " + str(e))
+        except Exception:
+            pass
+        return None
+
+
+_OCHRONA_TERMUKSA = [
+    ("bez usypiania (Doze)", "dumpsys deviceidle whitelist +com.termux"),
+    ("praca w tle", "cmd appops set com.termux RUN_ANY_IN_BACKGROUND allow"),
+    ("praca w tle", "cmd appops set com.termux RUN_IN_BACKGROUND allow"),
+    ("zawsze aktywny", "am set-standby-bucket com.termux active"),
+    ("bez limitu procesów-dzieci",
+     "device_config set_sync_disabled_for_tests persistent; "
+     "device_config put activity_manager max_phantom_processes 2147483647"),
+    ("bez limitu procesów-dzieci",
+     "settings put global settings_enable_monitor_phantom_procs false"),
+]
+
+
+def chron_termuksa_przed_zamykaniem():
+    """
+    Raz na start: przez ADB wylaczamy to, co Android sam moze
+    Termuksowi zrobic — usypianie, limit pracy w tle i zabijanie
+    "procesow-dzieci" (Android 12+ ubija ponad 32 takie procesy,
+    a nasz Python i wszystko, co odpala, to wlasnie one). Na brak
+    pamieci nie ma ustawienia — to widac potem w raporcie.
+    """
+    if _PO_AKTUALIZACJI or not adb_target:
+        return
+    udane, nieudane = [], []
+    for nazwa, polecenie in _OCHRONA_TERMUKSA:
+        wynik = _adb_szybko(polecenie + " && echo AEL_OK", 10)
+        cel = udane if "AEL_OK" in wynik else nieudane
+        if nazwa not in cel:
+            cel.append(nazwa)
+    nieudane = [n for n in nieudane if n not in udane]
+    try:
+        log(
+            "ANDROID",
+            "Ochrona Termuksa przed zamykaniem: "
+            + (", ".join(udane) if udane else "nic nie przeszło")
+            + ("; nie przeszło: " + ", ".join(nieudane) if nieudane else "")
+            + "."
+        )
+    except Exception:
+        pass
+
+
 def _zamknij_po_sygnale(signum, frame):
     """
     v480: `pkill -f agent.py` (SIGTERM) i zamkniecie okna Termuksa
@@ -11615,6 +11893,9 @@ def _zamknij_po_sygnale(signum, frame):
     except Exception:
         _nazwa = str(signum)
     globals()["_zamkniete_przez_uzytkownika"] = True
+    # v480al: sygnal zostaje w oddechu — nastepny start go zaraportuje.
+    globals()["_oddech_zostaw"] = True
+    _oddech_zapisz(sygnal=_nazwa)
     try:
         log(
             "PROGRAM",
@@ -46314,6 +46595,7 @@ def main():
     # ----------------------------------------------------------
 
     agent_wake_lock()
+    zacznij_oddech()
     _podstaw_sleep_zespolu()
 
     # ----------------------------------------------------------
@@ -46377,6 +46659,8 @@ def main():
     # ----------------------------------------------------------
 
     init_android()
+    raport_poprzedniego_zamkniecia()
+    chron_termuksa_przed_zamykaniem()
 
     # ----------------------------------------------------------
     # Niestandardowe narzędzia (custom_tools/) — DeepSeek może je

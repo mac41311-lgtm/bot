@@ -1607,3 +1607,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        `adb devices`); powrot telefonu do Wi-Fi skraca przerwe od razu;
      - log mowi raz na probe: "Telefon przez ADB nieosiagalny — nastepna
        proba za N s".
+
+ 39. (uzytkownik 2026-10-14) Okno Termuksa samo sie zamykalo (bieg urwal
+     sie o 08:09 i 09:00 w pol linii), a w logu nie bylo sladu dlaczego.
+
+     CO ZMIENIONE:
+     - program co 30 s zostawia "oddech" (state/ostatni_oddech.json: czas,
+       krok, wolna pamiec); czyste wyjscie go kasuje, sygnal SIGHUP/SIGTERM
+       dopisuje swoja nazwe;
+     - jesli przy starcie oddech zostal, program pyta Androida przez ADB
+       (dumpsys activity exit-info com.termux + logcat) i zapisuje raport
+       zamkniecie_*.txt w memory/przebieg oraz w AEL-MINI na telefonie;
+       w logu jedna linia z powodem;
+     - raz na start przez ADB: Termux bez usypiania (Doze), z praca w tle,
+       stale aktywny i bez limitu "procesow-dzieci" (Android 12+); brak
+       pamieci nie ma ustawienia — wtedy widac to w raporcie.
