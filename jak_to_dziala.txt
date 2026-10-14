@@ -1805,3 +1805,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  59. (uzytkownik 2026-10-14) Ocena Sedziego idzie do MAIN-ow i do plikow
      rund w calosci (wczesniej "ocena" i "uzasadnienie" byly ucinane do
      400 znakow).
+ 60. (2026-10-14) Druzyna 2 wznowiona po padnieciu liczy kroki od 1 —
+     ocena rundy sprzed startu jej biegu jest dla niej stara, wiec Sedzia
+     ocenia te runde od nowa (wczesniej dostawala oceny sprzed godziny).

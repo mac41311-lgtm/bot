@@ -47554,10 +47554,18 @@ def _plik_rundy(runda):
     return _DIR_RUND / ("runda_" + str(int(runda)) + ".json")
 
 
-def _ocena_rundy(runda):
+def _ocena_rundy(runda, od=None):
+    """Ocena rundy albo None. v480bg: ocena sprzed startu biegu `od`
+    (domyslnie: tego biegu) jest stara — druzyna 2 wznowiona po padnieciu
+    liczy kroki od 1 i inaczej dostawala oceny sprzed godziny."""
     try:
         o = json.loads(_plik_rundy(runda).read_text(encoding="utf-8"))
-        return o if isinstance(o, dict) and o.get("druzyna_1") else None
+        if not (isinstance(o, dict) and o.get("druzyna_1")):
+            return None
+        od = int(_URUCHOMIENIE_ID) if od is None else int(od or 0)
+        if od and time.mktime(time.strptime(str(o.get("czas")), "%Y-%m-%d %H:%M:%S")) < od:
+            return None
+        return o
     except Exception:
         return None
 
@@ -47625,7 +47633,7 @@ def przystanek_sedziego(step):
         if not o:
             _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
             tmp = _PLIK_PROSBY_2.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"runda": runda, "krok": int(step or 0), "pid": os.getpid()}), encoding="utf-8")
+            tmp.write_text(json.dumps({"runda": runda, "krok": int(step or 0), "pid": os.getpid(), "od": int(_URUCHOMIENIE_ID)}), encoding="utf-8")
             os.replace(tmp, _PLIK_PROSBY_2)
             log("RYWALIZACJA", "Krok " + str(step) + ": jesteśmy pierwsi w tej rundzie — czekam na ocenę Sędziego.")
             _od = time.time()
@@ -47670,9 +47678,10 @@ def _obsluguj_prosby_druzyny_2():
             if _PLIK_PROSBY_2.exists():
                 pr = json.loads(_PLIK_PROSBY_2.read_text(encoding="utf-8"))
                 runda = int(pr.get("runda", 0))
-                if not _ocena_rundy(runda):
+                _od2 = int(pr.get("od") or 0)
+                if not _ocena_rundy(runda, _od2):
                     with _KOLEJKA_KONTA:
-                        if not _ocena_rundy(runda):
+                        if not _ocena_rundy(runda, _od2):
                             ocen_rywalizacje(int(pr.get("krok", runda * 5)), "2")
                 try:
                     _PLIK_PROSBY_2.unlink()
