@@ -1735,3 +1735,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      przeszkadza jej albo buduje poza swoim folderem, Sedzia pisze to w
      ocenie, a te prace liczy jej dopiero po przeniesieniu do siebie.
      Dziala dla kazdego celu. Nowy prompt dostaje nowa rozmowa Sedziego.
+ 48. (uzytkownik 2026-10-14) Logi w rywalizacji: kazda druzyna kopiuje swoj
+     przebieg do AEL-MINI/druzyna_1 i AEL-MINI/druzyna_2 (jak dotad);
+     druzyna 2 dorzuca tam swoj terminal.log (ostatnie 2 MB — ona dziala w
+     tle, bez ekranu), a obie kopiuja werdykty i oceny Sedziego z
+     ~/RYWALIZACJA do AEL-MINI/rywalizacja. Tryb 1 bez zmian.

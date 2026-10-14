@@ -1669,6 +1669,28 @@ def skopiuj_przebieg_na_telefon():
 
             skopiowane.append(cel)
 
+        # v480av: w rywalizacji obok przebiegu ida tez: wyjscie terminala
+        # druzyny 2 (dziala w tle, wiec bledy sprzed startu przebiegu sa
+        # tylko tam; ostatnie 2 MB) i werdykty sedziego (~/RYWALIZACJA).
+        if _DRUZYNA == "2":
+            try:
+                _term = _DRUZYNA2_DIR / "terminal.log"
+                if _term.exists():
+                    with open(_term, "rb") as f:
+                        f.seek(max(0, _term.stat().st_size - 2_000_000))
+                        (PRZEBIEG_NA_TELEFONIE / "terminal.log").write_bytes(f.read())
+            except Exception:
+                pass
+        if _DRUZYNA:
+            try:
+                _ryw = HOME / "RYWALIZACJA"
+                for _w in _ryw.glob("*.json"):
+                    _cel_w = PRZEBIEG_NA_TELEFONIE.parent / "rywalizacja"
+                    _cel_w.mkdir(parents=True, exist_ok=True)
+                    (_cel_w / _w.name).write_bytes(_w.read_bytes())
+            except Exception:
+                pass
+
         if not skopiowane:
             return ""
 
