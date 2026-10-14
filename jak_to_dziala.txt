@@ -1792,3 +1792,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dostaje te SAMA ocene z pliku rundy, bez nowego pytania Sedziego.
      Sedzia widzi, w ktorym kroku jest kazda druzyna. Nowy start programu
      (nie przeladowanie po aktualizacji) zaczyna rundy od nowa.
+ 56. (uzytkownik 2026-10-14) Pasek postepu w rywalizacji: dwa paski z tej
+     samej oceny Sedziego — procent druzyny 1 i druzyny 2 osobno, z
+     dopiskiem "(wy)" przy swojej i kto prowadzi.

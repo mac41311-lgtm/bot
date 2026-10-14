@@ -47579,10 +47579,29 @@ def _daj_ocene(o, step):
         _sedzia_wiadomosci.append(_ocena_zdaniem(o))
     log("RYWALIZACJA", _ocena_zdaniem(o))
     try:
-        _moja = o.get("druzyna_" + _DRUZYNA) or {}
-        print_progress_bar(step, _moja.get("procent", 0), _moja.get("ocena", ""))
+        pasek_rywalizacji(o)
     except Exception:
         pass
+
+
+def pasek_rywalizacji(o):
+    """v480bc: dwa paski — procent kazdej druzyny z tej samej oceny Sedziego."""
+    print()
+    print("═" * 60)
+    print("  POSTĘP CELU — ocena Sędziego po kroku " + str(o.get("krok", "")))
+    for n in ("1", "2"):
+        d = o.get("druzyna_" + n) or {}
+        try:
+            pr = max(0, min(100, int(d.get("procent", 0))))
+        except Exception:
+            pr = 0
+        filled = int(round(pr / 5))
+        print("  " + ("Drużyna " + n + (" (wy)" if n == _DRUZYNA else "")).ljust(16) + "["
+              + "█" * filled + "░" * (20 - filled) + "] " + str(pr) + "%")
+    _prow = str(o.get("prowadzi", "")).strip()
+    print("  Prowadzi: " + ("remis" if _prow.lower().startswith("remis") or not _prow else "drużyna " + _prow))
+    print("═" * 60)
+    print()
 
 
 def przystanek_sedziego(step):
