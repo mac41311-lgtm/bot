@@ -47459,10 +47459,24 @@ def _sedzia_petla():
 
     # Tego, co juz ocenione przed tym startem, nie oceniamy drugi raz.
     try:
-        _juz = json.loads(moja_tablica.read_text(encoding="utf-8")).get("_mtime_wyniku", 0.0)
+        _tab = json.loads(moja_tablica.read_text(encoding="utf-8"))
+        _juz = _tab.get("_mtime_wyniku", 0.0)
+        ostatni_klucz = _tab.get("_klucz_wyniku", "")
     except Exception:
         _juz = 0.0
+        ostatni_klucz = ""
     widziany_wynik = _juz
+
+    # v480az: ocenia sie TRESC zgloszenia, nie date pliku. Bieg 2026-10-14
+    # 19:44-19:50 (druzyna 2): skrypt z "sprawdz" sam zapisywal wynik.json,
+    # wiec kazde sprawdzenie zmienialo date i Sedzia sprawdzal to samo
+    # w kolko (12 razy), za kazdym razem z ta sama wiadomoscia do MAIN-a.
+    def _klucz():
+        try:
+            d = json.loads(moj_plik.read_text(encoding="utf-8"))
+            return json.dumps([str(d.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")], ensure_ascii=False)
+        except Exception:
+            return ""
     widziana_tablica_rywala = 0.0
     with _sedzia_lock:
         if _ocena_widziana[0] is None:
@@ -47478,8 +47492,17 @@ def _sedzia_petla():
                 time.sleep(5)   # niech druzyna skonczy zapis
                 m = _mtime(moj_plik)
                 widziany_wynik = m
+                k = _klucz()
+                if k and k == ostatni_klucz:
+                    time.sleep(_SEDZIA_CO_S)
+                    continue
+                ostatni_klucz = k
                 w = _sedzia_ocen(_DRUZYNA)
-                w["_mtime_wyniku"] = m
+                # sprawdzenie moglo samo nadpisac wynik.json — to nie nowe zgloszenie
+                widziany_wynik = _mtime(moj_plik)
+                ostatni_klucz = _klucz() or k
+                w["_mtime_wyniku"] = widziany_wynik
+                w["_klucz_wyniku"] = ostatni_klucz
                 _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
                 tmp = moja_tablica.with_suffix(".tmp")
                 tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
