@@ -47855,7 +47855,9 @@ def ocen_rywalizacje(step, pierwsza="1"):
                 pr = max(0, min(100, int(float(_l.group().replace(",", "."))))) if _l else 0
             except Exception:
                 pr = 0
-            return {"procent": pr, "ocena": short(str(d.get("ocena") or ""), 400)}
+            # v480bf: cala ocena — skracana do 400 znakow dochodzila do
+            # MAIN-ow urwana w polowie zdania ("...[skrócono]...").
+            return {"procent": pr, "ocena": str(d.get("ocena") or "").strip()}
 
         ocena = {
             "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -47865,7 +47867,7 @@ def ocen_rywalizacje(step, pierwsza="1"):
             "druzyna_1": _druz("druzyna_1"),
             "druzyna_2": _druz("druzyna_2"),
             "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
-            "uzasadnienie": short(str(parsed.get("uzasadnienie") or ""), 400),
+            "uzasadnienie": str(parsed.get("uzasadnienie") or "").strip(),
         }
         _DIR_RUND.mkdir(parents=True, exist_ok=True)
         for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):

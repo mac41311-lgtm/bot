@@ -1802,3 +1802,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  58. (uzytkownik 2026-10-14) Prompt Sedziego: procent opisuje stan celu,
      a nie ilosc pracy — Sedzia porownuje go ze swoja poprzednia ocena i
      podnosi o tyle, o ile druzynie przybylo sprawdzonego wyniku.
+ 59. (uzytkownik 2026-10-14) Ocena Sedziego idzie do MAIN-ow i do plikow
+     rund w calosci (wczesniej "ocena" i "uzasadnienie" byly ucinane do
+     400 znakow).
