@@ -75,6 +75,24 @@ from urllib.parse import urlparse
 _PO_AKTUALIZACJI = os.environ.pop("AEL_PO_AKTUALIZACJI", "") == "1"
 _SCIEZKA_PROGRAMU = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
 
+# v480aq: rywalizacja dwoch druzyn (wybor 2 na starcie, patrz
+# _wybierz_tryb). "" = zwykly program, "1" = druzyna 1 (ten terminal,
+# konto 1, dotychczasowe dane), "2" = druzyna 2 (proces w tle, konto 2,
+# wlasny katalog ~/agent_druzyna2). Zmienna przechodzi przez cicha
+# aktualizacje (execv), wiec tryb trwa do zamkniecia programu.
+_DRUZYNA = os.environ.get("AEL_DRUZYNA", "").strip()
+if _DRUZYNA not in ("1", "2"):
+    _DRUZYNA = ""
+
+# Start bez pytan: po cichej aktualizacji i w druzynie 2 (ona nie ma
+# terminala — pracuje w tle, odpowiedzi na pytania nikt by nie dal).
+_BEZ_PYTAN = _PO_AKTUALIZACJI or _DRUZYNA == "2"
+
+try:
+    _MTIME_PROGRAMU = os.path.getmtime(_SCIEZKA_PROGRAMU) if _SCIEZKA_PROGRAMU else 0.0
+except Exception:
+    _MTIME_PROGRAMU = 0.0
+
 # ============================================================
 # CO POSZLO DO AGENTOW (v313)
 # ============================================================
@@ -846,6 +864,13 @@ except Exception as e:
 HOME = Path.home()
 AGENT_DIR = HOME / "agent"
 
+# v480aq: druzyna 2 trzyma stan, rozmowy i logi osobno. Klucze Gemini
+# i adres ADB sa wspolne — to ten sam telefon i te same klucze.
+_AGENT_DIR_WSPOLNY = AGENT_DIR
+_DRUZYNA2_DIR = HOME / "agent_druzyna2"
+if _DRUZYNA == "2":
+    AGENT_DIR = _DRUZYNA2_DIR
+
 # v480k: stan biegu zapisany tuz przed przeladowaniem na nowa wersje
 # (patrz _przeladuj_po_aktualizacji). Czytany raz i kasowany.
 _PLIK_STANU_AKTUALIZACJI = AGENT_DIR / "stan_przed_aktualizacja.json"
@@ -872,8 +897,8 @@ TOKEN_FILE = HOME / "api_token.txt"
 # pusty, WSZYSTKO działa dokładnie tak jak wcześniej — jedno konto.
 TOKEN_FILE_2 = HOME / "api_token_2.txt"
 
-GEMINI_KEY_FILE = AGENT_DIR / "gemini_api_key.txt"
-GEMINI_KEYS_DIR = AGENT_DIR / "gemini_keys"
+GEMINI_KEY_FILE = _AGENT_DIR_WSPOLNY / "gemini_api_key.txt"
+GEMINI_KEYS_DIR = _AGENT_DIR_WSPOLNY / "gemini_keys"
 
 STATE_DIR = AGENT_DIR / "state"
 QUEUE_DIR = AGENT_DIR / "queue"
@@ -900,6 +925,8 @@ PRZEBIEG_DIR = MEMORY_DIR / "przebieg"
 # `termux-setup-storage`; gdy uzytkownik go nie zrobil, po prostu
 # nie ma czego kopiowac i nic sie nie dzieje.
 PRZEBIEG_NA_TELEFONIE = HOME / "storage" / "shared" / "AEL-MINI"
+if _DRUZYNA == "2":
+    PRZEBIEG_NA_TELEFONIE = PRZEBIEG_NA_TELEFONIE / "druzyna_2"
 
 # Ustawiane raz przy starcie biegu — patrz zacznij_zapis_biegu().
 _plik_przebiegu = None
@@ -1291,7 +1318,7 @@ GOAL_FILE = AGENT_DIR / "current_goal.txt"
 # zapisywany przez prompt_adb_target() przy starcie programu i
 # odczytywany automatycznie przez find_adb(), gdy `adb devices`
 # nic nie zwróci.
-ADB_CONNECT_FILE = AGENT_DIR / "adb_connect.txt"
+ADB_CONNECT_FILE = _AGENT_DIR_WSPOLNY / "adb_connect.txt"
 
 # Lista top-level katalogów/plików pod $HOME, w których Gemini
 # faktycznie coś zapisał (termux_mkdir/termux_write_file/
@@ -3113,6 +3140,18 @@ _ROLE_ACCOUNT = {
     "CODE_REVIEWER": 2,
     "CODE_FIXER": 2,
 }
+
+# v480aq: podzial zwyklego programu — potrzebny, zeby rozpoznac, na
+# ktorym koncie powstala zapisana rozmowa sprzed rywalizacji.
+_ROLE_ACCOUNT_DOMYSLNE = dict(_ROLE_ACCOUNT)
+
+
+def _ustaw_konta_druzyny():
+    """W rywalizacji cala druzyna jest na swoim koncie: 1 albo 2."""
+    if _DRUZYNA:
+        for _rola in _ROLE_ACCOUNT:
+            _ROLE_ACCOUNT[_rola] = int(_DRUZYNA)
+
 
 # {1: token_konta_1, 2: token_konta_2_lub_1_jesli_brak_drugiego}
 _account_tokens = {}
@@ -4991,6 +5030,13 @@ def _goal_briefing_for(name):
 
     _goal_briefed.add(name)
 
+    # v480aq: w rywalizacji do celu dochodzi raz opis rywalizacji —
+    # takze rozmowie, ktora sam cel dostala juz wczesniej.
+    _rywal = _rywalizacja_tekst()
+    _odcisk_rywal = (
+        hashlib.sha1(_rywal.encode("utf-8")).hexdigest()[:16] if _rywal else ""
+    )
+
     # v480n: wznowiona rozmowa, ktora ten cel juz dostala, nie dostaje
     # go drugi raz.
     #
@@ -5018,10 +5064,16 @@ def _goal_briefing_for(name):
             and _wpis.get("rozmowa") == _rozmowa
             and _wpis.get("cel") == _odcisk_celu
         ):
+            if _rywal and _wpis.get("rywalizacja") != _odcisk_rywal:
+                _wpis["rywalizacja"] = _odcisk_rywal
+                _wyslane[name] = _wpis
+                write_json(_CEL_WYSLANY_FILE, _wyslane)
+                return _rywal + "\n\n"
             return ""
 
         if _rozmowa:
-            _wyslane[name] = {"rozmowa": _rozmowa, "cel": _odcisk_celu}
+            _wyslane[name] = {"rozmowa": _rozmowa, "cel": _odcisk_celu,
+                              "rywalizacja": _odcisk_rywal}
             write_json(_CEL_WYSLANY_FILE, _wyslane)
     except Exception:
         pass
@@ -5029,7 +5081,7 @@ def _goal_briefing_for(name):
     # v335: sam cel, jego slowami. "CEL, nad ktorym pracujemy:" i
     # "(Mowie to raz, na poczatku...)" to byly nasze zdania o naszej
     # rozmowie — czyli dokladnie ten szablon, ktorego nie chcemy.
-    return _current_goal_text + "\n\n"
+    return _current_goal_text + "\n\n" + (_rywal + "\n\n" if _rywal else "")
 
 
 def _load_session_state(name):
@@ -5043,6 +5095,19 @@ def _load_session_state(name):
         isinstance(data, dict)
         and data.get("chat_session_id")
     ):
+        # v480aq: rozmowa z innego konta nie da sie wznowic tym
+        # tokenem (przejscie miedzy zwyklym programem a rywalizacja
+        # przenosi role na inne konto) — wtedy zaczyna sie nowa.
+        try:
+            _konto = int(data.get("konto") or _ROLE_ACCOUNT_DOMYSLNE.get(name, 1))
+            if (
+                _account_tokens
+                and _account_tokens.get(_konto)
+                != _account_tokens.get(_account_of(name))
+            ):
+                return None
+        except Exception:
+            pass
         return data
 
     return None
@@ -5059,7 +5124,8 @@ def _save_session_state(name, session, prompt_hash=None, prompt_text=None,
 
     data = {
         "chat_session_id": session.chat_session_id,
-        "parent_message_id": session.parent_message_id
+        "parent_message_id": session.parent_message_id,
+        "konto": _account_of(name),
     }
 
     # v342: jakie fakty o maszynie ta sesja juz slyszala — zeby przy
@@ -11400,6 +11466,17 @@ def _git_telefonu(*argumenty, czas=60):
 def _sprawdz_nowa_wersje():
     """Commit z GitHuba, gdy rozni sie od wgranego; inaczej ""."""
 
+    # v480aq: druzyna 2 nie pobiera sama — robi to druzyna 1. Druzyna 2
+    # przeladowuje sie, gdy agent.py na dysku jest nowszy niz ten,
+    # z ktorym wystartowala.
+    if _DRUZYNA == "2":
+        try:
+            if os.path.getmtime(_SCIEZKA_PROGRAMU) > _MTIME_PROGRAMU + 1:
+                return "nowy-plik"
+        except Exception:
+            pass
+        return ""
+
     try:
         if not (_REPO_TELEFONU / ".git").exists():
             return ""
@@ -11567,14 +11644,18 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
     _nowa_wersja["commit"] = ""
 
     try:
-        wynik = subprocess.run(
-            ["bash", str(_SKRYPT_AKTUALIZACJI)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            timeout=600
-        )
+        if _DRUZYNA == "2":
+            # Nowy agent.py wgrala juz druzyna 1.
+            wynik = subprocess.CompletedProcess([], 0, "")
+        else:
+            wynik = subprocess.run(
+                ["bash", str(_SKRYPT_AKTUALIZACJI)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=600
+            )
     except Exception as e:
         log("AKTUALIZACJA", "Aktualizacja nie przeszła: " + str(e))
         return
@@ -12107,7 +12188,7 @@ def chron_termuksa_przed_zamykaniem():
     pamieci nie ma ustawienia — to widac potem w raporcie.
     """
     if (
-        _PO_AKTUALIZACJI or _chron_zrobione[0]
+        _PO_AKTUALIZACJI or _chron_zrobione[0] or _DRUZYNA == "2"
         or not (adb_target or os.environ.get("ANDROID_SERIAL"))
     ):
         return
@@ -39295,6 +39376,11 @@ def main_decide(
         ):
             _co_sie_stalo_main = _blok_zamkniecia + _co_sie_stalo_main
 
+    # v480aq: werdykty sedziego rywalizacji — kazdy raz, gdy zapadl.
+    _werdykty = _sedzia_blok()
+    if _werdykty:
+        _co_sie_stalo_main = _werdykty + _co_sie_stalo_main
+
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
     # czekal na wyniki RUN sprzed restartu.
     #
@@ -44123,6 +44209,7 @@ def run_agent(goal):
             log("AKTUALIZACJA", "Nie odtworzyłem całego stanu biegu: " + str(e))
 
     uruchom_pilnowanie_aktualizacji()
+    uruchom_sedziego()
 
     while MAX_STEPS is None or step < MAX_STEPS:
 
@@ -46693,7 +46780,7 @@ def prompt_adb_target():
         )
 
         # v480k: po cichej aktualizacji — zapisany adres, bez pytania.
-        typed = "" if _PO_AKTUALIZACJI else input(prompt_text).strip()
+        typed = "" if _BEZ_PYTAN else input(prompt_text).strip()
 
     except (EOFError, KeyboardInterrupt):
 
@@ -46850,9 +46937,398 @@ def _run_permission_bootstrap():
     print()
 
 
+# ============================================================
+# v480aq: RYWALIZACJA DWOCH DRUZYN
+# ============================================================
+#
+# Uzytkownik (2026-10-14): "zdrowa rywalizacja" — dwie druzyny nad
+# tym samym celem, jednoczesnie, kazda na swoim koncie DeepSeek i z
+# osobnymi logami; sedzia, ktory rzetelnie mowi obu, jak stoja; stary
+# program zostaje bez zmian pod "1" na starcie, rywalizacja pod "2".
+#
+# Druzyna 1 to ten terminal: dotychczasowe dane, konto 1. Druzyna 2
+# to drugi proces tego samego programu w tle: konto 2, stan i logi w
+# ~/agent_druzyna2 (kopia logow w AEL-MINI/druzyna_2). Pracuja w
+# ~/MAIN_1 i ~/MAIN_2. Sedzia to sam program, bez zadnego modelu:
+# uruchamia komende, ktora druzyna podala przy wyniku, i porownuje
+# liczbe — obie druzyny dostaja ten sam werdykt.
+
+_RYWALIZACJA_DIR = HOME / "RYWALIZACJA"
+_PLIK_PID_DRUZYNY2 = _DRUZYNA2_DIR / "pid.txt"
+_SEDZIA_CO_S = 30
+_SEDZIA_MAKS_S = 20 * 60
+_druzyna2 = {"pid": 0, "cel": "", "starty": []}
+_sedzia_wiadomosci = []
+_sedzia_lock = _threading.Lock()
+_sedzia_watek = [None]
+
+
+def _folder_druzyny(numer):
+    return HOME / ("MAIN_" + str(numer))
+
+
+def _rywal():
+    return "2" if _DRUZYNA == "1" else "1"
+
+
+def _wybierz_tryb():
+    """Pytanie na starcie: 1 = zwykly program, 2 = rywalizacja."""
+
+    global _DRUZYNA, _BEZ_PYTAN
+
+    if _DRUZYNA or _PO_AKTUALIZACJI:
+        return
+
+    try:
+        typed = input(
+            "Tryb: 1 = zwykły program, 2 = rywalizacja dwóch drużyn "
+            "[Enter = 1] > "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        typed = ""
+
+    if typed != "2":
+        return
+
+    if not read_text(TOKEN_FILE_2).strip():
+        print(
+            "Rywalizacja potrzebuje drugiego konta DeepSeek ("
+            + str(TOKEN_FILE_2) + ") — ruszam zwykły program."
+        )
+        return
+
+    _DRUZYNA = "1"
+    os.environ["AEL_DRUZYNA"] = "1"
+    log(
+        "RYWALIZACJA",
+        "Rywalizacja: ten terminal to drużyna 1 (konto 1, folder ~/MAIN_1); "
+        "drużyna 2 ruszy w tle po wyborze celu."
+    )
+
+
+def _rywalizacja_tekst():
+    """Opis rywalizacji dla zespolu tej druzyny; "" w zwyklym programie."""
+
+    if not _DRUZYNA:
+        return ""
+
+    my, oni = _DRUZYNA, _rywal()
+
+    return (
+        "RYWALIZACJA\n\n"
+        "Nad tym celem pracują teraz jednocześnie dwie drużyny. Wy "
+        "jesteście drużyną " + my + ". Drużyna " + oni + " ma własnego "
+        "MAIN-a, własny zespół i własne konto. To zdrowa rywalizacja: "
+        "obie drużyny chcą dojść jak najdalej, a liczy się wynik, który "
+        "przetrwa sprawdzenie.\n\n"
+        "Wasz folder to ~/MAIN_" + my + " — tam budujecie i zapisujecie "
+        "wszystko, co robicie w tej rywalizacji. Folder drużyny " + oni
+        + " to ~/MAIN_" + oni + ": możecie do niego zaglądać, czytać jej "
+        "kod i wyniki i szukać w nich słabych miejsc. Wszystko, co "
+        "powstało przed rywalizacją, leży tam, gdzie leżało, i obie "
+        "drużyny mogą z tego korzystać.\n\n"
+        "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
+        "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
+        "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
+        "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
+        "liczbę\"}. Program uruchomi tę komendę w waszym folderze i "
+        "porówna liczbę. Werdykt — potwierdzone albo nie wyszło — "
+        "dostają obie drużyny, tak samo jak każdy następny wynik "
+        "drużyny " + oni + "."
+    )
+
+
+def _druzyna2_zyje(pid):
+    if not pid:
+        return False
+    try:
+        _p, _ = os.waitpid(int(pid), os.WNOHANG)
+        if _p == int(pid):
+            return False
+    except ChildProcessError:
+        pass
+    except Exception:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _odpal_druzyne_2():
+    _DRUZYNA2_DIR.mkdir(parents=True, exist_ok=True)
+    write_text(_DRUZYNA2_DIR / "current_goal.txt", _druzyna2["cel"])
+    env = dict(os.environ)
+    env["AEL_DRUZYNA"] = "2"
+    env.pop("AEL_PO_AKTUALIZACJI", None)
+    env.pop("AEL_URUCHOMIENIE_ID", None)
+    with open(_DRUZYNA2_DIR / "terminal.log", "a", encoding="utf-8") as wyjscie:
+        proces = subprocess.Popen(
+            [sys.executable, _SCIEZKA_PROGRAMU],
+            stdin=subprocess.DEVNULL,
+            stdout=wyjscie,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=str(HOME),
+            start_new_session=True,
+        )
+    _druzyna2["pid"] = proces.pid
+    _druzyna2["starty"].append(time.time())
+    write_text(_PLIK_PID_DRUZYNY2, str(proces.pid))
+    return proces.pid
+
+
+def _pilnuj_druzyny_2():
+    """Druzyna 2 padla — rusza od nowa; trzy padniecia w 10 min = stop."""
+    while True:
+        time.sleep(60)
+        if _druzyna2_zyje(_druzyna2["pid"]):
+            continue
+        _ostatnie = [t for t in _druzyna2["starty"] if time.time() - t < 600]
+        if len(_ostatnie) >= 3:
+            log("RYWALIZACJA", "Drużyna 2 pada zaraz po starcie — nie wznawiam. "
+                "Jej log: " + str(_DRUZYNA2_DIR / "terminal.log"))
+            return
+        try:
+            pid = _odpal_druzyne_2()
+            log("RYWALIZACJA", "Drużyna 2 przestała działać — ruszyła od nowa "
+                "(pid " + str(pid) + ").")
+        except Exception as e:
+            log("RYWALIZACJA", "Drużyny 2 nie dało się wznowić: " + str(e))
+            return
+
+
+def _uruchom_druzyne_2(cel):
+    """Druzyna 1: rusza druzyne 2 w tle (albo zostawia te, ktora juz idzie)."""
+
+    _druzyna2["cel"] = cel
+    for _n in ("1", "2"):
+        try:
+            _folder_druzyny(_n).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    try:
+        stary = int(read_text(_PLIK_PID_DRUZYNY2).strip() or 0)
+    except Exception:
+        stary = 0
+
+    try:
+        if _druzyna2_zyje(stary):
+            _druzyna2["pid"] = stary
+            log("RYWALIZACJA", "Drużyna 2 dalej pracuje w tle (pid " + str(stary) + ").")
+        else:
+            pid = _odpal_druzyne_2()
+            log(
+                "RYWALIZACJA",
+                "Drużyna 2 ruszyła w tle (pid " + str(pid) + ", konto 2, "
+                "folder ~/MAIN_2). Jej logi: " + str(_DRUZYNA2_DIR / "memory" / "przebieg")
+                + " i AEL-MINI/druzyna_2."
+            )
+    except Exception as e:
+        log("RYWALIZACJA", "Drużyna 2 nie ruszyła: " + str(e))
+        return
+
+    if not _druzyna2.get("pilnowana"):
+        _druzyna2["pilnowana"] = True
+        _threading.Thread(target=_pilnuj_druzyny_2, name="druzyna-2", daemon=True).start()
+
+
+def _zatrzymaj_druzyne_2():
+    """Wyjscie druzyny 1 (nie przeladowanie) konczy tez druzyne 2."""
+    if _DRUZYNA != "1" or not _druzyna2_zyje(_druzyna2["pid"]):
+        return
+    try:
+        print("Zamykam drużynę 2 (pid " + str(_druzyna2["pid"]) + ").")
+        os.killpg(int(_druzyna2["pid"]), signal.SIGTERM)
+    except Exception:
+        try:
+            os.kill(int(_druzyna2["pid"]), signal.SIGTERM)
+        except Exception:
+            pass
+
+
+atexit.register(_zatrzymaj_druzyne_2)
+
+
+def _ostatnia_liczba(tekst):
+    """Ostatnia liczba z ostatniej niepustej linii albo None."""
+    linie = [l for l in str(tekst or "").splitlines() if l.strip()]
+    if not linie:
+        return None
+    liczby = re.findall(r"[-+]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", linie[-1])
+    if not liczby:
+        return None
+    try:
+        return float(liczby[-1].replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _sedzia_ocen(numer):
+    """Sprawdza wynik.json druzyny i zapisuje werdykt na tablicy."""
+
+    folder = _folder_druzyny(numer)
+    werdykt = {"druzyna": numer, "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+    try:
+        dane = json.loads((folder / "wynik.json").read_text(encoding="utf-8"))
+        if not isinstance(dane, dict):
+            raise ValueError("to nie jest obiekt JSON")
+    except Exception as e:
+        werdykt.update(werdykt="nie wyszło", szczegol="wynik.json nie do odczytania: " + str(e)[:200])
+        return werdykt
+
+    werdykt["opis"] = str(dane.get("opis") or "")[:300]
+    werdykt["lepiej"] = str(dane.get("lepiej") or "")[:20]
+    komenda = str(dane.get("sprawdz") or "").strip()
+    werdykt["sprawdz"] = komenda[:500]
+
+    try:
+        ogloszony = float(str(dane.get("wynik")).replace(",", "."))
+        werdykt["wynik"] = ogloszony
+    except Exception:
+        werdykt.update(werdykt="nie wyszło", szczegol="pole \"wynik\" nie jest liczbą")
+        return werdykt
+
+    if not komenda:
+        werdykt.update(werdykt="nie wyszło", szczegol="brak komendy \"sprawdz\"")
+        return werdykt
+
+    if _looks_like_delete_command(komenda):
+        werdykt.update(werdykt="nie wyszło", szczegol="komenda usuwa pliki — sędzia jej nie uruchamia")
+        return werdykt
+
+    try:
+        proces = subprocess.Popen(
+            ["bash", "-c", komenda],
+            cwd=str(folder), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, start_new_session=True,
+        )
+        try:
+            wyjscie, _ = proces.communicate(timeout=_SEDZIA_MAKS_S)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proces.pid, signal.SIGKILL)
+            except Exception:
+                pass
+            proces.communicate()
+            werdykt.update(werdykt="nie wyszło", szczegol="komenda nie skończyła się w "
+                           + str(_SEDZIA_MAKS_S // 60) + " min")
+            return werdykt
+    except Exception as e:
+        werdykt.update(werdykt="nie wyszło", szczegol="komenda nie ruszyła: " + str(e)[:200])
+        return werdykt
+
+    wypisala = _ostatnia_liczba(wyjscie)
+    werdykt["wypisala"] = wypisala
+    if wypisala is None:
+        werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
+                       + str(proces.returncode) + "): " + short(str(wyjscie or "").strip(), 200))
+    elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):
+        werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala))
+    else:
+        werdykt.update(werdykt="nie wyszło", szczegol="komenda wypisała " + str(wypisala)
+                       + ", a ogłoszone było " + str(ogloszony))
+    return werdykt
+
+
+def _werdykt_zdaniem(w, kto):
+    return (
+        kto + ": " + (w.get("opis") or "(bez opisu)")
+        + (" — ogłoszony wynik " + str(w["wynik"]) if "wynik" in w else "")
+        + (" (lepiej: " + w["lepiej"] + ")" if w.get("lepiej") else "")
+        + " — " + str(w.get("werdykt")) + " (" + str(w.get("szczegol", "")) + ")."
+    )
+
+
+def _sedzia_petla():
+    moj_plik = _folder_druzyny(_DRUZYNA) / "wynik.json"
+    moja_tablica = _RYWALIZACJA_DIR / ("druzyna_" + _DRUZYNA + ".json")
+    ich_tablica = _RYWALIZACJA_DIR / ("druzyna_" + _rywal() + ".json")
+
+    def _mtime(p):
+        try:
+            return p.stat().st_mtime
+        except Exception:
+            return 0.0
+
+    # Tego, co juz ocenione przed tym startem, nie oceniamy drugi raz.
+    try:
+        _juz = json.loads(moja_tablica.read_text(encoding="utf-8")).get("_mtime_wyniku", 0.0)
+    except Exception:
+        _juz = 0.0
+    widziany_wynik = _juz
+    widziana_tablica_rywala = 0.0
+
+    while True:
+        try:
+            m = _mtime(moj_plik)
+            if m and m != widziany_wynik:
+                time.sleep(5)   # niech druzyna skonczy zapis
+                m = _mtime(moj_plik)
+                widziany_wynik = m
+                w = _sedzia_ocen(_DRUZYNA)
+                w["_mtime_wyniku"] = m
+                _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+                tmp = moja_tablica.with_suffix(".tmp")
+                tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
+                os.replace(tmp, moja_tablica)
+                with _sedzia_lock:
+                    _sedzia_wiadomosci.append(_werdykt_zdaniem(w, "Wasz wynik"))
+                log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA))
+
+            m2 = _mtime(ich_tablica)
+            if m2 and m2 != widziana_tablica_rywala:
+                widziana_tablica_rywala = m2
+                try:
+                    w2 = json.loads(ich_tablica.read_text(encoding="utf-8"))
+                    with _sedzia_lock:
+                        _sedzia_wiadomosci.append(
+                            _werdykt_zdaniem(w2, "Drużyna " + _rywal() + " (" + str(w2.get("czas", "")) + ")")
+                        )
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                log("RYWALIZACJA", "Sędzia: " + str(e))
+            except Exception:
+                pass
+        time.sleep(_SEDZIA_CO_S)
+
+
+def uruchom_sedziego():
+    if not _DRUZYNA or _sedzia_watek[0] is not None:
+        return
+    for _n in ("1", "2"):
+        try:
+            _folder_druzyny(_n).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    _sedzia_watek[0] = _threading.Thread(target=_sedzia_petla, name="sedzia", daemon=True)
+    _sedzia_watek[0].start()
+
+
+def _sedzia_blok():
+    """Nowe werdykty dla MAIN-a — kazdy raz; "" gdy nic nowego."""
+    with _sedzia_lock:
+        if not _sedzia_wiadomosci:
+            return ""
+        linie = list(_sedzia_wiadomosci)
+        del _sedzia_wiadomosci[:]
+    return "Sędzia rywalizacji:\n" + "\n".join("- " + l for l in linie) + "\n\n"
+
+
 def main():
 
     banner()
+
+    # v480aq: 1 = zwykly program, 2 = rywalizacja dwoch druzyn.
+    _wybierz_tryb()
+    _ustaw_konta_druzyny()
 
     # Sprząta ewentualne zrzuty ekranu z poprzedniego, twardo
     # zabitego uruchomienia (np. zamknięte przed atexit) — bez
@@ -46869,7 +47345,10 @@ def main():
     # było podpięte przez atexit, tylko nikt nigdy nie włączał blokady.
     # ----------------------------------------------------------
 
-    agent_wake_lock()
+    # v480aq: blokade trzyma druzyna 1 — wyjscie druzyny 2 zwalnialoby
+    # ja obu (termux-wake-lock jest jeden na caly Termux).
+    if _DRUZYNA != "2":
+        agent_wake_lock()
     zacznij_oddech()
     _podstaw_sleep_zespolu()
 
@@ -46883,7 +47362,7 @@ def main():
     try:
 
         # v480k: po cichej aktualizacji start idzie bez pytan.
-        typed_perm_check = "" if _PO_AKTUALIZACJI else input(
+        typed_perm_check = "" if _BEZ_PYTAN else input(
             "Sprawdzić/aktywować uprawnienia Termux:API przed "
             "startem? [t/N] > "
         ).strip().lower()
@@ -46914,7 +47393,7 @@ def main():
 
     # v480k: po cichej aktualizacji to ten sam bieg — niczego nie
     # czyscimy i o nic nie pytamy (jak odpowiedz NIE na kazde pytanie).
-    if not _PO_AKTUALIZACJI:
+    if not _BEZ_PYTAN:
         maybe_clear_previous_session_data()
         maybe_clear_generated_project_files()
         maybe_clear_stale_final_ok_evidence()
@@ -47039,7 +47518,7 @@ def main():
         while True:
 
             # v480k: po cichej aktualizacji — ten sam cel, bez pytania.
-            if _PO_AKTUALIZACJI and saved_goal:
+            if _BEZ_PYTAN and saved_goal:
                 goal = saved_goal
                 break
 
@@ -47124,6 +47603,10 @@ def main():
     )
 
     print()
+
+    # v480aq: druzyna 2 rusza w tle z tym samym celem.
+    if _DRUZYNA == "1":
+        _uruchom_druzyne_2(goal)
 
     try:
 

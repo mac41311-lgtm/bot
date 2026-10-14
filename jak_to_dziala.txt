@@ -1657,3 +1657,31 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      CO ZMIENIONE:
      - do procesora komendy liczy sie cala rodzina procesow (takze dzieci
        w innych grupach) razem z czasem dzieci, ktore juz sie skonczyly.
+
+ 43. (uzytkownik 2026-10-14) Rywalizacja dwoch druzyn. Na starcie pytanie:
+     1 = zwykly program (bez zadnej zmiany), 2 = rywalizacja.
+
+     JAK DZIALA "2":
+     - druzyna 1 to ten terminal: dotychczasowe dane i rozmowy, caly zespol
+       na koncie 1 (~/api_token.txt); druzyna 2 rusza w tle po wyborze celu,
+       z tym samym celem, caly zespol na koncie 2 (~/api_token_2.txt);
+       bez drugiego konta program rusza jako "1";
+     - druzyna 2 ma osobny stan i logi: ~/agent_druzyna2 (memory/przebieg,
+       terminal.log), kopia w AEL-MINI/druzyna_2; klucze Gemini i adres
+       ADB sa wspolne;
+     - kazda rola dostaje raz, razem z celem, opis rywalizacji: wasz folder
+       ~/MAIN_1 albo ~/MAIN_2, folder rywala do czytania, wynik zapisujecie
+       w wynik.json z komenda "sprawdz";
+     - sedzia to sam program: gdy wynik.json sie zmieni, uruchamia komende
+       "sprawdz" w folderze druzyny (najwyzej 20 min, komend usuwajacych
+       nie uruchamia), porownuje ostatnia liczbe z ogloszonym wynikiem i
+       zapisuje werdykt w ~/RYWALIZACJA; MAIN kazdej druzyny dostaje raz
+       swoj werdykt i kazdy nowy werdykt rywala;
+     - zamkniecie programu w terminalu zamyka tez druzyne 2; cicha
+       aktualizacja przeladowuje obie (druzyna 2, gdy zobaczy nowy agent.py);
+       gdy druzyna 2 padnie, rusza od nowa (3 padniecia w 10 min = stop);
+     - rozmowy rol zalozone na innym koncie zaczynaja sie od nowa (przejscie
+       miedzy "1" i "2" przenosi role na inne konto); MAIN druzyny 1 jest
+       na koncie 1 w obu trybach, wiec jego rozmowa trwa dalej;
+     - druzyna 2 nie ma terminala: o nic nie pyta, a usuwania cudzych
+       plikow, ktore wymagaloby potwierdzenia, nie dostaje.
