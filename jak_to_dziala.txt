@@ -1785,3 +1785,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wytrzymal powtorzenia, Sedzia ocenia ja wedlug tego, co ustalila.
      Zmiane promptu Sedzia dostaje sam przy wznowieniu rozmowy (po
      aktualizacji programu) jako aktualizacje instrukcji roli.
+ 55. (uzytkownik 2026-10-14) ZMIANA punktu 52: ocena Sedziego jest JEDNA dla
+     obu druzyn. Co 5 krokow jest runda ocen (~/RYWALIZACJA/oceny/
+     runda_N.json). Kto pierwszy dojdzie do kroku 5 (10, 15…), ten wywoluje
+     Sedziego i dostaje ocene od razu; spozniona druzyna na swoim kroku 5
+     dostaje te SAMA ocene z pliku rundy, bez nowego pytania Sedziego.
+     Sedzia widzi, w ktorym kroku jest kazda druzyna. Nowy start programu
+     (nie przeladowanie po aktualizacji) zaczyna rundy od nowa.
