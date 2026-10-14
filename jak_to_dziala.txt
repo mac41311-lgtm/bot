@@ -1795,3 +1795,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  56. (uzytkownik 2026-10-14) Pasek postepu w rywalizacji: dwa paski z tej
      samej oceny Sedziego — procent druzyny 1 i druzyny 2 osobno, z
      dopiskiem "(wy)" przy swojej i kto prowadzi.
+ 57. (uzytkownik 2026-10-14) Paski obu druzyn pokazuja sie na ekranie od
+     razu, gdy Sedzia oceni runde — takze gdy pierwsza doszla druzyna 2
+     (wczesniej druzyna 1 pokazywala je dopiero na swoim kroku). MAIN-y
+     dostaja ocene bez zmian, kazdy na swoim kroku.

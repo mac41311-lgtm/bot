@@ -47579,9 +47579,14 @@ def _daj_ocene(o, step):
         _sedzia_wiadomosci.append(_ocena_zdaniem(o))
     log("RYWALIZACJA", _ocena_zdaniem(o))
     try:
-        pasek_rywalizacji(o)
+        if o.get("runda") not in _paski_pokazane:
+            pasek_rywalizacji(o)
+            _paski_pokazane.add(o.get("runda"))
     except Exception:
         pass
+
+
+_paski_pokazane = set()
 
 
 def pasek_rywalizacji(o):
@@ -47867,6 +47872,14 @@ def ocen_rywalizacje(step, pierwsza="1"):
             tmp = _plik.with_suffix(".tmp")
             tmp.write_text(json.dumps(ocena, ensure_ascii=False, indent=1), encoding="utf-8")
             os.replace(tmp, _plik)
+        # v480bd: paski na ekranie (terminal druzyny 1) od razu, gdy Sedzia
+        # oceni — takze gdy pierwsza byla druzyna 2; MAIN-y dostaja ocene
+        # i tak dopiero na swoim kroku.
+        try:
+            pasek_rywalizacji(ocena)
+            _paski_pokazane.add(ocena["runda"])
+        except Exception:
+            pass
         if pierwsza == "2":
             log("RYWALIZACJA", "Sędzia ocenił rundę po kroku " + str(step) + " (pierwsza drużyna 2) — drużyna 1 dostanie tę ocenę na swoim kroku " + str(step) + ".")
         log_event("ocena_sedziego", ocena)
