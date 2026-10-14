@@ -12039,8 +12039,12 @@ def raport_poprzedniego_zamkniecia():
         try:
             r = subprocess.run(["logcat", "-d", "-t", "400"],
                                capture_output=True, text=True, timeout=10)
+            # v480ap: bez wpisow SELinux "avc: granted" — kazde
+            # uruchomienie programu (takze nasz wlasny start) sypie ich
+            # dziesiatkami, a o zamknieciu nie mowia nic.
             wlasne = [l for l in (r.stdout or "").splitlines()
-                      if re.search(r"termux|kill|destroy|memory|died", l, re.I)]
+                      if re.search(r"termux|kill|destroy|memory|died", l, re.I)
+                      and "avc:" not in l and "audit(" not in l]
             linie += ["", "Logi aplikacji Termux (bez ADB):"]
             linie += wlasne[-40:] or ["(nic)"]
         except Exception:
