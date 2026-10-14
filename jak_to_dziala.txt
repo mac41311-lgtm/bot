@@ -1725,3 +1725,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - stan limitow Gemini (gemini_modele.json) jest jeden: ~/agent/state —
        limit wyczerpany przez jedna druzyne widzi tez druga; w zwyklym
        programie to ta sama sciezka co dotad; zapis przez plik tymczasowy.
+
+ 47. (uzytkownik 2026-10-14) Sedzia w rywalizacji dostal w poczatkowym
+     prompcie jedno zdanie: praca sprzed rywalizacji (gdy cel jest
+     kontynuacja starego) jest wspolnym punktem startu obu druzyn, kazdej
+     liczy tylko to, co sama dodala, a gdy obie zmienialy te same wspolne
+     pliki — rozdziela, czyj wklad jest czyj, albo pisze wprost, ze tego
+     nie da sie ustalic. Przy nowym celu wczesniejszej pracy nie ma, wiec
+     zdanie po prostu nie ma zastosowania. Nowy prompt dostaje nowa
+     rozmowa Sedziego.
