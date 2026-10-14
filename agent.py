@@ -21044,6 +21044,14 @@ def _czas_cpu_grupy(pgid):
     zawsze wykonuje wnuk: powloka odpala `gradle`, `ffmpeg` albo
     `python`, a sama tylko czeka. Sam pid powiedzialby wiec "zero
     CPU" o kompilacji, ktora wlasnie grzeje telefon.
+
+    v480ao: do grupy doliczamy jej potomkow, takze w innych grupach.
+    Bieg 2026-10-14 16:30, krok 2: `timeout 900 python trening.py |
+    tail -10` — `timeout` przenosi siebie i trening do WLASNEJ grupy,
+    wiec liczylismy zero CPU i po 120 s ciszy (tail wypisuje dopiero
+    na koncu) uznalibysmy liczacy trening za stojacy. Liczymy tez
+    czas zakonczonych dzieci (cutime/cstime), zeby suma nie spadala,
+    gdy dziecko sie konczy.
     """
 
     if not pgid:
@@ -21054,7 +21062,7 @@ def _czas_cpu_grupy(pgid):
     except Exception:
         tiki = 100.0
 
-    razem = 0
+    procesy = {}
 
     try:
         for wpis in os.listdir("/proc"):
@@ -21081,20 +21089,31 @@ def _czas_cpu_grupy(pgid):
                 continue
 
             try:
-                # stat: 3. pole po nazwie to pgrp, 12. i 13. to
-                # utime i stime (liczac od zera w tej liscie).
-                if int(pola[2]) != int(pgid):
-                    continue
-
-                razem += int(pola[11]) + int(pola[12])
-
+                # stat (liczac od zera za nazwa): 1 ppid, 2 pgrp,
+                # 11-12 utime/stime, 13-14 cutime/cstime.
+                procesy[int(wpis)] = (
+                    int(pola[1]),
+                    int(pola[2]),
+                    int(pola[11]) + int(pola[12])
+                    + int(pola[13]) + int(pola[14]),
+                )
             except Exception:
                 continue
 
     except Exception:
         return 0.0
 
-    return razem / tiki
+    nasze = {pid for pid, (_, grupa, _) in procesy.items()
+             if grupa == int(pgid)}
+    dodane = True
+    while dodane:
+        dodane = False
+        for pid, (rodzic, _, _) in procesy.items():
+            if pid not in nasze and rodzic in nasze:
+                nasze.add(pid)
+                dodane = True
+
+    return sum(procesy[pid][2] for pid in nasze) / tiki
 
 
 def _kreci_sie_w_kolko(sciezka):

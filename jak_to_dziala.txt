@@ -1647,3 +1647,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        aplikacji Termux; powod od Androida dopisuje sie, gdy ADB wroci;
      - ochrona Termuksa (punkt 39) wlacza sie tez wtedy, gdy ADB pojawi
        sie dopiero w trakcie biegu.
+
+ 42. (bieg 2026-10-14 16:30, krok 2) `timeout 900 python trening.py |
+     tail -10`: `timeout` przenosi siebie i trening do wlasnej grupy
+     procesow, a program liczyl procesor tylko w grupie komendy — widzial
+     zero, a `tail` nic nie wypisuje do konca. Po 120 s ciszy liczacy
+     trening zostalby przerwany jako "stoi".
+
+     CO ZMIENIONE:
+     - do procesora komendy liczy sie cala rodzina procesow (takze dzieci
+       w innych grupach) razem z czasem dzieci, ktore juz sie skonczyly.
