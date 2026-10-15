@@ -1825,3 +1825,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      "Messages too frequent" w strumieniu: program zwalnia tempo konta i
      probuje w tej samej rozmowie (wczesniej ponawial po 1 s i tracil
      odpowiedz roli).
+ 64. (uzytkownik 2026-10-15) Prompt Sedziego przepisany w calosci: ocena
+     opisuje, co druzyna ma potwierdzone i czego brakuje do celu — jako
+     opis stanu; droge wybiera sama druzyna (wczesniej Sedzia pisal "co
+     najbardziej posunie Was" i MAIN wykonywal to od razu).
