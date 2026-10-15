@@ -46667,6 +46667,10 @@ def maybe_restart_team_sessions_for_new_goal():
     for name in _role_do_resetu:
         _clear_session_state(name)
 
+    # v480bm: w rywalizacji "t" to nowy start obu druzyn i Sedziego.
+    if _DRUZYNA == "1":
+        _nowy_start_rywalizacji()
+
     # Nowy, niepowiązany cel nie powinien dziedziczyć "już otwarte w
     # tym celu" ostrzeżeń o aplikacjach z POPRZEDNIEGO celu — inaczej
     # android_launch_app fałszywie ostrzegałby o powtórce, mimo że to
@@ -47460,6 +47464,60 @@ def _odpal_druzyne_2():
     _druzyna2["starty"].append(time.time())
     write_text(_PLIK_PID_DRUZYNY2, str(proces.pid))
     return proces.pid
+
+
+def _nowy_start_rywalizacji():
+    """v480bm: druzyna 1 zgodzila sie na reset rozmow — nowy start calej gry.
+
+    Bieg 2026-10-15 21:13: uzytkownik dal "t" i nowy cel, a Sedzia od razu
+    sprawdzil stary wynik.json z ~/MAIN_1 (R5FIX ze starego celu). Reset
+    czyscil tylko rozmowy druzyny 1: druzyna 2 nie dostaje pytan, wiec
+    zostawala ze starymi rozmowami (albo jej stary proces dalej pracowal),
+    a ~/MAIN_1, ~/MAIN_2 i oceny w ~/RYWALIZACJA byly ze starego biegu.
+    Nic nie kasujemy — stare rzeczy ida do ~/archiwum_rywalizacji/<czas>.
+    """
+
+    try:
+        stary = int(read_text(_PLIK_PID_DRUZYNY2).strip() or 0)
+    except Exception:
+        stary = 0
+    if _druzyna2_zyje(stary):
+        try:
+            os.killpg(os.getpgid(stary), signal.SIGTERM)
+        except Exception:
+            try:
+                os.kill(stary, signal.SIGTERM)
+            except Exception:
+                pass
+        for _ in range(20):
+            if not _druzyna2_zyje(stary):
+                break
+            time.sleep(0.5)
+        if _druzyna2_zyje(stary):
+            try:
+                os.kill(stary, signal.SIGKILL)
+            except Exception:
+                pass
+        log("RYWALIZACJA", "Zatrzymałem drużynę 2 ze starego biegu (pid " + str(stary) + ").")
+
+    archiwum = HOME / "archiwum_rywalizacji" / time.strftime("%Y%m%d_%H%M%S")
+    przeniesione = []
+    for p in (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR):
+        try:
+            if not p.exists():
+                continue
+            archiwum.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(p), str(archiwum / p.name))
+            przeniesione.append("~/" + p.name)
+        except Exception as e:
+            log("RYWALIZACJA", "Nie przeniosłem " + str(p) + " do archiwum: " + str(e))
+    if przeniesione:
+        log(
+            "RYWALIZACJA",
+            "Nowy start rywalizacji: " + ", ".join(przeniesione)
+            + " przeniesione do ~/archiwum_rywalizacji/" + archiwum.name
+            + " — obie drużyny i Sędzia zaczynają od zera.",
+        )
 
 
 def _pilnuj_druzyny_2():

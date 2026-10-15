@@ -1833,3 +1833,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      FAILED, przy nastepnym starcie zaczyna od nowych rozmow (cel,
      rywalizacja, ostatnia ocena Sedziego); jej wyniki zostaja w
      ~/MAIN_N, a Sedzia zostaje w swojej rozmowie.
+ 66. (uzytkownik 2026-10-15) Nowy start rywalizacji: "t" przy resecie
+     rozmow zespolu w trybie 2 zatrzymuje stara druzyne 2 i przenosi
+     ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA i ~/agent_druzyna2 do
+     ~/archiwum_rywalizacji/<data_godzina> (nic nie jest kasowane).
+     Obie druzyny i Sedzia zaczynaja od zera z nowym celem.
