@@ -1838,3 +1838,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA i ~/agent_druzyna2 do
      ~/archiwum_rywalizacji/<data_godzina> (nic nie jest kasowane).
      Obie druzyny i Sedzia zaczynaja od zera z nowym celem.
+ 67. (uzytkownik 2026-10-15) Prompt Sedziego przepisany w calosci: miara
+     jest tresc celu uzytkownika — takze to, jaki wynik ma byc i skad ma
+     sie wziac. Gdy druzyna dochodzi do wyniku w sposob niezgodny z
+     trescia celu, Sedzia pisze to w ocenie i obniza jej procent (takze
+     to, co juz wczesniej policzyl).
