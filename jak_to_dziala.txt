@@ -1812,3 +1812,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (Tomek i Marek) wprost potwierdzi "CEL ZROBIONY". Kto nie
      potwierdza — choc nie pisze "cel nie jest zrobiony" — liczy sie jako
      "nie" i cel trwa.
+ 62. (uzytkownik 2026-10-15) Gdy serwer DeepSeek 3 razy z rzedu
+     odpowie bledem ("Server busy" / "Server is temporarily
+     unavailable"), to konto stoi 2 h, potem jedna proba; dalej blad —
+     kolejne 2 h. Przerwa jest zapisana w ~/.ael_przerwa_konta_N.txt
+     (widzi ja druga druzyna i nowy start). Druzyna 2 nie czeka wtedy na
+     ocene Sedziego (konto 1) — idzie dalej bez niej.

@@ -5723,17 +5723,90 @@ def _pozostaly_cooldown_konta(name):
         return 0.0
 
 
+# v480bi: bieg 2026-10-15 02:00-05:51 — konto 1 przez prawie 4 h na
+# kazda wiadomosc dostawalo od serwera "Server busy" / "Server is
+# temporarily unavailable" (pusta odpowiedz), a program pukal co ~2 min
+# (okolo 270 wiadomosci). Decyzja uzytkownika: po 3 takich odpowiedziach
+# z rzedu konto stoi 2 h, potem jedna proba; dalej blad — kolejne 2 h.
+# Przerwa jest w pliku, wiec widzi ja tez druga druzyna i nowy start.
+_PRZERWA_KONTA_S = 2 * 3600
+_BLEDY_SERWERA_PROG = 3
+_bledy_serwera = {}
+
+
+def _plik_przerwy_konta(account):
+    return HOME / (".ael_przerwa_konta_" + str(account) + ".txt")
+
+
+def _przerwa_konta_do(account):
+    """Do kiedy (time.time()) konto ma przerwe za bledy serwera; 0 = brak."""
+    try:
+        return float(_plik_przerwy_konta(account).read_text().strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _blad_serwera_w_strumieniu(poczatek):
+    t = str(poczatek or "")
+    return '"type":"error"' in t and (
+        "Server busy" in t or "temporarily unavailable" in t
+        or "backend_err" in t
+    )
+
+
+def _zanotuj_odpowiedz_serwera(name, text):
+    """Po kazdej odpowiedzi: 3 bledy serwera z rzedu = 2 h przerwy konta."""
+    account = _account_of(name)
+    if str(text or "").strip() or not _blad_serwera_w_strumieniu(_poczatek_strumienia):
+        if str(text or "").strip():
+            _bledy_serwera[account] = 0
+        return
+    _bledy_serwera[account] = _bledy_serwera.get(account, 0) + 1
+    if _bledy_serwera[account] < _BLEDY_SERWERA_PROG:
+        return
+    do = time.time() + _PRZERWA_KONTA_S
+    try:
+        _plik_przerwy_konta(account).write_text(str(int(do)))
+    except Exception:
+        pass
+    _get_health(account)["cooldown_until"] = do
+    log(
+        "DEEPSEEK",
+        "Konto " + str(account) + ": serwer DeepSeek " + str(_bledy_serwera[account])
+        + " razy z rzędu odpowiedział błędem (Server busy / temporarily "
+        "unavailable). Wstrzymuję to konto na 2 h — do "
+        + datetime.fromtimestamp(do).strftime("%H:%M")
+        + " — potem jedna próba."
+    )
+
+
 def _deepseek_circuit_wait(name):
 
     account = _account_of(name)
     health = _get_health(account)
+
+    health["cooldown_until"] = max(
+        health["cooldown_until"], _przerwa_konta_do(account)
+    )
 
     remaining = (
         health["cooldown_until"]
         - time.time()
     )
 
-    if remaining > 0:
+    if remaining > 0 and _przerwa_konta_do(account) >= health["cooldown_until"]:
+
+        log(
+            "DEEPSEEK",
+            "Konto " + str(account) + " ma przerwę za błędy serwera "
+            "DeepSeek — czekam do "
+            + datetime.fromtimestamp(health["cooldown_until"]).strftime("%H:%M")
+            + " i wtedy próbuję jedną wiadomością."
+        )
+
+        time.sleep(remaining)
+
+    elif remaining > 0:
 
         log(
             "DEEPSEEK",
@@ -8495,6 +8568,8 @@ def _deepseek_jedna_rozmowa(name, message):
                     konto=_account_of(name),
                     tresc=str(text or "")
                 )
+
+                _zanotuj_odpowiedz_serwera(name, text)
 
                 # v432: w ktorym kroku ta rola naprawde sie odezwala
                 # — patrz _podpis_starej_wypowiedzi().
@@ -47656,6 +47731,9 @@ def przystanek_sedziego(step):
                     _obsluguje = False
                 if not (_zyje(pid1) and _obsluguje):
                     log("RYWALIZACJA", "Drużyna 1 nie może teraz dać oceny Sędziego — idę dalej bez niej.")
+                    break
+                if _przerwa_konta_do(1) > time.time():
+                    log("RYWALIZACJA", "Konto 1 (Sędzia) ma przerwę za błędy serwera DeepSeek — idę dalej bez oceny.")
                     break
                 time.sleep(2)
                 o = _ocena_rundy(runda)
