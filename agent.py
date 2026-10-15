@@ -47386,6 +47386,41 @@ def _rywalizacja_tekst():
     )
 
 
+def _swieze_rozmowy_po_poddaniu():
+    """
+    v480bk2: druzyna, ktora sama zamknela cel jako FAILED, przy nowym
+    starcie zaczyna od czystych rozmow. Bieg 2026-10-14/15: MAIN druzyny 2
+    zapisal w rozmowie "projekt zamkniety, FAILED ostateczny" i po kazdym
+    wznowieniu powtarzal to w 1-2 krokach (9 wznowien). Nowa rozmowa
+    dostaje cel, opis rywalizacji i ostatnia ocene Sedziego, a wyniki
+    druzyny zostaja w jej folderze. Sedzia (ARBITER) zostaje w swojej
+    rozmowie — porownuje z poprzednimi ocenami. Nigdy nie rzuca.
+    """
+    if not _DRUZYNA or _PO_AKTUALIZACJI:
+        return
+    try:
+        lr = read_json(LAST_RESULT_FILE, {})
+        if not (isinstance(lr, dict) and lr.get("status") == "FAILED"):
+            return
+        for _rola in _ROLE_ACCOUNT:
+            if _rola != "ARBITER":
+                _clear_session_state(_rola)
+        lr["status"] = "FAILED_NOWE_ROZMOWY"
+        write_json(LAST_RESULT_FILE, lr)
+        log(
+            "RYWALIZACJA",
+            "Drużyna " + _DRUZYNA + " zamknęła poprzedni bieg jako FAILED — "
+            "zaczyna od nowych rozmów (cel, rywalizacja, ostatnia ocena "
+            "Sędziego; jej wyniki zostają w ~/MAIN_" + _DRUZYNA + ")."
+        )
+        o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+        if isinstance(o, dict) and o.get("druzyna_1"):
+            with _sedzia_lock:
+                _sedzia_wiadomosci.append(_ocena_zdaniem(o))
+    except Exception as e:
+        log("RYWALIZACJA", "Nowe rozmowy po FAILED nie wyszły: " + str(e))
+
+
 def _druzyna2_zyje(pid):
     if not pid:
         return False
@@ -48150,6 +48185,8 @@ def main():
         maybe_clear_stale_final_ok_evidence()
         maybe_clear_custom_tools()
         maybe_restart_team_sessions_for_new_goal()
+
+    _swieze_rozmowy_po_poddaniu()
 
     init_team()
 

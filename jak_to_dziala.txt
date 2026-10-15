@@ -1829,3 +1829,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      opisuje, co druzyna ma potwierdzone i czego brakuje do celu — jako
      opis stanu; droge wybiera sama druzyna (wczesniej Sedzia pisal "co
      najbardziej posunie Was" i MAIN wykonywal to od razu).
+ 65. (uzytkownik 2026-10-15) Druzyna, ktora sama zamknela bieg jako
+     FAILED, przy nastepnym starcie zaczyna od nowych rozmow (cel,
+     rywalizacja, ostatnia ocena Sedziego); jej wyniki zostaja w
+     ~/MAIN_N, a Sedzia zostaje w swojej rozmowie.
