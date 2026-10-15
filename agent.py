@@ -47377,8 +47377,7 @@ def _rywalizacja_tekst():
         "wszystko, co robicie w tej rywalizacji. Folder drużyny " + oni
         + " to ~/MAIN_" + oni + ": możecie do niego zaglądać, czytać jej "
         "kod i wyniki i szukać w nich słabych miejsc. Wszystko, co "
-        "powstało przed rywalizacją, leży tam, gdzie leżało, i obie "
-        "drużyny mogą z tego korzystać.\n\n"
+        "powstało przed rywalizacją, leży tam, gdzie leżało.\n\n"
         "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
         "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
