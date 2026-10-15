@@ -5754,6 +5754,25 @@ def _blad_serwera_w_strumieniu(poczatek):
     )
 
 
+def _czat_testowy_odpowiada(name):
+    """Osobny, pusty czat na koncie tej roli i jedna krotka wiadomosc."""
+    try:
+        _activate_account_for_role(name)
+        probny = deepseek_model.start_chat()
+        try:
+            probny.thinking_enabled = False
+        except Exception:
+            pass
+        _deepseek_pace(name)
+        tekst, _ = _deepseek_send_experimental(
+            name, probny, "Odpowiedz jednym słowem: ok"
+        )
+        return bool(str(tekst or "").strip())
+    except Exception as e:
+        log("DEEPSEEK", "Czat testowy nie odpowiedział: " + short(str(e), 200))
+        return False
+
+
 def _zanotuj_odpowiedz_serwera(name, text):
     """Po kazdej odpowiedzi: 3 bledy serwera z rzedu = 2 h przerwy konta."""
     account = _account_of(name)
@@ -5763,6 +5782,22 @@ def _zanotuj_odpowiedz_serwera(name, text):
         return
     _bledy_serwera[account] = _bledy_serwera.get(account, 0) + 1
     if _bledy_serwera[account] < _BLEDY_SERWERA_PROG:
+        return
+    # v480bj: najpierw osobny, pusty czat testowy. Odpowiada — zablokowala
+    # sie tylko rozmowa tej roli: dostaje nowy czat (z celem i stanem,
+    # jak kazda nowa rozmowa), konto pracuje dalej. Nie odpowiada — stoi
+    # serwer albo konto: dopiero wtedy 2 h przerwy.
+    if _czat_testowy_odpowiada(name):
+        _bledy_serwera[account] = 0
+        _clear_session_state(name)
+        sessions.pop(name, None)
+        _goal_briefed.discard(name)
+        log(
+            "DEEPSEEK",
+            "Konto " + str(account) + ": czat testowy odpowiada — "
+            "zablokowała się tylko rozmowa " + str(name) + ". Ta rola "
+            "dostaje nowy czat z celem i stanem, konto pracuje dalej."
+        )
         return
     do = time.time() + _PRZERWA_KONTA_S
     try:
@@ -6532,6 +6567,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # czytniku i trzeba zobaczyc, ktora.
     poczatek_strumienia = []
     _limit_rozmowy = [""]
+    _za_szybko = [""]
 
     # Pierwszy kawalek tresci, ktory realnie doszedl do odpowiedzi.
     pierwsza_tresc = [""]
@@ -6583,6 +6619,24 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             ):
                 _limit_rozmowy[0] = str(
                     data.get("content") or "context_length_exceeded"
+                )
+
+            # v480bj: "Messages too frequent" przychodzi w strumieniu, nie
+            # jako blad HTTP — bieg 2026-10-11, 23 razy: program bral to za
+            # pusta odpowiedz i ponawial po 1 s, wiec ponowienie tez padalo
+            # i odpowiedz roli ginela.
+            if (
+                isinstance(data, dict)
+                and (
+                    data.get("finish_reason") == "rate_limit_reached"
+                    or (
+                        data.get("type") == "error"
+                        and "too frequent" in str(data.get("content", "")).lower()
+                    )
+                )
+            ):
+                _za_szybko[0] = str(
+                    data.get("content") or "rate_limit_reached"
                 )
 
             if "response_message_id" in data:
@@ -6949,6 +7003,13 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     if _limit_rozmowy[0] and not full_text.strip():
         raise RuntimeError(
             "DeepSeek: context_length_exceeded — " + _limit_rozmowy[0]
+        )
+
+    # v480bj: "za szybko" idzie sciezka przeciazenia w deepseek() —
+    # zwolnij tempo konta i sprobuj w tej samej rozmowie.
+    if _za_szybko[0] and not full_text.strip():
+        raise RuntimeError(
+            "DeepSeek: rate_limit_reached — " + _za_szybko[0]
         )
 
     if not full_text.strip() and znakow_myslenia[0]:
@@ -8585,7 +8646,10 @@ def _deepseek_jedna_rozmowa(name, message):
                 _przyspiesz_po_sukcesie(name)
 
                 _resume_unverified.discard(name)
-                _save_session_state(name, session)
+                # v480bj: czat testowy wskazal zablokowana rozmowe —
+                # _zanotuj_odpowiedz_serwera() ja porzucil; nie zapisujemy.
+                if sessions.get(name) is not None:
+                    _save_session_state(name, session)
 
                 return text
 

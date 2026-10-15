@@ -1818,3 +1818,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      kolejne 2 h. Przerwa jest zapisana w ~/.ael_przerwa_konta_N.txt
      (widzi ja druga druzyna i nowy start). Druzyna 2 nie czeka wtedy na
      ocene Sedziego (konto 1) — idzie dalej bez niej.
+ 63. (uzytkownik 2026-10-15) Zanim konto dostanie 2 h przerwy, program
+     otwiera osobny, pusty czat testowy z krotka wiadomoscia. Odpowiada —
+     zablokowala sie tylko rozmowa tej roli: rola dostaje nowy czat (z
+     celem i stanem), konto pracuje dalej. Nie odpowiada — 2 h przerwy.
+     "Messages too frequent" w strumieniu: program zwalnia tempo konta i
+     probuje w tej samej rozmowie (wczesniej ponawial po 1 s i tracil
+     odpowiedz roli).
