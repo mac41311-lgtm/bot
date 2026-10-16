@@ -44756,14 +44756,19 @@ def run_agent(goal):
         _znane_dodaj(step_chrome_text)
         _znane_dodaj(step_android_text)
 
-        log(
-            "STATE",
-            "Chrome: "
-            + short(
-                step_chrome_text,
-                900
+        # v480bv: uzytkownik (2026-10-16): karty Chrome uzytkownika nie
+        # trafiaja do logu w kazdym kroku — tylko gdy zespol w ostatnim
+        # kroku uzywal przegladarki. (Do DeepSeeka szly i tak tylko wtedy,
+        # patrz _dzialalo_na() przy budowaniu wiadomosci.)
+        if _dzialalo_na(last_result, "chrome_"):
+            log(
+                "STATE",
+                "Chrome: "
+                + short(
+                    step_chrome_text,
+                    900
+                )
             )
-        )
 
         log(
             "STATE",
