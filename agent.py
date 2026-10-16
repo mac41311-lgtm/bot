@@ -47487,7 +47487,9 @@ def _rywalizacja_tekst():
            "spróbuje wprowadzić Sędziego w błąd co do tego, na czym "
            "zbudowała swoją pracę, zostaje zdyskwalifikowana od razu. "
            "Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół od "
-           "zera, a powód dostają nowa drużyna i jej rywal."
+           "zera, a powód dostają nowa drużyna i jej rywal. Z jej folderu "
+           "zostaje tylko to, co Sędzia uzna za zgodne z celem — nowa "
+           "drużyna dostaje to w podfolderze spadek."
            if _cel_przewiduje_dyskwalifikacje() else "")
     )
 
@@ -47712,6 +47714,74 @@ def _do_archiwum_po_dyskwalifikacji(numer, sciezki):
     return archiwum
 
 
+# v480ca: uzytkownik (2026-10-16): oryginalny pomysl zdyskwalifikowanej
+# druzyny nie musi przepasc — Sedzia w polu "spadek" wybiera pliki zgodne
+# z celem, a nowa druzyna dostaje je w ~/MAIN_N/spadek. Reszta folderu
+# znika jak dotad (v480br).
+_SPADEK_MAKS = 40
+
+
+def _spadek_lista(v):
+    """Pole "spadek" Sedziego jako lista sciezek wzglednych (bez pustych)."""
+    if isinstance(v, (list, tuple)):
+        el = [str(x) for x in v]
+    elif isinstance(v, str):
+        el = re.split(r"[\n,;]+", v)
+    else:
+        el = []
+    out = []
+    for x in el:
+        x = x.strip().strip("`'\"").strip()
+        x = re.sub(r"^(~/)?MAIN_\d+/", "", x).lstrip("/")
+        if not x or x in out or re.match(r"^(brak|nie|none|null|false|n/?a|-+|—|żadn\w*)$", x.lower()):
+            continue
+        out.append(x)
+    return out[:_SPADEK_MAKS]
+
+
+def _spadek_poczekalnia(numer):
+    return _RYWALIZACJA_DIR / ("spadek_" + str(numer))
+
+
+def _zachowaj_spadek(numer, lista):
+    """Kopiuje wybrane przez Sedziego pliki z ~/MAIN_N do poczekalni.
+    Zwraca liste skopiowanych sciezek."""
+    folder = _folder_druzyny(numer).resolve()
+    cel = _spadek_poczekalnia(numer)
+    shutil.rmtree(cel, ignore_errors=True)
+    zrobione = []
+    for rel in lista:
+        try:
+            zr = (folder / rel).resolve()
+            if zr == folder or folder not in zr.parents or not zr.exists():
+                continue
+            do = cel / zr.relative_to(folder)
+            do.parent.mkdir(parents=True, exist_ok=True)
+            if zr.is_dir():
+                shutil.copytree(zr, do, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+            else:
+                shutil.copy2(zr, do)
+            zrobione.append(str(zr.relative_to(folder)))
+        except Exception as e:
+            log("RYWALIZACJA", "Spadek: nie skopiowałem " + str(rel) + ": " + str(e))
+    return zrobione
+
+
+def _wloz_spadek(numer):
+    """Po nowym starcie: poczekalnia -> ~/MAIN_N/spadek."""
+    zrodlo = _spadek_poczekalnia(numer)
+    if not zrodlo.exists():
+        return
+    try:
+        do = _folder_druzyny(numer) / "spadek"
+        do.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(do, ignore_errors=True)
+        shutil.move(str(zrodlo), str(do))
+        log("RYWALIZACJA", "Nowa drużyna " + str(numer) + " dostała spadek w ~/MAIN_" + str(numer) + "/spadek.")
+    except Exception as e:
+        log("RYWALIZACJA", "Spadek nie trafił do nowej drużyny: " + str(e))
+
+
 def zdyskwalifikuj(numer, powod, ocena):
     """Druzyna 1 (proces Sedziego): zapis powodu i nowy start druzyny `numer`."""
     numer = str(numer)
@@ -47721,6 +47791,16 @@ def zdyskwalifikuj(numer, powod, ocena):
         wynik = _werdykt_zdaniem(w, "Jej ostatni wynik.json")
     except Exception:
         wynik = "Jej ostatni wynik.json: żadnego."
+    spadek = _zachowaj_spadek(numer, _spadek_lista(d.get("spadek")))
+    if spadek:
+        o_folderze = (
+            "z tym samym celem. Folder ~/MAIN_" + numer + " jest pusty poza "
+            "podfolderem spadek: Sędzia uznał te pliki poprzedniej drużyny za "
+            "zgodne z celem i możecie je rozwijać, zmieniać albo pominąć — "
+            + ", ".join(spadek) + "."
+        )
+    else:
+        o_folderze = "z tym samym celem, a folder ~/MAIN_" + numer + " jest pusty."
     tekst = (
         "Poprzednia drużyna " + numer + " została zdyskwalifikowana przez "
         "Sędziego (" + str(ocena.get("czas", "")) + "). Powód: "
@@ -47729,13 +47809,13 @@ def zdyskwalifikuj(numer, powod, ocena):
         + "%): " + str(d.get("ocena") or "").strip() + "\n"
         + wynik + "\n"
         "Wy jesteście nową drużyną " + numer + ": cały zespół zaczyna od zera, "
-        "z tym samym celem, a folder ~/MAIN_" + numer + " jest pusty."
+        + o_folderze
     )
     try:
         _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
         write_json(_plik_dyskwalifikacji(numer), {
             "czas": ocena.get("czas"), "powod": str(powod).strip(),
-            "tekst": tekst, "dostarczono": False,
+            "tekst": tekst, "spadek": spadek, "dostarczono": False,
         })
     except Exception as e:
         log("RYWALIZACJA", "Zapis dyskwalifikacji nie wyszedł: " + str(e))
@@ -47759,6 +47839,7 @@ def zdyskwalifikuj(numer, powod, ocena):
         ))
         try:
             _folder_druzyny(2).mkdir(parents=True, exist_ok=True)
+            _wloz_spadek("2")
             if not _druzyna2.get("cel"):
                 _druzyna2["cel"] = str(_current_goal_text or "")
             pid = _odpal_druzyne_2()
@@ -47794,6 +47875,7 @@ def wykonaj_dyskwalifikacje_1():
             sessions.pop(_rola, None)
             _goal_briefed.discard(_rola)
         _folder_druzyny(1).mkdir(parents=True, exist_ok=True)
+        _wloz_spadek("1")
         zapisz_zdarzenie("dyskwalifikacja")
         _wiadomosc_po_dyskwalifikacji()
         log("RYWALIZACJA", "Nowa drużyna 1: cały zespół w nowych rozmowach, ~/MAIN_1 pusty.")
@@ -48290,13 +48372,13 @@ Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd
 
 Każda drużyna buduje swoją pracę we własnym folderze i może czytać folder rywala. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem.
 
-Ostrzeżenia i dyskwalifikacja istnieją tylko w rywalizacji, której cel przewiduje dyskwalifikację. Drużyna, która spełniła warunek dyskwalifikacji z celu, ale zrobiła to jawnie — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania — zostaje zdyskwalifikowana od razu: w polu "dyskwalifikacja" piszesz powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a oba pola zostawiasz puste. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Nową drużynę oceniasz od zera, wyłącznie po jej własnych krokach, i jej ostrzeżenia też liczą się od zera.
+Ostrzeżenia i dyskwalifikacja istnieją tylko w rywalizacji, której cel przewiduje dyskwalifikację. Drużyna, która spełniła warunek dyskwalifikacji z celu, ale zrobiła to jawnie — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania — zostaje zdyskwalifikowana od razu: w polu "dyskwalifikacja" piszesz powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a oba pola zostawiasz puste. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
 Procent opisuje stan celu, a nie ilość pracy: zmieniasz go względem swojej poprzedniej oceny o tyle, o ile zmieniło się to, co drużyna ma potwierdzone i zgodne z celem. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Twoją ocenę dostają obie drużyny.
 
 {
-  "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": ""},
-  "druzyna_2": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": ""},
+  "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},
+  "druzyna_2": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},
   "prowadzi": "remis",
   "uzasadnienie": ""
 }"""
@@ -48535,7 +48617,8 @@ def ocen_rywalizacje(step, pierwsza="1"):
             # MAIN-ow urwana w polowie zdania ("...[skrócono]...").
             return {"procent": pr, "ocena": str(d.get("ocena") or "").strip(),
                     "ostrzezenie": _powod_dyskwalifikacji(d.get("ostrzezenie")),
-                    "dyskwalifikacja": _powod_dyskwalifikacji(d.get("dyskwalifikacja"))}
+                    "dyskwalifikacja": _powod_dyskwalifikacji(d.get("dyskwalifikacja")),
+                    "spadek": _spadek_lista(d.get("spadek"))}
 
         ocena = {
             "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -48565,6 +48648,10 @@ def ocen_rywalizacje(step, pierwsza="1"):
         else:
             for _n in ("1", "2"):
                 ocena["druzyna_" + _n].pop("ostrzezenie", None)
+                ocena["druzyna_" + _n].pop("spadek", None)
+        for _n in ("1", "2"):
+            if not ocena["druzyna_" + _n].get("dyskwalifikacja"):
+                ocena["druzyna_" + _n].pop("spadek", None)
         _DIR_RUND.mkdir(parents=True, exist_ok=True)
         for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):
             tmp = _plik.with_suffix(".tmp")

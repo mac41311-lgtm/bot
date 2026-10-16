@@ -1899,3 +1899,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (np. {"wynik": 91.3}) nie jest juz brany za decyzje. Jesli po
      poprawce JSON-a MAIN zwroci pytania ASK, trafiaja one do zespolu
      zamiast konczyc sie bledem UNKNOWN_DECISION.
+ 78. (uzytkownik 2026-10-16) Spadek po dyskwalifikacji: Sedzia, gdy
+     dyskwalifikuje druzyne albo daje jej trzecie ostrzezenie, wpisuje
+     w polu "spadek" pliki z jej folderu zgodne z celem. Program kopiuje
+     je przed usunieciem folderu, a nowa druzyna dostaje je w
+     ~/MAIN_N/spadek (razem z lista w wiadomosci o dyskwalifikacji).
+     Reszta folderu znika jak dotad. Sedzia liczy spadek nowej druzynie
+     jako punkt startu, a dalej ocenia jej wlasne kroki.
