@@ -47572,6 +47572,13 @@ def _do_archiwum_po_dyskwalifikacji(numer, sciezki):
         try:
             if not p.exists():
                 continue
+            # v480br: uzytkownik (2026-10-16): folder pracy zdyskwalifikowanej
+            # druzyny znika bez pytania — jej pliki byly niezgodne z celem
+            # i nie maja kusic nowej druzyny. Rozmowy i logi ida do archiwum.
+            if p == _folder_druzyny(numer):
+                shutil.rmtree(p)
+                log("RYWALIZACJA", "Usunąłem ~/" + p.name + " zdyskwalifikowanej drużyny.")
+                continue
             archiwum.mkdir(parents=True, exist_ok=True)
             shutil.move(str(p), str(archiwum / p.name))
         except Exception as e:
