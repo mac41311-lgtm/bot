@@ -47433,11 +47433,13 @@ def _rywalizacja_tekst():
         "drużyny " + oni + "."
         # v480bt: uzytkownik (2026-10-16) — o dyskwalifikacji, takze za
         # oszukiwanie Sedziego, wiedza obie druzyny od poczatku.
-        + ("\n\nTa rywalizacja ma dyskwalifikację. Sędzia dyskwalifikuje "
-           "drużynę, która spełni jej warunek z celu albo spróbuje "
-           "wprowadzić go w błąd co do tego, na czym zbudowała swoją "
-           "pracę. Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół "
-           "od zera, a powód dostają nowa drużyna i jej rywal."
+        + ("\n\nTa rywalizacja ma dyskwalifikację. Drużyna, która jawnie "
+           "spełni jej warunek z celu, dostaje od Sędziego ostrzeżenie, "
+           "a trzecie ostrzeżenie oznacza dyskwalifikację. Drużyna, która "
+           "spróbuje wprowadzić Sędziego w błąd co do tego, na czym "
+           "zbudowała swoją pracę, zostaje zdyskwalifikowana od razu. "
+           "Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół od "
+           "zera, a powód dostają nowa drużyna i jej rywal."
            if _cel_przewiduje_dyskwalifikacje() else "")
     )
 
@@ -47603,6 +47605,39 @@ def _powod_dyskwalifikacji(v):
     return t if len(t) >= 8 else ""
 
 
+# v480by: uzytkownik (2026-10-16) — za jawnie przyznany znany pomysl
+# Sedzia daje ostrzezenie; trzecie ostrzezenie to dyskwalifikacja.
+_OSTRZEZEN_DO_DYSKWALIFIKACJI = 3
+_PLIK_OSTRZEZEN = _RYWALIZACJA_DIR / "ostrzezenia.json"
+
+
+def _ostrzezenia(numer):
+    d = read_json(_PLIK_OSTRZEZEN, {})
+    w = d.get(str(numer)) if isinstance(d, dict) else None
+    return w if isinstance(w, list) else []
+
+
+def _zapisz_ostrzezenia(numer, lista):
+    d = read_json(_PLIK_OSTRZEZEN, {})
+    if not isinstance(d, dict):
+        d = {}
+    d[str(numer)] = lista
+    try:
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        write_json(_PLIK_OSTRZEZEN, d)
+    except Exception as e:
+        log("RYWALIZACJA", "Zapis ostrzeżeń nie wyszedł: " + str(e))
+
+
+def _ostrzezenia_dla_sedziego(numer):
+    lista = _ostrzezenia(numer)
+    if not lista:
+        return "Ostrzeżenia drużyny " + str(numer) + ": żadnego.\n"
+    return ("Ostrzeżenia drużyny " + str(numer) + ": " + str(len(lista)) + " z "
+            + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + " — "
+            + " | ".join(short(str(o.get("powod", "")), 300) for o in lista) + "\n")
+
+
 def _cel_przewiduje_dyskwalifikacje():
     return "dyskwalifik" in str(_current_goal_text or "").lower()
 
@@ -47657,6 +47692,7 @@ def zdyskwalifikuj(numer, powod, ocena):
     except Exception as e:
         log("RYWALIZACJA", "Zapis dyskwalifikacji nie wyszedł: " + str(e))
         return
+    _zapisz_ostrzezenia(numer, [])
     log("RYWALIZACJA", "Sędzia zdyskwalifikował drużynę " + numer + ". Powód: "
         + str(powod).strip() + " — drużyna " + numer + " zaczyna od nowa.")
     _nowe_po_dyskwalifikacji[numer] = str(ocena.get("czas", ""))
@@ -48206,13 +48242,13 @@ Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd
 
 Każda drużyna buduje swoją pracę we własnym folderze i może czytać folder rywala. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem.
 
-Dyskwalifikacja istnieje tylko w rywalizacji, której cel ją przewiduje. Wtedy drużyna zostaje zdyskwalifikowana, gdy spełniła warunek z celu albo gdy planuje lub próbuje wprowadzić Cię w błąd: ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. Rozmowa o takim pomyśle po to, żeby go odrzucić, jest uczciwą pracą. W polu "dyskwalifikacja" piszesz powód: co drużyna zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Nową drużynę oceniasz od zera, wyłącznie po jej własnych krokach.
+Ostrzeżenia i dyskwalifikacja istnieją tylko w rywalizacji, której cel przewiduje dyskwalifikację. Drużyna, która spełniła warunek dyskwalifikacji z celu, ale zrobiła to jawnie — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania — zostaje zdyskwalifikowana od razu: w polu "dyskwalifikacja" piszesz powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a oba pola zostawiasz puste. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Nową drużynę oceniasz od zera, wyłącznie po jej własnych krokach, i jej ostrzeżenia też liczą się od zera.
 
 Procent opisuje stan celu, a nie ilość pracy: zmieniasz go względem swojej poprzedniej oceny o tyle, o ile zmieniło się to, co drużyna ma potwierdzone i zgodne z celem. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Twoją ocenę dostają obie drużyny.
 
 {
-  "druzyna_1": {"procent": 0, "ocena": "", "dyskwalifikacja": ""},
-  "druzyna_2": {"procent": 0, "ocena": "", "dyskwalifikacja": ""},
+  "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": ""},
+  "druzyna_2": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": ""},
   "prowadzi": "remis",
   "uzasadnienie": ""
 }"""
@@ -48430,8 +48466,10 @@ def ocen_rywalizacje(step, pierwsza="1"):
                 + ") — to nowy zespół, z nowymi krokami.\n\n"
                 for _n, _cz in sorted(_nowe_po_dyskwalifikacji.items())
             )
-            + _stan_druzyny_dla_sedziego("1") + "\n"
+            + _stan_druzyny_dla_sedziego("1")
+            + (_ostrzezenia_dla_sedziego("1") if _cel_przewiduje_dyskwalifikacje() else "") + "\n"
             + _stan_druzyny_dla_sedziego("2")
+            + (_ostrzezenia_dla_sedziego("2") if _cel_przewiduje_dyskwalifikacje() else "")
         )
         parsed = parse_json(deepseek("ARBITER", prompt))
         _nowe_po_dyskwalifikacji.clear()
@@ -48448,6 +48486,7 @@ def ocen_rywalizacje(step, pierwsza="1"):
             # v480bf: cala ocena — skracana do 400 znakow dochodzila do
             # MAIN-ow urwana w polowie zdania ("...[skrócono]...").
             return {"procent": pr, "ocena": str(d.get("ocena") or "").strip(),
+                    "ostrzezenie": _powod_dyskwalifikacji(d.get("ostrzezenie")),
                     "dyskwalifikacja": _powod_dyskwalifikacji(d.get("dyskwalifikacja"))}
 
         ocena = {
@@ -48460,6 +48499,24 @@ def ocen_rywalizacje(step, pierwsza="1"):
             "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
             "uzasadnienie": str(parsed.get("uzasadnienie") or "").strip(),
         }
+        if _cel_przewiduje_dyskwalifikacje():
+            for _n in ("1", "2"):
+                _d = ocena["druzyna_" + _n]
+                if _d.get("dyskwalifikacja") or not _d.get("ostrzezenie"):
+                    continue
+                _lista = _ostrzezenia(_n) + [{"czas": ocena["czas"], "powod": _d["ostrzezenie"]}]
+                _zapisz_ostrzezenia(_n, _lista)
+                _d["ostrzezenie_nr"] = len(_lista)
+                log("RYWALIZACJA", "Sędzia: ostrzeżenie dla drużyny " + _n + " ("
+                    + str(len(_lista)) + " z " + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + "): " + _d["ostrzezenie"])
+                if len(_lista) >= _OSTRZEZEN_DO_DYSKWALIFIKACJI:
+                    _d["dyskwalifikacja"] = (
+                        "Trzecie ostrzeżenie Sędziego. Kolejne ostrzeżenia: "
+                        + " | ".join(str(o.get("powod", "")) for o in _lista)
+                    )
+        else:
+            for _n in ("1", "2"):
+                ocena["druzyna_" + _n].pop("ostrzezenie", None)
         _DIR_RUND.mkdir(parents=True, exist_ok=True)
         for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):
             tmp = _plik.with_suffix(".tmp")
@@ -48497,6 +48554,16 @@ def _ocena_zdaniem(o):
         + " Drużyna 2 — " + str(o["druzyna_2"]["procent"]) + "%: " + _zd(o["druzyna_2"]["ocena"])
         + " Prowadzi: " + ("remis" if _prow.lower().startswith("remis") else "drużyna " + _prow)
         + (" — " + _zd(o["uzasadnienie"]) if o.get("uzasadnienie") else ".")
+        + "".join(
+            " Drużyna " + _n + " dostaje ostrzeżenie ("
+            + str(o["druzyna_" + _n].get("ostrzezenie_nr", "?")) + " z "
+            + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + ", trzecie to dyskwalifikacja) — powód: "
+            + _zd(o["druzyna_" + _n]["ostrzezenie"])
+            for _n in ("1", "2")
+            if (o.get("druzyna_" + _n) or {}).get("ostrzezenie")
+            and not (o.get("druzyna_" + _n) or {}).get("dyskwalifikacja")
+            and _cel_przewiduje_dyskwalifikacje()
+        )
         + "".join(
             " Drużyna " + _n + " zdyskwalifikowana — powód: "
             + _zd(o["druzyna_" + _n]["dyskwalifikacja"])

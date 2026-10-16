@@ -1885,3 +1885,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  75. (2026-10-16) Opis rywalizacji mowi, ze komenda "sprawdz" idzie w
      bashu w folderze druzyny i moze trwac do 20 minut (pipe "| tail -1"
      dziala). Druzyna 1 zgadywala, ze pipe psuje sprawdzenie.
+ 76. (uzytkownik 2026-10-16) Ostrzezenia: w rywalizacji z dyskwalifikacja
+     w celu druzyna, ktora jawnie zbudowala cos na warunku dyskwalifikacji
+     (sama to przyznaje albo widac to wprost w kodzie), dostaje od Sedziego
+     ostrzezenie (pole "ostrzezenie"). Program liczy je w
+     ~/RYWALIZACJA/ostrzezenia.json, podaje Sedziemu przy kazdej ocenie,
+     a trzecie ostrzezenie to dyskwalifikacja. Proba wprowadzenia Sedziego
+     w blad = dyskwalifikacja od razu. Po dyskwalifikacji ostrzezenia
+     druzyny licza sie od zera. Prompt Sedziego i opis rywalizacji
+     przepisane tak, zeby to sie zgadzalo.
