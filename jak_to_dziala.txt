@@ -1843,3 +1843,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      sie wziac. Gdy druzyna dochodzi do wyniku w sposob niezgodny z
      trescia celu, Sedzia pisze to w ocenie i obniza jej procent (takze
      to, co juz wczesniej policzyl).
+ 68. (uzytkownik 2026-10-16) Enter przy celu w rywalizacji wznawia ostatni
+     cel rywalizacji. Cel zwyklego programu (~/agent) przechodzi do
+     rywalizacji tylko przy jej pierwszym starcie (wczesniej kazdy wybor 2
+     go nadpisywal).

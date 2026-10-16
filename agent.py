@@ -47336,9 +47336,13 @@ def _wybierz_tryb():
     # v480ar: druzyna 1 ma wlasny katalog, a sciezki program liczy przy
     # imporcie — wiec startujemy od nowa jako druzyna 1. Zapisany cel
     # zwyklego programu idzie z nami, zeby Enter go wznowil.
+    #
+    # v480bp: tylko przy pierwszej rywalizacji. Bieg 2026-10-16: Enter
+    # wznowil stary cel zwyklego programu ("piaskownica") zamiast ostatniego
+    # celu rywalizacji — kazdy wybor 2 nadpisywal cel druzyny 1 celem z ~/agent.
     try:
         _cel = read_text(_AGENT_DIR_WSPOLNY / "current_goal.txt").strip()
-        if _cel:
+        if _cel and not read_text(_DRUZYNA1_DIR / "current_goal.txt").strip():
             _DRUZYNA1_DIR.mkdir(parents=True, exist_ok=True)
             write_text(_DRUZYNA1_DIR / "current_goal.txt", _cel)
     except Exception:
