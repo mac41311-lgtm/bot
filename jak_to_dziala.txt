@@ -1858,3 +1858,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wedlug Sedziego i jej ostatni wynik; rywal widzi powod w ocenie.
      Druzyna 2 rusza od razu, druzyna 1 od nastepnego kroku. Bez slowa o
      dyskwalifikacji w celu program nikogo nie restartuje.
+ 70. (uzytkownik 2026-10-16) W rywalizacji z dyskwalifikacja w celu
+     Sedzia dyskwalifikuje tez za oszukiwanie go: gdy druzyna planuje
+     albo probuje ukryc, na czym naprawde zbudowala prace, przebrac znany
+     pomysl w inne slowa albo podlozyc sie pod sposob oceniania. Dowodem
+     sa jej wlasne slowa z krokow. Rozmowa o takim pomysle po to, zeby go
+     odrzucic, dyskwalifikacji nie daje.
