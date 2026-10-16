@@ -39946,7 +39946,7 @@ def _handle_main_ask(
             asked_followup=_followup
         )
 
-        decision = parse_json(raw)
+        decision = _tylko_decyzja(parse_json(raw))
 
     return decision
 
@@ -40078,6 +40078,16 @@ def _dsml_na_run(text):
         "actions": akcje,
         "_z_dsml": True
     }
+
+
+_TYPY_DECYZJI = ("TASK", "DONE", "FAILED", "NEED_USER_LOGIN", "ASK", "RUN")
+
+
+def _tylko_decyzja(d):
+    """v480bz: slownik z typem decyzji MAIN-a albo None."""
+    if isinstance(d, dict) and str(d.get("type") or "").strip().upper() in _TYPY_DECYZJI:
+        return d
+    return None
 
 
 def parse_json(text):
@@ -44878,6 +44888,13 @@ def run_agent(goal):
 
             decision = parse_json(raw)
 
+        # v480bz: obiekt bez typu decyzji to nie decyzja. Bieg 2026-10-16
+        # 20:07, krok 40: MAIN odpisal podsumowaniem w markdownie, w ktorym
+        # stal przyklad {"wynik": 91.3782, "lepiej": "wiecej"} — parser
+        # wzial go za decyzje i krok skonczyl sie UNKNOWN_DECISION zamiast
+        # prosba o poprawny JSON.
+        decision = _tylko_decyzja(decision)
+
         if isinstance(decision, dict) and decision.get("type") == "ASK":
 
             decision = _handle_main_ask(
@@ -44974,10 +44991,41 @@ def run_agent(goal):
                 "Poprzednia odpowiedź nie była poprawnym JSON."
             )
 
-            decision = parse_json(
+            decision = _tylko_decyzja(parse_json(
                 repair
-            )
+            ))
 
+            # v480bz: poprawiona odpowiedz bywa pytaniem do zespolu.
+            # Bieg 2026-10-16 21:13 (druzyna 2, krok 9): po bledzie sieci
+            # MAIN odpisal dwoma ASK-ami, a krok skonczyl sie
+            # UNKNOWN_DECISION, bo ASK z poprawki nie szedl do zespolu.
+            if isinstance(decision, dict) and decision.get("type") == "ASK":
+
+                decision = _handle_main_ask(
+                    decision,
+                    goal,
+                    step,
+                    team,
+                    last_result,
+                    step_chrome_text,
+                    step_android_text,
+                    raw=repair
+                )
+
+            if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
+
+                _ask_przeniesione[:] = list(decision.get("pytania") or [])
+
+                last_result = {
+                    "status": "ASK_PRZENIESIONE",
+                    "message": (
+                        "W kroku " + str(step) + " MAIN zadał już "
+                        + str(_MAIN_ASK_MAX) + " pytań; reszta pytań "
+                        "poszła na początek kroku " + str(step + 1) + "."
+                    )
+                }
+
+                continue
 
             if decision is not None:
 

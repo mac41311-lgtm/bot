@@ -1894,3 +1894,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      w blad = dyskwalifikacja od razu. Po dyskwalifikacji ostrzezenia
      druzyny licza sie od zera. Prompt Sedziego i opis rywalizacji
      przepisane tak, zeby to sie zgadzalo.
+ 77. (2026-10-16) Decyzja MAIN-a musi miec typ (TASK, ASK, RUN, DONE,
+     FAILED, NEED_USER_LOGIN). Przykladowy JSON z odpowiedzi w markdownie
+     (np. {"wynik": 91.3}) nie jest juz brany za decyzje. Jesli po
+     poprawce JSON-a MAIN zwroci pytania ASK, trafiaja one do zespolu
+     zamiast konczyc sie bledem UNKNOWN_DECISION.
