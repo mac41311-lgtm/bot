@@ -1877,3 +1877,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  73. (uzytkownik 2026-10-16) Karty Chrome uzytkownika ida do zespolu
      (DeepSeek) tylko po kroku, w ktorym zespol uzywal przegladarki (tak
      od v419). Od v480bv takze do logu terminala trafiaja tylko wtedy.
+ 74. (uzytkownik 2026-10-16) Sedzia dostaje o kazdej druzynie wiecej:
+     pelne uzasadnienia ostatnich krokow MAIN-a, tresc ostatnio
+     zmienionych plikow w ~/MAIN_N (wynik.json pierwszy, do ~5 kB) i
+     ostatnie wypowiedzi zespolu z pliku biegu druzyny (pytania MAIN-a i
+     odpowiedzi rol, do ~5 kB; po dyskwalifikacji tylko nowej druzyny).

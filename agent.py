@@ -47709,6 +47709,7 @@ def wykonaj_dyskwalifikacje_1():
             sessions.pop(_rola, None)
             _goal_briefed.discard(_rola)
         _folder_druzyny(1).mkdir(parents=True, exist_ok=True)
+        zapisz_zdarzenie("dyskwalifikacja")
         _wiadomosc_po_dyskwalifikacji()
         log("RYWALIZACJA", "Nowa drużyna 1: cały zespół w nowych rozmowach, ~/MAIN_1 pusty.")
     except Exception as e:
@@ -48198,7 +48199,7 @@ def uruchom_sedziego():
 # ocene przez ~/RYWALIZACJA/ocena_sedziego.json.
 # v480av: Sedzia sprawdza tez, czy kazda druzyna pracuje w swoim folderze
 # i nie wchodzi drugiej w droge (patrz jak_to_dziala.txt, punkt 47).
-ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Co kilka kroków dostajesz to, co każda drużyna faktycznie wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę plików w jej folderze oraz komendy i pliki, których ostatnio używała. Oceniasz wyłącznie na podstawie tego materiału.
+ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Co kilka kroków dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
 
 Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd ma się wziąć. Jako zrobione liczysz to, co ma wynik potwierdzony przez program i zgadza się z treścią celu; to, co dopiero ruszyło, opisujesz jako rozpoczęte. Potwierdzony wynik mówi tylko, że komenda wypisuje tę liczbę — gdy drużyna sama ustaliła, że był przypadkowy albo nie wytrzymał powtórzenia, liczysz go tak, jak ustaliła. To, co drużyna pisze o sobie, waży mniej niż to, co widać w jej krokach, komendach i plikach.
 
@@ -48284,6 +48285,108 @@ def _pliki_druzyny(numer, ile=40):
     return ", ".join(linie) if linie else "(pusto)"
 
 
+# v480bw: uzytkownik (2026-10-16) — Sedzia widzi to, co drużyna
+# naprawde zbudowala i o czym rozmawiala, nie tylko jej streszczenia.
+# Bieg 2026-10-16 15:09: "Materiał jest skrócony i nie widzę
+# jednoznacznie, czy backoff został faktycznie użyty w predict.py".
+_SEDZIA_KOD_LIMIT = 5000
+_SEDZIA_ROZMOWA_LIMIT = 5000
+_SEDZIA_TEKSTOWE = (".py", ".sh", ".json", ".md", ".txt", ".c", ".cpp", ".h",
+                    ".js", ".rs", ".go", ".java", ".cfg", ".toml", ".yaml", ".yml")
+
+
+def _kroki_dla_sedziego(katalog, n=8):
+    """Ostatnie kroki z pelnym uzasadnieniem MAIN-a."""
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return ""
+    linie = []
+    for i, f in enumerate(pliki, 1):
+        data = read_json(f, {})
+        if not isinstance(data, dict):
+            continue
+        status = _HUMAN_STATUS_LABELS.get(data.get("status"), str(data.get("status") or "?"))
+        po_co = " ".join(str(data.get("task") or "").split())
+        co = " ".join(str(data.get("report") or data.get("message")
+                          or data.get("error") or "").split())
+        linie.append(str(i) + ". " + status + (" — " + short(po_co, 500) if po_co else "")
+                     + (" | wynik: " + short(co, 300) if co and co not in po_co else ""))
+    return "\n".join(linie)
+
+
+def _kod_dla_sedziego(numer):
+    """Tresc ostatnio zmienionych plikow tekstowych z ~/MAIN_N."""
+    folder = HOME / ("MAIN_" + str(numer))
+    try:
+        pliki = [
+            p for p in folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in _SEDZIA_TEKSTOWE
+            and not any(cz.startswith(".") or cz == "__pycache__"
+                        for cz in p.relative_to(folder).parts)
+        ]
+        pliki.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return ""
+    wynik = folder / "wynik.json"
+    if wynik in pliki:
+        pliki.remove(wynik)
+        pliki.insert(0, wynik)
+    bloki, zostalo = [], _SEDZIA_KOD_LIMIT
+    for p in pliki:
+        if zostalo < 300:
+            break
+        try:
+            tresc = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        kawalek = tresc[:min(zostalo, 3000)]
+        bloki.append("--- " + str(p.relative_to(folder)) + " ---\n" + kawalek
+                     + ("\n…(dalej " + str(len(tresc) - len(kawalek)) + " znaków)"
+                        if len(kawalek) < len(tresc) else ""))
+        zostalo -= len(kawalek)
+    return "\n".join(bloki)
+
+
+def _rozmowa_dla_sedziego(numer):
+    """Ostatnie wypowiedzi zespolu drużyny (z jej pliku zdarzen biegu)."""
+    katalog = ((_DRUZYNA1_DIR if str(numer) == "1" else _DRUZYNA2_DIR)
+               / "memory" / "przebieg")
+    try:
+        plik = max(katalog.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+        linie = plik.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return ""
+    wpisy = []
+    for l in linie:
+        try:
+            d = json.loads(l)
+        except Exception:
+            continue
+        if d.get("typ") == "dyskwalifikacja":
+            wpisy = []
+        elif (d.get("typ") == "odpowiedz" and d.get("rola") != "ARBITER"
+              and str(d.get("tresc") or "").strip()):
+            wpisy.append(d)
+    bloki, zostalo = [], _SEDZIA_ROZMOWA_LIMIT
+    for d in reversed(wpisy):
+        if zostalo < 300:
+            break
+        kto = _IMIONA_ROL.get(d.get("rola"), d.get("rola"))
+        tresc = " ".join(str(d["tresc"]).split())
+        if d.get("rola") == "MAIN":
+            # decyzje RUN/TASK sa juz w krokach — z MAIN-a tylko pytania
+            _dec = parse_json(str(d["tresc"]))
+            if not (isinstance(_dec, dict) and _dec.get("ask_question")):
+                continue
+            kto = "MAIN do " + str(_IMIONA_ROL.get(_dec.get("ask_role"), _dec.get("ask_role") or "zespołu"))
+            tresc = " ".join(str(_dec["ask_question"]).split())
+        kawalek = short(tresc, min(zostalo, 1200))
+        bloki.append("[krok " + str(d.get("krok", "?")) + "] " + str(kto) + ": " + kawalek)
+        zostalo -= len(kawalek)
+    return "\n".join(reversed(bloki))
+
+
 def _stan_druzyny_dla_sedziego(numer):
     katalog = RESULTS_DIR if numer == _DRUZYNA else (
         (_DRUZYNA2_DIR if numer == "2" else _DRUZYNA1_DIR) / "results"
@@ -48296,11 +48399,15 @@ def _stan_druzyny_dla_sedziego(numer):
     return (
         "Drużyna " + numer + " (folder ~/MAIN_" + numer + ")"
         + (", teraz w kroku " + str(_krok_druzyny(numer)) if _krok_druzyny(numer) else "") + ":\n"
-        "Ostatnie kroki:\n" + (_podsumowania_z(katalog) or "(jeszcze żadnych)") + "\n"
+        "Ostatnie kroki (z uzasadnieniem MAIN-a):\n" + (_kroki_dla_sedziego(katalog) or "(jeszcze żadnych)") + "\n"
         "Wynik sprawdzony przez program: " + wynik + "\n"
         "Pliki w folderze: " + _pliki_druzyny(numer) + "\n"
         "Ostatnio używane komendy i pliki:\n"
         + (_gdzie_pracowala(katalog) or "(brak)") + "\n"
+        "Treść ostatnio zmienionych plików w ~/MAIN_" + numer + ":\n"
+        + (_kod_dla_sedziego(numer) or "(brak)") + "\n"
+        "Ostatnie wypowiedzi zespołu:\n"
+        + (_rozmowa_dla_sedziego(numer) or "(brak)") + "\n"
     )
 
 
