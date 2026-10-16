@@ -44657,6 +44657,11 @@ def run_agent(goal):
         )
         dopisz_do_przebiegu("\n\n--- KROK " + str(step) + " ---")
 
+        # v480bq: Sedzia zdyskwalifikowal druzyne 1 — nowy zespol od tego kroku.
+        if wykonaj_dyskwalifikacje_1():
+            del _python_written_files[:]
+            last_result = {"status": "START", "goal": goal}
+
         # Wykryj nowe/zmienione narzędzia w custom_tools/ — tanie
         # (stat() na plikach), gdy nic się nie zmieniło.
         load_custom_tools()
@@ -47295,6 +47300,7 @@ _PLIK_PID_DRUZYNY2 = _DRUZYNA2_DIR / "pid.txt"
 _SEDZIA_CO_S = 30
 _SEDZIA_MAKS_S = 20 * 60
 _druzyna2 = {"pid": 0, "cel": "", "starty": []}
+_druzyna2_lock = _threading.Lock()
 _sedzia_wiadomosci = []
 _sedzia_lock = _threading.Lock()
 _sedzia_watek = [None]
@@ -47469,6 +47475,33 @@ def _odpal_druzyne_2():
     return proces.pid
 
 
+def _zatrzymaj_stara_druzyne_2(skad=""):
+    """Zatrzymuje dzialajacy proces druzyny 2 (SIGTERM, po 10 s SIGKILL)."""
+    try:
+        stary = int(read_text(_PLIK_PID_DRUZYNY2).strip() or 0)
+    except Exception:
+        stary = 0
+    if not _druzyna2_zyje(stary):
+        return
+    try:
+        os.killpg(os.getpgid(stary), signal.SIGTERM)
+    except Exception:
+        try:
+            os.kill(stary, signal.SIGTERM)
+        except Exception:
+            pass
+    for _ in range(20):
+        if not _druzyna2_zyje(stary):
+            break
+        time.sleep(0.5)
+    if _druzyna2_zyje(stary):
+        try:
+            os.kill(stary, signal.SIGKILL)
+        except Exception:
+            pass
+    log("RYWALIZACJA", "Zatrzymałem drużynę 2" + (" " + skad if skad else "") + " (pid " + str(stary) + ").")
+
+
 def _nowy_start_rywalizacji():
     """v480bm: druzyna 1 zgodzila sie na reset rozmow — nowy start calej gry.
 
@@ -47480,28 +47513,7 @@ def _nowy_start_rywalizacji():
     Nic nie kasujemy — stare rzeczy ida do ~/archiwum_rywalizacji/<czas>.
     """
 
-    try:
-        stary = int(read_text(_PLIK_PID_DRUZYNY2).strip() or 0)
-    except Exception:
-        stary = 0
-    if _druzyna2_zyje(stary):
-        try:
-            os.killpg(os.getpgid(stary), signal.SIGTERM)
-        except Exception:
-            try:
-                os.kill(stary, signal.SIGTERM)
-            except Exception:
-                pass
-        for _ in range(20):
-            if not _druzyna2_zyje(stary):
-                break
-            time.sleep(0.5)
-        if _druzyna2_zyje(stary):
-            try:
-                os.kill(stary, signal.SIGKILL)
-            except Exception:
-                pass
-        log("RYWALIZACJA", "Zatrzymałem drużynę 2 ze starego biegu (pid " + str(stary) + ").")
+    _zatrzymaj_stara_druzyne_2("ze starego biegu")
 
     archiwum = HOME / "archiwum_rywalizacji" / time.strftime("%Y%m%d_%H%M%S")
     przeniesione = []
@@ -47523,19 +47535,172 @@ def _nowy_start_rywalizacji():
         )
 
 
+# v480bq: DYSKWALIFIKACJA. Uzytkownik (2026-10-16): gdy cel przewiduje
+# dyskwalifikacje, a Sedzia ja ogosi, druzyna zaczyna od nowa — caly zespol
+# od zera, z tym samym celem — a nowa druzyna (i rywal, w ocenie) dostaje
+# powod i to, co zrobila poprzednia. Bez slowa o dyskwalifikacji w celu
+# program jej nie wykonuje, nawet gdy Sedzia ja wpisze.
+_dyskwalifikacja_1 = [False]
+_nowe_po_dyskwalifikacji = {}
+
+
+def _plik_dyskwalifikacji(numer):
+    return _RYWALIZACJA_DIR / ("dyskwalifikacja_" + str(numer) + ".json")
+
+
+def _powod_dyskwalifikacji(v):
+    """Powod z pola Sedziego albo "" — "brak", "nie", false itp. to nie powod."""
+    if v is None or v is False or v is True:
+        return ""
+    t = str(v).strip()
+    if len(t) < 20 and re.match(
+        r"^(brak|nie|none|null|false|n/?a|-+|—|0|puste|żadn\w*)\b", t.lower()
+    ):
+        return ""
+    return t if len(t) >= 8 else ""
+
+
+def _cel_przewiduje_dyskwalifikacje():
+    return "dyskwalifik" in str(_current_goal_text or "").lower()
+
+
+def _do_archiwum_po_dyskwalifikacji(numer, sciezki):
+    archiwum = HOME / "archiwum_rywalizacji" / (
+        time.strftime("%Y%m%d_%H%M%S") + "_dyskwalifikacja_" + str(numer)
+    )
+    for p in sciezki:
+        try:
+            if not p.exists():
+                continue
+            archiwum.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(p), str(archiwum / p.name))
+        except Exception as e:
+            log("RYWALIZACJA", "Nie przeniosłem " + str(p) + " do archiwum: " + str(e))
+    return archiwum
+
+
+def zdyskwalifikuj(numer, powod, ocena):
+    """Druzyna 1 (proces Sedziego): zapis powodu i nowy start druzyny `numer`."""
+    numer = str(numer)
+    d = ocena.get("druzyna_" + numer) or {}
+    try:
+        w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
+        wynik = _werdykt_zdaniem(w, "Jej ostatni wynik.json")
+    except Exception:
+        wynik = "Jej ostatni wynik.json: żadnego."
+    tekst = (
+        "Poprzednia drużyna " + numer + " została zdyskwalifikowana przez "
+        "Sędziego (" + str(ocena.get("czas", "")) + "). Powód: "
+        + str(powod).strip() + "\n"
+        "Co zrobiła, według ostatniej oceny Sędziego (" + str(d.get("procent", 0))
+        + "%): " + str(d.get("ocena") or "").strip() + "\n"
+        + wynik + "\n"
+        "Wy jesteście nową drużyną " + numer + ": cały zespół zaczyna od zera, "
+        "z tym samym celem, a folder ~/MAIN_" + numer + " jest pusty."
+    )
+    try:
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        write_json(_plik_dyskwalifikacji(numer), {
+            "czas": ocena.get("czas"), "powod": str(powod).strip(),
+            "tekst": tekst, "dostarczono": False,
+        })
+    except Exception as e:
+        log("RYWALIZACJA", "Zapis dyskwalifikacji nie wyszedł: " + str(e))
+        return
+    log("RYWALIZACJA", "Sędzia zdyskwalifikował drużynę " + numer + ". Powód: "
+        + str(powod).strip() + " — drużyna " + numer + " zaczyna od nowa.")
+    _nowe_po_dyskwalifikacji[numer] = str(ocena.get("czas", ""))
+    if numer == "1":
+        # na granicy krokow, w glownej petli — nie w srodku kroku
+        _dyskwalifikacja_1[0] = True
+        return
+    with _druzyna2_lock:
+        _zatrzymaj_stara_druzyne_2("po dyskwalifikacji")
+        try:
+            _PLIK_PROSBY_2.unlink()
+        except Exception:
+            pass
+        _do_archiwum_po_dyskwalifikacji("2", (
+            _folder_druzyny(2), _RYWALIZACJA_DIR / "druzyna_2.json", _DRUZYNA2_DIR,
+        ))
+        try:
+            _folder_druzyny(2).mkdir(parents=True, exist_ok=True)
+            if not _druzyna2.get("cel"):
+                _druzyna2["cel"] = str(_current_goal_text or "")
+            pid = _odpal_druzyne_2()
+            log("RYWALIZACJA", "Nowa drużyna 2 ruszyła (pid " + str(pid) + ").")
+        except Exception as e:
+            log("RYWALIZACJA", "Nowa drużyna 2 nie ruszyła: " + str(e))
+
+
+def wykonaj_dyskwalifikacje_1():
+    """Drużyna 1, na poczatku kroku: nowy zespol po dyskwalifikacji. True = zrobione."""
+    if _DRUZYNA != "1" or not _dyskwalifikacja_1[0]:
+        return False
+    _dyskwalifikacja_1[0] = False
+    try:
+        do_archiwum = [_folder_druzyny(1), _RYWALIZACJA_DIR / "druzyna_1.json"]
+        archiwum = _do_archiwum_po_dyskwalifikacji("1", do_archiwum)
+        for _katalog in (RESULTS_DIR, QUEUE_DIR):
+            for f in list(_katalog.glob("*.json")):
+                try:
+                    (archiwum / _katalog.name).mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(f), str(archiwum / _katalog.name / f.name))
+                except Exception:
+                    pass
+        for f in (LAST_RESULT_FILE, GEMINI_STATE_FILE, PROGRESS_CHECKLIST_FILE, APPROACHES_FILE):
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+        for _rola in _ROLE_ACCOUNT:
+            if _rola == "ARBITER":
+                continue
+            _clear_session_state(_rola)
+            sessions.pop(_rola, None)
+            _goal_briefed.discard(_rola)
+        _folder_druzyny(1).mkdir(parents=True, exist_ok=True)
+        _wiadomosc_po_dyskwalifikacji()
+        log("RYWALIZACJA", "Nowa drużyna 1: cały zespół w nowych rozmowach, ~/MAIN_1 pusty.")
+    except Exception as e:
+        log("RYWALIZACJA", "Nowy start drużyny 1 po dyskwalifikacji nie wyszedł: " + str(e))
+    return True
+
+
+def _wiadomosc_po_dyskwalifikacji():
+    """Nowa druzyna dostaje raz powod dyskwalifikacji poprzedniej."""
+    if not _DRUZYNA:
+        return
+    try:
+        plik = _plik_dyskwalifikacji(_DRUZYNA)
+        d = read_json(plik, {})
+        if not (isinstance(d, dict) and d.get("tekst")) or d.get("dostarczono"):
+            return
+        with _sedzia_lock:
+            _sedzia_wiadomosci.append(str(d["tekst"]))
+        d["dostarczono"] = True
+        write_json(plik, d)
+    except Exception:
+        pass
+
+
 def _pilnuj_druzyny_2():
     """Druzyna 2 padla — rusza od nowa; trzy padniecia w 10 min = stop."""
     while True:
         time.sleep(60)
-        if _druzyna2_zyje(_druzyna2["pid"]):
-            continue
+        with _druzyna2_lock:
+            if _druzyna2_zyje(_druzyna2["pid"]):
+                continue
         _ostatnie = [t for t in _druzyna2["starty"] if time.time() - t < 600]
         if len(_ostatnie) >= 3:
             log("RYWALIZACJA", "Drużyna 2 pada zaraz po starcie — nie wznawiam. "
                 "Jej log: " + str(_DRUZYNA2_DIR / "terminal.log"))
             return
         try:
-            pid = _odpal_druzyne_2()
+            with _druzyna2_lock:
+                if _druzyna2_zyje(_druzyna2["pid"]):
+                    continue
+                pid = _odpal_druzyne_2()
             log("RYWALIZACJA", "Drużyna 2 przestała działać — ruszyła od nowa "
                 "(pid " + str(pid) + ").")
         except Exception as e:
@@ -47990,11 +48155,13 @@ Miarą jest treść celu użytkownika — zarówno to, co ma powstać, jak i to,
 
 Gdy z kroków, komend albo plików widzisz, że drużyna dochodzi do wyniku w sposób, który nie zgadza się z treścią celu, piszesz to wprost w jej ocenie i w uzasadnieniu i obniżasz jej procent o tę część, która się nie zgadza — także wtedy, gdy wcześniej ją jej policzyłeś. Tak samo oceniasz grę z rywalem: każda drużyna buduje swoją pracę we własnym folderze, a folder rywala może czytać; zmienianie czegoś u rywala, przeszkadzanie mu albo budowanie poza własnym folderem opisujesz w jej ocenie i odejmujesz tę część, dopóki drużyna nie zrobi jej u siebie po swojemu.
 
+Gdy treść celu przewiduje dyskwalifikację, a drużyna spełniła jej warunek, w jej polu "dyskwalifikacja" piszesz powód: co dokładnie zrobiła i w którym kroku, komendzie albo pliku to widać. Program wtedy zaczyna tę drużynę od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i jej rywal dostają Twój powód. Dyskwalifikujesz więc tylko za to, co sam widzisz w tym, co dostałeś; gdy sprawa nie jest pewna, opisujesz ją w ocenie i obniżasz procent, a pole "dyskwalifikacja" zostawiasz puste. Drużynę, która zaczęła od nowa, oceniasz od zera, wyłącznie po jej własnych, nowych krokach.
+
 Procent opisuje stan celu, a nie ilość pracy: porównujesz go ze swoją poprzednią oceną i zmieniasz o tyle, o ile od niej zmieniło się to, co drużyna ma sprawdzone i zgodne z treścią celu. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego jeszcze brakuje do celu użytkownika — jako opis stanu; drogę, którą do tego dojdzie, wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, żeby ją uczciwie rozstrzygnąć, a w "uzasadnienie" piszesz, na jakiej podstawie. Twoją ocenę dostają obie drużyny.
 
 {
-  "druzyna_1": {"procent": 0, "ocena": ""},
-  "druzyna_2": {"procent": 0, "ocena": ""},
+  "druzyna_1": {"procent": 0, "ocena": "", "dyskwalifikacja": ""},
+  "druzyna_2": {"procent": 0, "ocena": "", "dyskwalifikacja": ""},
   "prowadzi": "remis",
   "uzasadnienie": ""
 }"""
@@ -48101,10 +48268,16 @@ def ocen_rywalizacje(step, pierwsza="1"):
             "Ocena po kroku " + str(step) + " — pierwsza doszła do niego drużyna "
             + pierwsza + ". Tę samą ocenę dostaną obie drużyny, każda na swoim kroku "
             + str(step) + ".\n\n"
+            + "".join(
+                "Drużyna " + _n + " zaczęła od nowa po dyskwalifikacji (" + _cz
+                + ") — to nowy zespół, z nowymi krokami.\n\n"
+                for _n, _cz in sorted(_nowe_po_dyskwalifikacji.items())
+            )
             + _stan_druzyny_dla_sedziego("1") + "\n"
             + _stan_druzyny_dla_sedziego("2")
         )
         parsed = parse_json(deepseek("ARBITER", prompt))
+        _nowe_po_dyskwalifikacji.clear()
         if not isinstance(parsed, dict):
             return None
 
@@ -48117,7 +48290,8 @@ def ocen_rywalizacje(step, pierwsza="1"):
                 pr = 0
             # v480bf: cala ocena — skracana do 400 znakow dochodzila do
             # MAIN-ow urwana w polowie zdania ("...[skrócono]...").
-            return {"procent": pr, "ocena": str(d.get("ocena") or "").strip()}
+            return {"procent": pr, "ocena": str(d.get("ocena") or "").strip(),
+                    "dyskwalifikacja": _powod_dyskwalifikacji(d.get("dyskwalifikacja"))}
 
         ocena = {
             "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -48145,6 +48319,10 @@ def ocen_rywalizacje(step, pierwsza="1"):
         if pierwsza == "2":
             log("RYWALIZACJA", "Sędzia ocenił rundę po kroku " + str(step) + " (pierwsza drużyna 2) — drużyna 1 dostanie tę ocenę na swoim kroku " + str(step) + ".")
         log_event("ocena_sedziego", ocena)
+        if _cel_przewiduje_dyskwalifikacje():
+            for _n in ("1", "2"):
+                if ocena["druzyna_" + _n].get("dyskwalifikacja"):
+                    zdyskwalifikuj(_n, ocena["druzyna_" + _n]["dyskwalifikacja"], ocena)
         return ocena
     except Exception as e:
         log("RYWALIZACJA", "Ocena Sędziego nie wyszła (pomijam): " + str(e))
@@ -48162,6 +48340,14 @@ def _ocena_zdaniem(o):
         + " Drużyna 2 — " + str(o["druzyna_2"]["procent"]) + "%: " + _zd(o["druzyna_2"]["ocena"])
         + " Prowadzi: " + ("remis" if _prow.lower().startswith("remis") else "drużyna " + _prow)
         + (" — " + _zd(o["uzasadnienie"]) if o.get("uzasadnienie") else ".")
+        + "".join(
+            " Drużyna " + _n + " zdyskwalifikowana — powód: "
+            + _zd(o["druzyna_" + _n]["dyskwalifikacja"])
+            + " Zaczyna od nowa, cały zespół od zera."
+            for _n in ("1", "2")
+            if (o.get("druzyna_" + _n) or {}).get("dyskwalifikacja")
+            and _cel_przewiduje_dyskwalifikacje()
+        )
     )
 
 
@@ -48254,6 +48440,7 @@ def main():
         maybe_restart_team_sessions_for_new_goal()
 
     _swieze_rozmowy_po_poddaniu()
+    _wiadomosc_po_dyskwalifikacji()
 
     init_team()
 

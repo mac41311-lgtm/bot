@@ -1847,3 +1847,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      cel rywalizacji. Cel zwyklego programu (~/agent) przechodzi do
      rywalizacji tylko przy jej pierwszym starcie (wczesniej kazdy wybor 2
      go nadpisywal).
+ 69. (uzytkownik 2026-10-16) Dyskwalifikacja: gdy cel uzytkownika mowi
+     o dyskwalifikacji, a Sedzia w ocenie wpisze druzynie powod
+     dyskwalifikacji, program zaczyna te druzyne od nowa — caly zespol w
+     nowych rozmowach (Sedzia zostaje w swojej), pusty ~/MAIN_N; stare
+     pliki, wyniki i rozmowy druzyny ida do
+     ~/archiwum_rywalizacji/<czas>_dyskwalifikacja_N. Nowa druzyna dostaje
+     raz: ze poprzednia zostala zdyskwalifikowana, powod, co zrobila
+     wedlug Sedziego i jej ostatni wynik; rywal widzi powod w ocenie.
+     Druzyna 2 rusza od razu, druzyna 1 od nastepnego kroku. Bez slowa o
+     dyskwalifikacji w celu program nikogo nie restartuje.
