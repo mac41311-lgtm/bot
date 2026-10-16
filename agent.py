@@ -40020,6 +40020,35 @@ def _dsml_na_run(text):
     ):
         nazwa = m.group(1).strip()
         cialo = m.group(2)
+        # v480bu: cala decyzja (type, reason, actions...) wlozona jako
+        # parametry jednego invoke o zmyslonej nazwie. Bieg 2026-10-16
+        # 15:12: invoke name="think" z parametrami type=RUN, reason,
+        # actions=[7 akcji] — program wykonal "think" (nieznane
+        # narzedzie) i zgubil wszystkie 7 akcji. Parametry to decyzja.
+        _param = {}
+        for pm3 in re.finditer(
+            r'parameter\s+name="([A-Za-z0-9_]+)"([^>]*)>(.*?)</[^>]*parameter\s*>',
+            cialo, re.DOTALL
+        ):
+            _w = pm3.group(3).strip()
+            if 'string="false"' in pm3.group(2):
+                try:
+                    _w = json.loads(_w)
+                except Exception:
+                    pass
+            _param[pm3.group(1)] = _w
+        if (str(_param.get("type", "")).strip().upper()
+                in ("RUN", "ASK", "TASK", "DONE", "FAILED", "NEED_USER_LOGIN")
+                and any(k in _param for k in ("actions", "reason", "ask_question", "task"))):
+            _decyzja = dict(_param)
+            _decyzja["type"] = str(_decyzja["type"]).strip().upper()
+            if isinstance(_decyzja.get("actions"), str):
+                try:
+                    _decyzja["actions"] = json.loads(_decyzja["actions"])
+                except Exception:
+                    pass
+            _decyzja["_z_dsml"] = True
+            return _decyzja
         args = {}
         pm = re.search(
             r'parameter\s+name="args"[^>]*>(.*?)</[^>]*parameter\s*>',

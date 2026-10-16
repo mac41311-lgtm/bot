@@ -1870,3 +1870,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wprowadzenia go w blad, i ze powod dostaje nowa druzyna i rywal.
      Rozmowy, ktore juz dostaly stary opis, dostaja nowy raz po
      aktualizacji.
+ 72. (2026-10-16) Gdy DeepSeek wlozy cala decyzje (type, reason, actions)
+     jako parametry jednego wywolania w swoim formacie DSML o zmyslonej
+     nazwie (np. "think"), program bierze te parametry jako decyzje i
+     wykonuje jej akcje (wczesniej wykonywal "think" i gubil akcje).
