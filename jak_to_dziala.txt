@@ -1882,3 +1882,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zmienionych plikow w ~/MAIN_N (wynik.json pierwszy, do ~5 kB) i
      ostatnie wypowiedzi zespolu z pliku biegu druzyny (pytania MAIN-a i
      odpowiedzi rol, do ~5 kB; po dyskwalifikacji tylko nowej druzyny).
+ 75. (2026-10-16) Opis rywalizacji mowi, ze komenda "sprawdz" idzie w
+     bashu w folderze druzyny i moze trwac do 20 minut (pipe "| tail -1"
+     dziala). Druzyna 1 zgadywala, ze pipe psuje sprawdzenie.
