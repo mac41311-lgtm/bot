@@ -47605,27 +47605,30 @@ def _nowy_start_rywalizacji():
     czyscil tylko rozmowy druzyny 1: druzyna 2 nie dostaje pytan, wiec
     zostawala ze starymi rozmowami (albo jej stary proces dalej pracowal),
     a ~/MAIN_1, ~/MAIN_2 i oceny w ~/RYWALIZACJA byly ze starego biegu.
-    Nic nie kasujemy — stare rzeczy ida do ~/archiwum_rywalizacji/<czas>.
+    v480cb: uzytkownik (2026-10-16): druzyny znajdowaly stare biegi
+    w ~/archiwum_rywalizacji, wiec "t" kasuje teraz stare foldery
+    razem z archiwum, zamiast je tam przenosic.
     """
 
     _zatrzymaj_stara_druzyne_2("ze starego biegu")
 
-    archiwum = HOME / "archiwum_rywalizacji" / time.strftime("%Y%m%d_%H%M%S")
-    przeniesione = []
-    for p in (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR):
+    usuniete = []
+    for p in (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR,
+              HOME / "archiwum_rywalizacji"):
         try:
             if not p.exists():
                 continue
-            archiwum.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(p), str(archiwum / p.name))
-            przeniesione.append("~/" + p.name)
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            usuniete.append("~/" + p.name)
         except Exception as e:
-            log("RYWALIZACJA", "Nie przeniosłem " + str(p) + " do archiwum: " + str(e))
-    if przeniesione:
+            log("RYWALIZACJA", "Nie usunąłem " + str(p) + ": " + str(e))
+    if usuniete:
         log(
             "RYWALIZACJA",
-            "Nowy start rywalizacji: " + ", ".join(przeniesione)
-            + " przeniesione do ~/archiwum_rywalizacji/" + archiwum.name
+            "Nowy start rywalizacji: usunąłem " + ", ".join(usuniete)
             + " — obie drużyny i Sędzia zaczynają od zera.",
         )
 

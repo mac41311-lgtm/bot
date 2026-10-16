@@ -1906,3 +1906,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ~/MAIN_N/spadek (razem z lista w wiadomosci o dyskwalifikacji).
      Reszta folderu znika jak dotad. Sedzia liczy spadek nowej druzynie
      jako punkt startu, a dalej ocenia jej wlasne kroki.
+ 79. (uzytkownik 2026-10-16) Nowy start rywalizacji ("t" przy resecie
+     sesji w trybie 2) kasuje ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA,
+     ~/agent_druzyna2 i cale ~/archiwum_rywalizacji, zamiast przenosic je
+     do archiwum — druzyny znajdowaly tam stare biegi.
