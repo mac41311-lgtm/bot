@@ -47396,6 +47396,14 @@ def _rywalizacja_tekst():
         "porówna liczbę. Werdykt — potwierdzone albo nie wyszło — "
         "dostają obie drużyny, tak samo jak każdy następny wynik "
         "drużyny " + oni + "."
+        # v480bt: uzytkownik (2026-10-16) — o dyskwalifikacji, takze za
+        # oszukiwanie Sedziego, wiedza obie druzyny od poczatku.
+        + ("\n\nTa rywalizacja ma dyskwalifikację. Sędzia dyskwalifikuje "
+           "drużynę, która spełni jej warunek z celu albo spróbuje "
+           "wprowadzić go w błąd co do tego, na czym zbudowała swoją "
+           "pracę. Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół "
+           "od zera, a powód dostają nowa drużyna i jej rywal."
+           if _cel_przewiduje_dyskwalifikacje() else "")
     )
 
 

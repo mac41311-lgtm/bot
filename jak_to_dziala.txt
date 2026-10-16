@@ -1864,3 +1864,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      prace, przebranie znanego pomyslu w inne slowa, podkladanie sie pod
      sposob oceniania). Dowodem sa slowa druzyny z krokow; rozmowa o takim
      pomysle po to, zeby go odrzucic, dyskwalifikacji nie daje.
+ 71. (uzytkownik 2026-10-16) Gdy cel mowi o dyskwalifikacji, opis
+     rywalizacji, ktory kazda rola dostaje z celem, mowi tez obu
+     druzynom, ze Sedzia dyskwalifikuje za warunek z celu albo za probe
+     wprowadzenia go w blad, i ze powod dostaje nowa druzyna i rywal.
+     Rozmowy, ktore juz dostaly stary opis, dostaja nowy raz po
+     aktualizacji.
