@@ -86,7 +86,10 @@ if _DRUZYNA not in ("1", "2"):
 
 # Start bez pytan: po cichej aktualizacji i w druzynie 2 (ona nie ma
 # terminala — pracuje w tle, odpowiedzi na pytania nikt by nie dal).
-_BEZ_PYTAN = _PO_AKTUALIZACJI or _DRUZYNA == "2"
+# v480cc: druzyna 1 zamknela bieg jako FAILED i rusza od nowa sama
+# (patrz _nowy_bieg_po_poddaniu) — tez bez pytan, z tym samym celem.
+_PO_PODDANIU = os.environ.pop("AEL_PO_PODDANIU", "") == "1"
+_BEZ_PYTAN = _PO_AKTUALIZACJI or _PO_PODDANIU or _DRUZYNA == "2"
 
 try:
     _MTIME_PROGRAMU = os.path.getmtime(_SCIEZKA_PROGRAMU) if _SCIEZKA_PROGRAMU else 0.0
@@ -47529,6 +47532,54 @@ def _swieze_rozmowy_po_poddaniu():
         log("RYWALIZACJA", "Nowe rozmowy po FAILED nie wyszły: " + str(e))
 
 
+_MAKS_PODDAN_W_10_MIN = 3
+
+
+def _nowy_bieg_po_poddaniu():
+    """
+    v480cc: uzytkownik (2026-10-17) — druzyna 1 po FAILED rusza od nowa,
+    tak samo jak druzyna 2, zamiast konczyc cala rywalizacje. Bieg
+    2026-10-17 08:22: FAILED druzyny 1 zamknal program, a z nim druzyne 2.
+    Ten sam proces (execv), wiec druzyna 2 i robota w tle zyja dalej;
+    nowy start idzie bez pytan, z tym samym celem i nowymi rozmowami
+    (_swieze_rozmowy_po_poddaniu). Trzy FAILED w 10 minut = koniec.
+    """
+    if _DRUZYNA != "1" or globals().get("_zamkniete_przez_uzytkownika"):
+        return
+    lr = read_json(LAST_RESULT_FILE, {})
+    if not (isinstance(lr, dict) and lr.get("status") == "FAILED"):
+        return
+    teraz = time.time()
+    starty = []
+    for t in os.environ.get("AEL_STARTY_PO_PODDANIU", "").split(","):
+        try:
+            if teraz - float(t) < 600:
+                starty.append(float(t))
+        except ValueError:
+            pass
+    if len(starty) >= _MAKS_PODDAN_W_10_MIN - 1:
+        log("RYWALIZACJA", "Drużyna 1 zamyka bieg jako FAILED zaraz po starcie — "
+            "nie zaczynam od nowa, program kończy pracę.")
+        return
+    starty.append(teraz)
+    os.environ["AEL_STARTY_PO_PODDANIU"] = ",".join(str(t) for t in starty)
+    os.environ["AEL_PO_PODDANIU"] = "1"
+    log("RYWALIZACJA", "Drużyna 1 zamknęła bieg jako FAILED — rusza od nowa w nowych "
+        "rozmowach, z tym samym celem; drużyna 2 pracuje dalej.")
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    _KOLEJKA_KONTA.acquire()
+    try:
+        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
+    except Exception as e:
+        _KOLEJKA_KONTA.release()
+        os.environ.pop("AEL_PO_PODDANIU", None)
+        log("RYWALIZACJA", "Nowy bieg drużyny 1 nie ruszył: " + str(e))
+
+
 def _druzyna2_zyje(pid):
     if not pid:
         return False
@@ -47917,12 +47968,19 @@ def _pilnuj_druzyny_2():
                 "Jej log: " + str(_DRUZYNA2_DIR / "terminal.log"))
             return
         try:
+            _lr2 = read_json(_DRUZYNA2_DIR / "last_result.json", {})
+            _poddala = isinstance(_lr2, dict) and _lr2.get("status") == "FAILED"
             with _druzyna2_lock:
                 if _druzyna2_zyje(_druzyna2["pid"]):
                     continue
                 pid = _odpal_druzyne_2()
-            log("RYWALIZACJA", "Drużyna 2 przestała działać — ruszyła od nowa "
-                "(pid " + str(pid) + ").")
+            # v480cc: bieg 2026-10-17 — trzy razy "przestała działać",
+            # a za kazdym razem MAIN druzyny 2 sam zamknal bieg jako FAILED.
+            log("RYWALIZACJA", (
+                "Drużyna 2 zamknęła bieg jako FAILED — rusza od nowa w nowych "
+                "rozmowach (pid " if _poddala else
+                "Drużyna 2 przestała działać — ruszyła od nowa (pid "
+            ) + str(pid) + ").")
         except Exception as e:
             log("RYWALIZACJA", "Drużyny 2 nie dało się wznowić: " + str(e))
             return
@@ -49017,6 +49075,8 @@ def main():
         run_agent(
             goal
         )
+
+        _nowy_bieg_po_poddaniu()
 
     except KeyboardInterrupt:
 

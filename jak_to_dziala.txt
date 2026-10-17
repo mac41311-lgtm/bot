@@ -1910,3 +1910,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      sesji w trybie 2) kasuje ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA,
      ~/agent_druzyna2 i cale ~/archiwum_rywalizacji, zamiast przenosic je
      do archiwum — druzyny znajdowaly tam stare biegi.
+ 80. (uzytkownik 2026-10-17) W rywalizacji FAILED druzyny 1 nie konczy juz
+     calego programu. Druzyna 1 rusza od nowa sama (ten sam proces, bez
+     pytan, ten sam cel, nowe rozmowy zespolu; Sedzia zostaje w swojej),
+     tak jak druzyna 2, ktora pracuje dalej. Trzy FAILED w 10 minut =
+     koniec. Log druzyny 2 po jej FAILED pisze to wprost zamiast
+     "przestala dzialac".
