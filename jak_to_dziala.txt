@@ -1938,3 +1938,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      a zespol nie wola jego. Decyduje dalej MAIN z zespolem. Prompt
      MAIN-a przepisany w calosci o jedno zdanie o Igorze; zdanie o ASK
      w opisie programu mowi, ze kontekst dostaje ktos z zespolu.
+ 84. (bieg 2026-10-17) Licznik wiadomosci DeepSeeka na godzine i budzet
+     sciety po "za szybko" sa zapisane przy koncie
+     (~/.ael_budzet_konta_N.json) i przezywaja cicha aktualizacje.
+     Wczesniej przeladowanie zerowalo licznik, program wysylal za gesto
+     i drugi raz w biegu stal pol godziny pod sciana. Rozpoznawanie
+     braku internetu (punkt 81) zna teraz tez komunikaty curl, np.
+     "Could not resolve host".

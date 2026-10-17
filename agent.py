@@ -5810,7 +5810,12 @@ _BLAD_SIECI_RE = re.compile(
     r"|ChunkedEncodingError|ProtocolError|IncompleteRead|Broken pipe"
     r"|SSLEOFError|EOF occurred|Software caused connection abort"
     r"|Errno 101|Errno 104|Errno 110|Errno 111|Errno 113|Errno 7\b"
-    r"|Errno -2|Errno -3",
+    r"|Errno -2|Errno -3"
+    # v480cg: opendeep idzie przez curl_cffi, a curl mowi inaczej niz
+    # requests — bieg 2026-10-17 10:44: "curl: (6) Could not resolve host".
+    r"|Could not resolve|Failed to connect|Couldn't connect"
+    r"|Recv failure|Send failure|Empty reply from server"
+    r"|curl: \((?:6|7|28|35|52|55|56)\)",
     re.IGNORECASE
 )
 
@@ -6229,9 +6234,60 @@ _OKNO_BUDZETU = 3600.0
 # Znaczniki czasu wyslanych wiadomosci, osobno na konto.
 _deepseek_wyslane = {}
 
+# v480cg: licznik i sciety budzet przezywaja przeladowanie programu.
+#
+# Bieg 2026-10-17 (druzyna 1): o 09:45 strona powiedziala "za szybko",
+# program zszedl do 38 wiadomosci na godzine i odczekal. O 10:29 cicha
+# aktualizacja przeladowala program — licznik wyslanych wrocil do zera,
+# a budzet do 90 — i o 11:04 ta sama sciana i drugie pol godziny
+# czekania. Wyslane wiadomosci to fakt o koncie, nie o procesie, wiec
+# trzymamy je w pliku przy koncie. Sciety budzet wraca, gdy strona
+# scinala go w ostatniej godzinie (to ta sama sytuacja na koncie).
+_budzet_wczytany = set()
+
+
+def _plik_budzetu_konta(account):
+    return HOME / (".ael_budzet_konta_" + str(account) + ".json")
+
+
+def _wczytaj_budzet_konta(account):
+    if account in _budzet_wczytany:
+        return
+    _budzet_wczytany.add(account)
+    try:
+        d = json.loads(_plik_budzetu_konta(account).read_text())
+    except Exception:
+        return
+    if not isinstance(d, dict):
+        return
+    teraz = time.time()
+    _deepseek_wyslane[account] = sorted(
+        float(t) for t in (d.get("wyslane") or [])
+        if isinstance(t, (int, float)) and teraz - _OKNO_BUDZETU < t <= teraz
+    )
+    try:
+        if d.get("obciety") and teraz - float(d.get("kiedy") or 0) < _OKNO_BUDZETU:
+            _budzet_obciety[account] = int(d["obciety"])
+            _budzet_obciety_kiedy[account] = float(d["kiedy"])
+    except Exception:
+        pass
+
+
+def _zapisz_budzet_konta(account):
+    try:
+        _plik_budzetu_konta(account).write_text(json.dumps({
+            "wyslane": _deepseek_wyslane.get(account, []),
+            "obciety": _budzet_obciety.get(account),
+            "kiedy": _budzet_obciety_kiedy.get(account, 0),
+        }))
+    except Exception:
+        pass
+
 
 def _posprzataj_okno(account, teraz):
     """Wyrzuca z licznika wiadomosci starsze niz godzina."""
+
+    _wczytaj_budzet_konta(account)
 
     znaczniki = _deepseek_wyslane.setdefault(account, [])
     granica = teraz - _OKNO_BUDZETU
@@ -6287,6 +6343,7 @@ def _ile_czekac_na_budzet(account, teraz):
 # Budzet obciety po tym, jak strona powiedziala "za szybko" —
 # osobno na konto, trzymany do konca uruchomienia.
 _budzet_obciety = {}
+_budzet_obciety_kiedy = {}
 
 # v302: najnizszy budzet, do ktorego schodzimy po kolejnych "za
 # szybko". Musi zostawiac NAM 20 miejsc ponad rezerwa dla czlowieka,
@@ -6299,6 +6356,8 @@ _BUDZET_MINIMALNY = DEEPSEEK_REZERWA_DLA_CZLOWIEKA + 20
 
 def _budzet_konta_teraz(account):
     """Ile wiadomosci na godzine wolno na tym koncie w tej chwili."""
+
+    _wczytaj_budzet_konta(account)
 
     return _budzet_obciety.get(account, DEEPSEEK_NA_GODZINE)
 
@@ -6320,6 +6379,8 @@ def _obetnij_budzet(account):
     if nowy < biezacy:
 
         _budzet_obciety[account] = nowy
+        _budzet_obciety_kiedy[account] = time.time()
+        _zapisz_budzet_konta(account)
 
         log(
             "DEEPSEEK",
@@ -6450,6 +6511,7 @@ def _deepseek_pace(name):
         _teraz = time.time()
         _deepseek_last_send[account] = _teraz
         _posprzataj_okno(account, _teraz).append(_teraz)
+        _zapisz_budzet_konta(account)
 
 
 # ------------------------------------------------------------
