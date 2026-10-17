@@ -1916,3 +1916,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      tak jak druzyna 2, ktora pracuje dalej. Trzy FAILED w 10 minut =
      koniec. Log druzyny 2 po jej FAILED pisze to wprost zamiast
      "przestala dzialac".
+ 81. (uzytkownik 2026-10-17) Brak internetu to nie awaria konta. Gdy
+     polaczenie z DeepSeekiem pada bledem sieci (DNS, brak trasy,
+     zerwane polaczenie, timeout), program sprawdza, czy telefon widzi
+     internet w ogole (kilka niezaleznych adresow). Nie widzi: staje,
+     pisze w logu "Brak internetu", sprawdza co 15 s i po powrocie sieci
+     ponawia to samo w tej samej rozmowie. Bez restartu sesji, bez
+     czatu testowego, bez nowych rozmow i bez 2 h przerwy konta. Widzi
+     internet: to problem DeepSeeka albo konta i dziala dawna droga.

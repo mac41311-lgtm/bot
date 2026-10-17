@@ -5565,6 +5565,11 @@ def start_session(name, system_prompt):
 
         error_text = str(e)
 
+        # v480cd: bez internetu nie ma o czym meldowac — czekamy na
+        # siec i zakladamy (albo wznawiamy) te sama rozmowe jeszcze raz.
+        if _czekaj_na_internet(name, e):
+            return start_session(name, system_prompt)
+
         # Zaobserwowany realny przypadek: token konta (userToken z
         # localStorage chat.deepseek.com) po prostu WYGASŁ po
         # wielu godzinach użycia — _create_session() w opendeep
@@ -5749,6 +5754,130 @@ def _przerwa_konta_do(account):
         return 0.0
 
 
+# ------------------------------------------------------------
+# v480cd: BRAK INTERNETU TO NIE AWARIA KONTA
+# ------------------------------------------------------------
+# Uzytkownik (2026-10-17): "jak jest brak internetu zrob stop,
+# odroznij to od braku na koncie, zeby sie nie otwieraly nowe
+# sesje". Dotad zerwane polaczenie szlo ta sama droga co awaria
+# rozmowy albo konta: restart sesji, czat testowy, nowa rozmowa,
+# a po serii — 2 h przerwy konta. Bez sieci zadna z tych prob nie
+# ma szans i kazda tylko psuje stan roli.
+#
+# Teraz: blad, ktory wyglada na polaczenie, sprawdzamy jednym
+# pytaniem — czy telefon w ogole widzi internet (kilka niezaleznych
+# adresow, nie tylko DeepSeek). Nie widzi — program staje i czeka,
+# az siec wroci, a potem ponawia TO SAMO w TEJ SAMEJ rozmowie. Widzi
+# — to problem po stronie DeepSeeka albo konta i dziala dawna droga.
+
+_BLAD_SIECI_RE = re.compile(
+    r"Failed to resolve|NameResolution|getaddrinfo|Name or service not known"
+    r"|No address associated|Temporary failure in name resolution"
+    r"|Network is unreachable|No route to host|Connection refused"
+    r"|Connection reset|Connection aborted|ConnectionError|ConnectTimeout"
+    r"|ReadTimeout|timed out|Max retries exceeded|RemoteDisconnected"
+    r"|ChunkedEncodingError|ProtocolError|IncompleteRead|Broken pipe"
+    r"|SSLEOFError|EOF occurred|Software caused connection abort"
+    r"|Errno 101|Errno 104|Errno 110|Errno 111|Errno 113|Errno 7\b"
+    r"|Errno -2|Errno -3",
+    re.IGNORECASE
+)
+
+_ADRESY_SPRAWDZENIA_SIECI = (
+    ("1.1.1.1", 443),
+    ("8.8.8.8", 53),
+    ("chat.deepseek.com", 443),
+    ("www.google.com", 443),
+)
+
+_CO_ILE_SPRAWDZAM_SIEC_S = 15
+_brak_sieci_lock = _threading.Lock()
+_brak_sieci_od = [0.0]
+
+
+def _wyglada_na_blad_sieci(blad):
+    tekst = type(blad).__name__ + ": " + str(blad or "") if isinstance(
+        blad, BaseException) else str(blad or "")
+    return bool(_BLAD_SIECI_RE.search(tekst))
+
+
+def _internet_jest(timeout=5):
+    """Czy telefon dosiega KTOREGOKOLWIEK z kilku niezaleznych adresow."""
+    import socket
+    for host, port in _ADRESY_SPRAWDZENIA_SIECI:
+        try:
+            socket.create_connection((host, port), timeout=timeout).close()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _czekaj_na_internet(name, blad):
+    """
+    Gdy to brak internetu: czekamy (bez limitu), az wroci, i zwracamy
+    True — wolajacy ponawia to samo w tej samej rozmowie. Gdy internet
+    jest: False, nic nie robimy.
+    """
+    if not _wyglada_na_blad_sieci(blad) or _internet_jest():
+        return False
+    with _brak_sieci_lock:
+        pierwszy = not _brak_sieci_od[0]
+        if pierwszy:
+            _brak_sieci_od[0] = time.time()
+    if pierwszy:
+        log(
+            "SIEĆ",
+            "Brak internetu (" + str(name) + ": " + short(str(blad), 160)
+            + "). To nie jest problem konta ani DeepSeeka — wstrzymuję "
+            "pracę i czekam, aż sieć wróci. Nie zakładam nowych rozmów."
+        )
+    ostatni_log = time.time()
+    while not _internet_jest():
+        time.sleep(_CO_ILE_SPRAWDZAM_SIEC_S)
+        if time.time() - ostatni_log >= 600:
+            ostatni_log = time.time()
+            log(
+                "SIEĆ",
+                "Nadal brak internetu — czekam już "
+                + str(int((time.time() - (_brak_sieci_od[0] or time.time())) / 60))
+                + " min."
+            )
+    with _brak_sieci_lock:
+        od = _brak_sieci_od[0]
+        _brak_sieci_od[0] = 0.0
+    if od:
+        log(
+            "SIEĆ",
+            "Internet wrócił po " + str(max(1, int((time.time() - od) / 60)))
+            + " min — wracam do tych samych rozmów."
+        )
+    # Siec dopiero wstala: chwila oddechu, zeby DNS i polaczenia sie
+    # ulozyly, zanim pojdzie prawdziwe zapytanie.
+    time.sleep(5)
+    return True
+
+
+class _ProbyDeepSeek:
+    """range(n), w ktorym jedna proba moze pojsc jeszcze raz (po sieci)."""
+
+    def __init__(self, n):
+        self.n = n
+        self._powtorz = False
+
+    def powtorz(self):
+        self._powtorz = True
+
+    def __iter__(self):
+        i = 0
+        while i < self.n:
+            yield i
+            if self._powtorz:
+                self._powtorz = False
+                continue
+            i += 1
+
+
 def _blad_serwera_w_strumieniu(poczatek):
     t = str(poczatek or "")
     return '"type":"error"' in t and (
@@ -5772,6 +5901,10 @@ def _czat_testowy_odpowiada(name):
         )
         return bool(str(tekst or "").strip())
     except Exception as e:
+        # v480cd: brak sieci to nie "konto nie odpowiada" — bez tego
+        # konto dostawalo 2 h przerwy za to, ze telefon stracil zasieg.
+        if _czekaj_na_internet(name, e):
+            return _czat_testowy_odpowiada(name)
         log("DEEPSEEK", "Czat testowy nie odpowiedział: " + short(str(e), 200))
         return False
 
@@ -7947,7 +8080,9 @@ def _deepseek_jedna_rozmowa(name, message):
                     + " niedostępna i nie udało się jej wznowić."
                 )
 
-        for attempt in range(2):
+        _proby = _ProbyDeepSeek(2)
+
+        for attempt in _proby:
 
             try:
 
@@ -8662,6 +8797,13 @@ def _deepseek_jedna_rozmowa(name, message):
                     "DEEPSEEK",
                     f"{name} próba {attempt + 1} błąd: {e}"
                 )
+
+                # v480cd: brak internetu — czekamy na siec i ponawiamy
+                # TA SAMA probe w TEJ SAMEJ rozmowie. Bez restartu sesji,
+                # bez kasowania stanu, bez liczenia porazek konta.
+                if _czekaj_na_internet(name, e):
+                    _proby.powtorz()
+                    continue
 
                 if name in _resume_unverified:
 
