@@ -3403,9 +3403,9 @@ def init_deepseek():
 # ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
 # oddac decyzje; bez nich kazdy krok konczylby sie
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
-# v480cf: na prosbe uzytkownika (2026-10-17) przepisany w calosci —
-# doszedl Igor, niezalezny rozmowca spoza zespolu (patrz IGOR_PROMPT).
-MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej. Poza zespołem jest Igor: nie zna celu ani niczego z programu i dostaje tylko to, co sam mu napiszesz w ASK, tak jak człowiek pisze do kogoś w nowym czacie. Możesz pytać go, o co chcesz i kiedy chcesz — patrzy świeżo i może wpaść na coś nowego, a co z tym zrobić, ustalasz z zespołem.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK|IGOR",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
+# v480cf: doszedl Igor (IGOR w ask_role). v480ch: zdanie o nim stoi w
+# liscie zespolu w _JAK_TO_DZIALA (prosba uzytkownika), nie tu — raz.
+MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK|IGOR",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -41296,7 +41296,12 @@ _JAK_TO_DZIALA = (
     "- Wojtek patrzy na cel oczami zwykłego użytkownika,\n"
     "- Ela ocenia, ile celu jest naprawdę zrobione,\n"
     "- Piotr i Ania wchodzą, gdy kod się wysypie: Piotr szuka "
-    "przyczyny, Ania pisze poprawkę.\n\n"
+    "przyczyny, Ania pisze poprawkę.\n"
+    "Poza zespołem jest Igor: nie zna celu ani niczego z programu i "
+    "dostaje tylko to, co sam mu napiszesz w ASK, tak jak człowiek "
+    "pisze do kogoś w nowym czacie. Możesz pytać go, o co chcesz i "
+    "kiedy chcesz — patrzy świeżo i może wpaść na coś nowego, a co z "
+    "tym zrobić, ustalasz z zespołem.\n\n"
     "Ty decydujesz, co dalej. Twój TASK wykonuje Gemini — to on ma "
     "ręce: uruchamia komendy w Termuxie (także w tle), czyta i "
     "zapisuje pliki, klika i pisze na ekranie telefonu, obsługuje "
