@@ -1,4 +1,4 @@
-JAK TO DZIALA — AEL-MINI v450
+JAK TO DZIALA — AEL-MINI v468
 wszystko wyciagniete z agent.py, liczby sprawdzone w kodzie
 =========================================================================
 
@@ -7,9 +7,10 @@ W JEDNYM ZDANIU
 -------------------------------------------------------------------------
 
 Zespol na DeepSeeku rozmawia o Twoim celu, MAIN decyduje, co robimy,
-Gemini to wykonuje na telefonie, a Python jest rekami i oczami:
-kladzie kod, ktory ktos z zespolu napisal, i mowi wszystkim, co
-naprawde wyszlo.
+i od v459 sam wykonuje akcje przez Pythona (RUN); Gemini zostaje jako
+wykonawca do zadan, ktore wymagaja patrzenia i probowania (TASK).
+Python jest rekami i oczami: kladzie kod, ktory ktos z zespolu
+napisal, wykonuje akcje MAIN-a i mowi wszystkim, co naprawde wyszlo.
 
 
 =========================================================================
@@ -23,11 +24,12 @@ CZESC 1. TRZY WARSTWY
      |  mysla i pisza — nie wykonuja niczego
      v
     PYTHON (agent.py)                    <-- RECE I OCZY
-     |  kladzie kod autora na dysk, uruchamia proste rzeczy sam,
-     |  pokazuje strone i ekran, pilnuje autorstwa i limitow
+     |  wykonuje akcje z RUN MAIN-a (te same 41 narzedzi, do 12
+     |  akcji na jedno RUN), kladzie kod autora na dysk, pokazuje
+     |  strone i ekran, pilnuje autorstwa i limitow
      v
-    GEMINI (wykonawca, przez API)        <-- PALEC
-     |  40 narzedzi, do 25 wywolan na zadanie
+    GEMINI (wykonawca, przez API)        <-- PALEC, gdy trzeba patrzec
+     |  43 narzedzia, do 25 wywolan na zadanie (TASK)
      v
     TERMUX + ANDROID + CHROME            <-- TELEFON
 
@@ -36,7 +38,7 @@ CZESC 1. TRZY WARSTWY
 CZESC 2. KTO JEST KIM
 =========================================================================
 
-  MAIN     decyduje: TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+  MAIN     decyduje: RUN / TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
   Tomek    szuka sensownego nastepnego kroku
   Kamil    sprawdza fakty, szuka w sieci
   Marek    ocenia plany i szuka slabych punktow
@@ -109,8 +111,20 @@ CZESC 5. CO ROBI GEMINI
 
 Gemini WYKONUJE. Nie pisze kodu, nie decyduje o celu.
 
-Kazde zadanie to nowa rozmowa: 8 krotkich regul, stan telefonu,
-warunek sukcesu i tresc zadania. Do 25 wywolan narzedzi.
+Jeden cel = jedna rozmowa wykonawcy (v452). Pierwsze zadanie w celu
+dostaje 8 krotkich regul, stan telefonu, warunek sukcesu i tresc;
+kazde nastepne idzie jako kolejna wiadomosc w tej samej rozmowie
+(Interactions API, previous_interaction_id) — Gemini pamieta, co
+widzialo i robilo. Do 25 wywolan narzedzi na zadanie.
+
+Rozmowa idzie dalej tylko, gdy: ten sam cel i ta sama para klucz+
+model, ostatnia wiadomosc mlodsza niz 20 h (darmowa wersja trzyma
+rozmowy 1 dzien), kontekst ponizej GEMINI_PAMIEC_TOKENY (80 000) i
+kazde wywolanie narzedzia dostalo wynik. Po bledzie narzedzia Python
+domyka runde jedna wiadomoscia bez narzedzi — Gemini pisze, co o tym
+mysli, i te slowa MAIN dostaje razem ze sladem. Gdy serwer nie zna
+juz rozmowy, zadanie idzie od nowa z pelnym promptem.
+GEMINI_PAMIEC=0 wylacza pamiec.
 
 Blad a brak (v444):
   - blad w kodzie (skladnia, wysypany skrypt, kod bez autora),
@@ -120,7 +134,7 @@ Blad a brak (v444):
     fragmentu w pliku, miejsca do zapisu) — to zwykly wynik,
     Gemini dziala dalej
 
-40 narzedzi:
+41 narzedzi:
 
   TERMUX (14)
     termux_run, termux_run_background, termux_check_process,
@@ -129,11 +143,11 @@ Blad a brak (v444):
     termux_delete, termux_file_exists, termux_check_apk,
     termux_start_second_session
 
-  CHROME (7)
+  CHROME (8)
     chrome_open, chrome_tabs, chrome_inspect,
     chrome_click (po numerze albo tekscie),
     chrome_type (pole po numerze, enter: true),
-    chrome_back, chrome_execute_js
+    chrome_back, chrome_close, chrome_execute_js
 
   ANDROID (19)
     android_state (drzewo ekranu), android_click,
@@ -190,13 +204,14 @@ pracuja na telefonie (MAIN, Bartek, Piotr, Ania).
 CZESC 8. LICZBY, KTORE RZADZA
 =========================================================================
 
-  40        krokow na cel (AGENT_MAX_STEPS)
-  4         pytania ASK MAIN-a na krok
+  bez limitu krokow na cel (v464; AGENT_MAX_STEPS ustawia limit, gdy ktos chce)
+  5         pytania ASK MAIN-a na krok (nadmiar idzie na nastepny krok)
   25        wywolan narzedzi na jedno zadanie Gemini (GEMINI_MAX_TOOL_CALLS)
   4         ten sam wynik z tego samego wywolania pod rzad = czekanie
   2         to samo wywolanie juz bylo = od trzeciego wynik z pamieci
             (chrome_open tylko gdy karta nadal stoi pod tym adresem)
   1800 s    najdluzsza robota w tle (DLUGA_ROBOTA_TIMEOUT)
+  2         odpowiedzi kolegow na zawolanie po imieniu na krok (v454)
   3         przeglady kodu Piotra na jeden cel
   5         co ile krokow Ela ocenia postep
   0         rund wymiany Marek <-> Tomek
@@ -229,3 +244,1722 @@ CZESC 10. ZASADY, KTORYCH SIE TRZYMAMY
   - zmiana w programie tylko z konkretnego problemu w logach
 
 =========================================================================
+
+
+=========================================================================
+CZESC 11. CO ZMIENILO v451 (przeglad calosci + testy bez telefonu)
+=========================================================================
+
+  - web_search.py (modul obok agent.py, nie ma go w repozytorium) nie
+    jest juz twarda zaleznoscia: bez niego program startuje, a
+    "WEB_SEARCH:" Kamila oddaje fakt, ze tej drogi tu nie ma
+  - Kamil i siec: serwer DeepSeeka szuka w sieci tylko w trybie bez
+    myslenia (V4 Flash). Gdy przy mysleniu odpowie
+    search_enabled=false, Python raz przelacza rozmowe Kamila na tryb
+    bez myslenia; gdy wtedy szuka — zostaje tak, gdy nie — wraca
+    myslenie i zespol slyszy o tym raz, jak dotad
+  - bez ostrzezen Pythona 3.12 na starcie (\d w kodzie JS,
+    utcfromtimestamp przy liczeniu polnocy w Kalifornii)
+  - straznik czekania (4 x ten sam wynik) mowi w logu prawde: nie
+    przerywa, tylko informuje; w sladzie dla MAIN-a zostaje jedna linia
+  - Ela: "50%" w polu percent to tez liczba (bylo 0)
+  - uruchomienie w tle nie zostawia w agencie otwartego uchwytu logu
+  - martwy kod kluczy Gemini (v277: mark_quota/key_disabled/
+    get_gemini_client) usuniety — od v449 liczy sie para klucz+model
+  - update_agent.sh: galaz mozna nadpisac (BRANCH=... bash
+    ~/update_agent.sh); domyslnie idzie z galezi tej wersji
+
+  Sprawdzone bez telefonu, z zaslepionym DeepSeekiem i Gemini: parser
+  JSON-a decyzji, kilka ASK w jednej odpowiedzi, czas odnowienia po
+  429 (dzienny/minutowy/nieznany), polnoc kalifornijska z czasem
+  letnim, wybor bloku kodu Bartka, cala petla Gemini (narzedzie,
+  straznik, limit 25, 429 przed i w trakcie, 503), parser strumienia
+  DeepSeeka (myslenie, bez myslenia, paczka BATCH, samo myslenie) i
+  cala petla run_agent (ASK -> kod Bartka polozony i uruchomiony przez
+  Pythona -> TASK przez Gemini -> NEED_USER_LOGIN -> DONE).
+
+=========================================================================
+
+
+=========================================================================
+CZESC 12. CO ZMIENILO v452 (z logow 2026-09-25 16:15, 2026-09-26
+14:04 i 14:53)
+=========================================================================
+
+  - pamiec wykonawcy na caly cel (czesc 5): w 14 z 76 zadan Gemini
+    zaczynalo od chrome_tabs, a MAIN przepisywal stan strony do
+    kazdego zadania
+  - po bledzie narzedzia runda jest domykana: Gemini dostaje wynik i
+    fakt o przerwaniu, odpowiada bez narzedzi, MAIN dostaje jego slowa
+  - chrome_execute_js: "Runtime.evaluate timeout" (2 zadania stracone)
+    to jedno ponowienie, a potem odpowiedz "kod nie oddal wyniku w
+    10 s", nie koniec zadania
+  - chrome_open z file:// (zrzut PNG) — odpowiedz, ze to nie strona,
+    zamiast `am start` i utraty zadania
+  - opis chrome_execute_js mowi, ze el.value='' nie dziala w
+    formularzach React/Vue (OLX: 22 wywolania na jeden formularz) —
+    pola wpisuje chrome_type
+  - "Tresc zlecenia" -> "Zlecenie MAIN-a dla programu": Bartek czytal
+    zadanie dla wykonawcy jako polecenie dla siebie ("nie mam
+    chrome_open", "nie mam terminala") i odmawial kodu; zlecenie kodu
+    dla Bartka zaczyna sie od faktu, kto je wykonuje
+  - MAIN moze zapytac Wojtka przez ASK (byl dozwolony, brakowalo go w
+    ksztalcie JSON-a); MAIN wie, ze Gemini pamieta poprzednie zadania
+
+=========================================================================
+
+
+=========================================================================
+CZESC 13. STYK Z DEEPSEEKIEM (opendeep) — co jest i co zmienilo v453
+=========================================================================
+
+  Biblioteka opendeep (nieoficjalna) rozmawia ze STRONA
+  chat.deepseek.com na tokenie z przegladarki (userToken z
+  localStorage, ~/api_token.txt; drugie konto: ~/api_token_2.txt).
+  Robi trzy rzeczy: zaklada rozmowe (/chat_session/create), rozwiazuje
+  proof-of-work (WebAssembly: wasmtime + numpy) i czyta strumien SSE z
+  /chat/completion. Wysyla, gdy sie da, przez curl_cffi udajacy
+  Chrome (Cloudflare), inaczej przez zwykle requests.
+
+  Program uzywa z niej naglowkow, sesji HTTP i POW; sam strumien czyta
+  wlasna kopia (status odpowiedzi, myslenie, search_enabled — tego
+  biblioteka nie oddaje). Kazda rola to osobna rozmowa na stronie,
+  wznawiana po restarcie (state/*.json). Tempo: min. 6 s miedzy
+  wiadomosciami i 90 na godzine na konto; "Messages too frequent"
+  zwalnia, "invalid message id" zaklada nowa rozmowe.
+
+  v453 dolozylo:
+  - limit czasu na kazde zadanie HTTP (polaczenie 20 s, czytanie
+    strumienia 300 s; DEEPSEEK_CONNECT_TIMEOUT / DEEPSEEK_READ_TIMEOUT)
+    — zerwane WiFi w trakcie odpowiedzi wieszalo program na zawsze
+  - tresc odpowiedzi serwera w bledzie (HTTP 4xx/5xx, nie-SSE) — to w
+    niej jest "invalid message id" i "Messages too frequent"
+  - koniec podwojnej wysylki: awaryjny powrot do send_message()
+    biblioteki byl po KAZDYM bledzie, takze po bledzie serwera, i
+    wysylal te sama wiadomosc drugi raz; zostaje tylko dla zmiany
+    ksztaltu biblioteki
+  - na starcie fakt: jaki transport i czy POW jest do rozwiazania
+    (bez wasmtime/numpy serwer moze odrzucac wiadomosci — dotad ta
+    proba byla polykana po cichu)
+  - Ola i Ela rozmawiaja bez myslenia (tryb szybki strony): Ela
+    oddawala 228 znakow JSON-a po 49 s; DEEPSEEK_BEZ_MYSLENIA=... zmienia
+    liste, pusta wartosc = wszyscy z mysleniem
+
+  Czego nie ma i dlaczego: kasowania starych rozmow ze strony (kazdy
+  bieg zostawia do 10 czatow) — biblioteka nie zna tego endpointu, a
+  zgadywanie go na koncie uzytkownika to ryzyko; wysylania plikow do
+  rozmowy (ref_file_ids zawsze puste) — z tego samego powodu.
+
+=========================================================================
+
+
+=========================================================================
+CZESC 14. PRZEGLAD SPOJNOSCI (v454)
+=========================================================================
+
+SPRAWDZONE I DZIALA (testy bez telefonu, z zaslepionym DeepSeekiem):
+  - kod Bartka trafia na dysk 1:1 (nazwa nad blokiem, heredoc, jezyk
+    pliku), Python sam uruchamia "uruchom ten plik", wynik wraca do
+    autora, po awarii Piotr oglada, Ania poprawia
+  - poprawki w trzech ksztaltach: SZUKAJ/ZAMIEN, unified diff, "stary
+    fragment / nowy fragment" — z kopia, sprawdzeniem skladni i
+    wycofaniem, gdy skladnia nie przejdzie
+  - Gemini nie kladzie i nie zmienia kodu (termux_write_file,
+    termux_run z cat/tee, termux_patch_file) — kod idzie od autora
+  - do DeepSeeka ida tylko nowe rzeczy: kazdy blok przechodzi przez
+    "czy juz to czytal" (_only_if_new, skrzynka), cel raz na rozmowe,
+    stare wypowiedzi nie wracaja do MAIN-a
+
+ZMIENIONE, BO OGRANICZALO:
+  - druga identyczna porazka narzedzia wolala Piotra i Anie do
+    LATANIA agent.py (patch na wlasny plik, po restarcie) — usuniete;
+    MAIN dostaje sam fakt o powtorzonej porazce
+  - "za krotki kod" (nowy blok < 40% starego pliku) konczyl krok bez
+    zapisu — teraz zapis z kopia .bak i liczbami dla zespolu; autor ma
+    prawo skrocic wlasny plik
+  - zawolanie kolegi po imieniu ("Bartku, napisz…") czekalo w
+    skrzynce, az MAIN sam go zapyta — teraz adresat odpowiada od razu,
+    do 2 takich odpowiedzi na krok, MAIN dostaje obie
+  - notka o ucietej odpowiedzi bez polecen ("nie przepraszaj",
+    "zmiesc sie") — sam fakt o limicie
+
+CO ZOSTAJE JAKO GRANICA (i dlaczego):
+  - usuwanie plikow i zmiany nieodwracalne (SMS, polaczenie) pytaja
+    uzytkownika — to jego telefon
+  - kod nie wchodzi do pliku z danymi (numer, klucz) — v207: cztery
+    razy zamazany numer telefonu
+  - 25 wywolan na zadanie, 40 krokow na cel, 90 wiadomosci na godzine
+    na konto — limity strony i API, nie programu
+
+=========================================================================
+
+
+=========================================================================
+CZESC 15. CO ZMIENILO v455 (z biegu 2026-09-27 20:18)
+=========================================================================
+
+  CO POKAZAL LOG:
+  - rozmowa z DeepSeekiem szla normalnie: MAIN pytal Tomka, Marka i
+    Kamila po kolei, kazdy osobna wiadomoscia, Kamil szukal w sieci
+    (search_enabled=true); zadnego bledu po stronie DeepSeeka
+  - Gemini: dwa zadania z rzedu padly w polowie na 429 "limit: 20
+    requests per day" (gemini-3.8-flash), bo program czytal z tego
+    tylko "retry in 29s" i po 29 s wracal do modelu, ktory odnawia sie
+    o polnocy; drugi klucz spalil sie tak samo
+  - Gemini "gubilo sie" na OLX, bo chrome_click po tekscie klikalo
+    przez el.click() ze strony, a przyciski OLX (react-aria) na to nie
+    reaguja: "Nie, zaczynam od nowa", "Dalej", "Zmien" bez skutku,
+    dopiero wlasny JS Gemini ze zdarzeniami myszy ruszal strone
+
+  CO ZMIENIONE:
+  - limity Google w nowym brzmieniu ("per day", "per minute", "daily")
+    - dzienny odstawia pare do polnocy PT, tak jak "PerDay"
+  - program zapamietuje limit dzienny modelu (state/gemini_modele.json,
+    "limity_dzienne") i pomija modele, ktorych limit nie starcza na
+    jedno zadanie (< 25 + 5 zapytan) - 3.8-flash z 20/dzien nie wraca
+    jutro na szczyt drabinki
+  - limit minutowy w trakcie zadania: ta sama wiadomosc idzie jeszcze
+    raz po podanym czasie (do 90 s, najwyzej dwa razy) - nic nie
+    uruchamia sie drugi raz, ponawia sie tylko wysylka wynikow
+  - chrome_click po tekscie klika prawdziwa myszka przez CDP w srodek
+    elementu (jak po numerze); szuka takze [role=link/tab/option/
+    menuitem/radio/checkbox], [tabindex], label; przy kilku
+    trafieniach bierze dokladny napis, potem najmniejszy element
+
+=========================================================================
+
+
+=========================================================================
+CZESC 16. CO ZMIENILO v456 (z biegu 2026-09-27 20:49, juz na v455)
+=========================================================================
+
+  CO POKAZAL LOG:
+  - v455 zadzialalo: 3.8-flash (20/dzien) rozpoznany i pominiety od
+    razu, zadanie poszlo na 3.7-flash i sie skonczylo; w kroku 2
+    3.7-flash okazal sie takim samym modelem (20/dzien) i padl po 16
+    wywolaniach — o tym program dowiedzial sie dopiero z 429
+  - MAIN dostal surowe "limit: 20 requests per day", uznal, ze
+    wykonawcy dzis juz nie ma, i zlecil uzytkownikowi wypelnienie
+    profilu Useme i odpowiedz na 6 pytan — a program mial jeszcze
+    inne modele
+
+  CO ZMIENIONE:
+  - licznik zapytan na dobe (kalifornijska) per para klucz+model
+    (state/gemini_modele.json, "uzycie"); para, ktorej zostalo mniej
+    niz 25+2 zapytan, nie dostaje zadania do jutra; po 429 dziennym
+    licznik staje na limicie
+  - kolejnosc modeli: najpierw te ze znanym limitem, ktory starcza na
+    zadanie (po randze), potem nieznane — flash-lite przed flash przed
+    pro (w darmowej wersji limity rosna w te strone), za male wcale.
+    Kazdy nowy model kosztuje najwyzej jedno zadanie, potem jest
+    zapamietany na stale
+  - po limicie w trakcie zadania MAIN dostaje fakt: "limit dotyczy
+    modelu X na kluczu Y; nastepne zadanie pojdzie na Z" albo "wszystkie
+    modele wyczerpane, najblizszy wraca o HH:MM, program czeka sam"
+  - opis programu dla MAIN-a: formularze, profile i ustawienia na
+    stronach wypelnia Gemini; uzytkownik loguje sie i podaje to, czego
+    nikt z nas nie wie (hasla, kody, dane osobowe)
+
+=========================================================================
+
+
+=========================================================================
+CZESC 17. CO ZMIENILO v457 (z biegu 2026-09-27 21:19, na v456)
+=========================================================================
+
+  CO POKAZAL LOG:
+  - piec zadan z rzedu padlo na Chrome: "Page.navigate nie powiodlo
+    sie" i "Brak danych strony", kazde po 40 s. Wszystkie na kartach
+    lezacych W TLE (1492, 1494, 1500, 1503); karta na wierzchu (1502)
+    dzialala. Chrome na Androidzie zamraza karty w tle — ich renderer
+    nie odpowiada na CDP, poki karta nie wroci na ekran
+  - po tych bledach Gemini porzucilo Chrome i przez 12 krokow stukalo
+    w ekran przez `adb shell input tap` na zgadywanych wspolrzednych,
+    a `adb shell input text` zgubilo polskie znaki
+  - `adb shell uiautomator dump` (krok 6) zerwal polaczenie
+    uiautomator2 — w kroku 14 android_swipe "nie odpowiedzialo w 20 s"
+  - DeepSeek: MAIN odpowiadal w 6-60 s, Ela w 3 s (bez myslenia);
+    zadnego bledu; przez 17 krokow MAIN nikogo nie zapytal — to jego
+    wybor, program go nie ogranicza
+  - limity Gemini: caly bieg na gemini-3.5-flash-lite, 100+ zapytan
+    bez 429 — v456 dobral model z zapasem
+
+  CO ZMIENIONE:
+  - kazda operacja Chrome zaczyna sie od wyciagniecia karty na
+    wierzch (/json/activate) — jedno tanie zadanie; po zmianie karty
+    chwila na odmrozenie. Nieudany Page.navigate idzie jeszcze raz po
+    aktywacji, a gdy i to nie pomoze, wynik mowi, co zrobic
+  - chrome_close (41. narzedzie): zamyka karte; kilkanascie kart w
+    tle to zamrozone renderery
+  - `uiautomator dump` nie jest uruchamiany — wynik mowi, ze drzewo
+    ekranu daje android_state; zadanie idzie dalej
+  - `adb shell input text` z polskimi znakami albo %s idzie przez
+    schowek (termux-clipboard-set + KEYCODE_PASTE) do pola z kursorem
+
+  Klikanie po ekranie (android_click po tekscie, android_state z
+  polozeniem) zostaje jako druga droga obok Chrome przez CDP — obie sa
+  do wyboru wykonawcy; CDP daje numerowane elementy i tresc strony,
+  ekran daje to, co widac.
+
+=========================================================================
+
+
+=========================================================================
+CZESC 18. CO ZMIENILO v458 (z biegu 2026-09-27 22:11, na v457)
+=========================================================================
+
+  OCENA BIEGU (9 krokow, 23 min, przerwany przez uzytkownika):
+  - krok 1 (8 min): MAIN zapytal Tomka, Kamila, Marka, znow Kamila, a
+    piate pytanie (kod od Bartka) Python odrzucil jako "ponad limit";
+    MAIN powtorzyl je trzy razy i krok skonczyl sie bez decyzji
+  - kroki 3-4: karta 1504 sprzed restartu nie odpowiadala na CDP
+    nawet po wyciagnieciu na wierzch (Chrome ja wyladowal)
+  - 11 z 40 wywolan to android_screenshot — MAIN kazal robic zrzut po
+    kazdym etapie, a zrzutu nikt nie oglada
+  - realny postep: 1 aktywne ogloszenie OLX (z poprzedniego biegu),
+    "O mnie" wpisane na Useme (zapis niepewny), 0 zl
+
+  CO ZMIENIONE:
+  - pytanie ponad limit ASK nie przepada: idzie na poczatek
+    nastepnego kroku, MAIN dostaje odpowiedz razem z tym, co sie stalo
+    (limit 4 -> 5)
+  - karta, ktora nie odpowiada mimo aktywacji: adres otwiera Android
+    (`am start`), program bierze karte, ktora go pokazuje — takze w
+    chrome_inspect
+  - Gemini dostaje na poczatku rozmowy CEL zespolu — kazde zadanie to
+    jego krok, wiec drobne decyzje wykonawcy ida w te sama strone
+  - MAIN wie, ze zrzut ekranu to PNG, ktorego nikt nie oglada; tekst
+    daja chrome_inspect i android_state
+
+=========================================================================
+
+=========================================================================
+CZESC 19. CO ZMIENILO v459 — RUN: MAIN WYKONUJE SAM
+=========================================================================
+
+  PYTANIE UZYTKOWNIKA: czy MAIN (DeepSeek) nie moglby wykonywac sam,
+  bez Gemini, skoro Python i tak ma rece?
+
+  ODPOWIEDZ W KODZIE — hybryda, nie zamiana:
+  - nowa decyzja RUN: {"type":"RUN","reason":"...","actions":[
+    {"tool":"termux_run","args":{"command":"ls"}}, ...]}
+    Python wykonuje akcje po kolei tymi samymi narzedziami, ktore
+    ma Gemini (dispatch_tool). Do 12 akcji na jedno RUN
+    (RUN_MAX_AKCJI w srodowisku). Przy bledzie narzedzia Python
+    zatrzymuje sie i mowi, ile akcji nie wykonal — poza "nie ma
+    pliku" i podobnymi, ktore sa odpowiedzia, nie awaria.
+  - MAIN dostaje na starcie liste narzedzi z argumentami (41 sztuk),
+    a po RUN pelne wyniki kazdej akcji ("Wyniki akcji RUN:", do
+    3500 znakow na akcje, 14 000 razem) — na nich pracuje w
+    nastepnym kroku. Wyniki nie sa nadpisywane komunikatem o
+    blokadzie Gemini.
+  - TASK zostaje: to Gemini patrzy na strone po kazdym kliknieciu
+    i sam wybiera nastepny ruch (do 25 wywolan w jednym zadaniu).
+    MAIN w RUN widzi wynik dopiero po zakonczeniu calej listy —
+    dlatego RUN do rzeczy przewidywalnych (komendy, pliki, git,
+    pip, otwarcie strony i odczyt), TASK do klikania po stronach.
+  - blokada Gemini (limity dnia) nie zatrzymuje programu: MAIN
+    dostaje fakt "RUN wykonuje akcje bez Gemini" i dziala dalej.
+    Program czeka dopiero wtedy, gdy MAIN mimo to dwa razy z rzedu
+    zlecil TASK.
+  - status RUN_TOOL_ERROR liczy sie jak klopot (pomiar Eli, ruchy
+    w kolko) tak samo jak bledy wykonania Gemini.
+
+  DLACZEGO NIE "WSZYSTKO PRZEZ MAIN-a":
+  - DeepSeek przez przegladarke to ok. 90 wiadomosci na godzine na
+    konto; kazde klikniecie jako osobna runda MAIN-a zjadloby ten
+    budzet w kwadrans. Gemini w TASK robi 25 ruchow za jedna
+    wiadomosc MAIN-a.
+  - MAIN z myśleniem odpowiada 30-120 s; petla "kliknij, spojrz,
+    kliknij" na tym tempie to minuty na kazdy formularz.
+  - RUN nie widzi ekranu miedzy akcjami — Gemini widzi.
+
+=========================================================================
+
+=========================================================================
+CZESC 20. CO ZMIENILO v460 (z biegu 2026-09-27 22:59, pierwszego na v459)
+=========================================================================
+
+  OCENA BIEGU (22 kroki, 28 min, przerwany przez uzytkownika):
+  - MAIN prowadzil sam przez RUN: 19 z 22 krokow, 73 wywolania
+    narzedzi, ani jednego TASK-a dla Gemini
+  - realny postep: ogloszenie OLX opublikowane bez promocji (50 zl),
+    CV na Useme zapisane, konto do wyplaty PLN dodane (dane od
+    uzytkownika), pierwsza oferta na Useme wciaz blokowana
+    ("Uzupelnij O mnie oraz portfolio i/lub CV")
+  - krok 1: Tomek poradzil "dopytac uzytkownika", MAIN wyslal 5
+    pytan o plan i zasoby; uzytkownik odpisal numerem BLIK i "ty
+    masz wszystko robic automatycznie"
+  - krok 15: po "Zapisz" strona pokazala "Twoje doswiadczenie
+    zostalo zapisane", ale mialo to te sama dlugosc co formularz
+    z bledem — klikniecie wrocilo jako "bez skutku"
+  - kazdy wynik RUN szedl do MAIN-a dwa razy (skrot sladu + pelne
+    wyniki), a w kazdym wyniku chrome_open/chrome_click siedziala
+    lista kart ("snapshot") — przez to "strona" po chrome_open byla
+    ucieta i MAIN dokladal chrome_inspect po kazdym otwarciu
+  - Ela dostawala "MAIN wykonal 4 z 4 akcji" bez slowa, o co szlo,
+    i oceniala postep po tytulach kart (5% -> 10%)
+
+  CO ZMIENIONE:
+  - MAIN i zespol dostaja na start fakt o uzytkowniku: chce, zeby
+    program dzialal sam; loguje sie, daje dostep do kont i dane,
+    ktorych nikt nie ma (hasla, kody, konto do wyplaty); pytan o
+    plan i zasoby nie ma komu zadac — to ustala zespol
+  - stan strony ma skrot tresci: inna tresc o tej samej dlugosci
+    to zmiana ("tresc strony zmienila sie (ta sama dlugosc, inna
+    tresc)"), nie "bez skutku"
+  - po RUN MAIN dostaje tylko pelne wyniki (bez skrotu sladu i bez
+    wlasnego powodu jako "raportu"); z wynikow znika "snapshot" —
+    liste kart MAIN ma osobno; "strona" po chrome_open miesci sie
+    w calosci
+  - raport RUN niesie powod MAIN-a ("... — wykonano 4 z 4 akcji"),
+    Ela widzi, o co szlo w kazdym kroku; etykiety "MAIN wykonal
+    sam" / "MAIN wykonal sam, narzedzie padlo"
+  - RUN trafia do checklisty z dowodami z narzedzi — licza sie dla
+    Eli ("udane wywolania narzedzi") i dla verify_final ("czy
+    cokolwiek realnie zadzialalo") tak samo jak zadania Gemini
+  - etykieta raportu w "Co sie wlasnie stalo" po RUN: "MAIN wykonal
+    sam (RUN):" zamiast "Gemini napisal:"
+
+=========================================================================
+
+=========================================================================
+CZESC 21. CO ZMIENILO v461 (z biegu 2026-09-28 16:33, cel "1000 PLN")
+=========================================================================
+
+  OCENA BIEGU (40 krokow, 90 min, 237 wywolan narzedzi, przerwany):
+  - MAIN prowadzil sam przez RUN w 35 z 40 krokow; jeden TASK dla
+    Gemini (uruchomienie sms_reader.py Bartka) skonczyl sie 503
+    "high demand" po 6 minutach trzech prob
+  - realny postep: sms_reader.py (kod Bartka, poprawka MAIN-a)
+    czyta SMS-y i wyciaga kody; konto Clickworker zalozone i
+    zalogowane (rejestracja, 2FA i dane bankowe od uzytkownika);
+    apka Clickworker otwarta na pierwszym zadaniu; 0 zl
+  - krok 6: MAIN poprawil sms_reader.py heredokiem w termux_run i
+    dostal KOD_POLOZYL_PYTHON — odmowe pisana dla Gemini, choc MAIN
+    jest osoba z DeepSeeka
+  - krok 2-3: osiem android_list_packages z filtrem, kazde czekalo
+    20 s na "drugie spojrzenie" (instalacja mogla trwac) — prawie
+    3 minuty na nic
+  - krok 7: "POWTORZONA CZYNNOSC NIEODWRACALNA: termux-sms-send" —
+    a to byla notatka w heredoku, nie SMS
+  - kroki 27 i 40: android_swipe czekal 20 s na uiautomator2 i nic
+  - android_state zaczynal od paska stanu ("Powiadomienie z
+    aplikacji Messenger", "Bluetooth nie jest podlaczony"), przez
+    co MAIN dokladal zrzut + OCR; blok "ekran" dla MAIN-a wazyl
+    55 tys. znakow, bo szedl obok wyniku android_state z RUN
+
+  CO ZMIENIONE:
+  - w RUN kod pisze MAIN (DeepSeek): termux_write_file i heredoc w
+    termux_run kladzie jego kod na dysk jako kod zespolu, z autorem
+    MAIN (Piotr/Ania wiedza, czyj); Gemini dalej kodu nie pisze
+  - android_state pomija pasek stanu (com.android.systemui), gdy na
+    ekranie jest cokolwiek innego
+  - android_swipe: gdy uiautomator2 nie odpowiada, gest idzie przez
+    `adb shell input swipe`
+  - android_list_packages: drugie spojrzenie po 20 s tylko, gdy w
+    ostatnich 5 min bylo adb install albo Sklep Play jest na
+    wierzchu
+  - Gemini 503: jedna ponowka zamiast dwoch (kazda proba to ~100 s)
+  - czynnosc nieodwracalna liczy sie tylko jako komenda (poczatek,
+    po ; && | ), nie jako slowo w tresci heredoca
+  - po RUN z android_state MAIN nie dostaje drugiego bloku ekranu
+
+=========================================================================
+
+=========================================================================
+CZESC 22. CO ZMIENILO v462 (z biegu 2026-09-28 18:21 — Gemini stoi)
+=========================================================================
+
+  OCENA BIEGU (1 krok, 17 min, przerwany):
+  - krok 1: MAIN zapytal Kamila, Marka i Wojtka, wzial kod Bartka
+    (env_check.sh) i zlecil TASK z write_engineer_code_to
+  - Gemini (gemini-3.5-flash-lite, klucz main): serwer trzymal
+    polaczenie 2 min, potem 4 min, i oddal 503 "high demand";
+    program przeskoczyl na TEN SAM model na drugim kluczu — znow
+    4 min i 503. Razem 11 minut stania calego programu bez jednego
+    wykonanego narzedzia. Klient Google nie mial limitu czasu na
+    zapytanie i sam nie ponawia — to serwer trzymal polaczenie.
+
+  CO ZMIENIONE:
+  - klient Gemini ma limit 60 s na jedno zapytanie
+    (HttpOptions.timeout); po nim blad liczy sie jak przeciazenie
+  - przy przeciazeniu odstawiany jest MODEL na wszystkich kluczach
+    (120 s), wiec nastepna proba idzie na inny model, nie na ten
+    sam na drugim kluczu
+  - zero ponowek w tej samej parze — nastepna para JEST ponowka; a
+    przeskok na kolejna pare tylko jeden na zadanie: najgorszy
+    przypadek to ok. 2 min, po czym MAIN dostaje fakt "Wykonawca
+    nie odpowiedzial. RUN wykonuje akcje bez Gemini."
+  - MAIN wie, ze kod Bartka w RUN wkleja 1:1 do termux_write_file
+    (nie potrzebuje TASK-a, zeby polozyc cudzy kod)
+
+=========================================================================
+
+=========================================================================
+CZESC 23. CO ZMIENILO v463 (z biegu 2026-09-28 18:53 — program skonczyl
+sie sam)
+=========================================================================
+
+  OCENA BIEGU (40 krokow, 43 min, 156 wywolan, zero TASK-ow):
+  - program skonczyl sie sam, bo 40 to domyslny limit krokow
+    (AGENT_MAX_STEPS); w logu nie bylo o tym slowa
+  - krok 1: MAIN napisal "Nie widzę wyników poprzedniego RUN" — to
+    ta sama rozmowa na DeepSeeku co w poprzednim biegu, a nikt mu
+    nie powiedzial, ze program wystartowal od nowa
+  - kroki 2-8: rekonesans Clickworker (sesja wygasla, PayPal
+    niezweryfikowany, brak danych podatkowych, zero zadan)
+  - kroki 9-16: Paidwork — rejestracja przez uzytkownika, saldo
+    0 zl, ankiety w iframe (Bitlabs, CPX); MAIN otworzyl adresy
+    iframe'ow na wierzchu
+  - kroki 17-26: bramka zgody CPX — chrome_click nie trafial w
+    elementy bez tekstu, MAIN wstrzykiwal JS; Marek to zatrzymal
+    (ryzyko bana), MAIN posluchal
+  - kroki 27-40: Bitlabs — zgody zdjete tapnieciami, lista ankiet
+    widoczna, ale karta ankiety to div bez roli: chrome_click
+    mowil "Nie znaleziono: 5 min", choc napis byl w tekscie
+    strony; android_tap raz odrzucony, bo na wierzchu byl Termux
+  - Ela: 0% -> 15%; realny stan: konta sa, pieniedzy 0
+
+  CO ZMIENIONE:
+  - limit krokow 40 -> 150 (AGENT_MAX_STEPS), a jego osiagniecie
+    jest w logu wprost
+  - wznowiona rozmowa MAIN-a dostaje w kroku 1 fakt: "Nowe
+    uruchomienie programu. Poprzedni bieg zostal przerwany — jego
+    ostatnie wyniki nie wracaja"
+  - chrome_click(text): gdy napisu nie ma wsrod kontrolek, bierze
+    najmniejszy widoczny element z tym napisem (div, span, karta) i
+    klika myszka przez CDP w jego srodek
+  - android_tap przy Termuksie na wierzchu: gdy ostatnie narzedzie
+    bylo w Chrome, program sam wyciaga Chrome i tapie; odmowa
+    zostaje dla innych przypadkow
+
+=========================================================================
+
+
+=========================================================================
+CZESC 24. v464 — BEZ LIMITU KROKOW
+=========================================================================
+
+  Decyzja uzytkownika: program chodzi caly czas, az cel jest DONE
+  albo FAILED. Limit krokow zdjety (MAX_STEPS = None). Zmienna
+  AGENT_MAX_STEPS ustawia limit tylko wtedy, gdy ktos jej uzyje.
+  Promptow nie zmieniono.
+
+=========================================================================
+
+=========================================================================
+CZESC 25. CO ZMIENILO v465 (biegi 2026-09-28 20:32 i 2026-09-29 15:55)
+=========================================================================
+
+  BIEG 20:32 (63 kroki, 3 h 20 min, przerwany przez uzytkownika):
+  - najlepszy dotad: MAIN z Bartkiem zbudowal produkt (ebook "100
+    promptow AI", PDF 21 stron), opublikowal go na Gumroad za 49 zl
+    przez CLI (obszedl DNS Go w Termuksie lokalnym proxy i CA),
+    wrzucil posty na profil FB i X; zero sprzedazy; Ela 0% -> 39%
+  - krok 8: uzytkownik odrzucil plan OLX ("bez pracy uzytkownika,
+    tylko logowanie") — MAIN przestawil zespol na produkt cyfrowy
+  - krok 7: `cd ~/olx && rm -rf ogloszenia` — katalog, ktory MAIN
+    sam zalozyl 6 minut wczesniej — czekal na potwierdzenie w
+    terminalu 2 GODZINY (20:48 -> 22:50); program stal
+  - Tomek dostawal po 27 tys. znakow na wiadomosc (blok "watek")
+
+  BIEG 15:55 (3 kroki, 2 min, program zamknal sie sam):
+  - cel napisany jak rozkaz dla "autonomicznego agenta" z zakazem
+    Facebooka i "fail-fast"; MAIN (DeepSeek) w kroku 1 odmowil:
+    uznal, ze jedyne drogi to spam albo oszustwo, i dal FAILED
+  - program trzy razy odeslal mu "nic sie nie wykonalo" i zamknal
+    cel; nikt z zespolu nie uslyszal powodu
+
+  CO ZMIENIONE:
+  - FAILED MAIN-a idzie do Tomka i Marka jak na spotkaniu ("Uwazam,
+    ze tego celu nie da sie zrealizowac... Powod: ..."); ich
+    odpowiedzi MAIN dostaje w calosci i decyduje jeszcze raz; dopiero
+    powtorzony FAILED konczy cel
+  - usuwanie WEWNATRZ katalogow, ktore program sam zalozyl
+    (project_dirs.json), nie pyta nikogo; pytanie zostaje dla cudzych
+    plikow, ale czeka najwyzej 120 s — brak odpowiedzi to NIE, a MAIN
+    dostaje fakt i rade (mv zamiast rm)
+
+=========================================================================
+
+=========================================================================
+CZESC 26. CO ZMIENILO v466 (bieg 2026-09-29 16:18 — cel bez celu)
+=========================================================================
+
+  OCENA BIEGU (13 krokow, 25 min, zamknal sie sam):
+  - tekst celu to same zasady ("kategoryczne ograniczenia",
+    "autonomia", "fail-fast") bez kwoty i bez tego, co ma powstac;
+    MAIN w kroku 1 poprosil Tomka, zeby NAZWAL cel — Tomek wybral
+    "pierwsze platne zlecenie na Useme"
+  - kroki 1-4: MAIN sprawdzil warsztat (ADB, input, CDP, Chrome)
+  - krok 2: `screencap -p /sdcard/_t.png && ... && rm /sdcard/_t.png`
+    czekalo 120 s na potwierdzenie usuwania i dostalo odmowe —
+    plik utworzyla ta sama komenda
+  - kroki 5-10: uzytkownik zalogowal Useme; MAIN ustalil, ze Useme
+    to gielda zlecen, konto ma role Zleceniodawcy, a zlecen w niszy
+    nie ma
+  - krok 11: MAIN dal FAILED dla sciezki Useme; Tomek i Marek
+    (v465) uslyszeli powod, zgodzili sie co do Useme i W TEJ SAMEJ
+    odpowiedzi wskazali inne drogi (Fiverr, wlasny klient) — a
+    program po powtorzonym FAILED zamknal caly bieg
+
+  CO ZMIENIONE:
+  - FAILED zamyka bieg dopiero wtedy, gdy Tomek i Marek napisza
+    wprost "NIE MA INNEJ DROGI" (Python pyta ich o to w tej samej
+    wiadomosci z powodem MAIN-a) i MAIN powtorzy FAILED; poki ktos
+    widzi droge, MAIN dostaje status ZESPOL_WIDZI_INNA_DROGE z ich
+    odpowiedziami i cel trwa (najwyzej 3 takie rundy)
+  - rm pliku, ktory ta sama komenda utworzyla wczesniej (zrzut,
+    plik tymczasowy), nie pyta nikogo
+
+  UWAGA DO CELU: program nie zgadnie kwoty ani produktu. Tekst
+  zasad bez celu daje bieg, w ktorym zespol sam wymysla cel i
+  zamyka go, gdy padnie. Cel z kwota i z tym, co jest do
+  dyspozycji (jak w biegu 2026-09-28 20:32), daje kilka godzin
+  pracy i realny produkt.
+
+=========================================================================
+
+=========================================================================
+CZESC 27. CO ZMIENILO v467 (bieg 2026-09-29 18:33 -> 2026-09-30 07:40)
+=========================================================================
+
+  OCENA BIEGU (69 krokow, 172 wywolania, przerwany na kroku 69):
+  - zespol wybral usluge OCR skanow -> Word za 40 zl; Bartek dal
+    pipeline ocr2docx (tesseract + python-docx), MAIN go uruchomil i
+    naprawil (kroki 2-16)
+  - krok 17: NEED_USER_LOGIN (dane do ogloszenia) czekal 6 godzin
+    na uzytkownika — to normalne
+  - kroki 21-24 i 48-49: bezprzewodowe ADB padlo ("no devices/
+    emulators found") — port zmienia sie po restarcie sesji; bez ADB
+    nie ma chrome_* ani android_*, MAIN dwa razy prosil uzytkownika
+  - kroki 25-68: formularz OLX (m.olx.pl/nowe-ogloszenie, SPA React):
+    wartosci ustawiane przez JS nie wchodzily do stanu (licznik
+    0/9000) — dopiero chrome_type (klawisze) zadzialal (krok 59-60);
+    zdjecia nie dalo sie wgrac (input type=file) — uzytkownik dodal
+    recznie; przycisk "Dodaj ogloszenie" nie reagowal na klik myszka
+    przez CDP (trzy razy), a tap palcem zostal odrzucony, bo program
+    uznal, ze ostatnim narzedziem byl sam tap (blad v463)
+  - kroki 38, 55, 58, 66: MAIN odpowiedzial natywnym formatem
+    wywolan DeepSeeka (DSML: <|DSML| invoke name=...>) zamiast JSON
+    — program uznal to za UNKNOWN_DECISION, cztery kroki stracone
+  - krok 14: `rm -f ~/ocr2docx/out/multi.*` (maska we wlasnym
+    katalogu) czekalo 120 s i dostalo odmowe
+  - kroki 4, 8: "/tmp/...: Permission denied" — w Termuksie nie ma
+    /tmp
+  - Ela: 0% -> 27%; realny stan: pipeline OCR->DOCX dziala, cennik i
+    opis gotowe, ogloszenie OLX wypelnione, niepublikowane
+
+  CO ZMIENIONE:
+  - DSML: odpowiedz MAIN-a w natywnym formacie wywolan DeepSeeka
+    staje sie decyzja RUN z lista akcji (parse_json)
+  - chrome_click: gdy klik myszka nie ruszyl strony, ten sam punkt
+    dostaje dotyk palcem (Input.dispatchTouchEvent) — mobilne SPA
+    sluchaja touch; wynik mowi "po dotknieciu palcem (touch)"
+  - nowe narzedzie chrome_upload_file(path, nr, selector): plik z
+    Termuksa idzie przez `adb push` do /sdcard/Download/ael_upload/,
+    a potem DOM.setFileInputFiles wklada go w input[type=file]
+    (zdjecie do ogloszenia bez czlowieka); 42 narzedzia
+  - ADB: gdy komenda zwroci "no devices/emulators found", program
+    laczy sie ponownie (zapamietany adres, potem `adb mdns services`)
+    i powtarza komende raz; find_adb zna mDNS
+  - android_tap przy Termuksie na wierzchu: decyduje POPRZEDNIE
+    narzedzie (nie biezace) — Chrome jest wyciagany, gdy krok
+    wczesniej pracowalismy w Chrome
+  - rm z maska (*) wewnatrz wlasnego katalogu bez pytania
+  - wynik komendy z "/tmp/...: Permission denied" niesie podpowiedz
+    o $PREFIX/tmp
+
+=========================================================================
+
+=========================================================================
+CZESC 28. CO ZMIENILO v468 (bieg 2026-09-30 12:34 — Gemini jako oczy)
+=========================================================================
+
+  OCENA BIEGU (78 krokow, ok. 2 h, Ela 0% -> 55%, przerwany):
+  - najdalej dotad: zespol znalazl zywa platforme (FreddyWorks, escrow,
+    bez KYC, 168 projektow), uzytkownik sie zalogowal, MAIN wypelnil
+    profil (bio, stawka, 3 umiejetnosci -> 42%), znalazl projekt za
+    397 USDC bez ofert i zatrzymal sie na 2FA (instalowal pyotp)
+  - Gemini wzial udzial raz (TASK w kroku 2: 16 narzedzi, bez bledu);
+    reszte MAIN robil przez RUN
+  - kroki 12-27: bot w Telegramie — 16 krokow, bo klawiatura
+    ekranowa zaslaniala odpowiedz bota, a tapniecia po starych
+    wspolrzednych trafialy w "Referrals" zamiast "All Available";
+    w kroku 37 okazalo sie, ze "Poland" poszlo juz w kroku 17
+  - osiem razy "Brak istniejacej karty" — MAIN nie podal tab_id, a
+    kart bylo kilka
+  - krok 67: wyniki ostatnich akcji RUN uciete ("za dlugie") — MAIN
+    powtarzal zapis
+  - uzytkownik w kroku 2: "buduj nowe oczy, rece" — chcial, zeby
+    program sam rozbudowywal narzedzia
+
+  CO ZMIENIONE:
+  - android_look(question): Gemini OGLADA zrzut ekranu (model z
+    drabinki, multimodalny) i opisuje: aplikacje, widoczny tekst,
+    przyciski/pola z przyblizonymi (x, y), klawiature, dialog, blad.
+    Jedno wywolanie = jedno zapytanie z limitu; bez Gemini narzedzie
+    mowi to wprost i odsyla do android_state / OCR. 43 narzedzia
+  - bez tab_id chrome_* bierze karte, na ktorej ostatnio
+    pracowalismy, a gdy jej nie ma — pierwsza z adresem http(s)
+  - android_state mowi "KLAWIATURA EKRANOWA zaslania ekran od y=..."
+    i nie wypisuje klawiszy; android_click, gdy nie znajdzie
+    elementu przy otwartej klawiaturze, chowa ja (back) i probuje raz
+    jeszcze
+  - wyniki RUN: gdy calosc nie miesci sie w 14 000 znakow, kazdy
+    wynik dostaje rowna czesc — zaden nie wypada
+
+=========================================================================
+
+CZESC 29. CO ZMIENILO v469 (ten sam bieg 2026-09-30 12:34 — to, czego
+v468 jeszcze nie zalatalo)
+=========================================================================
+
+  - find_tab: gdy podany tab_id juz nie istnieje albo `contains` nie
+    trafia w tytul/adres zadnej karty, narzedzie bierze karte, na ktorej
+    pracujemy (jak bez tab_id), a wynik ma pole "karta" z informacja o
+    zamianie. Kroki 60, 61, 64 (tab_id=1614 po zamknieciu karty) i 3, 9,
+    24 (contains="Visit website" — tekst ze strony, nie z tytulu).
+    chrome_close nadal zamyka TYLKO wskazana karte.
+  - chrome_open po `am start` czeka na karte do 12 s (co sekunde):
+    karta z tym adresem albo karta, ktorej wczesniej nie bylo. Kroki 5
+    i 6 konczyly sie bledem "brak widocznej karty CDP" po 1 s, a karta
+    byla. Przy nieistniejacym tab_id chrome_open najpierw szuka karty z
+    tym adresem, zamiast nadpisywac biezaca.
+  - chrome_open: "title" nie jest juz tytulem poprzedniej strony, gdy
+    nowa jeszcze go nie ma (krok 4).
+  - android_swipe: duration > 10 to milisekundy (krok 22: 500 ->
+    gest na 8 minut, 40 s czekania i blad).
+  - konta DeepSeek: MAIN sam na koncie 1, reszta zespolu na koncie 2.
+    W tym biegu konto 1 mialo 75 z 90 wiadomosci w godzinie, konto 2 —
+    jedna.
+
+=========================================================================
+
+CZESC 30. CO ZMIENILO v470 (bieg 2026-10-03 22:23 — Useme, 95 krokow)
+=========================================================================
+
+  OCENA BIEGU (na v468, bo v469 nie byla jeszcze na telefonie):
+  - 7 ofert na Useme (potencjal 3150 zl), naprawiony profil, 3-4
+    zapytania przez "Zapytaj o szczegoly"; potem OLX (wymusza wersje
+    mobilna), Gmail, grupy na Facebooku
+  - 32 wywolania chrome_execute_js wrocily z "value": null. W krokach
+    48-59 kod mial zbedne "})" na koncu — blad skladni, a wynik
+    wygladal jak udane wywolanie bez wartosci. MAIN uznal, ze
+    "Promise w chrome_execute_js gubi wynik"
+
+  CO ZMIENIONE:
+  - chrome_execute_js: blad JavaScriptu (exceptionDetails z CDP) to
+    ok: false, "Błąd JavaScriptu: ...", z linia i kolumna; kod bez
+    wartosci (undefined) dostaje pole "undefined"; "Inspected target
+    navigated or closed" (kod kliknal i strona przeszla dalej) to
+    ok: true z "strona_przeszla_dalej" i nowym adresem
+  - chrome_type bez `pole`, gdy kursor nie stoi w polu, a na stronie
+    jest dokladnie jedno pole — pisze w nie (krok 41: szesc razy
+    "Kursor nie stoi w polu tekstowym" przy jednym polu tagow);
+    pola contenteditable kazdego rodzaju, bez wylaczonych i tylko do
+    odczytu
+  - chrome_screenshot -> android_screenshot (alias)
+  - podsumowanie biegu: krok, ktory sie dopiero zaczal, nie liczy sie
+    jako "krok bez ani jednego narzedzia"
+
+=========================================================================
+
+CZESC 31. CO ZMIENILO v471 (bieg 2026-10-04 11:15 — Messenger, Facebook)
+=========================================================================
+
+  OCENA BIEGU (28 krokow, nadal v468 na telefonie):
+  - Termux wisial w plywajacym oknie ([104,282][977,1834]) nad
+    Messengerem/Chrome. app_current() mowil "com.termux", wiec kazdy
+    android_tap byl odrzucany jako "poszłoby w Termux", a android_state
+    zaczynal sie od "Na wierzchu jest teraz: Termux". Kroki 3-9 zeszly
+    na obchodzenie tego; `adb shell input tap 864 200` trafil od razu
+  - potem komentarz z oferta pod postem w grupie FB poszedl (czeka na
+    moderacje)
+
+  CO ZMIENIONE:
+  - _okna_na_ekranie(): okno Termuksa, rozmiar ekranu i aplikacja z
+    najwieksza powierzchnia — z drzewa ekranu
+  - android_tap: gdy Termux plywa, a punkt lezy poza jego oknem, tap
+    idzie (trafia w aplikacje pod spodem); w oknie Termuksa — nadal nie
+  - android_state: naglowek mowi, co jest na calym ekranie, a co w
+    plywajacym oknie Termuksa
+  - wpisywanie tekstu i klawisze bez zmian (fokus moze byc w Termuksie)
+
+=========================================================================
+
+CZESC 32. CO ZMIENILO v472 (bieg 2026-10-04 11:51 — "google play mógł
+sam sobie pobrać")
+=========================================================================
+
+  OCENA BIEGU (11 krokow, v471): telefon byl widoczny caly czas (ADB,
+  CDP i android_state dzialaly), ale w kroku 11 MAIN zatrzymal bieg
+  prosba: "zainstaluj apkę Facebook (...) Play Store -> Facebook ->
+  Zainstaluj". Aplikacji Facebook (com.facebook.katana) nie bylo, a
+  program nie umial instalowac ze Sklepu.
+
+  CO ZMIENIONE:
+  - _zainstaluj_ze_sklepu(pakiet): `am start market://details?id=...`
+    w Sklepie Google Play, klik w "Zainstaluj"/"Install", czekanie na
+    instalacje (pm path co 5 s, do PLAY_CZEKANIE_NA_INSTALACJE_S, domyslnie
+    600 s, z logiem co minute)
+  - android_launch_app pakietu, ktorego nie ma na telefonie, najpierw go
+    instaluje, potem uruchamia
+  - android_list_packages bez wyniku mowi, ze android_launch_app pobierze
+    aplikacje ze Sklepu
+  - NEED_USER_LOGIN z prosba o instalacje ze Sklepu: program instaluje
+    sam (pakiet z tekstu albo znana nazwa: Facebook, Instagram, WhatsApp,
+    OLX, Allegro, Vinted...). Gdy w prosbie nie ma nic wiecej — bieg idzie
+    dalej bez pytania; gdy jest tez logowanie — do uzytkownika idzie
+    prosba z dopiskiem, ze aplikacja juz jest
+
+=========================================================================
+
+CZESC 33. CO ZMIENILO v473 (bieg 2026-10-04 12:24 — "teraz sobie
+gorzej radzi")
+=========================================================================
+
+  OCENA BIEGU (51 krokow, v472): to nie byl skutek v472 (instalacja ze
+  Sklepu w tym biegu sie nie odpalila). Zadanie bylo trudniejsze (oferta
+  na Useme), a dwie stare usterki programu wprowadzaly MAIN w blad:
+
+  1. Krok 26: chrome_open przelaczyl na juz otwarta karte z formularzem,
+     ale zapamietana "karta, na ktorej pracujemy" zostala stara
+     (/pl/login/). Dwa chrome_execute_js bez tab_id poszly w nia —
+     formularz "nie istnial", MAIN wypelnial go od nowa.
+  2. Kroki 30-50: android_state zaczynal sie od "Na wierzchu jest teraz:
+     Termux", choc cale drzewo ekranu to byl Chrome (Termux mial fokus,
+     ale na ekranie byl tylko maly podglad w rogu). MAIN ani razu nie
+     uzyl android_tap i przez 14 krokow probowal kliknac "Przejdz do
+     podsumowania" wlasnymi skryptami CDP. Udalo sie dopiero przez
+     `adb shell input tap`.
+
+  CO ZMIENIONE:
+  - _przelacz_na_karte() i kazde udane narzedzie chrome_* (poza
+    chrome_close), ktore zwraca tab_id, ustawia te karte jako biezaca
+  - _termux_nie_zaslania(): gdy Termux ma fokus, ale nie ma go w drzewie
+    ekranu, a jest tam inna aplikacja — android_state mowi, ze na
+    wierzchu jest ta aplikacja, a android_tap klika (jak przy
+    plywajacym oknie z v471)
+
+=========================================================================
+
+CZESC 34. CO ZMIENILO v474 (bieg 2026-10-10 23:03 — "czemu
+zakonczylo sie dzialanie?")
+=========================================================================
+
+  OCENA BIEGU (33 kroki, 154 wywolania narzedzi): bieg nie padl. W kroku
+  33 MAIN dal DONE, bo zespol uznal, ze "zamyka sesje" po FAZIE 14 —
+  choc cel (MISJA RSI) kaze pracowac dalej bez nowego polecenia, a
+  Marek w tej samej rozmowie ocenil postep na 5% (level_3_not_started).
+  Od v432 DONE konczylo program bez pytania.
+
+  CO ZMIENIONE:
+  - DONE dziala jak FAILED z v466: zanim zamknie bieg, Tomek i Marek
+    mowia, czy cel uzytkownika (caly) jest zrobiony. Gdy zaden nie
+    napisze wprost "CEL ZROBIONY", cel trwa, a MAIN dostaje ich
+    odpowiedzi (status CEL_NIE_JEST_ZROBIONY). Bez limitu odbic — bieg
+    konczy sie tylko po wyraznym "CEL ZROBIONY" (albo gdy zespolu nie da
+    sie zapytac).
+
+=========================================================================
+
+CZESC 35. CO ZMIENILO v475 (bieg 2026-10-10 23:03, krok 22)
+=========================================================================
+
+  termux_run padl z "No closing quotation", zanim komenda w ogole
+  ruszyla. Komenda byla poprawna dla basha (python3 -c "...; ...; ..."
+  i dalej `rm -f selfcode_engine.state.json`), ale bramka usuwania
+  dzielila ja po kazdym ";" — takze w srodku cudzyslowu — i shlex
+  wywracal sie na rozcietym kawalku. MAIN stracil krok na przepisanie
+  komendy.
+
+  CO ZMIENIONE:
+  - _czlony_komendy(): podzial po &&, ||, ;, | i nowej linii tylko poza
+    cudzyslowami; uzywaja go obie bramki usuwania
+    (_usuwa_tylko_wlasne_katalogi, _usuwa_wlasny_plik_tymczasowy)
+  - blad shlex w bramce = "nie wiem" (zwykle pytanie), nie wywrotka
+    narzedzia
+
+=========================================================================
+
+CZESC 36. CO ZMIENILO v476 (bieg 2026-10-11 00:13)
+=========================================================================
+
+  OCENA BIEGU (36 krokow, 94 wywolania narzedzi): sprawdzenie DONE z
+  v474 zadzialalo w kroku 11 (Tomek i Marek: cel nie jest zrobiony, bieg
+  szedl dalej jeszcze 25 krokow). W kroku 36 bieg sie jednak zakonczyl,
+  choc obaj znowu powiedzieli "nie": Tomek napisal "CEL NIE JEST
+  ZROBIONY (...) nie jest to „CEL ZROBIONY”", a v474 szukal samego
+  napisu "cel zrobiony".
+
+  Drugie ograniczenie: krok 29 — termux_patch_file MAIN-a odrzucony jako
+  "kod spoza zespolu" (BRAK_KODU_DO_ZAPISU). Od v461 kod, ktory MAIN pisze
+  w RUN, jest kodem zespolu (termux_write_file, termux_run) — patch o tym
+  nie wiedzial. MAIN zrobil to samo krok pozniej przez termux_run.
+
+  CO ZMIENIONE:
+  - _mowi_cel_zrobiony(): "CEL ZROBIONY" liczy sie tylko jako
+    potwierdzenie, nie w zdaniu z "nie", "ani", "jesli", "zanim" tuz
+    przed; "cel nie jest zrobiony" = nie
+  - wystarczy, ze jeden z dwoch (Tomek albo Marek) mowi wprost "cel nie
+    jest zrobiony" — bieg trwa
+  - termux_patch_file w RUN MAIN-a dziala jak termux_write_file
+
+=========================================================================
+
+CZESC 37. CO ZMIENILO v477 (pytanie "czy oni maja problem czasowy?")
+=========================================================================
+
+  Program nie ogranicza calkowitego czasu komendy, tylko czas CISZY:
+  COMMAND_TIMEOUT = 120 s bez wyjscia i bez CPU (v293), przy pracy do
+  SUFIT_CZASU = 7200 s; pobieranie/kompilacja: 1800 s ciszy. Limit 600 s
+  w biegu RSI to warunek samego zespolu (Tomka) w ich skrypcie.
+
+  Ale `sleep` milczy i nie liczy — wiec MAIN, czekajac na trening w tle,
+  dzielil czekanie na `sleep 60 && tail` / `sleep 90 && tail`, kazde w
+  osobnej turze (osobna wiadomosc do DeepSeeka).
+
+  CO ZMIENIONE:
+  - _sekundy_spania(): komenda z `sleep N` (N, Ns, Nm, Nh) ma na cisze
+    N + COMMAND_TIMEOUT sekund (najwyzej SUFIT_CZASU), wiec `sleep 600 &&
+    tail log` czeka do konca w jednym kroku
+  - udany wynik termux_run nie mowi juz "timeout": 120 (MAIN bral to za
+    limit dlugosci komendy), tylko "limit_ciszy_s" i "maks_czas_s"
+    (SUFIT_CZASU, 7200 s)
+
+=========================================================================
+
+CZESC 38. CO ZMIENILO v478 (bieg 2026-10-11 08:45 — Ela "99% celu")
+=========================================================================
+
+  Ela (PROGRESS_ESTIMATOR) pisala "Zrealizowano ~99% celu" za jeden
+  rozstrzygniety eksperyment (perceptron, FAZA 19), choc cel to cala
+  MISJA RSI. Jej poczatkowy prompt mowil tylko "Oceniasz, ile celu
+  zostalo rzeczywiscie wykonane". Na prosbe uzytkownika prompt Eli
+  przepisany w calosci — co robi i co wpisuje, bez zakazow i bez
+  dodatkowych, powtarzanych tekstow:
+
+    Jestes Ela. Oceniasz, jaka czesc calego celu uzytkownika jest juz
+    rzeczywiscie zrobiona — calego, od pierwszego do ostatniego punktu,
+    tak jak go napisal. Biezacy etap to jedna z tych czesci. W "percent"
+    wpisujesz ten udzial jako liczbe od 0 do 100. W "summary" piszesz
+    krotko, ktore czesci celu sa zrobione i na jakiej podstawie, a ktore
+    jeszcze zostaly.
+
+  Prompt idzie raz, na poczatku rozmowy z Ela w danym uruchomieniu.
+
+=========================================================================
+
+CZESC 39. CO ZMIENILO v479 (bieg 2026-10-11 09:10 — czekanie na trening)
+=========================================================================
+
+  Po v477 komenda `sleep N` moze czekac do 2 h, ale MAIN dalej
+  sprawdzal trening co 90 s (`sleep 90 && tail log && ls ckpt`) i dwa
+  razy z rzedu dostal slowo w slowo ten sam wynik. Kazde puste
+  sprawdzenie to tura MAIN-a i wiadomosc do DeepSeeka.
+
+  CO ZMIENIONE:
+  - _czekaj_az_sie_zmieni(): gdy komenda MAIN-a tylko czeka i czyta
+    (sleep + cd/tail/cat/ls/ps/grep/echo..., bez zapisu do plikow) i jej
+    wynik jest identyczny jak przy poprzednim takim samym sprawdzeniu
+    (te same komendy, liczby dowolne), program powtarza ja sam, az wynik
+    sie zmieni albo komenda padnie — dopiero wtedy oddaje go MAIN-owi,
+    z polami "czekalem_na_zmiane_s" i "sprawdzen_bez_zmiany"
+  - najdluzej CZEKANIE_NA_ZMIANE_S (domyslnie 900 s) za jednym razem
+  - MAIN nie jest slepy: program sledzi procesy, ktorych polecenie
+    zawiera nazwe pliku z komendy (faza19b_seed42.log -> proces z
+    "faza19b_seed42"); gdy ktorys sie skonczy, czekanie konczy sie od
+    razu. W wyniku: "co_sie_dzialo" (ile czekal, ile razy, dlaczego
+    przestal) i "procesy_teraz" (pid, czas dzialania, polecenie)
+
+=========================================================================
+
+CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
+=========================================================================
+
+  1. Treningi i testy w tle ginely przy zamknieciu agenta — i nikt
+     zespolowi o tym nie mowil. Perceptron padl trzy razy (epoka 7,
+     2, 1), za kazdym razem miedzy uruchomieniami agenta. Przy
+     wyjsciu program gasi wszystko, co sam puscil w tle (tak ma
+     zostac — po zamknieciu nie zostaja procesy). Zespol widzial
+     tylko urwany log i szukal przyczyny w Androidzie (doze,
+     wake-lock).
+
+     CO ZMIENIONE:
+     - przy wyjsciu zapisujemy, co zatrzymalismy (pid, komenda, plik
+       logu) do ~/agent/zatrzymane_przy_zamknieciu.json
+     - po starcie MAIN dostaje to raz, w pierwszym kroku: "Przy
+       zamknieciu programu (czas) zatrzymalem to, co dzialalo w tle:
+       - pid ... (komenda), log: ..."; plik jest potem kasowany
+     - `pkill -f agent.py` (SIGTERM) i zamkniecie okna Termuksa
+       (SIGHUP) sprzataja tak samo jak Ctrl+C — dotad wtedy procesy
+       w tle zostawaly
+
+  2. Ela dalej pisala 99%, choc w tym samym podsumowaniu wyliczala
+     kilkanascie rzeczy niezrobionych. Nowy promt z v478 doszedl do
+     jej starej rozmowy jako aktualizacja, a w historii miala dziesiatki
+     wlasnych "99%".
+
+     CO ZMIENIONE:
+     - Ela (PROGRESS_ESTIMATOR) zaczyna czysta rozmowe w kazdym
+       uruchomieniu; cel i stan dostaje jak dotad. Reszta zespolu
+       wznawia swoje rozmowy bez zmian.
+
+=========================================================================
+
+  3. (bieg 2026-10-11 11:07) Zdanie "Nowe uruchomienie programu.
+     Poprzedni bieg zostal przerwany..." z v463 nie dochodzilo do MAIN-a
+     nigdy: program sprawdzal, czy rozmowa zostala wznowiona, zanim ja
+     w ogole wznowil (rozmowa startuje dopiero przy wysylce). MAIN
+     dostawal w kroku 1 sam cel i pisal "Poprzedni RUN nie zwrocil
+     wyniku - powtarzam diagnostyke".
+
+     CO ZMIENIONE:
+     - krok 1: jesli rozmowy MAIN-a nie ma jeszcze w tym uruchomieniu,
+       a jest zapisana na dysku, MAIN dostaje to zdanie (raz na
+       uruchomienie), a zaraz po nim liste tego, co zatrzymalismy przy
+       zamknieciu
+
+  4. (bieg 2026-10-11 11:07, krok 21) Odpowiedz uzytkownika szla do
+     MAIN-a dwa razy w jednej wiadomosci ("Uzytkownik:" i "wartosc
+     wklejona przez uzytkownika"), a blok "Uzytkownik:" przy kazdym
+     nowym zdaniu niosl wszystkie dawne, i po kazdym restarcie znowu.
+
+     CO ZMIENIONE:
+     - _jeszcze_niewyslane_zdania(): kazde zdanie uzytkownika idzie do
+       roli raz na rozmowe; pamiec na dysku
+       (state/zdania_uzytkownika_wyslane.json) przy identyfikatorze
+       rozmowy — nowa rozmowa dostaje zdania od nowa
+     - gdy pelny tekst jest w "Uzytkownik:", linia "wartosc wklejona"
+       w "Co sie wlasnie stalo" znika (sciezka do pliku zostaje)
+
+  5. (bieg 2026-10-11 11:07, kroki 10, 20, 43) MAIN pytal uzytkownika
+     o decyzje i dane przez NEED_USER_LOGIN bez strony, choc mial
+     Chrome i Termuxa; po odpowiedzi "sprawdz, czy mozesz sam" zespol
+     zrobil to sam.
+
+     CO ZMIENIONE:
+     - NEED_USER_LOGIN bez "url" najpierw idzie do Tomka i Marka z
+       pytaniem MAIN-a. Do uzytkownika trafia dopiero, gdy obaj napisza
+       wprost "TYLKO UŻYTKOWNIK" (albo gdy zaden nie odpowie). Inaczej
+       krok konczy sie statusem PYTANIE_ZOSTAJE_W_ZESPOLE z ich
+       odpowiedziami dla MAIN-a. Logowanie na stronie (z url) bez zmian.
+
+  6. (bieg 2026-10-11 11:07, krok 67) `timeout 300 python3
+     faza24_wildchat.py fetch` czekal na serwer (HTTP 429), nic nie
+     wypisywal i nie liczyl — po 120 s ciszy program go przerwal, choc
+     komenda sama dawala sobie 300 s.
+
+     CO ZMIENIONE:
+     - _sekundy_timeoutu(): gdy komenda ma `timeout N` (takze -s KILL,
+       --preserve-status, 10m), limit ciszy to co najmniej N + 15 s
+       (tak jak `sleep N` od v477)
+
+  7. (bieg 2026-10-11 12:34) Kamil (RESEARCHER) na jedno pytanie MAIN-a
+     dostal caly cel (12 kB) i zdania uzytkownika dwa razy ("Uzytkownik
+     powiedzial nam..." i "Uzytkownik:") — ~25 kB, z czego jego
+     dotyczylo tylko pytanie.
+
+     CO ZMIENIONE:
+     - _ROLE_TYLKO_PYTANIE = {"RESEARCHER"}: Kamil dostaje swoja role
+       ("Jestes Kamilem...") i pytanie, bez celu i bez zdan uzytkownika
+     - u pozostalych rol zdania uzytkownika ida juz tylko raz, w
+       "Uzytkownik:" (blok "Uzytkownik powiedzial nam..." usuniety)
+
+  8. (bieg 2026-10-11 12:42) Log urwal sie po kroku 5 bez zadnego
+     komunikatu — telefon zamknal wszystkie aplikacje. Nie dalo sie
+     powiedziec, czy program dostal sygnal, czy zostal ubity od razu.
+
+     CO ZMIENIONE:
+     - SIGTERM/SIGHUP zapisuja w logu linie "Dostałem sygnał ... od
+       systemu"; brak takiej linii na koncu urwanego logu znaczy, ze
+       Android ubil proces bez ostrzezenia (SIGKILL, zwykle brak
+       pamieci)
+
+  9. (bieg 2026-10-11 14:02) Kroki 6, 10, 14, 16 ubite jako "stoi":
+     `sleep 45; tail ...` po 168 s z pustym wyjsciem, trening po 149 s
+     "ciszy". Meldunki "Leci" przychodzily co 15-93 s zamiast co kilka
+     — telefon zasypial (wake-lock zdjety w kroku 3), a z nim komenda
+     i nasza petla. Po przebudzeniu zegar scienny przeskakiwal, a my
+     liczylismy przespany czas jako cisze komendy.
+
+     CO ZMIENIONE:
+     - cisze komendy liczymy time.monotonic(), ktory w uspieniu stoi
+     - przeskok zegara > 5 s jest logowany: "Telefon spał przez ok.
+       N s — ... tego czasu nie liczę jako ciszy."; gdy komende i tak
+       trzeba przerwac, opis mowi, ile z tego czasu telefon spal
+
+ 10. (ten sam bieg) Wake-lock wlaczany przez program na starcie
+     zdejmowal MAIN (`termux-wake-unlock` w kroku 3) i skrypty
+     zespolu (meta_learn.py na koncu run()). Blokada w Termuxie jest
+     jedna, wiec przy wygaszonym ekranie telefon zasypial.
+
+     CO ZMIENIONE:
+     - po wlaczeniu blokady program podstawia w PATH wlasne
+       ~/agent/bin_programu/termux-wake-unlock: nic nie zdejmuje,
+       wypisuje, ze blokade trzyma program przez caly bieg
+     - prawdziwe termux-wake-unlock wola tylko program przy
+       zamknieciu (sciezka zapamietana przed podstawieniem)
+
+ 11. Cicha aktualizacja w trakcie biegu (prosba uzytkownika: "niech
+     sprawdza co 15 min", "cicho, bez zmian w czacie", "jakby caly
+     czas dzialal, ale z aktualizacja").
+
+     CO ZMIENIONE:
+     - watek w tle co 15 min porownuje commit w ~/.ael-repo z galezia
+       na GitHubie (git ls-remote)
+     - gdy jest nowszy: na granicy krokow ~/update_agent.sh, zapis
+       stanu biegu do ~/agent/stan_przed_aktualizacja.json i os.execv
+       — ten sam pid, wiec robota w tle zyje dalej i zostaje nasza
+     - nowa wersja startuje bez pytan (cel wznowiony, nic nie
+       czyszczone), wczytuje krok, ostatni wynik, co ktora rola juz
+       widziala, procesy i logi w tle, pisze dalej do tego samego
+       logu biegu; Ela zachowuje rozmowe, agenci nie dostaja zadnej
+       wiadomosci o aktualizacji
+     - gdy aktualizacja albo przeladowanie nie wyjdzie, bieg idzie
+       dalej na starej wersji
+
+ 12. (bieg 2026-10-11 16:58, krok 9) ENGINEER: status INCOMPLETE,
+     action='continue' -> 422, wiec program dopytywal zwykla
+     wiadomoscia "Ucięło Cię...". Przycisk "Kontynuuj" na stronie
+     DeepSeeka to osobny adres, nie pole action w /chat/completion.
+
+     CO ZMIENIONE:
+     - action="continue" idzie teraz na POST /api/v0/chat/continue z
+       {chat_session_id, message_id: id ucietej odpowiedzi,
+       fallback_to_resume: true}, PoW liczony dla tej sciezki
+       (wzor: ds2api, internal/deepseek/client/client_continue.go)
+     - gdy serwer odda cala odpowiedz od poczatku, bierzemy ja w
+       calosci zamiast sklejac
+     - gdy i to sie nie uda, zostaje dotychczasowe dopytanie
+
+ 13. (bieg 2026-10-11 16:58) Cicha aktualizacja zadzialala (17:16 i
+     17:33, bieg ciagnal sie dalej od nastepnego kroku), ale za kazdym
+     razem jako "nowa wersja 3a034ba". Klon ~/.ael-repo na telefonie
+     ma nazwe galezi claude/android-termux-agent-repair-18dvrp (stara
+     v450), a update_agent.sh pobiera inna galaz — fetch + reset nie
+     zmienia nazwy. Sprawdzanie porownywalo wiec z obca galezia i co
+     15 min przeladowywalo program na ten sam kod.
+
+     CO ZMIENIONE:
+     - galaz do porownania bierzemy z BRANCH w ~/update_agent.sh (albo
+       ze zmiennej BRANCH), tej samej, ktora skrypt pobiera
+
+ 14. (bieg 2026-10-11 16:58) Po cichej aktualizacji wszystkie role
+     wznowily swoje rozmowy (zadnej nowej sesji), ale kazda przy
+     pierwszej wiadomosci dostala znowu caly cel (~16 kB) — tak samo
+     jak przy kazdym zwyklym restarcie programu. Pierwsza wiadomosc
+     roli w uruchomieniu skreslala ja z _goal_briefed (v191: restart =
+     pusta historia), choc rozmowa jest wznawiana.
+
+     CO ZMIENIONE:
+     - STATE_DIR/cel_wyslany.json pamieta, ktora rozmowa
+       (chat_session_id) dostala ktory cel (odcisk sha1); wznowiona
+       rozmowa z tym samym celem nie dostaje go drugi raz, nowa
+       rozmowa albo zmieniony cel — dostaje
+
+ 15. Nowa rozmowa roli (zerwana, limit na stronie, zmieniony prompt)
+     dostawala od nowa cel, ale nie stan: bloki postepu, plikow i
+     wypowiedzi kolegow byly "widziane" jeszcze w starym czacie, wiec
+     _only_if_new je pomijal.
+
+     CO ZMIENIONE:
+     - gdy start_session zaklada NOWY czat, czyscimy _role_seen_blocks
+       tej roli — dostaje caly obecny stan raz; wznowiony czat nadal
+       dostaje tylko to, co nowe
+
+ 16. (bieg 2026-10-11 16:58, 18:21-18:31) Role na koncie 2 (Ela,
+     Marek, Tomek) dostawaly od DeepSeeka "Unexpected Content-Type:
+     application/json | " — odmowe bez slowa wyjasnienia, bo przy
+     stream=True .text byl pusty. Konto 1 (MAIN) dzialalo.
+
+     CO ZMIENIONE:
+     - przy bledzie cialo odpowiedzi dociagamy z samego strumienia; gdy
+       i tam nic nie ma, piszemy to wprost razem z kodem HTTP
+
+ 17. (bieg 2026-10-11 16:58, 19:00 i 19:03) Dzieki punktowi 16 widac
+     bylo powod odmow: biz_code 26 "invalid message id". Po pustej
+     odpowiedzi DeepSeeka rozmowa wskazywala na wiadomosc, ktorej
+     serwer nie zapisal. Nastepne pytanie do niej bylo odrzucane i
+     Tomek (19:00) oraz Marek (19:03) dostali NOWE rozmowy.
+
+     CO ZMIENIONE:
+     - gdy odpowiedz nie ma ani tekstu, ani myslenia, rozmowa wraca do
+       poprzedniej wiadomosci (parent_message_id sprzed pytania), wiec
+       ponowienie idzie w tej samej rozmowie
+
+ 18. (bieg 2026-10-11 19:20 i 19:52) Ela liczyla jako "kamienie
+     milowe" test, ktory zespol sam opisal jako niesprawdzajacy
+     kompozycji, i samo puszczenie treningu, bez wyniku.
+
+     CO ZMIENIONE:
+     - poczatkowy promt Eli przepisany w calosci: wynik liczy sie
+       razem z ograniczeniem, ktore zespol przy nim zapisal, a to, co
+       dopiero ruszylo, jest opisane jako rozpoczete
+
+ 19. (bieg 2026-10-11 19:52, krok 105) Zespol puscil trening przez
+     zwykle termux_run z "nohup ... &". Powloka skonczyla od razu, a
+     trening szedl dalej poza lista procesow w tle, wiec zamkniecie
+     programu by go nie zatrzymalo.
+
+     CO ZMIENIONE:
+     - po kazdej komendzie sprawdzamy, czy jej grupa procesow jeszcze
+       zyje; jesli tak, zapamietujemy ja i przy zamknieciu programu
+       zatrzymujemy razem z reszta (cicha aktualizacja jej nie rusza)
+
+ 20. (bieg 2026-10-11 20:32) Trening szedl w tle, a MAIN wyslal
+     `sleep 1500; cat log` — 25 minut czekania bez wzgledu na to,
+     kiedy trening sie skonczy.
+
+     CO ZMIENIONE:
+     - komendy dostaja w PATH wlasny `sleep` programu (dziala jak
+       zwykly); gdy w trakcie takiego czekania skonczy sie albo
+       wysypie proces w tle, ktory juz wczesniej szedl, program konczy
+       samo czekanie, a reszta komendy (`cat log`) idzie normalnie
+     - tylko wtedy na koncu wyniku tej komendy jest jedno zdanie, np.
+       "Czekanie (sleep) skończone wcześniej, bo proces w tle (...)
+       się zakończył."
+
+ 21. (bieg 2026-10-11 21:29) Kopia logu do wyciagniecia z telefonu
+     (storage/shared/AEL-MINI) odswiezala sie tylko miedzy krokami.
+     Przy dlugiej komendzie (np. `sleep 1500`) byla starsza o
+     kilkadziesiat minut.
+
+     CO ZMIENIONE:
+     - w trakcie dlugiej komendy kopia odswieza sie co minute
+
+ 22. (bieg 2026-10-11 22:05, krok 139) Komenda sama ubila stary
+     trening (pkill), puscila nowy (nohup ... &) i dala mu chwile na
+     start (sleep 3). Program (punkt 20) uznal, ze stary proces sie
+     skonczyl, skrocil ten sleep i dopisal mylace zdanie.
+
+     CO ZMIENIONE:
+     - czekanie jest skracane tylko w komendzie, ktora sama nic nie
+       puszcza w tlo (&) i niczego nie zabija (kill/pkill/killall)
+
+ 23. (bieg 2026-10-11 16:58, od 02:17 12.10) Rozmowa MAIN-a doszla do
+     limitu dlugosci na stronie DeepSeeka. Strumien niosl tylko
+     "Length limit reached. Please start a new chat."
+     (context_length_exceeded). Program bral to za pusta odpowiedz,
+     ponawial w tej samej rozmowie i tak przez 282 kroki (3,5 godziny),
+     spalajac budzet konta 1. Nic sie nie dzialo.
+
+     CO ZMIENIONE:
+     - taka odpowiedz jest bledem "rozmowa zerwana": program od razu
+       zaklada roli nowa rozmowe, w ktorej dostaje cel i pelny stan,
+       i ponawia w niej to samo pytanie
+
+ 24. (bieg 2026-10-12 18:35) Bartek zapisal cztery moduly (hyp_dedup.py,
+     hyp_rules.py ...), potem hyp_gen.py, ktory je importuje z tego
+     samego katalogu. Program napisal zespolowi, ze "ten Python nie ma"
+     tych modulow — nieprawda, sprawdzal bez katalogu skryptu.
+
+     CO ZMIENIONE:
+     - sprawdzenie importow widzi katalog zapisanego skryptu, tak jak
+       Python, ktory go potem uruchomi
+
+ 25. (ten sam bieg) Cel byl krotki (sama "piaskownica"). Ela wpisala do
+     "celu uzytkownika" zdanie z opisu programu ("sam sie loguje, daje
+     dostep do kont") i liczyla postep wzgledem niego.
+
+     CO ZMIENIONE:
+     - Ela nie dostaje juz na start opisu, jak dziala program; ocenia
+       cel tak, jak go napisal uzytkownik
+
+ 26. (bieg 2026-10-12 18:35, o 23:57) MAIN zapisal nowa sekcje do 186 KB
+     pliku z notatkami zespolu bez dopisywania (append) — zostalo 2,9 KB.
+     Program tylko ostrzegl "Nadpisany: mial ..., teraz ma ...".
+     Najswiezsza kopia zespolu byla z 20:04, wiec 24 sekcje przepadly.
+
+     CO ZMIENIONE:
+     - zanim plik zostanie nadpisany wyraznie mniejsza trescia,
+       program odklada poprzednia tresc obok jako
+       <plik>.przed_nadpisaniem (jedna kopia na plik) i mowi o tym
+       w tym samym ostrzezeniu
+
+ 27. (8.10.2026, zmiana u Google) gemini-3.7-flash jest teraz
+     przekierowany na gemini-3.8-flash, a gemini-3.5-flash na
+     gemini-3.6-flash. Obie nazwy sa dalej na liscie modeli, ale
+     dziela limit z modelem, na ktory ida. Program bral je za osobne
+     modele: zajmowaly miejsca w codziennym sprawdzaniu, a po
+     wyczerpaniu limitu jednej nazwy probowal drugiej i znow dostawal
+     429. Modele 2.5 sa dostepne tylko dla tych, kto ich ostatnio
+     uzywal — to program juz obsluguje ("niedostepny dla tego klucza").
+
+     CO ZMIENIONE:
+     - gdy Google odpowiada innym modelem albo 429 wymienia inny
+       model niz pytany, program zapamietuje przekierowanie, odstawia
+       obie nazwy razem i w drabince zostawia tylko prawdziwa
+     - codziennie sprawdza 8 kandydatow zamiast 6
+
+ 28. (uzytkownik 13.10.2026: "dlugo Gemini sie laduje") Raz dziennie,
+     przy starcie, program sprawdza modele Gemini: po jednym zapytaniu
+     na kandydata, po kolei, kazde do 60 s. Start czekal na wszystkie.
+
+     CO ZMIENIONE:
+     - sprawdzanie idzie w tle, start na nie nie czeka
+     - wszystkie modele sprawdzane naraz, nie po kolei (8 kandydatow
+       trwa tyle, co najwolniejszy z nich)
+     - gdy zadanie dla Gemini przyjdzie przed koncem sprawdzania,
+       czeka tylko na jego wynik
+
+ 29. (uzytkownik 13.10.2026: "musimy informowac Main, jak zamkne
+     program, zeby wiedzial, ze zamknalem") Po ponownym starcie MAIN
+     dostawal tylko "Poprzedni bieg zostal przerwany", a liste
+     zatrzymanych procesow jedynie wtedy, gdy cos dzialalo w tle.
+
+     CO ZMIENIONE:
+     - gdy program zamyka uzytkownik (Ctrl+C, zamkniete okno, pkill),
+       przy nastepnym starcie MAIN dostaje raz: "Uzytkownik zamknal
+       program (czas)" i co sie wtedy zatrzymalo w tle albo ze w tle
+       nic nie dzialalo; po DONE albo bledzie programu tego zdania nie
+       ma
+
+ 30. (uzytkownik: "to jest uniwersalny program, a jak bedzie inny
+     cel?") Informacja o zamknieciu i o tym, co sie wtedy zatrzymalo,
+     szla do MAIN-a takze przy nowym celu — czyli wiadomosc o cudzej
+     pracy.
+
+     CO ZMIENIONE:
+     - MAIN dostaje ja tylko wtedy, gdy program wznawia ten sam cel
+       (rozmowa MAIN-a z poprzedniego uruchomienia zostaje). Przy nowym
+       celu (reset rozmow) plik jest odczytany i skasowany bez slowa
+
+ 31. (przeglad uniwersalnosci 13.10.2026) Przy "nowy cel zacznie sie na
+     czysto" program kasowal dane poprzedniego celu, ale zostawial dwa
+     pliki: serie bledow narzedzia i liste tego, co zatrzymal koniec
+     poprzedniego celu.
+
+     CO ZMIENIONE:
+     - oba pliki kasowane razem z reszta danych poprzedniego celu
+
+ 32. (bieg 2026-10-13 19:06, krok 32) Przez 13 minut liczenia bez nowych
+     linii podglad pisal co 15 s "nic nowego od 0 s" — sprzecznie: zero
+     sekund, bo procesor pracowal i to liczylo sie jako ruch.
+
+     CO ZMIENIONE:
+     - gdy nie ma nowych linii, ale procesor pracuje, podglad pisze
+       "liczy, bez nowych linii (...)"
+
+ 33. (bieg 2026-10-13 19:39) Po "TASK -> ..." program stanal bez zadnej
+     linii. Zadanie czekalo na sprawdzanie modeli Gemini w tle, a jedno
+     sprawdzenie nie wracalo — wykonawca nie dostawal modelu.
+
+     CO ZMIENIONE:
+     - gdy modele sa jeszcze sprawdzane, zadanie nie czeka: leci na
+       ostatniej znanej drodze modeli (albo modelu domyslnym), z jedna
+       linia "Modele jeszcze sprawdzam w tle — na razie: ...";
+     - sprawdzanie konczy sie najpozniej po 90 s; model, ktory nie
+       odpowiedzial, liczy sie jako chwilowo zajety.
+
+ 34. (bieg 2026-10-13 19:50) Przy sprawdzaniu modeli szesc z osmiu bylo
+     "przeciazonych", a na szczycie drogi modeli stanal przeciazony model;
+     do drogi trafil tez model do transkrypcji mowy.
+
+     CO ZMIENIONE:
+     - model przeciazony przy sprawdzaniu jest odstawiony na 2 minuty na
+       kazdym kluczu, jak przy zadaniu — zadanie idzie od razu na
+       pierwszy, ktory odpowiada;
+     - linia "Sprawdzam model ..." pokazuje krotko, co odpisal serwer;
+     - modele "transcribe" nie sa brane do zadan.
+
+ 35. (prosba uzytkownika 2026-10-13) Bezprzewodowe ADB rozlacza sie,
+     gdy telefon traci Wi-Fi, a po powrocie ma nowy port (czasem IP).
+
+     CO ZMIENIONE:
+     - bez Wi-Fi program nie pyta, tylko raz zapisuje w logu, ze zapyta
+       po powrocie do sieci;
+     - po powrocie najpierw sam probuje: nowy IP + stary port;
+     - gdy to nie dziala, RAZ pyta w terminalu o nowy adres (IP:port albo
+       sam port — IP dopisze sam), czeka 120 s, potem pracuje dalej;
+     - pytanie pada tylko po utracie i powrocie Wi-Fi, nie gdy ADB padnie
+       przy dzialajacym Wi-Fi (wtedy jak dotad: zapamietany adres, mDNS).
+
+ 36. (bieg 2026-10-13 22:41, krok 32) MAIN dopisywal sekcje do pliku
+     przez heredoc. W tekscie byla linia zaczynajaca sie od "top 150 per
+     dlugosc" — program wzial ja za komende `top` i zamiast zapisu
+     uruchomil `top -b -n 1`. Zapis przepadl, MAIN musial go powtarzac.
+
+     CO ZMIENIONE:
+     - komendy "dla czlowieka" (nano, less, top...) sa szukane w komendzie
+       bez tresci heredoc — tekst zapisywany do pliku ich nie wyzwala.
+
+ 37. (bieg 2026-10-14 09:52, krok 13) `rm -f ~/sanity2l.json && python
+     ... --out ~/sanity2l.json` — czyszczenie przed zapisem, a pliku
+     jeszcze nie bylo. Program zapytal uzytkownika o usuniecie, po 120 s
+     bez odpowiedzi odrzucil cala komende i MAIN uslyszal "usuniecie
+     odrzucone".
+
+     CO ZMIENIONE:
+     - gdy kazdy cel rm na pewno nie istnieje (z uwzglednieniem `cd` w tej
+       samej komendzie, bez gwiazdek i zmiennych), program nie pyta —
+       nie ma czego usuwac.
+
+ 38. (uzytkownik 2026-10-14 13:24) Gdy telefon byl nieosiagalny przez ADB,
+     kazdy krok tracil ok. 30 s: trzy razy `adb connect` po 10 s.
+
+     CO ZMIENIONE:
+     - `adb connect` i szukanie przez mDNS czekaja najwyzej 5 s;
+     - po nieudanej probie kolejna dopiero po przerwie (30 s, 60 s, ...
+       najwyzej 5 min); w tym czasie sprawdzenie trwa chwile (samo
+       `adb devices`); powrot telefonu do Wi-Fi skraca przerwe od razu;
+     - log mowi raz na probe: "Telefon przez ADB nieosiagalny — nastepna
+       proba za N s".
+
+ 39. (uzytkownik 2026-10-14) Okno Termuksa samo sie zamykalo (bieg urwal
+     sie o 08:09 i 09:00 w pol linii), a w logu nie bylo sladu dlaczego.
+
+     CO ZMIENIONE:
+     - program co 30 s zostawia "oddech" (state/ostatni_oddech.json: czas,
+       krok, wolna pamiec); czyste wyjscie go kasuje, sygnal SIGHUP/SIGTERM
+       dopisuje swoja nazwe;
+     - jesli przy starcie oddech zostal, program pyta Androida przez ADB
+       (dumpsys activity exit-info com.termux + logcat) i zapisuje raport
+       zamkniecie_*.txt w memory/przebieg oraz w AEL-MINI na telefonie;
+       w logu jedna linia z powodem;
+     - raz na start przez ADB: Termux bez usypiania (Doze), z praca w tle,
+       stale aktywny i bez limitu "procesow-dzieci" (Android 12+); brak
+       pamieci nie ma ustawienia — wtedy widac to w raporcie.
+
+ 40. (uzytkownik 2026-10-14) "Bez Wi-Fi teraz jestem, a bez niego [ADB]
+     nie dziala." Android wylacza debugowanie bezprzewodowe razem z Wi-Fi.
+
+     CO ZMIENIONE:
+     - gdy ADB dziala przez Wi-Fi, program raz wlacza `adb tcpip 5555` i
+       laczy sie z telefonem lokalnie (127.0.0.1:5555) — to polaczenie
+       zostaje bez Wi-Fi, az do restartu telefonu;
+     - lokalne polaczenie ma pierwszenstwo i jest probowane najpierw
+       (ulamek sekundy); gdy nie wyjdzie, zostaje stare przez Wi-Fi;
+     - ANDROID_SERIAL wskazuje wybrane urzadzenie, wiec `adb shell` bez -s
+       nie trafia na "more than one device".
+
+ 41. (uzytkownik 2026-10-14) ADB dziala tylko przez Wi-Fi, a zapis, przez
+     co program sie wylacza, ma powstawac zawsze.
+
+     CO ZMIENIONE:
+     - memory/przebieg/dziennik_pracy.log: co minute czas, krok, wolna
+       pamiec, swap, rozmiar programu, liczba procesow, co 5 min bateria —
+       bez ADB;
+     - raport zamkniecie_*.txt powstaje od razu przy starcie, takze bez
+       ADB: ostatni slad, ostatnie 20 minut dziennika, logi samej
+       aplikacji Termux; powod od Androida dopisuje sie, gdy ADB wroci;
+     - ochrona Termuksa (punkt 39) wlacza sie tez wtedy, gdy ADB pojawi
+       sie dopiero w trakcie biegu.
+
+ 42. (bieg 2026-10-14 16:30, krok 2) `timeout 900 python trening.py |
+     tail -10`: `timeout` przenosi siebie i trening do wlasnej grupy
+     procesow, a program liczyl procesor tylko w grupie komendy — widzial
+     zero, a `tail` nic nie wypisuje do konca. Po 120 s ciszy liczacy
+     trening zostalby przerwany jako "stoi".
+
+     CO ZMIENIONE:
+     - do procesora komendy liczy sie cala rodzina procesow (takze dzieci
+       w innych grupach) razem z czasem dzieci, ktore juz sie skonczyly.
+
+ 43. (uzytkownik 2026-10-14) Rywalizacja dwoch druzyn. Na starcie pytanie:
+     1 = zwykly program (bez zadnej zmiany), 2 = rywalizacja.
+
+     JAK DZIALA "2":
+     - druzyna 1 to ten terminal: dotychczasowe dane i rozmowy, caly zespol
+       na koncie 1 (~/api_token.txt); druzyna 2 rusza w tle po wyborze celu,
+       z tym samym celem, caly zespol na koncie 2 (~/api_token_2.txt);
+       bez drugiego konta program rusza jako "1";
+     - druzyna 2 ma osobny stan i logi: ~/agent_druzyna2 (memory/przebieg,
+       terminal.log), kopia w AEL-MINI/druzyna_2; klucze Gemini i adres
+       ADB sa wspolne;
+     - kazda rola dostaje raz, razem z celem, opis rywalizacji: wasz folder
+       ~/MAIN_1 albo ~/MAIN_2, folder rywala do czytania, wynik zapisujecie
+       w wynik.json z komenda "sprawdz";
+     - sedzia to sam program: gdy wynik.json sie zmieni, uruchamia komende
+       "sprawdz" w folderze druzyny (najwyzej 20 min, komend usuwajacych
+       nie uruchamia), porownuje ostatnia liczbe z ogloszonym wynikiem i
+       zapisuje werdykt w ~/RYWALIZACJA; MAIN kazdej druzyny dostaje raz
+       swoj werdykt i kazdy nowy werdykt rywala;
+     - zamkniecie programu w terminalu zamyka tez druzyne 2; cicha
+       aktualizacja przeladowuje obie (druzyna 2, gdy zobaczy nowy agent.py);
+       gdy druzyna 2 padnie, rusza od nowa (3 padniecia w 10 min = stop);
+     - rozmowy rol zalozone na innym koncie zaczynaja sie od nowa (przejscie
+       miedzy "1" i "2" przenosi role na inne konto); MAIN druzyny 1 jest
+       na koncie 1 w obu trybach, wiec jego rozmowa trwa dalej;
+     - druzyna 2 nie ma terminala: o nic nie pyta, a usuwania cudzych
+       plikow, ktore wymagaloby potwierdzenia, nie dostaje.
+
+ 44. (uzytkownik 2026-10-14) Po powrocie do "1" MAIN nie moze miec w
+     rozmowie rywalizacji — przy innych celach wszystko by sie mieszalo.
+
+     CO ZMIENIONE:
+     - druzyna 1 ma wlasny katalog ~/agent_druzyna1 (rozmowy, stan, logi;
+       kopia w AEL-MINI/druzyna_1); po wyborze "2" program startuje od nowa
+       jako druzyna 1, zapisany cel zwyklego programu idzie z nim (Enter
+       go wznawia);
+     - zwykly program (~/agent) nie dostaje nic z rywalizacji: jego
+       rozmowy, stan i logi zostaja takie, jakie byly; obie druzyny
+       zaczynaja od czystych rozmow, a pliki pracy na telefonie sa wspolne.
+
+ 45. (uzytkownik 2026-10-14) W rywalizacji osobny, bezstronny agent — Sedzia
+     (rola ARBITER) — co 5 krokow ocenia obie druzyny, tak jak Ela ocenia
+     postep w zwyklym programie.
+
+     JAK DZIALA:
+     - dostaje dla kazdej druzyny: ostatnie 8 wynikow krokow, jej wynik
+       sprawdzony przez program (wynik.json) i liste plikow w ~/MAIN_N;
+     - oddaje procent i krotka ocene dla kazdej druzyny, kto prowadzi (albo
+       remis) i dlaczego; jego prompt mowi wprost, ze ocenia uczciwie i obie
+       druzyny jednakowo;
+     - pracuje w procesie druzyny 1 (konto 1, po kolei z jej zespolem);
+       ocena trafia raz do MAIN-a druzyny 1 i przez
+       ~/RYWALIZACJA/ocena_sedziego.json do MAIN-a druzyny 2;
+     - w rywalizacji zastepuje automatyczna ocene Eli; Ela odzywa sie tylko,
+       gdy MAIN ja zawola; w zwyklym programie wszystko jak dotad.
+
+ 46. (uzytkownik 2026-10-14) Dwie druzyny na jednym telefonie nie moga sie
+     gryzc o ekran i limity Gemini.
+
+     CO ZMIENIONE (tylko w rywalizacji, poza limitami):
+     - narzedzi android_* i chrome_* uzywa naraz jedna druzyna: trzyma ekran,
+       dopoki na nim pracuje, i jeszcze 60 s po ostatniej czynnosci; druga
+       czeka najwyzej 5 min (blokada na ~/RYWALIZACJA/ekran.lock, znika sama,
+       gdy proces padnie);
+     - stan limitow Gemini (gemini_modele.json) jest jeden: ~/agent/state —
+       limit wyczerpany przez jedna druzyne widzi tez druga; w zwyklym
+       programie to ta sama sciezka co dotad; zapis przez plik tymczasowy.
+
+ 47. (uzytkownik 2026-10-14) Sedzia w rywalizacji pilnuje tez, gdzie
+     druzyny pracuja: przy kazdej ocenie (co 5 krokow) dostaje liste komend
+     i plikow, ktorych kazda druzyna ostatnio uzywala (z tool_trace jej
+     ostatnich wynikow), a w jego poczatkowym prompcie jest zdanie, ze
+     wedlug zasad gry kazda buduje u siebie, folder rywala i wczesniejsza
+     wspolna prace moze czytac; gdy druzyna zmienia cos u drugiej,
+     przeszkadza jej albo buduje poza swoim folderem, Sedzia pisze to w
+     ocenie, a te prace liczy jej dopiero po przeniesieniu do siebie.
+     Dziala dla kazdego celu. Nowy prompt dostaje nowa rozmowa Sedziego.
+ 48. (uzytkownik 2026-10-14) Logi w rywalizacji: kazda druzyna kopiuje swoj
+     przebieg do AEL-MINI/druzyna_1 i AEL-MINI/druzyna_2 (jak dotad);
+     druzyna 2 dorzuca tam swoj terminal.log (ostatnie 2 MB — ona dziala w
+     tle, bez ekranu), a obie kopiuja werdykty i oceny Sedziego z
+     ~/RYWALIZACJA do AEL-MINI/rywalizacja. Tryb 1 bez zmian.
+ 49. (uzytkownik 2026-10-14) Ocena Sedziego to wspolny przystanek: kazda
+     druzyna co 5 swoich krokow staje (plik ~/RYWALIZACJA/przystanek_N.json).
+     Druzyna 1 czeka, az stanie tez druzyna 2, Sedzia ocenia obie w tym
+     samym momencie, potem druzyna 1 usuwa przystanki i obie ruszaja razem
+     (druzyna 2 dostaje ocene od razu, zanim jej MAIN zdecyduje). Gdy
+     druzyna 2 nie zyje dluzej niz 90 s, ocena idzie bez czekania; gdy nie
+     zyje druzyna 1 (pid w ~/RYWALIZACJA/pid_1.txt), druzyna 2 rusza sama.
+ 50. (bieg 2026-10-14 19:15, druzyna 2, krok 6) MAIN podal w
+     write_engineer_code_to "sciezka, pusta linia, caly kod". Program
+     wyrzucal takie pole jako "kod zamiast sciezki", potem kladl
+     454-znakowy szkic Bartka z kroku 4 i to w ~ zamiast w ~/MAIN_2.
+     Teraz: pierwsza linia pola to sciezka, reszta to kod i ten kod
+     idzie pod te sciezke. A gdy zadanie uruchamia plik wzgledny
+     ("cd ~/MAIN_2 && python x.py"), brakujacego pliku szukamy w
+     katalogu z ostatniego `cd`, nie w domu. Dziala dla kazdego celu.
+ 51. (bieg 2026-10-14 19:18) Druzyna 1 stanela na przystanku w kroku 10,
+     a druzyna 2 dzialala jeszcze na wersji bez przystankow (nowy plik
+     sprawdzala co 15 min). Teraz: druzyna 2 sprawdza date agent.py co
+     30 s (nic nie pobiera, wiec to nic nie kosztuje); po starcie zapisuje
+     ~/RYWALIZACJA/przystanki_2.txt ze swoim pid — druzyna 1 czeka tylko
+     na druzyne 2, ktora przystanki zna; co 2 min pisze w terminalu, ile
+     juz czeka i w ktorym kroku jest druzyna 2.
+ 52. (uzytkownik 2026-10-14) ZMIANA punktu 49: druzyny NIE czekaja na
+     siebie. Kazda na swoim kroku 5, 10, 15… staje na chwile i dostaje
+     ocene Sedziego — kto pierwszy dojdzie, ten pierwszy dostaje, druga
+     dostaje swoja pozniej, na swoim kroku. Sedzia jest jeden (konto 1,
+     proces druzyny 1). Druzyna 2 zapisuje prosbe
+     (~/RYWALIZACJA/prosba_oceny_2.json) i czeka; watek druzyny 1 robi
+     ocene w pierwszej wolnej chwili konta 1 — kazda rozmowa z DeepSeek
+     idzie przez jedna blokade (_KOLEJKA_KONTA), wiec na koncie 1 nigdy
+     nie mowia dwaj naraz. Ocena dla 1 trafia do MAIN-a 1, dla 2 do
+     ~/RYWALIZACJA/ocena_sedziego.json i MAIN-a 2. Gdy druzyna 1 nie zyje
+     albo ma wersje bez obslugi prosb, druzyna 2 idzie dalej bez oceny.
+     Przeladowanie po aktualizacji czeka, az Sedzia skonczy odpowiedz.
+ 53. (bieg 2026-10-14 19:44-19:50, druzyna 2) Sedzia sprawdzal ten sam
+     wynik.json 12 razy, bo skrypt z "sprawdz" sam zapisywal wynik.json
+     (zmienial date pliku), i za kazdym razem MAIN dostawal te sama
+     wiadomosc. Teraz Sedzia patrzy na tresc zgloszenia (opis, wynik,
+     lepiej, sprawdz), a date po sprawdzeniu bierze jako juz widziana.
+ 54. (uzytkownik 2026-10-14) Sedzia: jedno zdanie w poczatkowym prompcie —
+     liczba potwierdzona przez program mowi tylko, ze komenda ja wypisuje;
+     gdy druzyna sama ustalila, ze jej wynik byl przypadkowy albo nie
+     wytrzymal powtorzenia, Sedzia ocenia ja wedlug tego, co ustalila.
+     Zmiane promptu Sedzia dostaje sam przy wznowieniu rozmowy (po
+     aktualizacji programu) jako aktualizacje instrukcji roli.
+ 55. (uzytkownik 2026-10-14) ZMIANA punktu 52: ocena Sedziego jest JEDNA dla
+     obu druzyn. Co 5 krokow jest runda ocen (~/RYWALIZACJA/oceny/
+     runda_N.json). Kto pierwszy dojdzie do kroku 5 (10, 15…), ten wywoluje
+     Sedziego i dostaje ocene od razu; spozniona druzyna na swoim kroku 5
+     dostaje te SAMA ocene z pliku rundy, bez nowego pytania Sedziego.
+     Sedzia widzi, w ktorym kroku jest kazda druzyna. Nowy start programu
+     (nie przeladowanie po aktualizacji) zaczyna rundy od nowa.
+ 56. (uzytkownik 2026-10-14) Pasek postepu w rywalizacji: dwa paski z tej
+     samej oceny Sedziego — procent druzyny 1 i druzyny 2 osobno, z
+     dopiskiem "(wy)" przy swojej i kto prowadzi.
+ 57. (uzytkownik 2026-10-14) Paski obu druzyn pokazuja sie na ekranie od
+     razu, gdy Sedzia oceni runde — takze gdy pierwsza doszla druzyna 2
+     (wczesniej druzyna 1 pokazywala je dopiero na swoim kroku). MAIN-y
+     dostaja ocene bez zmian, kazdy na swoim kroku.
+ 58. (uzytkownik 2026-10-14) Prompt Sedziego: procent opisuje stan celu,
+     a nie ilosc pracy — Sedzia porownuje go ze swoja poprzednia ocena i
+     podnosi o tyle, o ile druzynie przybylo sprawdzonego wyniku.
+ 59. (uzytkownik 2026-10-14) Ocena Sedziego idzie do MAIN-ow i do plikow
+     rund w calosci (wczesniej "ocena" i "uzasadnienie" byly ucinane do
+     400 znakow).
+ 60. (2026-10-14) Druzyna 2 wznowiona po padnieciu liczy kroki od 1 —
+     ocena rundy sprzed startu jej biegu jest dla niej stara, wiec Sedzia
+     ocenia te runde od nowa (wczesniej dostawala oceny sprzed godziny).
+ 61. (2026-10-14) DONE zamyka bieg tylko wtedy, gdy kazdy z pytanych
+     (Tomek i Marek) wprost potwierdzi "CEL ZROBIONY". Kto nie
+     potwierdza — choc nie pisze "cel nie jest zrobiony" — liczy sie jako
+     "nie" i cel trwa.
+ 62. (uzytkownik 2026-10-15) Gdy serwer DeepSeek 3 razy z rzedu
+     odpowie bledem ("Server busy" / "Server is temporarily
+     unavailable"), to konto stoi 2 h, potem jedna proba; dalej blad —
+     kolejne 2 h. Przerwa jest zapisana w ~/.ael_przerwa_konta_N.txt
+     (widzi ja druga druzyna i nowy start). Druzyna 2 nie czeka wtedy na
+     ocene Sedziego (konto 1) — idzie dalej bez niej.
+ 63. (uzytkownik 2026-10-15) Zanim konto dostanie 2 h przerwy, program
+     otwiera osobny, pusty czat testowy z krotka wiadomoscia. Odpowiada —
+     zablokowala sie tylko rozmowa tej roli: rola dostaje nowy czat (z
+     celem i stanem), konto pracuje dalej. Nie odpowiada — 2 h przerwy.
+     "Messages too frequent" w strumieniu: program zwalnia tempo konta i
+     probuje w tej samej rozmowie (wczesniej ponawial po 1 s i tracil
+     odpowiedz roli).
+ 64. (uzytkownik 2026-10-15) Prompt Sedziego przepisany w calosci: ocena
+     opisuje, co druzyna ma potwierdzone i czego brakuje do celu — jako
+     opis stanu; droge wybiera sama druzyna (wczesniej Sedzia pisal "co
+     najbardziej posunie Was" i MAIN wykonywal to od razu).
+ 65. (uzytkownik 2026-10-15) Druzyna, ktora sama zamknela bieg jako
+     FAILED, przy nastepnym starcie zaczyna od nowych rozmow (cel,
+     rywalizacja, ostatnia ocena Sedziego); jej wyniki zostaja w
+     ~/MAIN_N, a Sedzia zostaje w swojej rozmowie.
+ 66. (uzytkownik 2026-10-15) Nowy start rywalizacji: "t" przy resecie
+     rozmow zespolu w trybie 2 zatrzymuje stara druzyne 2 i przenosi
+     ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA i ~/agent_druzyna2 do
+     ~/archiwum_rywalizacji/<data_godzina> (nic nie jest kasowane).
+     Obie druzyny i Sedzia zaczynaja od zera z nowym celem.
+ 67. (uzytkownik 2026-10-15) Prompt Sedziego przepisany w calosci: miara
+     jest tresc celu uzytkownika — takze to, jaki wynik ma byc i skad ma
+     sie wziac. Gdy druzyna dochodzi do wyniku w sposob niezgodny z
+     trescia celu, Sedzia pisze to w ocenie i obniza jej procent (takze
+     to, co juz wczesniej policzyl).
+ 68. (uzytkownik 2026-10-16) Enter przy celu w rywalizacji wznawia ostatni
+     cel rywalizacji. Cel zwyklego programu (~/agent) przechodzi do
+     rywalizacji tylko przy jej pierwszym starcie (wczesniej kazdy wybor 2
+     go nadpisywal).
+ 69. (uzytkownik 2026-10-16) Dyskwalifikacja: gdy cel uzytkownika mowi
+     o dyskwalifikacji, a Sedzia w ocenie wpisze druzynie powod
+     dyskwalifikacji, program zaczyna te druzyne od nowa — caly zespol w
+     nowych rozmowach (Sedzia zostaje w swojej), pusty ~/MAIN_N. Folder
+     ~/MAIN_N zdyskwalifikowanej druzyny jest usuwany bez pytania (zgoda
+     uzytkownika 2026-10-16); jej rozmowy, logi i wyniki krokow ida do
+     ~/archiwum_rywalizacji/<czas>_dyskwalifikacja_N. Nowa druzyna dostaje
+     raz: ze poprzednia zostala zdyskwalifikowana, powod, co zrobila
+     wedlug Sedziego i jej ostatni wynik; rywal widzi powod w ocenie.
+     Druzyna 2 rusza od razu, druzyna 1 od nastepnego kroku. Bez slowa o
+     dyskwalifikacji w celu program nikogo nie restartuje.
+ 70. (uzytkownik 2026-10-16) Prompt Sedziego przepisany w calosci, bez
+     dopisywania: w rywalizacji z dyskwalifikacja w celu Sedzia
+     dyskwalifikuje tez za oszukiwanie go (ukrycie, na czym zbudowano
+     prace, przebranie znanego pomyslu w inne slowa, podkladanie sie pod
+     sposob oceniania). Dowodem sa slowa druzyny z krokow; rozmowa o takim
+     pomysle po to, zeby go odrzucic, dyskwalifikacji nie daje.
+ 71. (uzytkownik 2026-10-16) Gdy cel mowi o dyskwalifikacji, opis
+     rywalizacji, ktory kazda rola dostaje z celem, mowi tez obu
+     druzynom, ze Sedzia dyskwalifikuje za warunek z celu albo za probe
+     wprowadzenia go w blad, i ze powod dostaje nowa druzyna i rywal.
+     Rozmowy, ktore juz dostaly stary opis, dostaja nowy raz po
+     aktualizacji.
+ 72. (2026-10-16) Gdy DeepSeek wlozy cala decyzje (type, reason, actions)
+     jako parametry jednego wywolania w swoim formacie DSML o zmyslonej
+     nazwie (np. "think"), program bierze te parametry jako decyzje i
+     wykonuje jej akcje (wczesniej wykonywal "think" i gubil akcje).
+ 73. (uzytkownik 2026-10-16) Karty Chrome uzytkownika ida do zespolu
+     (DeepSeek) tylko po kroku, w ktorym zespol uzywal przegladarki (tak
+     od v419). Od v480bv takze do logu terminala trafiaja tylko wtedy.
+ 74. (uzytkownik 2026-10-16) Sedzia dostaje o kazdej druzynie wiecej:
+     pelne uzasadnienia ostatnich krokow MAIN-a, tresc ostatnio
+     zmienionych plikow w ~/MAIN_N (wynik.json pierwszy, do ~5 kB) i
+     ostatnie wypowiedzi zespolu z pliku biegu druzyny (pytania MAIN-a i
+     odpowiedzi rol, do ~5 kB; po dyskwalifikacji tylko nowej druzyny).
+ 75. (2026-10-16) Opis rywalizacji mowi, ze komenda "sprawdz" idzie w
+     bashu w folderze druzyny i moze trwac do 20 minut (pipe "| tail -1"
+     dziala). Druzyna 1 zgadywala, ze pipe psuje sprawdzenie.
+ 76. (uzytkownik 2026-10-16) Ostrzezenia: w rywalizacji z dyskwalifikacja
+     w celu druzyna, ktora jawnie zbudowala cos na warunku dyskwalifikacji
+     (sama to przyznaje albo widac to wprost w kodzie), dostaje od Sedziego
+     ostrzezenie (pole "ostrzezenie"). Program liczy je w
+     ~/RYWALIZACJA/ostrzezenia.json, podaje Sedziemu przy kazdej ocenie,
+     a trzecie ostrzezenie to dyskwalifikacja. Proba wprowadzenia Sedziego
+     w blad = dyskwalifikacja od razu. Po dyskwalifikacji ostrzezenia
+     druzyny licza sie od zera. Prompt Sedziego i opis rywalizacji
+     przepisane tak, zeby to sie zgadzalo.
+ 77. (2026-10-16) Decyzja MAIN-a musi miec typ (TASK, ASK, RUN, DONE,
+     FAILED, NEED_USER_LOGIN). Przykladowy JSON z odpowiedzi w markdownie
+     (np. {"wynik": 91.3}) nie jest juz brany za decyzje. Jesli po
+     poprawce JSON-a MAIN zwroci pytania ASK, trafiaja one do zespolu
+     zamiast konczyc sie bledem UNKNOWN_DECISION.
+ 78. (uzytkownik 2026-10-16) Spadek po dyskwalifikacji: Sedzia, gdy
+     dyskwalifikuje druzyne albo daje jej trzecie ostrzezenie, wpisuje
+     w polu "spadek" pliki z jej folderu zgodne z celem. Program kopiuje
+     je przed usunieciem folderu, a nowa druzyna dostaje je w
+     ~/MAIN_N/spadek (razem z lista w wiadomosci o dyskwalifikacji).
+     Reszta folderu znika jak dotad. Sedzia liczy spadek nowej druzynie
+     jako punkt startu, a dalej ocenia jej wlasne kroki.
+ 79. (uzytkownik 2026-10-16) Nowy start rywalizacji ("t" przy resecie
+     sesji w trybie 2) kasuje ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA,
+     ~/agent_druzyna2 i cale ~/archiwum_rywalizacji, zamiast przenosic je
+     do archiwum — druzyny znajdowaly tam stare biegi.
+ 80. (uzytkownik 2026-10-17) W rywalizacji FAILED druzyny 1 nie konczy juz
+     calego programu. Druzyna 1 rusza od nowa sama (ten sam proces, bez
+     pytan, ten sam cel, nowe rozmowy zespolu; Sedzia zostaje w swojej),
+     tak jak druzyna 2, ktora pracuje dalej. Trzy FAILED w 10 minut =
+     koniec. Log druzyny 2 po jej FAILED pisze to wprost zamiast
+     "przestala dzialac".
+ 81. (uzytkownik 2026-10-17) Brak internetu to nie awaria konta. Gdy
+     polaczenie z DeepSeekiem pada bledem sieci (DNS, brak trasy,
+     zerwane polaczenie, timeout), program sprawdza, czy telefon widzi
+     internet w ogole (kilka niezaleznych adresow). Nie widzi: staje,
+     pisze w logu "Brak internetu", sprawdza co 15 s i po powrocie sieci
+     ponawia to samo w tej samej rozmowie. Bez restartu sesji, bez
+     czatu testowego, bez nowych rozmow i bez 2 h przerwy konta. Widzi
+     internet: to problem DeepSeeka albo konta i dziala dawna droga.
+ 82. (uzytkownik 2026-10-17) Prompty Bartka i Ani przepisane w calosci:
+     nowy plik pisze sie w calosci, a zmiane albo dopisek w pliku, ktory
+     juz istnieje, jako sama zmiane (patch). Python naklada ja jak
+     dotad: kopia zapasowa, jednoznaczne dopasowanie, sprawdzenie
+     skladni, wycofanie przy bledzie. Trwajace rozmowy dostaja zmiane
+     promptu raz, jak przy kazdej zmianie promptu.
+ 83. (uzytkownik 2026-10-17) Igor — niezalezny rozmowca spoza zespolu.
+     Nie ma promptu, nie dostaje celu, opisu rywalizacji ani niczego z
+     programu: jego rozmowa to czysty czat DeepSeeka, do ktorego pisze
+     tylko MAIN (ASK do IGOR), kiedy i o co chce. Odpowiedz wraca do
+     MAIN-a jak kazda odpowiedz na ASK; Igor nikogo z zespolu nie wola,
+     a zespol nie wola jego. Decyduje dalej MAIN z zespolem. Prompt
+     MAIN-a przepisany w calosci o jedno zdanie o Igorze; zdanie o ASK
+     w opisie programu mowi, ze kontekst dostaje ktos z zespolu.
+ 84. (bieg 2026-10-17) Licznik wiadomosci DeepSeeka na godzine i budzet
+     sciety po "za szybko" sa zapisane przy koncie
+     (~/.ael_budzet_konta_N.json) i przezywaja cicha aktualizacje.
+     Wczesniej przeladowanie zerowalo licznik, program wysylal za gesto
+     i drugi raz w biegu stal pol godziny pod sciana. Rozpoznawanie
+     braku internetu (punkt 81) zna teraz tez komunikaty curl, np.
+     "Could not resolve host".
+ 85. (uzytkownik 2026-10-17) Zdanie o Igorze stoi w liscie zespolu w
+     opisie programu, ktory MAIN dostaje na start (pod Piotrem i Ania),
+     a z promptu MAIN-a zniknelo, zeby nie bylo napisane dwa razy.
+ 86. (uzytkownik 2026-10-17) Nowy cel nie startuje od razu po wklejeniu.
+     Program pokazuje dlugosc, poczatek i koniec celu i czeka: Enter =
+     start, "n" = wklej od nowa, inny tekst = dalszy ciag celu (wklejka
+     w kawalkach) doklejany do tego, co juz jest. Wznowienie zapisanego
+     celu samym Enterem i ciche starty (aktualizacja, druzyna 2) bez
+     zmian.
+ 87. (bieg 2026-10-17 22:31) Gdy MAIN odpisze RUN-em i obok niego
+     pytaniami ASK (np. do Bartka, Igora i Tomka), RUN wykonuje sie od
+     razu, a pytania ida na poczatek nastepnego kroku i MAIN dostaje
+     odpowiedzi razem z wynikami RUN. Wczesniej pytania przepadaly bez
+     slowa.
+ 88. (uzytkownik 2026-10-17) Igor w liscie zespolu: "nie zna celu ani
+     niczego z programu i dostaje tylko to, co sam mu napiszesz w ASK,
+     jak w nowym czacie; pytasz go, o co chcesz i kiedy chcesz, bo
+     patrzy swiezo" — bez "spoza zespolu".

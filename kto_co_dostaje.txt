@@ -1,4 +1,4 @@
-KTO CO DOSTAJE I KIEDY — AEL-MINI v450
+KTO CO DOSTAJE I KIEDY — AEL-MINI v468
 wyciagniete z agent.py i z logow biegow, nie z pamieci
 =========================================================================
 
@@ -14,16 +14,21 @@ Kazda rola ma wlasna rozmowe na DeepSeeku. Pierwsza wiadomosc:
         (model, uklad, wersja Androida, czy jest su, czy Termux:API)
 
   MAIN dodatkowo  (v422)
-      "Kilka słów o tym, jak to wszystko działa": kto jest w
-      zespole, ze TASK wykonuje Gemini (do 25 wywolan narzedzi), ze
-      kod kladzie Python, jak dziala ASK (do 4 pytan na krok),
-      NEED_USER_LOGIN, DONE i FAILED
+      "Kilka słów o tym, jak to wszystko działa" (v460: + fakt o
+      uzytkowniku — loguje sie, daje dostepy i dane, reszte ustala
+      zespol): kto jest w
+      zespole, ze RUN wykonuje Python (v459: lista 41 narzedzi (v467: 42, + chrome_upload_file; v468: 43, + android_look — Gemini oglada ekran) z
+      argumentami, do 12 akcji na RUN), ze TASK wykonuje Gemini
+      (do 25 wywolan narzedzi), ze kod kladzie Python, jak dziala
+      ASK (do 5 pytan na krok), NEED_USER_LOGIN, DONE i FAILED
       + ksztalty JSON-a decyzji
 
   Bartek, Piotr, Ania, Tomek, Marek, Ola, Ela  (v424)
       jedno zdanie, jak dziala rozmowa: nikt nie ma terminala, to,
       co zespol ustali, wykonuje program; kod program kladzie na
-      dysk i uruchamia, gdy MAIN tak zdecyduje
+      dysk i uruchamia, gdy MAIN tak zdecyduje; v460: + uzytkownik
+      chce, zeby program dzialal sam — daje logowanie, dostepy i
+      dane, reszte ustala zespol
 
   Kamil i Wojtek
       nic — zaczynaja od samego celu
@@ -41,6 +46,12 @@ w tym celu. Nowy cel czysci te pamiec.
 CZESC 1. KTO SIE ODZYWA W KROKU (od v435)
 -------------------------------------------------------------------------
 
+  Tomek i Marek — takze gdy MAIN da FAILED (v465): dostaja jego
+           powod jako wypowiedz MAIN-a z pytaniem o inna droge
+           (v466) i odpowiadaja; MAIN widzi obie odpowiedzi w
+           calosci w nastepnym kroku; "NIE MA INNEJ DROGI" od obu
+           + powtorzony FAILED konczy cel
+
   MAIN   — w kazdym kroku
   Ela    — co 5 krokow albo gdy MAIN poprosi
   reszta — tylko gdy MAIN zapyta (ASK); kilka pytan z jednej
@@ -56,6 +67,12 @@ CZESC 2. CO DOSTAJE MAIN W KAZDYM KROKU
 
   "Co się właśnie stało:"
     - jak sie skonczyl ostatni krok (status)
+    - po RUN (v459): "Wyniki akcji RUN:" — pelny wynik kazdej
+      akcji (do 3500 znakow na akcje, 14 000 razem) i ile akcji
+      Python nie wykonal po bledzie; v460: bez skrotu sladu, bez
+      "snapshotu" (lista kart idzie osobno), bez wlasnego powodu;
+      v461: gdy RUN mial android_state, blok "Na ekranie telefonu"
+      nie idzie drugi raz
     - "Gemini napisał:" — raport wykonawcy, oznaczony jako jego
       slowa, nie pomiar
     - slad narzedzi: ile wywolan, ktore sie nie udaly, co zwrocily
@@ -110,7 +127,7 @@ Kazde zadanie to nowa rozmowa:
   - "TERAZ NA TELEFONIE:" — aplikacja na wierzchu i otwarte karty
     Chrome (v446)
   - warunek sukcesu i tresc zadania od MAIN-a
-  - 40 narzedzi (lista: jak_to_dziala.txt, czesc 5)
+  - 41 narzedzi (lista: jak_to_dziala.txt, czesc 5)
 
 Po kazdym ruchu w Chrome — pole "strona": adres, tytul, poczatek
 tekstu i ponumerowane linki, przyciski i pola (v442).
