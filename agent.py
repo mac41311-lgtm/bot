@@ -8885,6 +8885,11 @@ def _deepseek_jedna_rozmowa(name, message):
                 if sessions.get(name) is not None:
                     _save_session_state(name, session)
 
+                # v480cl: ostatnia odpowiedz MAIN-a — z niej RUN bierze
+                # pytania, ktore staly obok (patrz petla run_agent).
+                if name == "MAIN":
+                    globals()["_ostatnia_odpowiedz_maina"] = text
+
                 return text
 
             except Exception as e:
@@ -46508,8 +46513,32 @@ def run_agent(goal):
 
         if dtype == "RUN":
 
+            _odp_maina = str(globals().get("_ostatnia_odpowiedz_maina") or "")
+            globals()["_ostatnia_odpowiedz_maina"] = ""
+
             last_result = _wykonaj_akcje_maina(decision, step)
             globals()["_taski_przy_blokadzie"] = 0
+
+            # v480cl: bieg 2026-10-17 22:31 (druzyna 2) — MAIN odpisal
+            # RUN-em i trzema ASK naraz (Bartek, Igor, Tomek). Wykonal
+            # sie sam RUN, pytania przepadly bez slowa, a MAIN pisal
+            # dalej, ze "Igor dostanie pytanie o swiezy pomysl". Pytania
+            # z tej samej odpowiedzi ida teraz na poczatek nastepnego
+            # kroku, razem z wynikami RUN — jak przy limicie ASK (v458).
+            _pytania_obok = (
+                _pytania_ask(_odp_maina) if '"RUN"' in _odp_maina else []
+            )
+            if _pytania_obok and isinstance(last_result, dict):
+                _ask_przeniesione[:] = _pytania_obok
+                log(
+                    "MAIN",
+                    "Obok RUN były pytania (" + ", ".join(
+                        _ROLE_DISPLAY_NAME.get(
+                            str(q.get("ask_role") or "").upper(),
+                            str(q.get("ask_role") or "")
+                        ) for q in _pytania_obok
+                    ) + ") — idą na początek następnego kroku."
+                )
 
             _w_kolko = _zauwaz_powtarzane_ruchy(last_result)
 

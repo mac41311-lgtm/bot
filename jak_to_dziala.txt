@@ -1954,3 +1954,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      w kawalkach) doklejany do tego, co juz jest. Wznowienie zapisanego
      celu samym Enterem i ciche starty (aktualizacja, druzyna 2) bez
      zmian.
+ 87. (bieg 2026-10-17 22:31) Gdy MAIN odpisze RUN-em i obok niego
+     pytaniami ASK (np. do Bartka, Igora i Tomka), RUN wykonuje sie od
+     razu, a pytania ida na poczatek nastepnego kroku i MAIN dostaje
+     odpowiedzi razem z wynikami RUN. Wczesniej pytania przepadaly bez
+     slowa.
+ 88. (uzytkownik 2026-10-17) Igor w liscie zespolu: "nie zna celu ani
+     niczego z programu i dostaje tylko to, co sam mu napiszesz w ASK,
+     jak w nowym czacie; pytasz go, o co chcesz i kiedy chcesz, bo
+     patrzy swiezo" — bez "spoza zespolu".
