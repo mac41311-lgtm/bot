@@ -1930,3 +1930,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dotad: kopia zapasowa, jednoznaczne dopasowanie, sprawdzenie
      skladni, wycofanie przy bledzie. Trwajace rozmowy dostaja zmiane
      promptu raz, jak przy kazdej zmianie promptu.
+ 83. (uzytkownik 2026-10-17) Igor — niezalezny rozmowca spoza zespolu.
+     Nie ma promptu, nie dostaje celu, opisu rywalizacji ani niczego z
+     programu: jego rozmowa to czysty czat DeepSeeka, do ktorego pisze
+     tylko MAIN (ASK do IGOR), kiedy i o co chce. Odpowiedz wraca do
+     MAIN-a jak kazda odpowiedz na ASK; Igor nikogo z zespolu nie wola,
+     a zespol nie wola jego. Decyduje dalej MAIN z zespolem. Prompt
+     MAIN-a przepisany w calosci o jedno zdanie o Igorze; zdanie o ASK
+     w opisie programu mowi, ze kontekst dostaje ktos z zespolu.

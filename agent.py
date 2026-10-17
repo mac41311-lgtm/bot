@@ -128,6 +128,7 @@ _IMIONA_ROL = {
     "CODE_REVIEWER": "Piotr",
     "CODE_FIXER": "Ania",
     "ARBITER": "Sędzia",
+    "IGOR": "Igor",
 }
 
 
@@ -2188,6 +2189,7 @@ _ROLE_SPEAKERS = {
     "CRITIC": (_IMIONA_ROL["CRITIC"], "yellow", "ocena"),
     "BROWSER": (_IMIONA_ROL["BROWSER"], "magenta", "tłumaczenie"),
     "WOJTEK": (_IMIONA_ROL["WOJTEK"], "bright_magenta", "pomysły"),
+    "IGOR": (_IMIONA_ROL["IGOR"], "bright_cyan", "z zewnątrz"),
     "MAIN": (_IMIONA_ROL["MAIN"], "bold white", "decyzja"),
     "PROGRESS_ESTIMATOR": (
         _IMIONA_ROL["PROGRESS_ESTIMATOR"], "bright_blue", "postęp"
@@ -3176,6 +3178,7 @@ _ROLE_ACCOUNT = {
     "CODE_REVIEWER": 2,
     "CODE_FIXER": 2,
     "ARBITER": 1,
+    "IGOR": 2,
 }
 
 # v480aq: podzial zwyklego programu — potrzebny, zeby rozpoznac, na
@@ -3400,7 +3403,9 @@ def init_deepseek():
 # ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
 # oddac decyzje; bez nich kazdy krok konczylby sie
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
-MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
+# v480cf: na prosbe uzytkownika (2026-10-17) przepisany w calosci —
+# doszedl Igor, niezalezny rozmowca spoza zespolu (patrz IGOR_PROMPT).
+MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej. Poza zespołem jest Igor: nie zna celu ani niczego z programu i dostaje tylko to, co sam mu napiszesz w ASK, tak jak człowiek pisze do kogoś w nowym czacie. Możesz pytać go, o co chcesz i kiedy chcesz — patrzy świeżo i może wpaść na coś nowego, a co z tym zrobić, ustalasz z zespołem.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK|IGOR",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -3527,6 +3532,17 @@ WOJTEK_PROMPT = (
     "Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik "
     "i zwracasz uwagę na praktyczny sens."
 )
+
+
+# v480cf: uzytkownik (2026-10-17) — "niezalezny ziomeczek": bez
+# promptu, bez celu, bez niczego z programu. Jego rozmowa to czysty
+# czat DeepSeeka, do ktorego pisze wylacznie MAIN (ASK do IGOR), tak
+# jak czlowiek pisze w nowym czacie. Decyduje dalej MAIN.
+IGOR_PROMPT = ""
+
+# Role, ktore nie dostaja ani celu, ani opisu rywalizacji, ani
+# kontekstu zespolu — tylko pytanie MAIN-a.
+_ROLE_BEZ_CELU = ("IGOR",)
 
 
 # ============================================================
@@ -3783,6 +3799,7 @@ _IMIE_AUTORA = {
     "WOJTEK": ("Wojtek", "Wojtka"),
     "BROWSER": ("Ola", "Oli"),
     "PROGRESS_ESTIMATOR": ("Ela", "Eli"),
+    "IGOR": ("Igor", "Igora"),
 }
 
 
@@ -5064,6 +5081,9 @@ def _goal_briefing_for(name):
     """
 
     if not _current_goal_text:
+        return ""
+
+    if name in _ROLE_BEZ_CELU:
         return ""
 
     if name in _goal_briefed:
@@ -8072,11 +8092,14 @@ def _deepseek_jedna_rozmowa(name, message):
                     WOJTEK_PROMPT,
                 "ARBITER":
                     ARBITER_PROMPT,
+                "IGOR":
+                    IGOR_PROMPT,
             }
 
             prompt = prompt_map.get(name)
 
-            if prompt:
+            # v480cf: pusty prompt (Igor) to tez prompt.
+            if prompt is not None:
                 # v191: restart = nowa, PUSTA historia po stronie
                 # DeepSeeka. Rola traci cel, który dostała wcześniej,
                 # więc musi dostać go ponownie przy najbliższej
@@ -8877,11 +8900,13 @@ def _deepseek_jedna_rozmowa(name, message):
                             WOJTEK_PROMPT,
                         "ARBITER":
                             ARBITER_PROMPT,
+                        "IGOR":
+                            IGOR_PROMPT,
                     }
 
                     prompt = prompt_map.get(name)
 
-                    if prompt:
+                    if prompt is not None:
 
                         # v290: "restart czysci historie" bylo
                         # nieprawda. start_session() wznawia z
@@ -35439,6 +35464,7 @@ _ROLE_DISPLAY_NAME = {
     "ENGINEER": "Bartek",
     "BROWSER": "Ola",
     "WOJTEK": "Wojtek",
+    "IGOR": "Igor",
     "MAIN": "MAIN",
 }
 
@@ -39266,7 +39292,8 @@ def consult_team(
 # ============================================================
 
 _MAIN_ASK_ALLOWED_ROLES = (
-    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK"
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
+    "IGOR"
 )
 
 
@@ -39999,18 +40026,30 @@ def _handle_main_ask(
                 + ":\n" + ask_question
             )
 
-            # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie je w
-            # swojej zwyklej wiadomosci, pod "MAIN:".
-            _role_inbox.setdefault(ask_role, []).append(("MAIN", ask_question))
+            if ask_role in _ROLE_BEZ_CELU:
 
-            _odp_team = consult_team(
-                goal, last_result, step, chrome_text, android_text,
-                wolani={ask_role}
-            )
+                # v480cf: Igor dostaje samo pytanie MAIN-a — bez celu,
+                # bez skrzynki i bez kontekstu zespolu.
+                answer = str(deepseek(ask_role, ask_question) or "")
+                _speak(ask_role, answer)
 
-            answer = str(
-                ((_odp_team or {}).get("kod_full") or {}).get(ask_role) or ""
-            )
+            else:
+
+                # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie
+                # je w swojej zwyklej wiadomosci, pod "MAIN:".
+                _role_inbox.setdefault(ask_role, []).append(
+                    ("MAIN", ask_question)
+                )
+
+                _odp_team = consult_team(
+                    goal, last_result, step, chrome_text, android_text,
+                    wolani={ask_role}
+                )
+
+                answer = str(
+                    ((_odp_team or {}).get("kod_full") or {}).get(ask_role)
+                    or ""
+                )
 
             log(
                 "MAIN",
@@ -40034,7 +40073,10 @@ def _handle_main_ask(
             })
 
             # v454: adresat odpowiada od razu — patrz _ROZMOWA_HOP_MAX.
-            for _kogo, _co in _zawolania(answer):
+            # v480cf: Igor nie zna zespolu, wiec nikogo z niego nie wola.
+            for _kogo, _co in (
+                [] if ask_role in _ROLE_BEZ_CELU else _zawolania(answer)
+            ):
 
                 if _hopy >= _ROZMOWA_HOP_MAX:
                     break
@@ -40042,6 +40084,7 @@ def _handle_main_ask(
                 if (
                     _kogo == ask_role
                     or _kogo not in _MAIN_ASK_ALLOWED_ROLES
+                    or _kogo in _ROLE_BEZ_CELU
                     or _kogo in _juz_hop
                     or not str(_co or "").strip()
                 ):
@@ -41218,8 +41261,8 @@ _JAK_TO_DZIALA = (
     + _lista_narzedzi_dla_maina() + ".\n\n"
     "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
     "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
-    "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
-    "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu. W jednym "
+    "osoby; ktoś z zespołu dostaje je razem z tym, co się stało od jej "
+    "ostatniej wypowiedzi, a jej odpowiedź wraca do Ciebie od razu. W jednym "
     "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. Gdy "
     "zapytany zwróci się w odpowiedzi do kogoś po imieniu, ten ktoś "
     "odpowiada mu od razu i dostajesz obie odpowiedzi. "
