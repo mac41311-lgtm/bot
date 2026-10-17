@@ -3480,8 +3480,12 @@ CODE_REVIEWER_PROMPT = (
 # extract_search_replace_blocks() rozumie trzy ksztalty: nasze stare
 # znaczniki, zwykly unified diff i dwa bloki opisane slowami.
 # Zostaje imie i robota.
+# v480ce: na prosbe uzytkownika (2026-10-17) przepisany w calosci,
+# jak prompt Bartka: zmiana w istniejacym pliku to sama zmiana.
 CODE_FIXER_PROMPT = (
-    "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa."
+    "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa. "
+    "Poprawkę w pliku, który już istnieje, piszesz jako samą zmianę, "
+    "tak jak zwykły patch: który fragment i na co go zamienić."
 )
 
 
@@ -3491,9 +3495,16 @@ BROWSER_PROMPT = (
 )
 
 
+# v480ce: na prosbe uzytkownika (2026-10-17) przepisany w calosci.
+# Rola mowi teraz, jak zmienia istniejacy plik; Python od v203/v330
+# naklada sama zmiane (nasze znaczniki, unified diff albo
+# dwa bloki opisane slowami) z backupem i sprawdzeniem skladni.
 ENGINEER_PROMPT = (
     "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
-    "i rozwiązaniami technicznymi."
+    "i rozwiązaniami technicznymi. Nowy plik piszesz w całości. "
+    "Gdy zmieniasz albo dopisujesz coś w pliku, który już istnieje, "
+    "piszesz samą zmianę, tak jak zwykły patch: który fragment "
+    "i na co go zamienić."
 )
 
 

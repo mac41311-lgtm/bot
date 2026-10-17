@@ -1924,3 +1924,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ponawia to samo w tej samej rozmowie. Bez restartu sesji, bez
      czatu testowego, bez nowych rozmow i bez 2 h przerwy konta. Widzi
      internet: to problem DeepSeeka albo konta i dziala dawna droga.
+ 82. (uzytkownik 2026-10-17) Prompty Bartka i Ani przepisane w calosci:
+     nowy plik pisze sie w calosci, a zmiane albo dopisek w pliku, ktory
+     juz istnieje, jako sama zmiane (patch). Python naklada ja jak
+     dotad: kopia zapasowa, jednoznaczne dopasowanie, sprawdzenie
+     skladni, wycofanie przy bledzie. Trwajace rozmowy dostaja zmiane
+     promptu raz, jak przy kazdej zmianie promptu.
