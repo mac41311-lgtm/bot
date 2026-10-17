@@ -47515,7 +47515,10 @@ def _read_full_input(prompt):
     lines = [first_line]
 
     try:
-        while select.select([sys.stdin], [], [], 0)[0]:
+        # v480cj: wklejka w Termuksie przychodzi kawalkami — chwila
+        # oddechu, zeby dociagnac caly tekst, a nie tylko to, co juz
+        # doszlo.
+        while select.select([sys.stdin], [], [], 0.3)[0]:
             line = sys.stdin.readline()
             if not line:
                 break
@@ -47529,6 +47532,37 @@ def _read_full_input(prompt):
 _PERMISSION_TEST_COMMAND_WORDS = {
     "uprawnienia", "uprawnienie", "permissions"
 }
+
+
+def _potwierdz_cel(cel):
+    """
+    v480cj: uzytkownik (2026-10-17) — "jak wklejam, od razu odpala cel;
+    zmien, zeby po wklejeniu nie odpalal, tylko po docisnieciu".
+
+    Wklejka z Entera na koncu (albo z jednej linii) startowala bieg od
+    razu — tak o 22:11 poszedl jako cel kawalek terminala ze schowka.
+    Teraz program pokazuje, co dostal, i czeka: Enter = start, "n" =
+    wklej od nowa, a kazdy inny tekst to dalszy ciag celu (wklejka,
+    ktora doszla w kawalkach) i jest doklejany.
+    """
+    while True:
+        print()
+        print("Cel ma " + str(len(cel)) + " znaków.")
+        print("Początek: " + short(cel, 200))
+        if len(cel) > 200:
+            print("Koniec:   ..." + cel[-150:])
+        print()
+        try:
+            odp = _read_full_input(
+                "Enter = START z tym celem, 'n' = wklej od nowa > "
+            )
+        except EOFError:
+            return cel
+        if not odp.strip():
+            return cel
+        if odp.strip().lower() in ("n", "nie"):
+            return None
+        cel = (cel + "\n" + odp).strip()
 
 
 def _run_permission_bootstrap():
@@ -49276,6 +49310,11 @@ def main():
                     _run_permission_bootstrap()
                     continue
 
+                if typed:
+                    typed = _potwierdz_cel(typed)
+                    if typed is None:
+                        continue
+
                 goal = typed if typed else saved_goal
 
             else:
@@ -49293,6 +49332,11 @@ def main():
                 if typed.lower() in _PERMISSION_TEST_COMMAND_WORDS:
                     _run_permission_bootstrap()
                     continue
+
+                if typed:
+                    typed = _potwierdz_cel(typed)
+                    if typed is None:
+                        continue
 
                 goal = typed
 

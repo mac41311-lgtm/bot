@@ -1948,3 +1948,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  85. (uzytkownik 2026-10-17) Zdanie o Igorze stoi w liscie zespolu w
      opisie programu, ktory MAIN dostaje na start (pod Piotrem i Ania),
      a z promptu MAIN-a zniknelo, zeby nie bylo napisane dwa razy.
+ 86. (uzytkownik 2026-10-17) Nowy cel nie startuje od razu po wklejeniu.
+     Program pokazuje dlugosc, poczatek i koniec celu i czeka: Enter =
+     start, "n" = wklej od nowa, inny tekst = dalszy ciag celu (wklejka
+     w kawalkach) doklejany do tego, co juz jest. Wznowienie zapisanego
+     celu samym Enterem i ciche starty (aktualizacja, druzyna 2) bez
+     zmian.
