@@ -1975,3 +1975,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      tylko ten fragment, ktory do niego napisano (bez celu i reszty
      wypowiedzi), a jego odpowiedz trafia do skrzynki autora jak
      wiadomosc od kolegi. Zadnych zmian w promptach.
+ 91. (2026-10-18) Raport o zamknieciu sprawdza od razu, jak nazywa sie
+     proces systemowy, ktory zabil Termuxa (logcat "o-kill(6) from
+     1000,PID"), i dopisuje "Kto zabił". Wczesniej byl tylko numer.

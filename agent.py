@@ -12691,6 +12691,16 @@ def _powod_z_androida():
         streszczenie = "Android nie podał powodu"
     linie += ["", "Logcat (wpisy o zabiciu procesów Termuksa):",
               (zabicia.strip() or "(nic — bufor mógł się już nadpisać)")]
+    # v480co: "o-kill(6) from 1000,3217" mowi tylko, ze zabil proces
+    # systemowy 3217. Nazwe sprawdzamy od razu, poki pid jeszcze zyje
+    # (do restartu telefonu), zeby wiedziec, ktora czesc systemu to robi.
+    kto_zabil = []
+    for _pid in dict.fromkeys(re.findall(r"from \d+,(\d+)", zabicia or "")):
+        _nazwa = _adb_szybko("cat /proc/" + _pid + "/cmdline", 5)
+        _nazwa = _nazwa.replace("\0", " ").strip() or "(proces już nie żyje)"
+        kto_zabil.append("- pid " + _pid + ": " + _nazwa[:200])
+    if kto_zabil:
+        linie += ["", "Kto zabił (proces systemowy z logcat):"] + kto_zabil
     linie += ["", "Surowy dumpsys exit-info:", (surowe or "")[:12000]]
     return linie, streszczenie
 
