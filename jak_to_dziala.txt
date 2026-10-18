@@ -1978,3 +1978,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
  91. (2026-10-18) Raport o zamknieciu sprawdza od razu, jak nazywa sie
      proces systemowy, ktory zabil Termuxa (logcat "o-kill(6) from
      1000,PID"), i dopisuje "Kto zabił". Wczesniej byl tylko numer.
+ 92. (bieg 2026-10-18 19:26) "Za szybko" od DeepSeeka: jedno sciecie
+     budzetu na jeden limit (kolejne w ciagu 10 min nic juz nie tna),
+     sciety budzet tylko zwalnia tempo, a nie zamyka konta na reszte
+     godziny, i po kazdych 10 udanych wiadomosciach wraca o 10 w
+     strone 90. Wczesniej 90 -> 59 -> 38 w 90 s i 33 minuty stania
+     druzyny 1 (oraz 22 minuty czekania druzyny 2 na Sedziego).

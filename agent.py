@@ -6162,6 +6162,8 @@ def _przyspiesz_po_sukcesie(name):
 
     account = _account_of(name)
 
+    _odbuduj_budzet_po_sukcesie(account)
+
     with _deepseek_pacing_lock:
 
         biezacy = _biezacy_odstep(account)
@@ -6328,8 +6330,14 @@ def _ile_czekac_na_budzet(account, teraz):
 
     znaczniki = _posprzataj_okno(account, teraz)
 
+    # v480cp: twarda sciana godzinowa liczy sie od budzetu bazowego.
+    # Sciety budzet zwalnia tempo (_odstep_z_budzetu), ale nie
+    # zamyka konta. Bieg 2026-10-18 19:27: po scieciu z 90 na 38 w
+    # oknie stalo juz ponad 28 wiadomosci, wiec program uznal godzine
+    # za wyczerpana i druzyna 1 stala 33 minuty, a druzyna 2 czekala
+    # 22 minuty na Sedziego.
     wolne = (
-        _budzet_konta_teraz(account)
+        DEEPSEEK_NA_GODZINE
         - DEEPSEEK_REZERWA_DLA_CZLOWIEKA
         - len(znaczniki)
     )
@@ -6374,7 +6382,17 @@ def _obetnij_budzet(account):
 
     biezacy = _budzet_konta_teraz(account)
 
+    # v480cp: jeden limit strony to jedno sciecie. Kolejne "za
+    # szybko" w ciagu kilku minut to wciaz ten sam limit (ponowienia
+    # tej samej prosby), a nie dowod, ze budzet trzeba ciac dalej —
+    # 2026-10-18 19:26-19:27 konto 1 zeszlo tak z 90 na 59 i na 38 w
+    # 90 sekund.
+    if time.time() - _budzet_obciety_kiedy.get(account, 0) < _JEDEN_LIMIT_S:
+        return
+
     nowy = max(_BUDZET_MINIMALNY, int(biezacy * 0.66))
+
+    _udane_od_zmiany[account] = 0
 
     if nowy < biezacy:
 
@@ -6392,8 +6410,44 @@ def _obetnij_budzet(account):
                   - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)))
             + " s na " + str(int(_OKNO_BUDZETU / max(1, nowy
                   - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)))
-            + " s między wiadomościami. I już przy tym zostaję."
+            + " s między wiadomościami. Gdy wiadomości będą "
+            "przechodzić, wrócę do zwykłego tempa stopniowo."
         )
+
+
+# v480cp: sciety budzet wraca do bazowego po trochu. Po kazdych
+# _UDANE_NA_KROK udanych wiadomosciach (i nie wczesniej niz
+# _JEDEN_LIMIT_S po scieciu) dokladamy _KROK_ODBUDOWY. Kolejne "za
+# szybko" znowu tnie i zeruje licznik.
+_JEDEN_LIMIT_S = 600
+_UDANE_NA_KROK = 10
+_KROK_ODBUDOWY = 10
+_udane_od_zmiany = {}
+
+
+def _odbuduj_budzet_po_sukcesie(account):
+    if account not in _budzet_obciety:
+        return
+    _udane_od_zmiany[account] = _udane_od_zmiany.get(account, 0) + 1
+    if (
+        _udane_od_zmiany[account] < _UDANE_NA_KROK
+        or time.time() - _budzet_obciety_kiedy.get(account, 0) < _JEDEN_LIMIT_S
+    ):
+        return
+    _udane_od_zmiany[account] = 0
+    stary = _budzet_obciety[account]
+    nowy = min(DEEPSEEK_NA_GODZINE, stary + _KROK_ODBUDOWY)
+    if nowy >= DEEPSEEK_NA_GODZINE:
+        _budzet_obciety.pop(account, None)
+    else:
+        _budzet_obciety[account] = nowy
+    _zapisz_budzet_konta(account)
+    log(
+        "DEEPSEEK",
+        "Konto " + str(account) + ": wiadomości przechodzą — podnoszę "
+        "budżet z " + str(stary) + " do " + str(nowy)
+        + " wiadomości na godzinę."
+    )
 
 
 def _odstep_z_budzetu(account):
