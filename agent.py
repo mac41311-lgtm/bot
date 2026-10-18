@@ -34906,7 +34906,7 @@ def _o_kogo_prosi_main(tekst):
 
     for m in _ADDRESS_RE.finditer(t):
         rola = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
-        if rola and rola != "MAIN":
+        if rola and rola != "MAIN" and rola not in _ROLE_BEZ_CELU:
             kto.add(rola)
 
     # 2. po tym, czego potrzeba
@@ -35745,6 +35745,10 @@ _VOCATIVE_TO_ROLE = {
     # na tej liscie. Skutek: caly list, razem z checklista decyzji,
     # szedl do KAZDEGO kolegi jako wypowiedz do wszystkich.
     "MAIN": "MAIN", "MAINOWI": "MAIN", "MAINA": "MAIN",
+
+    # v480cn: do Igora tez mozna napisac po imieniu — patrz
+    # _collect_role_messages().
+    "IGORZE": "IGOR", "IGOR": "IGOR",
 }
 
 _WOLACZ = {
@@ -35993,6 +35997,28 @@ def _collect_role_messages(speaker_role, text):
         if len(tresc) < 15:
             # Samo zawołanie po imieniu, bez treści — nie ma czego
             # przekazywać.
+            continue
+
+        # v480cn: kto napisze do Igora po imieniu, ten dostaje jego
+        # odpowiedz. Igor dostaje tylko to, co do niego napisano —
+        # bez celu i bez reszty wypowiedzi — a odpowiedz wraca do
+        # skrzynki autora, jak od kazdego kolegi.
+        if adresat in _ROLE_BEZ_CELU:
+            if adresat in _nazwani or speaker_role in _ROLE_BEZ_CELU:
+                continue
+            _nazwani.add(adresat)
+            log(
+                "ZESPÓŁ",
+                _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role))
+                + " pisze do " + _ROLE_DISPLAY_NAME.get(adresat, adresat)
+                + ": " + short(tresc, 300)
+            )
+            _odp_igora = str(deepseek(adresat, tresc) or "").strip()
+            if _odp_igora:
+                _speak(adresat, _odp_igora)
+                _role_inbox.setdefault(speaker_role, []).append(
+                    (_ROLE_DISPLAY_NAME.get(adresat, adresat), _odp_igora)
+                )
             continue
 
         # v387: jego akapit RAZEM z czescia wspolna.
