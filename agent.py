@@ -12332,6 +12332,190 @@ def zacznij_oddech():
 atexit.register(_oddech_na_wyjsciu)
 
 
+# v480cm: straznik pamieci telefonu.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (noc 2026-10-18, 03:08-03:22). Obie
+# druzyny odpalily ciezkie skrypty naraz (z 4 procesow zrobilo sie 8),
+# wolna pamiec zjechala do ~500 MB i Android (LOW_MEMORY) zabil caly
+# Termux: obie druzyny i straznika druzyny 2. Do rana nic nie wstalo.
+#
+# Nie ograniczamy skryptow: zadnego limitu czasu, krokow ani rozmiaru,
+# skrypt bierze tyle pamieci, ile telefon da. Dopiero gdy wolnej
+# pamieci jest tak malo, ze Android za chwile zabije wszystko,
+# zatrzymujemy JEDEN, najciezszy skrypt zespolu i dopisujemy do jego
+# wyjscia, dlaczego. Program i reszta pracuja dalej, a zespol widzi
+# w wyniku, co sie stalo.
+_PAMIEC_PROG_MB = 700
+_PAMIEC_CO_S = 3
+_PAMIEC_MIN_SKRYPT_MB = 120
+_PLIK_STRAZNIKA_PAMIECI = HOME / ".ael_straznik_pamieci"
+_straznik_pamieci_watek = None
+
+
+def _status_procesu(pid):
+    """Uid i pamiec (RSS + swap, w MB) procesu z /proc/<pid>/status."""
+    uid, mb = None, 0
+    try:
+        with open("/proc/" + str(pid) + "/status", encoding="utf-8") as f:
+            for linia in f:
+                if linia.startswith("Uid:"):
+                    uid = int(linia.split()[1])
+                elif linia.startswith(("VmRSS:", "VmSwap:")):
+                    mb += int(linia.split()[1]) // 1024
+    except Exception:
+        return None, 0
+    return uid, mb
+
+
+def _nasi_przodkowie():
+    """Ten proces i wszyscy jego rodzice — ich nie ruszamy."""
+    pidy, pid = set(), os.getpid()
+    while pid > 1 and pid not in pidy:
+        pidy.add(pid)
+        try:
+            with open("/proc/" + str(pid) + "/stat", encoding="utf-8") as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except Exception:
+            break
+    return pidy
+
+
+def _druzyna_procesu(pid):
+    """Numer druzyny ze srodowiska procesu (dzieci druzyny 2 dziedzicza AEL_DRUZYNA=2)."""
+    try:
+        with open("/proc/" + str(pid) + "/environ", "rb") as f:
+            for zmienna in f.read().split(b"\0"):
+                if zmienna.startswith(b"AEL_DRUZYNA="):
+                    return zmienna.split(b"=", 1)[1].decode("utf-8", "replace").strip() or "1"
+    except Exception:
+        pass
+    return "1"
+
+
+def _najciezszy_skrypt():
+    """
+    (pid, MB, komenda) skryptu do zatrzymania albo None.
+
+    Obie druzyny maja te same szanse: liczymy, ile pamieci zajmuja
+    WSZYSTKIE skrypty kazdej druzyny, i ustepuje ta, ktora bierze
+    wiecej — jej najciezszy skrypt. Zadna druzyna nie wypchnie wiec
+    drugiej z telefonu tylko dlatego, ze wystartowala pierwsza.
+    """
+    nasze = _nasi_przodkowie()
+    program = os.path.basename(str(_SCIEZKA_PROGRAMU)) or "agent.py"
+    skrypty = []
+    for wpis in os.listdir("/proc"):
+        if not wpis.isdigit() or int(wpis) in nasze:
+            continue
+        uid, mb = _status_procesu(wpis)
+        if uid != os.getuid() or mb < 10:
+            continue
+        try:
+            with open("/proc/" + wpis + "/cmdline", "rb") as f:
+                komenda = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except Exception:
+            continue
+        # Sam program (obie druzyny), aplikacja Termux i pomocnik
+        # DeepSeeka to nie skrypty zespolu.
+        if (
+            not komenda
+            or program in komenda
+            or komenda.startswith("com.")
+            or "pow_helper" in komenda
+        ):
+            continue
+        skrypty.append((int(wpis), mb, komenda, _druzyna_procesu(wpis)))
+    duze = [s for s in skrypty if s[1] >= _PAMIEC_MIN_SKRYPT_MB]
+    if not duze:
+        return None
+    razem = {}
+    for s in skrypty:
+        razem[s[3]] = razem.get(s[3], 0) + s[1]
+    for druzyna in sorted(razem, key=razem.get, reverse=True):
+        jej = [s for s in duze if s[3] == druzyna]
+        if jej:
+            pid, mb, komenda, _ = max(jej, key=lambda s: s[1])
+            return pid, mb, komenda
+    return None
+
+
+def _plik_wyjscia_procesu(pid):
+    """Plik, do ktorego proces pisze wyjscie (stdout albo stderr), albo None."""
+    for fd in ("1", "2"):
+        try:
+            cel = os.readlink("/proc/" + str(pid) + "/fd/" + fd)
+        except Exception:
+            continue
+        if cel.startswith("/") and os.path.isfile(cel):
+            return cel
+    return None
+
+
+def _zatrzymaj_przy_braku_pamieci(wolna):
+    try:
+        ostatnio = float(read_text(_PLIK_STRAZNIKA_PAMIECI).strip() or 0)
+    except Exception:
+        ostatnio = 0.0
+    # Druga druzyna mogla wlasnie cos zatrzymac — dajemy pamieci
+    # chwile, zeby sie zwolnila, zanim ruszymy nastepny skrypt.
+    if time.time() - ostatnio < 15:
+        return
+    skrypt = _najciezszy_skrypt()
+    if not skrypt:
+        return
+    pid, mb, komenda = skrypt
+    try:
+        _PLIK_STRAZNIKA_PAMIECI.write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
+    plik_wyjscia = _plik_wyjscia_procesu(pid)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        return
+    tekst = (
+        "Zatrzymałem proces " + str(pid) + " (" + short(komenda, 120)
+        + "), bo zajmował " + str(mb) + " MB, a telefonowi zostało tylko "
+        + str(wolna) + " MB wolnej pamięci. Za chwilę Android zamknąłby "
+        "cały Termux razem z programem. Ten skrypt może ruszyć ponownie, "
+        "gdy będzie potrzebował mniej pamięci naraz."
+    )
+    if plik_wyjscia:
+        try:
+            with open(plik_wyjscia, "a", encoding="utf-8") as f:
+                f.write("\n[program] " + tekst + "\n")
+        except Exception:
+            pass
+    log("PAMIĘĆ", tekst)
+
+
+def zacznij_straznika_pamieci():
+    global _straznik_pamieci_watek
+
+    if _straznik_pamieci_watek is not None:
+        return
+
+    def _petla():
+        nisko = 0
+        while True:
+            time.sleep(_PAMIEC_CO_S)
+            wolna = _wolna_pamiec_mb()
+            # Dwa odczyty z rzedu, zeby chwilowy skok nie zatrzymal
+            # niczego bez potrzeby.
+            nisko = nisko + 1 if (wolna is not None and wolna < _PAMIEC_PROG_MB) else 0
+            if nisko >= 2:
+                nisko = 0
+                try:
+                    _zatrzymaj_przy_braku_pamieci(wolna)
+                except Exception:
+                    pass
+
+    _straznik_pamieci_watek = _threading_bootstrap.Thread(
+        target=_petla, name="pamiec", daemon=True
+    )
+    _straznik_pamieci_watek.start()
+
+
 def _adb_szybko(polecenie, timeout=10):
     """adb shell na nasz telefon; stdout albo "" przy bledzie."""
     try:
@@ -49133,6 +49317,7 @@ def main():
     if _DRUZYNA != "2":
         agent_wake_lock()
     zacznij_oddech()
+    zacznij_straznika_pamieci()
     _podstaw_sleep_zespolu()
 
     # ----------------------------------------------------------

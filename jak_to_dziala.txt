@@ -1963,3 +1963,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      niczego z programu i dostaje tylko to, co sam mu napiszesz w ASK,
      jak w nowym czacie; pytasz go, o co chcesz i kiedy chcesz, bo
      patrzy swiezo" — bez "spoza zespolu".
+ 89. (noc 2026-10-18 03:22) Straznik pamieci. Skrypty nie maja zadnego
+     limitu czasu ani rozmiaru. Dopiero gdy telefonowi zostaje ponizej
+     700 MB wolnej pamieci (dwa odczyty z rzedu, co 3 s), program
+     zatrzymuje jeden skrypt i dopisuje do jego wyjscia, dlaczego.
+     Obie druzyny maja rowne szanse: ustepuje ta, ktorej skrypty
+     zajmuja razem wiecej pamieci (jej najciezszy skrypt). Wczesniej
+     Android (LOW_MEMORY) zabijal caly Termux z obiema druzynami.
