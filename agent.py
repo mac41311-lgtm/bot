@@ -45345,8 +45345,10 @@ def run_agent(goal):
         # v480as: w rywalizacji co 5 krokow ocenia Sedzia (obie druzyny);
         # Ela odzywa sie wtedy tylko na zawolanie MAIN-a.
         # v480ay: kazda druzyna na swoim kroku 5, 10… dostaje ocene Sedziego.
-        if _DRUZYNA and step % 5 == 0:
-            przystanek_sedziego(step)
+        # v480cq: ocena co 15 minut, a druzyna dostaje najnowsza na swoim
+        # najblizszym kroku — patrz odbierz_ocene_sedziego().
+        if _DRUZYNA:
+            odbierz_ocene_sedziego(step)
 
         if (
             (step % 5 == 0 and not _DRUZYNA)
@@ -48884,7 +48886,7 @@ def pasek_rywalizacji(o):
     """v480bc: dwa paski — procent kazdej druzyny z tej samej oceny Sedziego."""
     print()
     print("═" * 60)
-    print("  POSTĘP CELU — ocena Sędziego po kroku " + str(o.get("krok", "")))
+    print("  POSTĘP CELU — ocena Sędziego z " + str(o.get("czas", ""))[11:16] + _kroki_oceny(o))
     for n in ("1", "2"):
         d = o.get("druzyna_" + n) or {}
         try:
@@ -48900,55 +48902,49 @@ def pasek_rywalizacji(o):
     print()
 
 
-def przystanek_sedziego(step):
-    """Co 5 krokow kazdej druzyny: ocena rundy (wspolna dla obu). Nigdy nie rzuca."""
+# v480cq: Sedzia ocenia co _SEDZIA_CO_S_OCENA sekund (uzytkownik
+# 2026-10-18: "lepiej czasowo ustawic co 10 min ... czy nawet 15"), a nie
+# co 5 krokow kazdej druzyny.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-18 wieczorem). Ocena byla
+# przypieta do numeru kroku: druzyna 1 na kroku 20 dostawala ocene
+# zrobiona wtedy, gdy druzyna 2 tez byla na kroku 20 — choc ta byla juz na
+# kroku 55. O rywalu widziala stan sprzed godzin. Do tego druzyna 2,
+# pierwsza w rundzie, czekala na Sedziego 22 minuty, bo konto 1 bylo
+# zajete rozmowa druzyny 1.
+#
+# Teraz jest jedna, zawsze najnowsza ocena. Proces druzyny 1 prosi o nia
+# Sedziego co kwadrans, gdy konto 1 jest wolne, a kazda druzyna dostaje
+# ja raz, na swoim najblizszym kroku. Nikt na nikogo nie czeka.
+_SEDZIA_CO_S_OCENA = 15 * 60
+_PLIK_ODEBRANEJ_OCENY = STATE_DIR / "odebrana_ocena_sedziego.txt"
+
+
+def _czas_oceny(o):
+    try:
+        return time.mktime(time.strptime(str(o.get("czas")), "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        return 0.0
+
+
+def odbierz_ocene_sedziego(step):
+    """Najnowsza ocena Sedziego, jesli ta druzyna jeszcze jej nie dostala. Nigdy nie rzuca."""
     if not _DRUZYNA:
         return
     try:
-        runda = int(step or 0) // 5
-        if _DRUZYNA == "1":
-            with _KOLEJKA_KONTA:
-                o = _ocena_rundy(runda) or ocen_rywalizacje(step, "1")
-            _daj_ocene(o, step)
+        o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+        if not (isinstance(o, dict) and o.get("druzyna_1")):
             return
-
-        o = _ocena_rundy(runda)
-        if not o:
-            _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = _PLIK_PROSBY_2.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"runda": runda, "krok": int(step or 0), "pid": os.getpid(), "od": int(_URUCHOMIENIE_ID)}), encoding="utf-8")
-            os.replace(tmp, _PLIK_PROSBY_2)
-            log("RYWALIZACJA", "Krok " + str(step) + ": jesteśmy pierwsi w tej rundzie — czekam na ocenę Sędziego.")
-            _od = time.time()
-            _meldunek = time.time()
-            while not o:
-                try:
-                    pid1 = int((_RYWALIZACJA_DIR / "pid_1.txt").read_text().strip())
-                except Exception:
-                    pid1 = 0
-                try:
-                    _obsluguje = int(_PLIK_OBSLUGI_1.read_text().strip()) == pid1
-                except Exception:
-                    _obsluguje = False
-                if not (_zyje(pid1) and _obsluguje):
-                    log("RYWALIZACJA", "Drużyna 1 nie może teraz dać oceny Sędziego — idę dalej bez niej.")
-                    break
-                if _przerwa_konta_do(1) > time.time():
-                    log("RYWALIZACJA", "Konto 1 (Sędzia) ma przerwę za błędy serwera DeepSeek — idę dalej bez oceny.")
-                    break
-                time.sleep(2)
-                o = _ocena_rundy(runda)
-                if not o and not _PLIK_PROSBY_2.exists():
-                    log("RYWALIZACJA", "Ocena Sędziego nie wyszła — idę dalej.")
-                    break
-                if not o and time.time() - _meldunek >= 120:
-                    _meldunek = time.time()
-                    log("RYWALIZACJA", "Wciąż czekam na ocenę Sędziego ("
-                        + str(int((time.time() - _od) // 60)) + " min) — konto 1 jest zajęte rozmową drużyny 1.")
-            try:
-                _PLIK_PROSBY_2.unlink()
-            except Exception:
-                pass
+        # v480bg: ocena sprzed startu tego biegu jest stara.
+        if _czas_oceny(o) < int(_URUCHOMIENIE_ID):
+            return
+        try:
+            if _PLIK_ODEBRANEJ_OCENY.read_text(encoding="utf-8").strip() == str(o.get("czas")):
+                return
+        except Exception:
+            pass
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _PLIK_ODEBRANEJ_OCENY.write_text(str(o.get("czas")), encoding="utf-8")
         _daj_ocene(o, step)
     except Exception as e:
         try:
@@ -48957,28 +48953,35 @@ def przystanek_sedziego(step):
             pass
 
 
-def _obsluguj_prosby_druzyny_2():
-    """Druzyna 1, watek: druzyna 2 pierwsza w rundzie -> Sedzia w wolnej chwili konta 1."""
+def _sedzia_co_kwadrans():
+    """Druzyna 1, watek: co _SEDZIA_CO_S_OCENA jedna ocena obu druzyn, gdy konto 1 jest wolne."""
+    nie_przed = int(_URUCHOMIENIE_ID) + _SEDZIA_CO_S_OCENA
+    ostatnie_kroki = None
     while True:
+        time.sleep(30)
         try:
-            if _PLIK_PROSBY_2.exists():
-                pr = json.loads(_PLIK_PROSBY_2.read_text(encoding="utf-8"))
-                runda = int(pr.get("runda", 0))
-                _od2 = int(pr.get("od") or 0)
-                if not _ocena_rundy(runda, _od2):
-                    with _KOLEJKA_KONTA:
-                        if not _ocena_rundy(runda, _od2):
-                            ocen_rywalizacje(int(pr.get("krok", runda * 5)), "2")
-                try:
-                    _PLIK_PROSBY_2.unlink()
-                except Exception:
-                    pass
+            o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+            if isinstance(o, dict) and o.get("druzyna_1"):
+                nie_przed = max(nie_przed, _czas_oceny(o) + _SEDZIA_CO_S_OCENA)
+            if time.time() < nie_przed or _przerwa_konta_do(1) > time.time():
+                continue
+            kroki = (_krok_druzyny("1"), _krok_druzyny("2"))
+            # Nikt nie zrobil kroku od ostatniej oceny — nie ma czego oceniac.
+            if kroki == ostatnie_kroki:
+                continue
+            with _KOLEJKA_KONTA:
+                ocena = ocen_rywalizacje(kroki)
+            ostatnie_kroki = kroki
+            # Takze gdy ocena nie wyszla: nastepna proba za kwadrans, nie
+            # co 30 sekund.
+            nie_przed = time.time() + _SEDZIA_CO_S_OCENA
+            if not ocena:
+                continue
         except Exception as e:
             try:
-                log("RYWALIZACJA", "Prośba drużyny 2 o ocenę: " + str(e))
+                log("RYWALIZACJA", "Ocena Sędziego co kwadrans: " + str(e))
             except Exception:
                 pass
-        time.sleep(2)
 
 
 def uruchom_sedziego():
@@ -49010,7 +49013,7 @@ def uruchom_sedziego():
             _PLIK_OBSLUGI_1.write_text(str(os.getpid()))
         except Exception:
             pass
-        _threading.Thread(target=_obsluguj_prosby_druzyny_2, name="oceny-2", daemon=True).start()
+        _threading.Thread(target=_sedzia_co_kwadrans, name="oceny-sedziego", daemon=True).start()
     _sedzia_watek[0] = _threading.Thread(target=_sedzia_petla, name="sedzia", daemon=True)
     _sedzia_watek[0].start()
 
@@ -49237,19 +49240,21 @@ def _stan_druzyny_dla_sedziego(numer):
     )
 
 
-def ocen_rywalizacje(step, pierwsza="1"):
+def ocen_rywalizacje(kroki):
     """
-    Druzyna 1 (proces z Sedzia): jedna ocena obu druzyn na runde (krok
-    `step`), wywolana przez te, ktora `pierwsza` do niego doszla. Zapis do
-    pliku rundy — obie druzyny dostaja ja na swoim kroku. Nigdy nie rzuca.
+    Druzyna 1 (proces z Sedzia): jedna ocena obu druzyn (v480cq: co
+    kwadrans, `kroki` = (krok druzyny 1, krok druzyny 2)). Zapis do pliku
+    najnowszej oceny — kazda druzyna dostaje ja na swoim najblizszym
+    kroku. Nigdy nie rzuca.
     """
     if _DRUZYNA != "1":
         return None
     try:
+        k1, k2 = (str(k if k is not None else "?") for k in kroki)
         prompt = (
-            "Ocena po kroku " + str(step) + " — pierwsza doszła do niego drużyna "
-            + pierwsza + ". Tę samą ocenę dostaną obie drużyny, każda na swoim kroku "
-            + str(step) + ".\n\n"
+            "Ocena z godziny " + datetime.now().strftime("%H:%M")
+            + " — drużyna 1 jest na kroku " + k1 + ", drużyna 2 na kroku " + k2
+            + ". Tę samą ocenę dostaną obie drużyny, każda na swoim najbliższym kroku.\n\n"
             + "".join(
                 "Drużyna " + _n + " zaczęła od nowa po dyskwalifikacji (" + _cz
                 + ") — to nowy zespół, z nowymi krokami.\n\n"
@@ -49281,9 +49286,8 @@ def ocen_rywalizacje(step, pierwsza="1"):
 
         ocena = {
             "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "runda": int(step or 0) // 5,
-            "pierwsza": pierwsza,
-            "krok": int(step or 0),
+            "runda": int(time.time()),
+            "kroki": {"1": k1, "2": k2},
             "druzyna_1": _druz("druzyna_1"),
             "druzyna_2": _druz("druzyna_2"),
             "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
@@ -49324,8 +49328,8 @@ def ocen_rywalizacje(step, pierwsza="1"):
             _paski_pokazane.add(ocena["runda"])
         except Exception:
             pass
-        if pierwsza == "2":
-            log("RYWALIZACJA", "Sędzia ocenił rundę po kroku " + str(step) + " (pierwsza drużyna 2) — drużyna 1 dostanie tę ocenę na swoim kroku " + str(step) + ".")
+        log("RYWALIZACJA", "Sędzia ocenił obie drużyny (drużyna 1 na kroku " + k1
+            + ", drużyna 2 na kroku " + k2 + ") — każda dostanie tę ocenę na swoim najbliższym kroku.")
         log_event("ocena_sedziego", ocena)
         if _cel_przewiduje_dyskwalifikacje():
             for _n in ("1", "2"):
@@ -49337,13 +49341,20 @@ def ocen_rywalizacje(step, pierwsza="1"):
         return None
 
 
+def _kroki_oceny(o):
+    k = o.get("kroki") if isinstance(o.get("kroki"), dict) else None
+    if k:
+        return " (drużyna 1 na kroku " + str(k.get("1", "?")) + ", drużyna 2 na kroku " + str(k.get("2", "?")) + ")"
+    return " (po kroku " + str(o.get("krok")) + ")" if o.get("krok") is not None else ""
+
+
 def _ocena_zdaniem(o):
     def _zd(t):
         t = str(t or "").strip()
         return t if t.endswith((".", "!", "?")) else t + "."
     _prow = str(o.get("prowadzi", "")).strip()
     return (
-        "Ocena Sędziego po kroku " + str(o.get("krok", "")) + " (" + str(o.get("czas", "")) + ", wspólna dla obu drużyn): "
+        "Ocena Sędziego z " + str(o.get("czas", "")) + _kroki_oceny(o) + ", wspólna dla obu drużyn: "
         "drużyna 1 — " + str(o["druzyna_1"]["procent"]) + "%: " + _zd(o["druzyna_1"]["ocena"])
         + " Drużyna 2 — " + str(o["druzyna_2"]["procent"]) + "%: " + _zd(o["druzyna_2"]["ocena"])
         + " Prowadzi: " + ("remis" if _prow.lower().startswith("remis") else "drużyna " + _prow)

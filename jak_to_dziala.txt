@@ -1984,3 +1984,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      godziny, i po kazdych 10 udanych wiadomosciach wraca o 10 w
      strone 90. Wczesniej 90 -> 59 -> 38 w 90 s i 33 minuty stania
      druzyny 1 (oraz 22 minuty czekania druzyny 2 na Sedziego).
+ 93. (uzytkownik 2026-10-18) Sedzia ocenia co 15 minut, a nie co 5
+     krokow. Proces druzyny 1 prosi go o ocene, gdy minie kwadrans i
+     konto 1 jest wolne (i ktoras druzyna zrobila od ostatniej oceny
+     krok). Kazda druzyna dostaje najnowsza ocene raz, na swoim
+     najblizszym kroku. Druzyna 2 nie czeka juz na Sedziego. Wczesniej
+     ocena byla przypieta do numeru kroku, wiec druzyna z tylu (krok 20)
+     dostawala ocene sprzed godzin, gdy rywal byl juz na kroku 55.
