@@ -2026,3 +2026,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wiec nie zabiera ekranu. Gdy rola uzywa narzedzia chrome_, a Chrome
      nie odpowiada albo nie dziala, program wyciaga go na wierzch (am
      start), czeka 2 s i sprawdza jeszcze raz.
+
+98.  Zmiana celu dociera do druzyny 2 (v480cu). Gdy druzyna 1 startuje z
+     innym celem, a stara druzyna 2 dalej dziala w tle, program ja
+     zatrzymuje i uruchamia od nowa z nowym celem (rozmowy i pliki
+     zostaja). Kazda rola, takze Sedzia, dostaje nowy cel raz.

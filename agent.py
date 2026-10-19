@@ -48910,6 +48910,17 @@ def _uruchom_druzyne_2(cel):
     except Exception:
         stary = 0
 
+    # v480cu: bieg 2026-10-19 — uzytkownik zmienil cel na starych
+    # rozmowach. Druzyna 2, ktora przezyla w tle, pracowalaby dalej nad
+    # starym celem (czyta go tylko na starcie). Inny cel = nowy start
+    # druzyny 2 z nowym celem; jej rozmowy i pliki zostaja.
+    try:
+        _cel_2 = read_text(_DRUZYNA2_DIR / "current_goal.txt").strip()
+    except Exception:
+        _cel_2 = ""
+    if _druzyna2_zyje(stary) and _cel_2 and _cel_2 != str(cel or "").strip():
+        _zatrzymaj_stara_druzyne_2("bo cel się zmienił")
+
     try:
         if _druzyna2_zyje(stary):
             _druzyna2["pid"] = stary
