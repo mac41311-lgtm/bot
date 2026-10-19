@@ -9802,6 +9802,28 @@ def _powiedz_jak_leca_komendy(pakiet):
     pass
 
 
+def _foreground_przez_adb():
+    """Pakiet na wierzchu z `dumpsys activity`/`dumpsys window` albo ""."""
+    try:
+        device = find_adb()
+        if not device:
+            return ""
+        for polecenie, wzor in (
+            ("dumpsys activity activities", r"(?:mResumedActivity|topResumedActivity)[^\n]*?\s([\w.]+)/"),
+            ("dumpsys window", r"mCurrentFocus[^\n]*?\s([\w.]+)/"),
+        ):
+            r = subprocess.run(
+                ["adb", "-s", device, "shell"] + polecenie.split(),
+                capture_output=True, text=True, timeout=6
+            )
+            m = re.search(wzor, r.stdout or "")
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
 def _foreground_app():
     """
     (pakiet, czytelna nazwa) aplikacji na wierzchu albo (None, None),
@@ -9809,20 +9831,26 @@ def _foreground_app():
     informacja pomocnicza, jej brak nie może wywrócić właściwej akcji.
     """
 
-    if android_device is None:
-        return None, None
+    # v480cv: bieg 2026-10-19 19:18 — uiautomator2 app_current() nie
+    # odpowiadal przez 10 s na kazdym kroku (Termux na wierzchu), choc
+    # telefon dzialal. Najpierw pytamy system przez adb (dumpsys, ~1 s);
+    # uiautomator2 zostaje tylko na wypadek, gdy adb nic nie powie.
+    pakiet = _foreground_przez_adb()
 
-    try:
-        biezaca = _android_with_deadline(
-            "android_app_current",
-            lambda: android_device.app_current(),
-            timeout=10
-        )
+    if not pakiet:
+        if android_device is None:
+            return None, None
+        try:
+            biezaca = _android_with_deadline(
+                "android_app_current",
+                lambda: android_device.app_current(),
+                timeout=10
+            )
 
-        pakiet = str((biezaca or {}).get("package") or "").strip()
+            pakiet = str((biezaca or {}).get("package") or "").strip()
 
-    except Exception:
-        return None, None
+        except Exception:
+            return None, None
 
     if not pakiet:
         return None, None
