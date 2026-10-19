@@ -5125,6 +5125,7 @@ def _goal_briefing_for(name):
     _odcisk_rywal = (
         hashlib.sha1(_rywal.encode("utf-8")).hexdigest()[:16] if _rywal else ""
     )
+    _poprzednia_ocena = ""
 
     # v480n: wznowiona rozmowa, ktora ten cel juz dostala, nie dostaje
     # go drugi raz.
@@ -5160,6 +5161,29 @@ def _goal_briefing_for(name):
                 return _rywal + "\n\n"
             return ""
 
+        # v480cs: bieg 2026-10-19 14:52 — rozmowa Sedziego dobila do
+        # limitu dlugosci, nowa rozmowa nie znala jego skali i oceny
+        # spadly z 48%/53% na 7%/9% przy tym samym stanie prac. Nowa
+        # rozmowa Sedziego przy tym samym celu dostaje raz jego ostatnia
+        # ocene.
+        if (
+            name == "ARBITER" and _rozmowa
+            and _wpis.get("cel") == _odcisk_celu
+            and _wpis.get("rozmowa") and _wpis.get("rozmowa") != _rozmowa
+        ):
+            _o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+            if isinstance(_o, dict) and _o.get("druzyna_1"):
+                _poprzednia_ocena = (
+                    "Poprzednia rozmowa z Tobą się skończyła (na przykład "
+                    "zapełniła się). Twoja ostatnia ocena w niej, z "
+                    + str(_o.get("czas", "")) + ":\n"
+                    + json.dumps({
+                        k: _o.get(k) for k in
+                        ("druzyna_1", "druzyna_2", "prowadzi", "uzasadnienie")
+                    }, ensure_ascii=False, indent=1)
+                    + "\n\n"
+                )
+
         if _rozmowa:
             _wyslane[name] = {"rozmowa": _rozmowa, "cel": _odcisk_celu,
                               "rywalizacja": _odcisk_rywal}
@@ -5170,7 +5194,10 @@ def _goal_briefing_for(name):
     # v335: sam cel, jego slowami. "CEL, nad ktorym pracujemy:" i
     # "(Mowie to raz, na poczatku...)" to byly nasze zdania o naszej
     # rozmowie — czyli dokladnie ten szablon, ktorego nie chcemy.
-    return _current_goal_text + "\n\n" + (_rywal + "\n\n" if _rywal else "")
+    return (
+        _current_goal_text + "\n\n" + (_rywal + "\n\n" if _rywal else "")
+        + _poprzednia_ocena
+    )
 
 
 def _load_session_state(name):

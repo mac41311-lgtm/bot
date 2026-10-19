@@ -2012,3 +2012,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      uruchamia. Gdy trafilaby w agent.py ktorejkolwiek druzyny, jego
      powloke albo Termuksa, komenda nie rusza, a wynik mowi, w co by
      trafila. Wlasne skrypty zespol zatrzymuje dalej bez przeszkod.
+
+96.  Nowa rozmowa Sedziego pamieta jego skale (v480cs). Gdy rozmowa
+     Sedziego sie konczy (np. limit dlugosci DeepSeeka) i program
+     zaklada nowa przy tym samym celu, pierwsza wiadomosc do niej
+     zawiera raz jego ostatnia ocene (procenty, oceny, prowadzi,
+     uzasadnienie). Bieg 2026-10-19 14:52: bez tego oceny spadly z
+     48%/53% na 7%/9% przy tym samym stanie prac.
