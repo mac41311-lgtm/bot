@@ -2019,3 +2019,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zawiera raz jego ostatnia ocene (procenty, oceny, prowadzi,
      uzasadnienie). Bieg 2026-10-19 14:52: bez tego oceny spadly z
      48%/53% na 7%/9% przy tym samym stanie prac.
+
+97.  Program sam budzi Chrome (v480ct). Android (ColorOS) usypia Chrome
+     w tle i CDP odpowiada "Read timed out". Stan na poczatku kroku (i na
+     starcie, i dla wykonawcy) sprawdza Chrome jedna proba i go nie budzi,
+     wiec nie zabiera ekranu. Gdy rola uzywa narzedzia chrome_, a Chrome
+     nie odpowiada albo nie dziala, program wyciaga go na wierzch (am
+     start), czeka 2 s i sprawdza jeszcze raz.

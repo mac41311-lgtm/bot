@@ -14729,9 +14729,10 @@ def execute_shell(command, timeout=None):
 # zamiast przestać próbować całkowicie — telefon może w
 # międzyczasie odzyskać CDP (np. użytkownik ręcznie otworzy kartę).
 _CDP_CONSECUTIVE_FAILURES = 0
+_budzenie_chrome = [False]
 
 
-def ensure_chrome_cdp_forward(retries=3):
+def ensure_chrome_cdp_forward(retries=3, budz=True):
     """
     Ustawia `adb forward` dla CDP i sprawdza /json/version.
 
@@ -14756,7 +14757,7 @@ def ensure_chrome_cdp_forward(retries=3):
 
     global _CDP_CONSECUTIVE_FAILURES
 
-    if _CDP_CONSECUTIVE_FAILURES >= 2:
+    if _CDP_CONSECUTIVE_FAILURES >= 2 or not budz:
         retries = 1
 
     device = find_adb()
@@ -14854,6 +14855,40 @@ def ensure_chrome_cdp_forward(retries=3):
             if refreshed:
                 device = refreshed
 
+    # v480ct: bieg 2026-10-19 — Chrome dzialal w tle, ale Android
+    # (ColorOS) go zamrazal: "Read timed out" na kazdym kroku. Uzytkownik:
+    # "niech program sam wlacza wylaczone". Gdy rola naprawde siega po
+    # Chrome (budz=True), program wyciaga go na wierzch — to go budzi,
+    # a gdy nie dziala, uruchamia — i sprawdza jeszcze raz. Stan na
+    # poczatku kroku (budz=False) Chrome'a nie budzi i nie zabiera ekranu.
+    if (
+        budz and last_error
+        and not str(last_error).startswith("ADB forward ERROR")
+        and not _budzenie_chrome[0]
+    ):
+        log(
+            "CHROME",
+            "Chrome nie odpowiada (w tle Android go usypia albo nie działa) "
+            "— wyciągam go na wierzch, żeby się obudził."
+        )
+        try:
+            subprocess.run(
+                ["adb", "-s", device, "shell", "am", "start", "-n",
+                 "com.android.chrome/com.google.android.apps.chrome.Main"],
+                capture_output=True, text=True, timeout=15
+            )
+        except Exception:
+            pass
+        time.sleep(2)
+        _budzenie_chrome[0] = True
+        try:
+            ok = ensure_chrome_cdp_forward(retries=2, budz=False)
+        finally:
+            _budzenie_chrome[0] = False
+        if ok:
+            log("CHROME", "Chrome obudzony — CDP odpowiada.")
+        return ok
+
     log(
         "CHROME",
         f"CDP AUTO ERROR (po {retries} próbach): {last_error}"
@@ -14864,9 +14899,9 @@ def ensure_chrome_cdp_forward(retries=3):
     return False
 
 
-def chrome_tabs():
+def chrome_tabs(budz=True):
 
-    if not ensure_chrome_cdp_forward():
+    if not ensure_chrome_cdp_forward(budz=budz):
         return []
 
     try:
@@ -14966,9 +15001,9 @@ def _adres_bez_ogona(url):
     return baza + "?" + "&".join(zostaje)
 
 
-def chrome_summary():
+def chrome_summary(budz=True):
 
-    tabs = chrome_tabs()
+    tabs = chrome_tabs(budz=budz)
 
     if not tabs:
         return "Brak dostępnych kart Chrome/CDP."
@@ -27863,7 +27898,7 @@ def _stan_telefonu_dla_wykonawcy():
         pass
 
     try:
-        karty = chrome_tabs()
+        karty = chrome_tabs(budz=False)
     except Exception:
         karty = []
 
@@ -34846,7 +34881,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     device_state_block = ""
 
     _resolved_chrome_text_for_progress = (
-        chrome_text if chrome_text is not None else chrome_summary()
+        chrome_text if chrome_text is not None else chrome_summary(budz=False)
     )
 
     # Bez last_result (nieprzekazywanego do tej funkcji) trzymamy tu
@@ -38413,7 +38448,7 @@ def consult_team(
         return "".join(p for p in pieces if p)
 
     _chrome_tekst = (
-        chrome_text if chrome_text is not None else chrome_summary()
+        chrome_text if chrome_text is not None else chrome_summary(budz=False)
     )
 
     chrome_block = (
@@ -39951,7 +39986,7 @@ def main_decide(
     # zamiast MAIN pytającego urządzenie NIEZALEŻNIE o dokładnie to
     # samo, co PLANNER/CRITIC już przed chwilą dostali.
     _resolved_chrome_text = (
-        chrome_text if chrome_text is not None else chrome_summary()
+        chrome_text if chrome_text is not None else chrome_summary(budz=False)
     )
 
     chrome_block = (
@@ -45535,7 +45570,9 @@ def run_agent(goal):
         # Wcześniej każda z tych 3 funkcji pytała urządzenie o
         # DOKŁADNIE ten sam stan osobno (do 4 żywych zapytań ADB/CDP
         # na jeden krok agenta).
-        step_chrome_text = chrome_summary()
+        # v480ct: stan na poczatku kroku nie budzi Chrome'a (patrz
+        # ensure_chrome_cdp_forward) — budzi go dopiero narzedzie chrome_.
+        step_chrome_text = chrome_summary(budz=False)
         step_android_text = android_summary()
 
         # v432: patrz _tekst_pythona().
@@ -49786,7 +49823,7 @@ def main():
     # Chrome
     # ----------------------------------------------------------
 
-    tabs = chrome_tabs()
+    tabs = chrome_tabs(budz=False)
 
     if tabs:
 
