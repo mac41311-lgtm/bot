@@ -21588,6 +21588,169 @@ _URUCHAMIANY_SKRYPT_RE = re.compile(
 )
 
 
+# v480cr: uzytkownik (2026-10-19) — druzyny "nie moga w ogole zamykac
+# programu". Komenda zespolu (albo skrypt, ktory ona uruchamia), ktora
+# trafilaby w sam program — agent.py ktorejkolwiek druzyny, jego
+# powloke albo Termuksa — nie rusza. Wlasne skrypty zespol zatrzymuje
+# dalej jak chce; liczy sie tylko, czy wzorzec trafia w program.
+_ZABIJAJACE_RE = re.compile(
+    r"\b(pkill|killall|kill)\b([^\n;|&)`]*)"
+)
+_PODSTAWIENIE_RE = re.compile(r"\$\(([^)]*)\)|`([^`]*)`")
+
+
+def _procesy_programu():
+    """[(pid, pgid, cmdline, comm)] — agent.py obu druzyn i nasi przodkowie."""
+    nazwa = os.path.basename(_SCIEZKA_PROGRAMU or "agent.py") or "agent.py"
+    przodkowie = _nasi_przodkowie()
+    wynik = []
+    try:
+        pidy = [int(d) for d in os.listdir("/proc") if d.isdigit()]
+    except Exception:
+        pidy = sorted(przodkowie)
+    for pid in pidy:
+        try:
+            with open("/proc/" + str(pid) + "/cmdline", "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            with open("/proc/" + str(pid) + "/comm", encoding="utf-8") as f:
+                comm = f.read().strip()
+        except Exception:
+            continue
+        nasz = pid in przodkowie or (
+            argv and "python" in os.path.basename(argv[0])
+            and any(os.path.basename(a) == nazwa for a in argv[1:3])
+        )
+        if not nasz:
+            continue
+        try:
+            pgid = os.getpgid(pid)
+        except Exception:
+            pgid = None
+        wynik.append((pid, pgid, " ".join(argv), comm))
+    return wynik
+
+
+def _trafia(wzorzec, tekst):
+    try:
+        return bool(re.search(wzorzec, tekst))
+    except re.error:
+        return wzorzec in tekst
+
+
+def _ofiary_wzorca(narzedzie, argumenty, procesy):
+    """Procesy programu, w ktore trafi pkill/pgrep/killall/pidof z tymi argumentami."""
+    try:
+        tokeny = shlex.split(argumenty)
+    except Exception:
+        tokeny = argumenty.split()
+    pelna = False
+    wzorce = []
+    pomin = False
+    for t in tokeny:
+        if pomin:
+            pomin = False
+            continue
+        if t.startswith("-") and len(t) > 1:
+            if narzedzie in ("pkill", "pgrep") and (
+                t == "--full" or ("f" in t[1:] and not t.startswith("--"))
+            ):
+                pelna = True
+            if t in ("-u", "-U", "-g", "-G", "-P", "-s", "-t", "--signal", "-o", "-n") and narzedzie != "killall":
+                pomin = True
+            continue
+        wzorce.append(t.strip("'\""))
+    if not wzorce:
+        return []
+    if narzedzie in ("pkill", "pgrep"):
+        wzorce = wzorce[:1]
+    trafione = []
+    for pid, _pgid, cmd, comm in procesy:
+        for w in wzorce:
+            if not w:
+                continue
+            if narzedzie in ("pkill", "pgrep"):
+                hit = _trafia(w, cmd if pelna else comm)
+            else:
+                hit = w in (comm, os.path.basename(cmd.split(" ")[0] if cmd else ""))
+            if hit:
+                trafione.append(pid)
+                break
+    return trafione
+
+
+def _pidy_z_podstawienia(tekst, procesy):
+    """$(cat plik), $(pgrep …), $(pidof …), $PPID w argumentach kill."""
+    pidy = set()
+    for m in _PODSTAWIENIE_RE.finditer(tekst):
+        wnetrze = (m.group(1) or m.group(2) or "").strip()
+        r = re.match(r"(pgrep|pidof)\b(.*)", wnetrze)
+        if r:
+            pidy.update(_ofiary_wzorca(
+                "pgrep" if r.group(1) == "pgrep" else "killall", r.group(2), procesy
+            ))
+            continue
+        r = re.match(r"cat\s+['\"]?([^\s'\"]+)", wnetrze)
+        if r:
+            try:
+                pidy.update(int(x) for x in re.findall(
+                    r"\d+", _resolve_home_relative_path(r.group(1)).read_text()[:200]
+                ))
+            except Exception:
+                pass
+    if re.search(r"\$\{?PPID\b", tekst):
+        pidy.add(os.getpid())
+    return pidy
+
+
+def _zatrzymalaby_program(command):
+    """
+    Zdanie do wyniku, gdy komenda (albo uruchamiany przez nia skrypt)
+    zatrzymalaby sam program — inaczej "". Nigdy nie rzuca.
+    """
+    try:
+        tekst = str(command or "")
+        tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
+        if not re.search(r"\b(?:pkill|killall|kill|force-stop|kill-all)\b|os\.kill", tekst):
+            return ""
+        procesy = _procesy_programu()
+        if not procesy:
+            return ""
+        pidy = {p[0] for p in procesy}
+        grupy = {p[1] for p in procesy if p[1]}
+        trafione = set()
+        if re.search(r"\bam\s+(?:force-stop|kill)\s+com\.termux\b|\bam\s+kill-all\b", tekst):
+            trafione.add(min(pidy))
+        if re.search(r"os\.kill(?:pg)?\(\s*os\.getppid\(\)", tekst):
+            trafione.add(os.getpid())
+        for m in _ZABIJAJACE_RE.finditer(tekst):
+            narzedzie, argumenty = m.group(1), m.group(2)
+            if narzedzie in ("pkill", "killall"):
+                trafione.update(_ofiary_wzorca(narzedzie, argumenty, procesy))
+                continue
+            # kill: pidy, -pgid, 0, -1, podstawienia
+            pelny = tekst[m.start():m.start() + 300].split("\n", 1)[0]
+            trafione.update(_pidy_z_podstawienia(pelny, procesy) & pidy)
+            cele = re.findall(r"(?<![\w$-])(-?\d+)\b", argumenty)
+            if cele and re.match(r"\s*-\d+\s", argumenty) and len(cele) > 1:
+                cele = cele[1:]  # pierwsze -N to sygnal
+            for c in cele:
+                n = int(c)
+                if n in pidy or (n < 0 and (-n in grupy or n == -1)) or n == 0 and (os.getpgrp() in grupy):
+                    trafione.add(n if n > 0 else min(pidy))
+        if not trafione:
+            return ""
+        opis = []
+        for pid, _g, cmd, comm in procesy:
+            if pid in trafione:
+                opis.append(short(cmd or comm, 60) + " (pid " + str(pid) + ")")
+        return (
+            "Nie uruchomiłem tej komendy — zatrzymałaby sam program: "
+            + "; ".join(opis[:3]) + ". Program zamyka tylko użytkownik."
+        )
+    except Exception:
+        return ""
+
+
 def _tresc_uruchamianego_skryptu(command):
     """
     Zawartosc skryptu, ktory ta komenda uruchamia — albo "".
@@ -22991,6 +23154,17 @@ def termux_run(command):
     try:
         command_str = str(command or "")
 
+        _program = _zatrzymalaby_program(command_str)
+        if _program:
+            log("PROGRAM", _program + " Komenda: " + short(command_str, 200))
+            return {
+                "ok": False,
+                "error": "ZATRZYMALABY_PROGRAM",
+                "command": command_str,
+                "message": _program,
+                "duration_s": 0.0
+            }
+
         # v354: zapis kodu przez cat/tee przechodzi te sama kontrole
         # autorstwa, co termux_write_file — patrz _gemini_pisze_kod().
         # Reszta termux_run bez zmian: `sed -i`, przekierowania do
@@ -23638,6 +23812,17 @@ def termux_run_background(
 
         if fake_tool:
             return _fake_tool_invocation_error(fake_tool)
+
+        _program = _zatrzymalaby_program(command)
+        if _program:
+            # "log" jest nizej zmienna lokalna (plik logu) — stad globals().
+            globals()["log"]("PROGRAM", _program + " Komenda: " + short(command, 200))
+            return {
+                "ok": False,
+                "error": "ZATRZYMALABY_PROGRAM",
+                "command": command,
+                "message": _program
+            }
 
         if (
             _looks_like_delete_command(command)

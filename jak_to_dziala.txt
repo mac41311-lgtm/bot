@@ -2004,3 +2004,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      "czesciowo", "w zakresie…") i nie liczy sie w cytatach (cudzyslow,
      linie od ">", "zamiast …"). Bieg 2026-10-19 05:01 zakonczyl sie, bo
      Tomek i Marek pisali "nie CEL ZROBIONY", ale cytowali te slowa.
+
+95.  Komenda zespolu nie zatrzyma programu (v480cr). Przed uruchomieniem
+     (termux_run i termux_run_background) program sprawdza pkill, killall,
+     kill (takze z $(cat plik_pid), $(pgrep …), $PPID), am force-stop
+     com.termux — w samej komendzie i w skrypcie .sh/.py, ktory ona
+     uruchamia. Gdy trafilaby w agent.py ktorejkolwiek druzyny, jego
+     powloke albo Termuksa, komenda nie rusza, a wynik mowi, w co by
+     trafila. Wlasne skrypty zespol zatrzymuje dalej bez przeszkod.
