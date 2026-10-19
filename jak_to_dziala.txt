@@ -1991,3 +1991,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      najblizszym kroku. Druzyna 2 nie czeka juz na Sedziego. Wczesniej
      ocena byla przypieta do numeru kroku, wiec druzyna z tylu (krok 20)
      dostawala ocene sprzed godzin, gdy rywal byl juz na kroku 55.
+
+94.  Druzyny nie zamykaja programu (v480cr). Zamyka go tylko uzytkownik.
+     DONE potwierdzone przez Tomka i Marka zapisuje raport w
+     raporty_done.json (w folderze agenta danej druzyny) i bieg trwa
+     dalej z tym samym celem. FAILED zaczyna bieg od nowa w nowych
+     rozmowach (takze w zwyklym programie); trzy FAILED w 10 minut daja
+     tylko przerwe do uplywu tych 10 minut, nie koniec programu. Tak
+     samo druzyna 2, gdy pada zaraz po starcie.
+     Potwierdzenie "CEL ZROBIONY" liczy sie tylko bez zaprzeczenia
+     gdziekolwiek w odpowiedzi ("nie cel zrobiony", "cel niezrobiony",
+     "czesciowo", "w zakresie…") i nie liczy sie w cytatach (cudzyslow,
+     linie od ">", "zamiast …"). Bieg 2026-10-19 05:01 zakonczyl sie, bo
+     Tomek i Marek pisali "nie CEL ZROBIONY", ale cytowali te slowa.

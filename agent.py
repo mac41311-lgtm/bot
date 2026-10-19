@@ -963,6 +963,8 @@ GEMINI_STATE_FILE = STATE_DIR / "gemini.json"
 # od v449 odstawia sie PARE klucz+model, w state/gemini_modele.json.
 
 LAST_RESULT_FILE = AGENT_DIR / "last_result.json"
+# v480cr: DONE nie zamyka programu — kazde potwierdzone DONE trafia tutaj.
+_PLIK_RAPORTOW_DONE = AGENT_DIR / "raporty_done.json"
 
 
 for d in [
@@ -4591,12 +4593,31 @@ def _mowi_cel_zrobiony(tekst):
     Marek "DONE jest falszywe" — a v474 szukal samego napisu i bieg
     sie zakonczyl.
     """
-    t = " ".join(str(tekst or "").lower().split())
-    if re.search(r"\bcel\W+(?:\w+\W+){0,2}nie\W+(?:jest\W+)?zrobiony", t):
+    # v480cr: bieg 2026-10-19 05:01, krok 89 (druzyna 1). Tomek: "nie CEL
+    # ZROBIONY w pelnym sensie", a nizej przyklad: Zamiast „CEL ZROBIONY”
+    # napisz wprost: > CEL ZROBIONY w zakresie mierzalnym…". Marek: "CEL
+    # NIEZROBIONY w calosci" i „dobra robota z rozdzieleniem »CEL ZROBIONY«
+    # od »DONE«". Obaj "potwierdzili" cel, bo liczyl sie kazdy napis.
+    # Teraz: zaprzeczenie gdziekolwiek wygrywa, a cytaty (w cudzyslowie,
+    # linie od ">", "zamiast …") i "cel zrobiony czesciowo / w zakresie"
+    # nie sa potwierdzeniem. Niejasne = cel trwa.
+    linie = [
+        l for l in str(tekst or "").splitlines()
+        if not l.strip().lstrip("*_ ").startswith(">")
+    ]
+    t = " ".join(" ".join(linie).lower().split())
+    if re.search(
+        r"\bcel\W+(?:\w+\W+){0,2}nie\W*(?:jest\W+)?zrobiony"
+        r"|\bnie\W+(?:\w+\W+){0,1}cel\W{0,3}zrobiony"
+        r"|cel\W{0,3}zrobiony\W+(?:\w+\W+){0,3}?(?:cz[eę][sś]ciowo|w\W+zakresie"
+        r"|w\W+cz[eę][sś]ci|nie\W+w\W+ca[lł]o[sś]ci|nie\W+ca[lł]kiem)",
+        t
+    ):
         return False
+    t = re.sub(r"[„“”\"«»][^„“”\"«»]{0,400}[„“”\"«»]", " ", t)
     for m in re.finditer(r"cel\W{0,3}zrobiony", t):
         przed = t[max(0, m.start() - 40):m.start()]
-        if re.search(r"\bnie\b|\bani\b|\bnigdy\b|\bzanim\b|\bjeśli\b|\bjesli\b|\bgdy\b", przed):
+        if re.search(r"\bnie\b|\bani\b|\bnigdy\b|\bzanim\b|\bjeśli\b|\bjesli\b|\bgdy\b|\bzamiast\b", przed):
             continue
         return True
     return False
@@ -46863,9 +46884,9 @@ def run_agent(goal):
                             "Uważam, że cel użytkownika jest zrobiony, i "
                             "chcę zakończyć bieg (DONE). Powód:\n"
                             + str(reason)
-                            + "\n\nPo DONE program się wyłącza i nic "
-                            "więcej się nie dzieje, dopóki użytkownik nie "
-                            "uruchomi go od nowa. Jeśli cel użytkownika "
+                            + "\n\nPo DONE program zapisze raport dla "
+                            "użytkownika i działa dalej z tym samym celem — "
+                            "program zamyka tylko użytkownik. Jeśli cel użytkownika "
                             "(cały, tak jak go napisał) jest zrobiony, "
                             "napisz wprost: CEL ZROBIONY. Jeśli nie — "
                             "napisz, czego brakuje i co robimy dalej."
@@ -46923,11 +46944,16 @@ def run_agent(goal):
             # (zgadywane po slowach celu) i bez odrzucania DONE przez
             # "weryfikacje fizyczna" (szukala FINAL_OK i plikow z celu).
             # Wynik sprawdzenia zostaje tylko w zapisie konca celu.
+            #
+            # v480cr: uzytkownik (2026-10-19, po falszywym DONE o 05:01):
+            # druzyny "nie moga w ogole zamykac programu". DONE zapisuje
+            # raport dla uzytkownika i bieg trwa z tym samym celem —
+            # program zamyka tylko uzytkownik.
             verification = verify_final(goal)
 
             print()
             print("=" * 72)
-            print("CEL ZAKOŃCZONY")
+            print("ZESPÓŁ UZNAŁ CEL ZA ZROBIONY — program działa dalej")
             print("=" * 72)
             print(
                 short(
@@ -46936,32 +46962,39 @@ def run_agent(goal):
                 )
             )
 
-            write_json(
-                LAST_RESULT_FILE,
-                {
-                    "status":
-                        "DONE",
-                    "goal":
-                        goal,
-                    "reason":
-                        reason,
-                    "step":
-                        step,
-                    "verification":
-                        verification["checks"]
-                }
-            )
+            _raporty = read_json(_PLIK_RAPORTOW_DONE, [])
+            if not isinstance(_raporty, list):
+                _raporty = []
+            _raporty.append({
+                "czas": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "goal": goal,
+                "reason": reason,
+                "step": step,
+                "glosy_zespolu": "\n\n".join(_glosy),
+                "verification": verification["checks"]
+            })
+            write_json(_PLIK_RAPORTOW_DONE, _raporty)
 
-            # Sesja faktycznie i fizycznie potwierdzona jako
-            # skończona — nie ma czego wznawiać.
-            try:
-                GOAL_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
+            log(
+                "MAIN",
+                "Zespół uznał cel za zrobiony (DONE) — raport zapisany w "
+                + str(_PLIK_RAPORTOW_DONE) + ". Program działa dalej; "
+                "zamyka go tylko użytkownik."
+            )
 
             pokaz_podsumowanie_biegu()
 
-            return
+            last_result = {
+                "status": "DONE_ZAPISANY_PROGRAM_DZIALA",
+                "message": (
+                    "W kroku " + str(step) + " MAIN dał DONE, a Tomek i "
+                    "Marek potwierdzili cel. Raport jest zapisany dla "
+                    "użytkownika. Programu nie zamyka zespół, tylko "
+                    "użytkownik — więc bieg trwa dalej z tym samym celem."
+                )
+            }
+
+            continue
 
         # ------------------------------------------------------
         # NEED_USER_LOGIN
@@ -48002,7 +48035,7 @@ def _rywal():
 def _wybierz_tryb():
     """Pytanie na starcie: 1 = zwykly program, 2 = rywalizacja."""
 
-    if _DRUZYNA or _PO_AKTUALIZACJI:
+    if _DRUZYNA or _PO_AKTUALIZACJI or _PO_PODDANIU:
         return
 
     try:
@@ -48107,7 +48140,7 @@ def _swieze_rozmowy_po_poddaniu():
     druzyny zostaja w jej folderze. Sedzia (ARBITER) zostaje w swojej
     rozmowie — porownuje z poprzednimi ocenami. Nigdy nie rzuca.
     """
-    if not _DRUZYNA or _PO_AKTUALIZACJI:
+    if _PO_AKTUALIZACJI:
         return
     try:
         lr = read_json(LAST_RESULT_FILE, {})
@@ -48118,6 +48151,10 @@ def _swieze_rozmowy_po_poddaniu():
                 _clear_session_state(_rola)
         lr["status"] = "FAILED_NOWE_ROZMOWY"
         write_json(LAST_RESULT_FILE, lr)
+        if not _DRUZYNA:
+            log("MAIN", "Zespół zamknął poprzedni bieg jako FAILED — zaczyna "
+                "od nowych rozmów, z tym samym celem.")
+            return
         log(
             "RYWALIZACJA",
             "Drużyna " + _DRUZYNA + " zamknęła poprzedni bieg jako FAILED — "
@@ -48142,9 +48179,13 @@ def _nowy_bieg_po_poddaniu():
     2026-10-17 08:22: FAILED druzyny 1 zamknal program, a z nim druzyne 2.
     Ten sam proces (execv), wiec druzyna 2 i robota w tle zyja dalej;
     nowy start idzie bez pytan, z tym samym celem i nowymi rozmowami
-    (_swieze_rozmowy_po_poddaniu). Trzy FAILED w 10 minut = koniec.
+    (_swieze_rozmowy_po_poddaniu).
+    v480cr: uzytkownik (2026-10-19) — druzyny "nie moga w ogole zamykac
+    programu". Trzy FAILED w 10 minut nie koncza juz programu: nowy start
+    czeka, az minie 10 minut od najstarszego z nich. Tak samo w zwyklym
+    programie (tryb 1).
     """
-    if _DRUZYNA != "1" or globals().get("_zamkniete_przez_uzytkownika"):
+    if _DRUZYNA not in ("", "1") or globals().get("_zamkniete_przez_uzytkownika"):
         return
     lr = read_json(LAST_RESULT_FILE, {})
     if not (isinstance(lr, dict) and lr.get("status") == "FAILED"):
@@ -48157,15 +48198,24 @@ def _nowy_bieg_po_poddaniu():
                 starty.append(float(t))
         except ValueError:
             pass
+    _kto = "Drużyna 1" if _DRUZYNA else "Zespół"
     if len(starty) >= _MAKS_PODDAN_W_10_MIN - 1:
-        log("RYWALIZACJA", "Drużyna 1 zamyka bieg jako FAILED zaraz po starcie — "
-            "nie zaczynam od nowa, program kończy pracę.")
-        return
+        _czekaj = max(0.0, min(starty) + 600 - teraz)
+        log("RYWALIZACJA" if _DRUZYNA else "MAIN",
+            _kto + " zamyka bieg jako FAILED zaraz po starcie — nowy start za "
+            + str(int(_czekaj // 60) + 1) + " min (program zamyka tylko użytkownik).")
+        time.sleep(_czekaj)
+        teraz = time.time()
+        starty = [t for t in starty if teraz - t < 600]
     starty.append(teraz)
     os.environ["AEL_STARTY_PO_PODDANIU"] = ",".join(str(t) for t in starty)
     os.environ["AEL_PO_PODDANIU"] = "1"
-    log("RYWALIZACJA", "Drużyna 1 zamknęła bieg jako FAILED — rusza od nowa w nowych "
-        "rozmowach, z tym samym celem; drużyna 2 pracuje dalej.")
+    if _DRUZYNA:
+        log("RYWALIZACJA", "Drużyna 1 zamknęła bieg jako FAILED — rusza od nowa w nowych "
+            "rozmowach, z tym samym celem; drużyna 2 pracuje dalej.")
+    else:
+        log("MAIN", "Zespół zamknął bieg jako FAILED — rusza od nowa w nowych "
+            "rozmowach, z tym samym celem (program zamyka tylko użytkownik).")
     try:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -48556,7 +48606,13 @@ def _wiadomosc_po_dyskwalifikacji():
 
 
 def _pilnuj_druzyny_2():
-    """Druzyna 2 padla — rusza od nowa; trzy padniecia w 10 min = stop."""
+    """Druzyna 2 padla — rusza od nowa; trzy padniecia w 10 min = przerwa.
+
+    v480cr: uzytkownik (2026-10-19) — druzyny "nie moga w ogole zamykac
+    programu". Zamiast przestac pilnowac, czekamy, az minie 10 minut od
+    najstarszego z trzech startow, i ruszamy ja dalej.
+    """
+    _przerwa_zgloszona = False
     while True:
         time.sleep(60)
         with _druzyna2_lock:
@@ -48564,9 +48620,13 @@ def _pilnuj_druzyny_2():
                 continue
         _ostatnie = [t for t in _druzyna2["starty"] if time.time() - t < 600]
         if len(_ostatnie) >= 3:
-            log("RYWALIZACJA", "Drużyna 2 pada zaraz po starcie — nie wznawiam. "
-                "Jej log: " + str(_DRUZYNA2_DIR / "terminal.log"))
-            return
+            if not _przerwa_zgloszona:
+                _przerwa_zgloszona = True
+                log("RYWALIZACJA", "Drużyna 2 pada zaraz po starcie — ruszy znowu, "
+                    "gdy minie 10 minut od pierwszego z tych startów. Jej log: "
+                    + str(_DRUZYNA2_DIR / "terminal.log"))
+            continue
+        _przerwa_zgloszona = False
         try:
             _lr2 = read_json(_DRUZYNA2_DIR / "last_result.json", {})
             _poddala = isinstance(_lr2, dict) and _lr2.get("status") == "FAILED"
@@ -48582,8 +48642,8 @@ def _pilnuj_druzyny_2():
                 "Drużyna 2 przestała działać — ruszyła od nowa (pid "
             ) + str(pid) + ").")
         except Exception as e:
-            log("RYWALIZACJA", "Drużyny 2 nie dało się wznowić: " + str(e))
-            return
+            log("RYWALIZACJA", "Drużyny 2 nie dało się wznowić: " + str(e)
+                + " — spróbuję znowu za minutę.")
 
 
 def _uruchom_druzyne_2(cel):
