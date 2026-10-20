@@ -2036,3 +2036,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      system (adb dumpsys activity / window, ok. 1 s), a uiautomator2
      tylko gdy adb nic nie powie. Wczesniej uiautomator2 przy Termuksie
      na wierzchu nie odpowiadal 10 s na kazdym kroku.
+
+100. Porownanie z obcym modelem tylko z jednej komendy (v480cw).
+     Uzytkownik (2026-10-20): Sedzia liczy porownanie z innym modelem,
+     programem albo ludzka metoda jako potwierdzone tylko wtedy, gdy
+     komenda sprawdzajaca sama uruchamia obie strony na tych samych
+     zadaniach, na ktorych zadna nie byla uczona. Liczba wpisana recznie,
+     z innego pomiaru albo z zadan treningowych druzyny to tylko opis.
+     Prompt Sedziego przepisany w calosci; istniejaca rozmowa Sedziego
+     dostaje nowa wersje po aktualizacji programu.
