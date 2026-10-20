@@ -21841,6 +21841,29 @@ def _zatrzymalaby_program(command):
         return ""
 
 
+def _uciete_wlasnym_timeoutem(command, trwalo_s):
+    """
+    v480cx: zdanie, gdy komenda trwala tyle, ile `timeout N` w niej —
+    czyli najpewniej to on ja przerwal. Inaczej "".
+    """
+    try:
+        for m in re.finditer(
+            r"\btimeout\s+(?:-{1,2}[\w-]+(?:[=\s]\S+)?\s+)*(\d+(?:\.\d+)?)([smhd]?)\b",
+            str(command or "")
+        ):
+            n = float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+            if n >= 30 and n - 5 <= trwalo_s <= n + max(30, n * 0.02):
+                return (
+                    "Komenda trwała " + str(int(trwalo_s)) + " s, tyle co jej "
+                    "własne `timeout " + m.group(1) + m.group(2) + "` — najpewniej to "
+                    "on ją przerwał, zanim się skończyła (kod wyjścia za potokiem, "
+                    "np. `| tail`, tego nie pokazuje)."
+                )
+    except Exception:
+        pass
+    return ""
+
+
 def _tresc_uruchamianego_skryptu(command):
     """
     Zawartosc skryptu, ktory ta komenda uruchamia — albo "".
@@ -22658,6 +22681,18 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 "Skonczylo sie po " + str(minut) + " min, kod wyjscia "
                 + str(proces.returncode) + "."
             )
+
+        # v480cx: bieg 2026-10-20 (druzyna 2, 07:12, 15:51, 20:33) —
+        # `timeout 3600 python … | tail -15` ucinal trening po 2 z 5 epok,
+        # a wynik mowil "kod wyjscia 0" (potok gubi kod 124). Gdy komenda
+        # trwala tyle, ile jej wlasny `timeout`, mowimy to jednym zdaniem.
+        _uciete = _uciete_wlasnym_timeoutem(
+            command, (datetime.now() - started).total_seconds()
+        )
+        if _uciete:
+            _zdanie_o_czekaniu = (
+                (_zdanie_o_czekaniu + "\n") if _zdanie_o_czekaniu else ""
+            ) + _uciete
 
         return {
             "ok": proces.returncode == 0,
