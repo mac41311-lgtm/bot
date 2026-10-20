@@ -2042,6 +2042,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      programem albo ludzka metoda jako potwierdzone tylko wtedy, gdy
      komenda sprawdzajaca sama uruchamia obie strony na tych samych
      zadaniach, na ktorych zadna nie byla uczona. Liczba wpisana recznie,
-     z innego pomiaru albo z zadan treningowych druzyny to tylko opis.
+     z innego pomiaru albo z zadan treningowych druzyny to tylko opis. Nieprawdopodobnie slaby wynik drugiej strony = jej test do sprawdzenia.
      Prompt Sedziego przepisany w calosci; istniejaca rozmowa Sedziego
      dostaje nowa wersje po aktualizacji programu.
