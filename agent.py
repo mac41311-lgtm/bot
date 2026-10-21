@@ -616,11 +616,28 @@ def _grupa_zyje(pgid):
     """
     try:
         os.killpg(int(pgid), 0)
-        return True
     except ProcessLookupError:
         return False
     except Exception:
         return False
+    # killpg widzi tez zombie — liczymy tylko procesy, ktore naprawde
+    # cos robia (stan inny niz Z/X w /proc/<pid>/stat).
+    try:
+        pgid = int(pgid)
+        for nazwa in os.listdir("/proc"):
+            if not nazwa.isdigit():
+                continue
+            try:
+                with open("/proc/" + nazwa + "/stat", "rb") as f:
+                    dane = f.read().decode("utf-8", "replace")
+                pola = dane[dane.rfind(")") + 2:].split()
+                if int(pola[2]) == pgid and pola[0] not in ("Z", "X"):
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return True
 
 
 def _zywe_w_tle():
