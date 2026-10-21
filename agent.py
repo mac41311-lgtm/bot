@@ -26254,6 +26254,24 @@ def _dispatch_tool_inner(
         # NIEZNANE
         # ====================================================
 
+        # v480db: nazwa akcji MAIN-a wpisana jako narzedzie w RUN. Bieg
+        # 2026-10-21 18:17, druzyna 2, krok 21: {"tool": "ASK", ...}
+        # dostalo samo "Nieznane narzędzie: ASK".
+        _akcja = str(name or "").strip().upper()
+        if _akcja in (
+            "ASK", "ASK_DALEJ", "TASK", "RUN", "DONE", "FAILED",
+            "NEED_USER_LOGIN",
+        ):
+            return {
+                "ok": False,
+                "error": "Nieznane narzędzie: " + str(name),
+                "podpowiedz": (
+                    _akcja + " to osobna akcja (\"type\": \"" + _akcja
+                    + "\"), nie narzędzie w RUN — wyślij ją jako "
+                    "osobną decyzję."
+                )
+            }
+
         return {
             "ok": False,
             "error":
