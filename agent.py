@@ -49152,17 +49152,62 @@ def _raport_z_tla():
             continue
         try:
             os.killpg(grupa, 0)
-            continue
+            _zyje = True
         except ProcessLookupError:
-            pass
+            _zyje = False
         except Exception:
             continue
+        # Plik, do ktorego komenda pisala (ostatnie "> plik" / ">> plik" /
+        # "&> plik" / "tee plik") — z niego bierzemy koncowke.
+        _cele = re.findall(
+            r"(?:&>>?|(?<![0-9&])>>?|\btee(?:\s+-a)?)\s*[\"']?([^\s;&|\"'<>]+)",
+            str(komenda)
+        )
+        _cele = [c for c in _cele if not c.startswith("/dev/")]
+        _plik = ""
+        for _c in reversed(_cele):
+            try:
+                _pc = _resolve_home_relative_path(_c)
+                if _pc.is_file():
+                    _plik = str(_pc)
+                    break
+            except Exception:
+                pass
+        rozmiar, linie = _ogon_logu(_plik) if _plik else (0, [])
+        if _zyje:
+            if not _plik:
+                continue
+            ostatnia = linie[-1] if linie else ""
+            if _tlo_ostatnio_widziane.get(klucz) == (rozmiar, ostatnia):
+                continue
+            _tlo_ostatnio_widziane[klucz] = (rozmiar, ostatnia)
+            _bl = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            zdania.append(
+                "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
+                + ") dalej działa, od " + _czas_slownie(time.time() - float(start or time.time()))
+                + ". Log " + _sciezka_od_domu(_plik) + ": " + str(rozmiar)
+                + " B, ostatnia linia: " + short(ostatnia, 200)
+                + ("\n  W ostatnich liniach logu jest: " + short(_bl[-1], 200) if _bl else "")
+            )
+            continue
         _tlo_zgloszone_konce.add(klucz)
+        _tlo_ostatnio_widziane.pop(klucz, None)
+        bledy = [l for l in linie if _BLAD_W_LOGU_RE.search(l)]
+        pokaz = (
+            (bledy[-6:] + ["…"] + linie[-4:])
+            if bledy and len(linie) > 10 else linie[-10:]
+        )
         zdania.append(
             "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
             + ") już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
-            + ". Jej kodu wyjścia program nie zna — wynik jest w logu, do "
-            "którego ją przekierowano."
+            + ". Kodu wyjścia program nie zna"
+            + (
+                " — log " + _sciezka_od_domu(_plik) + " (" + str(rozmiar)
+                + " B)" + (", w nim linie z błędem" if bledy else "")
+                + ", końcówka:\n" + "\n".join("  " + short(l, 200) for l in pokaz)
+                if _plik and pokaz else
+                " i nie widzi pliku, do którego pisała (brak przekierowania > plik)."
+            )
         )
     return zdania
 
