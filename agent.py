@@ -20577,15 +20577,74 @@ def _kto_pisze_do_logu(sciezka):
         return ""
 
 
+# v480dc: "Plik nie istnieje" z podpowiedzia. Bieg 2026-10-21 17:48,
+# krok 12: patch na ~/src/h2_tura2.py, a plik lezal w ~/MAIN_1/src/.
+# Uzytkownik: kazda pomylka ma dostac komunikat, co poszlo nie tak.
+# Najpierw to, co Python sam zapisal; potem plik o tej nazwie w domu
+# (bez ukrytych folderow i bez folderu drugiej druzyny).
+_POMIJANE_PRZY_SZUKANIU = {
+    "node_modules", "__pycache__", "storage", "venv", ".venv",
+    "site-packages",
+}
+
+
+def _czy_chodzilo_o(p):
+    try:
+        p = Path(str(p))
+        nazwa = p.name
+        if not nazwa:
+            return ""
+        trafienia = []
+        znany = _gdzie_zapisalismy.get(nazwa)
+        if znany and Path(znany).is_file() and str(Path(znany)) != str(p):
+            trafienia.append(str(znany))
+        if not trafienia:
+            dom = Path.home()
+            obca = (
+                {"MAIN_2"} if _DRUZYNA == "1"
+                else {"MAIN_1"} if _DRUZYNA == "2" else set()
+            )
+            przejrzane = 0
+            for korzen, katalogi, pliki in os.walk(str(dom)):
+                przejrzane += 1
+                glebokosc = len(Path(korzen).relative_to(dom).parts)
+                katalogi[:] = [
+                    k for k in katalogi
+                    if not k.startswith(".")
+                    and k not in _POMIJANE_PRZY_SZUKANIU
+                    and not (glebokosc == 0 and k in obca)
+                    and glebokosc < 5
+                ]
+                if nazwa in pliki:
+                    trafienia.append(str(Path(korzen) / nazwa))
+                    if len(trafienia) >= 3:
+                        break
+                if przejrzane > 3000:
+                    break
+        if not trafienia:
+            return ""
+        return (
+            "Plik o tej nazwie jest w: "
+            + ", ".join(_sciezka_od_domu(t) for t in trafienia)
+            + " — czy chodziło o tę ścieżkę?"
+        )
+    except Exception:
+        return ""
+
+
 def termux_read_file(path, max_bytes=20000):
     try:
         p = _resolve_home_relative_path(path)
 
         if not p.exists():
-            return {
+            _wynik = {
                 "ok": False,
-                "error": "Plik nie istnieje"
+                "error": "Plik nie istnieje: " + str(p)
             }
+            _podp = _czy_chodzilo_o(p)
+            if _podp:
+                _wynik["podpowiedz"] = _podp
+            return _wynik
 
         data = p.read_bytes()
 
@@ -24612,10 +24671,14 @@ def termux_patch_file(path, search, replace):
     target = _resolve_home_relative_path(path)
 
     if not target.exists():
-        return {
+        _wynik = {
             "ok": False,
             "error": "Plik nie istnieje: " + str(target)
         }
+        _podp = _czy_chodzilo_o(target)
+        if _podp:
+            _wynik["podpowiedz"] = _podp
+        return _wynik
 
     # v432b: autorstwo takze przy poprawce fragmentu. Bieg 2026-09-24
     # 20:54, krok 1: MAIN opisal slowami, jak ma wygladac app.py, a
@@ -40224,6 +40287,30 @@ def _main_human_line(decision, dtype):
     return reason or (dtype or "(brak decyzji)")
 
 
+# v480dc: zly JSON — gdzie sie psuje. Uzytkownik (2026-10-21): kazda
+# pomylka zespolu ma dostac komunikat, co poszlo nie tak.
+def _gdzie_psuje_sie_json(tekst):
+    tekst = str(tekst or "")
+    od = tekst.find("{")
+    do = tekst.rfind("}")
+    if od < 0:
+        return " (nie ma w niej obiektu {...})"
+    kawalek = tekst[od:do + 1] if do > od else tekst[od:]
+    try:
+        json.loads(kawalek)
+        return ""
+    except json.JSONDecodeError as e:
+        linia = kawalek.count("\n", 0, e.pos) + 1
+        wiersz = kawalek.split("\n")[linia - 1] if kawalek else ""
+        return (
+            " (linia " + str(linia) + " obiektu JSON, kolumna "
+            + str(e.colno) + ": "
+            + str(e.msg) + "; ta linia: " + short(wiersz.strip(), 120) + ")"
+        )
+    except Exception:
+        return ""
+
+
 def main_decide(
     goal,
     step,
@@ -46060,6 +46147,32 @@ def run_agent(goal):
 
             continue
 
+        # v480dc: blad wysylki (limit DeepSeeka, siec, zerwana rozmowa)
+        # to tez brak odpowiedzi, nie zly JSON. Bieg 2026-10-21 18:14,
+        # krok 23: po "rate_limit_reached" MAIN dwa razy dostal
+        # "Poprzednia odpowiedź nie była poprawnym JSON." — a zadnej
+        # odpowiedzi nie napisal.
+        if decision is None and str(raw or "").lstrip().startswith(
+            "DEEPSEEK ERROR ["
+        ):
+
+            log(
+                "MAIN",
+                "Wiadomość do MAIN-a nie doszła (" + short(str(raw), 160)
+                + ") — to nie jest zły JSON. Nie proszę o poprawkę."
+            )
+
+            last_result = {
+                "status": "MAIN_BEZ_ODPOWIEDZI",
+                "message": (
+                    "W kroku " + str(step) + " wiadomość do MAIN-a nie "
+                    "doszła przez błąd po stronie DeepSeeka ("
+                    + short(str(raw), 160) + ")."
+                )
+            }
+
+            continue
+
         if decision is None:
 
             log(
@@ -46081,7 +46194,8 @@ def run_agent(goal):
             # tozsamosci.
             repair = deepseek(
                 "MAIN",
-                "Poprzednia odpowiedź nie była poprawnym JSON."
+                "Poprzednia odpowiedź nie była poprawnym JSON"
+                + _gdzie_psuje_sie_json(raw) + "."
             )
 
             decision = _tylko_decyzja(parse_json(

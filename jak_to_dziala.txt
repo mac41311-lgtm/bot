@@ -2085,3 +2085,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 107. Akcja wpisana jako narzedzie (v480db). Gdy w RUN pada narzedzie o
      nazwie akcji (ASK, TASK, RUN, DONE, FAILED, ...), odpowiedz
      "Nieznane narzędzie" ma podpowiedz, ze to osobna akcja.
+
+108. Jasne komunikaty o pomylkach (v480dc). Uzytkownik (2026-10-21):
+     kazda pomylka zespolu ma dostac komunikat, co poszlo nie tak.
+     - Blad wysylki do MAIN-a (limit DeepSeeka, siec) to brak odpowiedzi,
+       nie "zly JSON" — MAIN nie dostaje juz prosby o poprawke JSON-a,
+       ktorego nie napisal.
+     - Przy prawdziwie zlym JSON prosba mowi, gdzie sie psuje (linia,
+       kolumna, tresc tej linii) albo ze w odpowiedzi nie ma obiektu.
+     - "Plik nie istnieje" (odczyt, poprawka fragmentu) podaje, gdzie
+       lezy plik o tej nazwie: najpierw to, co zapisal program, potem
+       szukanie w domu (bez ukrytych folderow i folderu drugiej druzyny).
