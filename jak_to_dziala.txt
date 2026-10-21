@@ -2127,3 +2127,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        na klucz/haslo nie idzie dalej.
      - Zespol nie moze pisac do OD_UZYTKOWNIKA.txt (termux_write_file i
        zapisy w termux_run dostaja odmowe z wyjasnieniem).
+
+112. Pytanie do uzytkownika nie zatrzymuje biegu (v480dg). NEED_USER_LOGIN
+     bez adresu http/https (pusty url, file://, sciezka) najpierw idzie
+     do Tomka i Marka jak dotad. Gdy obaj uznaja, ze to tylko uzytkownik,
+     pytanie trafia do DLA_UZYTKOWNIKA.md (powiadomienie z v480df), a
+     bieg idzie dalej bez czekania na Enter. Logowanie na stronie (url
+     http/https) dziala jak wczesniej. Bieg 2026-10-21 22:56, druzyna 1:
+     file://~/MAIN_1/RAPORT...md zatrzymal druzyne na Enterze.

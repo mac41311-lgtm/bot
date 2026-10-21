@@ -7726,6 +7726,7 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "ZESPOL_WIDZI_INNA_DROGE",
     "CEL_NIE_JEST_ZROBIONY",
     "PYTANIE_ZOSTAJE_W_ZESPOLE",
+    "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
     "ASK_PRZENIESIONE",
@@ -47863,7 +47864,14 @@ def run_agent(goal):
             # najpierw pytaja Tomek i Marek. Do uzytkownika pytanie
             # idzie dopiero, gdy obaj napisza, ze to moze zrobic tylko
             # on (albo gdy zaden nie odpowie).
-            if not str(decision.get("url") or "").strip():
+            # v480dg: adres, ktory nie jest strona (file://, sciezka
+            # pliku), to tez nie logowanie. Bieg 2026-10-21 22:56,
+            # druzyna 1: NEED_USER_LOGIN z file://~/MAIN_1/RAPORT...md
+            # zatrzymal bieg na Enterze uzytkownika.
+            _bez_strony = not re.match(
+                r"(?i)\s*https?://", str(decision.get("url") or "")
+            )
+            if _bez_strony:
                 _pytanie = str(
                     decision.get("instructions")
                     or decision.get("reason") or ""
@@ -47914,6 +47922,53 @@ def run_agent(goal):
                             "NEED_USER_LOGIN służy do logowania na stronie "
                             "(z adresem w url)."
                             + _zdanie_o_pliku_dla_uzytkownika()
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+                # v480dg: bieg nie czeka na uzytkownika (v480de/df).
+                # Pytanie idzie do DLA_UZYTKOWNIKA.md — program powiadomi
+                # uzytkownika na poczatku nastepnego kroku, a jego
+                # odpowiedz przyjdzie przez OD_UZYTKOWNIKA.txt.
+                try:
+                    _dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+                    _dla.parent.mkdir(parents=True, exist_ok=True)
+                    with open(_dla, "a", encoding="utf-8") as _f:
+                        _f.write(
+                            "\n\n## " + datetime.now().strftime("%Y-%m-%d %H:%M")
+                            + " — pytanie MAIN-a (krok " + str(step) + ")\n\n"
+                            + str(decision.get("reason") or "").strip()
+                            + ("\n\n" + _pytanie.strip()
+                               if _pytanie.strip()
+                               and _pytanie.strip() != str(decision.get("reason") or "").strip()
+                               else "")
+                            + (
+                                "\n\nPlik: " + str(decision.get("url")).strip()
+                                if str(decision.get("url") or "").strip() else ""
+                            )
+                            + "\n"
+                        )
+                    _gdzie = _plik_dla_uzytkownika()
+                except Exception as _e:
+                    _gdzie = ""
+                    log("MAIN", "Nie zapisałem pytania do użytkownika: " + str(_e))
+                if _gdzie:
+                    log(
+                        "MAIN",
+                        "Pytanie do użytkownika zapisane w " + _gdzie
+                        + " — bieg nie czeka, zespół idzie dalej."
+                    )
+                    last_result = {
+                        "status": "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zapytać "
+                            "użytkownika. Pytanie jest zapisane w " + _gdzie
+                            + "; użytkownik dostał o nim powiadomienie i "
+                            "przeczyta je, kiedy zechce. Bieg nie czeka — "
+                            "jeśli odpisze, odpowiedź przyjdzie jako "
+                            "„Użytkownik: …”. NEED_USER_LOGIN służy do "
+                            "logowania na stronie (adres http/https w url)."
                         ),
                         "glosy_zespolu": "\n\n".join(_glosy)
                     }
