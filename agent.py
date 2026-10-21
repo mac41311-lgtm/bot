@@ -32350,6 +32350,72 @@ def _podpis_w_naglowku(kod, sciezka):
     )
 
 
+# v480da: kod autora, ktory sie nie kompiluje, wraca do autora od razu,
+# w tym samym kroku — z linia bledu i okolica. Uzytkownik (2026-10-21):
+# ulatwic zespolowi pisanie kodu. Dotad zly kod ladowal na dysku, krok
+# szedl na uruchomienie i przeglad Piotra, a autor widzial blad dopiero
+# przy nastepnej konsultacji. Raz na zapis; bez odpowiedzi albo gdy
+# poprawka dalej sie nie kompiluje, wszystko idzie jak dotad.
+_AUTORZY_DO_POPRAWKI = (
+    "ENGINEER", "CODE_FIXER", "CRITIC", "PLANNER", "CODE_REVIEWER",
+)
+
+
+def _popraw_skladnie_u_autora(target_path, kod, team, step):
+    try:
+        target_path = Path(target_path)
+        if target_path.suffix.lower() != ".py":
+            return None
+        try:
+            compile(str(kod or ""), target_path.name, "exec")
+            return None
+        except SyntaxError as e:
+            linia = int(e.lineno or 0)
+            blad = "linia " + str(linia or "?") + ": " + str(e.msg or "")
+        autor = _czyja_kopia(kod)
+        if autor not in _AUTORZY_DO_POPRAWKI:
+            autor = "ENGINEER"
+        okolica = ""
+        if linia:
+            okolica, _od, _do = _okolica_linii(str(kod), linia)
+        log(
+            "MAIN",
+            "Kod " + target_path.name + " się nie kompiluje (" + blad
+            + ") — proszę " + _IMIE_AUTORA.get(autor, (autor, autor))[1]
+            + " o poprawkę, zanim trafi na dysk."
+        )
+        odp = deepseek(
+            autor,
+            "Kod do " + target_path.name + " się nie kompiluje ("
+            + blad + "), więc jeszcze go nie zapisałem."
+            + ("\n\n" + okolica if okolica else "")
+            + "\n\nNapisz cały plik " + target_path.name
+            + " jeszcze raz, w jednym bloku kodu."
+        )
+        if not str(odp or "").strip():
+            return None
+        _zapamietaj_kod_autora(autor, odp)
+        _role_response_cache[autor] = odp
+        _role_response_step[autor] = step
+        _collect_role_messages(autor, odp)
+        if autor == "ENGINEER":
+            team["engineer_full"] = odp
+            globals()["_kod_bartka_teraz"] = odp
+        nowy = _kod_z_wypowiedzi(odp, str(target_path))
+        if not nowy:
+            return None
+        try:
+            compile(nowy, target_path.name, "exec")
+        except SyntaxError:
+            log("MAIN", target_path.name + ": poprawka też się nie kompiluje.")
+            return None
+        log("MAIN", target_path.name + ": poprawiony kod się kompiluje.")
+        return nowy
+    except Exception as e:
+        log("MAIN", "Poprawka składni u autora nie wyszła: " + str(e))
+        return None
+
+
 def _zlec_kod_bartkowi(task_text, pliki, team, step):
     """
     v429: Bartek dostaje zlecenie MAIN-a jego wlasnymi slowami — bez
@@ -46976,6 +47042,13 @@ def run_agent(goal):
                     }
 
                     continue
+
+                _poprawiony = _popraw_skladnie_u_autora(
+                    target_path, engineer_code, team, step
+                )
+
+                if _poprawiony:
+                    engineer_code = _poprawiony
 
                 _zly = _zepsuty_zastepuje_dzialajacy(
                     target_path, engineer_code

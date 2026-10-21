@@ -2073,3 +2073,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      .py, ktory sie nie kompiluje, nie zastepuje dzialajacego pliku .py
      (stary zostaje, zespol dostaje linie bledu). Nowy plik zapisuje
      sie jak dotad.
+
+106. Kod, ktory sie nie kompiluje, wraca do autora od razu (v480da).
+     Gdy kod zlecony do zapisu pliku .py ma blad skladni (np. urwany w
+     polowie), program przed zapisem pokazuje autorowi linie bledu z
+     okolica i prosi o caly plik jeszcze raz — raz, w tym samym kroku.
+     Gdy poprawka sie kompiluje, na dysk idzie poprawka; inaczej wszystko
+     jak dotad. Fragment pliku z numerami linii przy bledzie uruchomienia
+     i dopytywanie o urwana odpowiedz dzialaly juz wczesniej.
