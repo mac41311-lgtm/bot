@@ -606,6 +606,23 @@ def _pid_sleepow_programu(pgid):
     return znalezione
 
 
+def _grupa_zyje(pgid):
+    """
+    v480dl: czy w grupie procesow (start_new_session -> pgid == pid)
+    zostal jeszcze ktos zywy. Bieg 2026-10-21 23:3x (druzyna 1):
+    `proot-distro login debian -- pip install torch` w tle — powloka
+    skonczyla sie od razu, a pip w kontenerze sciagal dalej. Program
+    mowil "COMPLETED" i "proces w tle sie zakonczyl", a to nieprawda.
+    """
+    try:
+        os.killpg(int(pgid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return False
+
+
 def _zywe_w_tle():
     """
     v480t: {klucz: opis} procesow w tle, ktore teraz zyja — i tych z
@@ -614,7 +631,7 @@ def _zywe_w_tle():
     zywe = {}
     for pid, proces in list(_procesy_w_tle.items()):
         try:
-            if proces.poll() is None:
+            if proces.poll() is None or _grupa_zyje(pid):
                 zywe[("p", pid)] = str(getattr(proces, "args", ""))
         except Exception:
             pass
@@ -21553,6 +21570,15 @@ def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
             # traktujemy tak samo: proces nadal dziala.
             return None
 
+        # v480dl: powloka skonczyla, ale jej dzieci (np. proot-distro
+        # login ... pip install) dalej pracuja — to nie jest koniec.
+        _reszta = max(0.0, budzet_s - (time.time() - start))
+        while _grupa_zyje(pid) and _reszta > 0:
+            time.sleep(1.0)
+            _reszta -= 1.0
+        if _grupa_zyje(pid):
+            return None
+
         _procesy_w_tle.pop(pid, None)
 
     else:
@@ -24457,6 +24483,19 @@ def termux_check_process(pid):
         }
 
     except ProcessLookupError:
+        # v480dl: sam proces skonczyl, ale jego dzieci z tej samej grupy
+        # (np. pip w proot-distro) moga dalej pracowac.
+        if _grupa_zyje(pid):
+            return {
+                "ok": True,
+                "running": True,
+                "pid": pid,
+                "note": (
+                    "Proces " + str(pid) + " już się skończył, ale "
+                    "uruchomione przez niego procesy dalej pracują "
+                    "(ta sama grupa procesów)."
+                )
+            }
         return {
             "ok": True,
             "running": False,
@@ -24483,10 +24522,15 @@ def termux_stop_process(pid):
 
         pid = int(pid)
 
-        os.kill(
-            pid,
-            15
-        )
+        # v480dl: proces z termux_run_background ma wlasna grupe — gasimy
+        # cala, inaczej jego dzieci (np. pip w proot-distro) pracuja dalej.
+        if pid in _procesy_w_tle and _grupa_zyje(pid):
+            os.killpg(pid, 15)
+        else:
+            os.kill(
+                pid,
+                15
+            )
 
         return {
             "ok": True,
@@ -35038,7 +35082,7 @@ potrzebna jest kolejna akcja.
 # SZACOWANIE POSTĘPU CELU (PROGRESS_ESTIMATOR)
 # ============================================================
 
-def _recent_task_summaries(n=8):
+def _recent_task_summaries(n=8, dlugosc=300):
     """
     Czyta N ostatnio zakończonych zadań z RESULTS_DIR (już
     zapisywane tam przez run_next_task() niezależnie od tej
@@ -35070,7 +35114,7 @@ def _recent_task_summaries(n=8):
                     or data.get("error")
                     or ""
                 ),
-                300
+                dlugosc
             )
         })
 
@@ -35102,7 +35146,7 @@ _HUMAN_STATUS_LABELS = {
 # Zamieniamy to na zwykłe, ponumerowane zdania — ta sama treść,
 # ludzka forma, zero dodatkowego zapytania do DeepSeeka (to czysto
 # formatowanie w Pythonie).
-def _human_task_summary_lines(summaries):
+def _human_task_summary_lines(summaries, dlugosc=140):
 
     lines = []
 
@@ -35117,7 +35161,7 @@ def _human_task_summary_lines(summaries):
         line = str(i) + ". " + label
 
         if report:
-            line += " — " + short(report, 140)
+            line += " — " + short(report, dlugosc)
 
         lines.append(line)
 
@@ -35280,6 +35324,39 @@ def _co_narzedzia_naprawde_zrobily(ile=6):
     )
 
 
+def _sprawdzone_przez_program_dla_eli():
+    """v480dk: wynik potwierdzony komenda i ostatnia ocena Sedziego (rywalizacja)."""
+    if not _DRUZYNA:
+        return ""
+    czesci = []
+    try:
+        w = json.loads(
+            (HOME / "RYWALIZACJA" / ("druzyna_" + _DRUZYNA + ".json")).read_text(encoding="utf-8")
+        )
+        czesci.append(
+            "- wynik drużyny sprawdzony komendą (" + str(w.get("czas", "")) + "): "
+            + str(w.get("wynik")) + " — " + str(w.get("werdykt")) + "; opis: "
+            + short(str(w.get("opis") or ""), 500)
+        )
+    except Exception:
+        pass
+    try:
+        o = json.loads(
+            (HOME / "RYWALIZACJA" / "ocena_sedziego.json").read_text(encoding="utf-8")
+        )
+        mo = o.get("druzyna_" + _DRUZYNA) or {}
+        if mo:
+            czesci.append(
+                "- ostatnia ocena Sędziego (" + str(o.get("czas", "")) + "): "
+                + str(mo.get("procent")) + "% — " + short(str(mo.get("ocena") or ""), 700)
+            )
+    except Exception:
+        pass
+    if not czesci:
+        return ""
+    return "\nSprawdzone przez program:\n" + "\n".join(czesci) + "\n"
+
+
 def estimate_progress(goal, chrome_text=None, android_text=None, last_result=None):
     """
     Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
@@ -35293,7 +35370,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     zamiast tej funkcji odpytującej urządzenie po raz kolejny.
     """
 
-    summaries = _recent_task_summaries(8)
+    summaries = _recent_task_summaries(8, dlugosc=700)
 
     if not summaries:
         return None
@@ -35365,10 +35442,25 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     # docstringami. Patrz bezwykonawcy.py.
     # v432: relacje z krokow i fakty, bez komentarza Pythona do nich
     # i bez listy punktow celu (patrz _checklist_summary_block).
+    # v480dk: Ela widziala tylko powody krokow uciete do 140 znakow
+    # ("......") i nazwy narzedzi — bez wynikow. Uzytkownik (2026-10-21):
+    # "Ela nie widzi realnych postępów". Teraz: dluzsze relacje, wynik
+    # ostatniego kroku i to, co program sam sprawdzil.
+    _ostatni_wynik = ""
+    try:
+        if isinstance(last_result, dict) and last_result:
+            _ostatni_wynik = (
+                "\nWynik ostatniego kroku:\n"
+                + _condense_last_result_for_team(last_result, 2000) + "\n"
+            )
+    except Exception:
+        _ostatni_wynik = ""
+    _sprawdzone = _sprawdzone_przez_program_dla_eli()
+
     prompt = f"""
 Kolejne kroki (co się wykonało):
-{_human_task_summary_lines(summaries)}
-{narzedzia_block}
+{_human_task_summary_lines(summaries, 600)}
+{_ostatni_wynik}{_sprawdzone}{narzedzia_block}
 {device_state_block}"""
 
     raw = deepseek(
@@ -49102,6 +49194,9 @@ def _raport_z_tla():
         rozmiar, linie = _ogon_logu(log_path) if log_path else (0, [])
         if kod is None and not _jeszcze_zyje(pid):
             kod = "?"
+        if kod is not None and _grupa_zyje(pid):
+            # glowna powloka skonczyla, jej procesy pracuja dalej
+            kod = None
         if kod is not None:
             if pid in _tlo_zgloszone_konce:
                 continue

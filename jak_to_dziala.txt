@@ -2163,3 +2163,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      znajduje plik, do ktorego pisze (> plik, >> plik, &> plik, tee plik):
      w trakcie podaje jego ostatnia linie (gdy sie zmienila), na koncu
      koncowke logu i linie z bledem.
+
+116. Ela widzi wyniki, nie tylko nazwy krokow (v480dl). Dostawala 8
+     ostatnich krokow uciętych do 140 znakow i liste nazw narzedzi.
+     Teraz: relacje krokow do 600 znakow, wynik ostatniego kroku (to samo
+     streszczenie, co zespol) i w rywalizacji to, co sprawdzil program:
+     wynik druzyny potwierdzony komenda i ostatnia ocena Sedziego dla jej
+     druzyny. W rywalizacji Ela odzywa sie tylko, gdy MAIN ja zawola.
+
+117. Proces w tle "skonczony", a jego dzieci dalej pracuja (v480dl). Bieg
+     2026-10-21 23:3x: `proot-distro login debian -- pip install torch`
+     w tle — powloka skonczyla od razu, pip sciagal dalej, a program
+     pisal COMPLETED. Teraz proces z termux_run_background liczy sie jako
+     zywy, dopoki zyje ktokolwiek z jego grupy (czekanie, raport z tla,
+     termux_check_process), a termux_stop_process gasi cala grupe.
