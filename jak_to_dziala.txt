@@ -2113,3 +2113,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ~/DLA_UZYTKOWNIKA.md), a zespol idzie dalej. Bieg 2026-10-21,
      druzyna 2: 9 odbitych DONE i NEED_USER_LOGIN bez strony jako
      "eskalacja".
+
+111. Poczta uzytkownik <-> druzyna (v480df). Uzytkownik (2026-10-21)
+     chcial wiedziec, kiedy zespol cos mu zostawi, i moc krotko odpisac.
+     - DLA_UZYTKOWNIKA.md (~/MAIN_<n>/ albo ~/ w trybie 1): gdy powstanie
+       albo sie zmieni, program raz wypisuje w terminalu i logu, ze
+       druzyna zostawila wiadomosc (z poczatkiem nowej tresci), i daje
+       jedno powiadomienie Termuksa.
+     - OD_UZYTKOWNIKA.txt w tym samym folderze: uzytkownik pisze np.
+       echo "tekst" >> ~/MAIN_2/OD_UZYTKOWNIKA.txt. Na poczatku kroku
+       program przekazuje to zespolowi jako "Użytkownik: …" (kazda rola
+       raz) i odklada plik do archiwum_od_uzytkownika. Tekst wygladajacy
+       na klucz/haslo nie idzie dalej.
+     - Zespol nie moze pisac do OD_UZYTKOWNIKA.txt (termux_write_file i
+       zapisy w termux_run dostaja odmowe z wyjasnieniem).

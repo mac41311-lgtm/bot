@@ -20036,6 +20036,14 @@ def _zepsuty_zastepuje_dzialajacy(p, nowa_tresc):
 
 
 def termux_write_file(path, content, append=False):
+    _za_uzytk = _pisze_za_uzytkownika(Path(str(path or "")).name)
+    if _za_uzytk:
+        log("PROGRAM", _za_uzytk)
+        return {"ok": False, "error": "PLIK_UZYTKOWNIKA", "message": _za_uzytk}
+    return _termux_write_file(path, content, append)
+
+
+def _termux_write_file(path, content, append=False):
     """
     append (opcjonalny, domyślnie False — zachowuje dotychczasowe
     zachowanie): False = nadpisz cały plik (jak zawsze); True =
@@ -23486,6 +23494,17 @@ def _gemini_program_w_komendzie(command_str):
 def termux_run(command):
     try:
         command_str = str(command or "")
+
+        _za_uzytk = _pisze_za_uzytkownika(command_str)
+        if _za_uzytk and re.search(r">|\btee\b|\bcp\b|\bmv\b|write|open\(", command_str):
+            log("PROGRAM", _za_uzytk)
+            return {
+                "ok": False,
+                "error": "PLIK_UZYTKOWNIKA",
+                "command": command_str,
+                "message": _za_uzytk,
+                "duration_s": 0.0
+            }
 
         _program = _zatrzymalaby_program(command_str)
         if _program:
@@ -45973,6 +45992,8 @@ def run_agent(goal):
         )
         dopisz_do_przebiegu("\n\n--- KROK " + str(step) + " ---")
 
+        _poczta_uzytkownika(step)
+
         # v480bq: Sedzia zdyskwalifikowal druzyne 1 — nowy zespol od tego kroku.
         if wykonaj_dyskwalifikacje_1():
             del _python_written_files[:]
@@ -48865,8 +48886,126 @@ def _zdanie_o_pliku_dla_uzytkownika():
         " Bieg nie czeka na użytkownika. Jeśli potrzebujecie jego "
         "decyzji albo chcecie mu coś przekazać, dopiszcie to do "
         + _plik_dla_uzytkownika() + " — przeczyta, kiedy zechce — "
-        "i idźcie dalej z kolejnym krokiem celu."
+        "i idźcie dalej z kolejnym krokiem celu. Jeśli odpisze, jego "
+        "odpowiedź przyjdzie w zwykłej wiadomości jako „Użytkownik: …”."
     )
+
+
+# v480df: poczta miedzy uzytkownikiem a druzyna. Uzytkownik (2026-10-21):
+# "jak mi coś wyślą, gdzie będę mógł się kontaktować krótką wiadomością,
+# która raz się pojawi". Dwa pliki w folderze druzyny:
+#   DLA_UZYTKOWNIKA.md — zespol pisze; program raz mowi o kazdej zmianie
+#                        (terminal, log, powiadomienie Termuksa).
+#   OD_UZYTKOWNIKA.txt — uzytkownik pisze; program na poczatku kroku
+#                        przekazuje tresc zespolowi (kazda rola raz, jak
+#                        reszte zdan uzytkownika) i odklada plik do
+#                        archiwum, zeby nie poszla drugi raz.
+_POCZTA_WIDZIANE_FILE = STATE_DIR / "dla_uzytkownika_widziane.json"
+
+
+def _plik_od_uzytkownika():
+    return _plik_dla_uzytkownika().replace(
+        "DLA_UZYTKOWNIKA.md", "OD_UZYTKOWNIKA.txt"
+    )
+
+
+def _pisze_za_uzytkownika(tekst):
+    """Komunikat, gdy zespol probuje pisac do pliku uzytkownika."""
+    if "OD_UZYTKOWNIKA" in str(tekst or ""):
+        return (
+            "Nie wykonałem — OD_UZYTKOWNIKA.txt to plik, do którego pisze "
+            "tylko użytkownik (jego odpowiedzi przychodzą stamtąd jako "
+            "„Użytkownik: …”). Sprawy do niego dopiszcie do "
+            + _plik_dla_uzytkownika() + "."
+        )
+    return ""
+
+
+def _poczta_uzytkownika(step):
+    _kto = ("Drużyna " + _DRUZYNA) if _DRUZYNA in ("1", "2") else "Zespół"
+
+    # 1) Zespol zostawil cos uzytkownikowi.
+    try:
+        dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+        if dla.is_file():
+            st = dla.stat()
+            znak = [int(st.st_mtime), int(st.st_size)]
+            widziane = read_json(_POCZTA_WIDZIANE_FILE, {})
+            if not isinstance(widziane, dict):
+                widziane = {}
+            if widziane.get("znak") != znak and st.st_size > 0:
+                tresc = dla.read_text(encoding="utf-8", errors="replace")
+                stary = int(widziane.get("rozmiar") or 0)
+                nowe = (
+                    tresc[stary:]
+                    if 0 < stary < len(tresc) else tresc
+                ).strip()
+                poczatek = " ".join(nowe.split())[:200]
+                linia = (
+                    _kto + " zostawiła Ci wiadomość: "
+                    + _plik_dla_uzytkownika() + " — „" + poczatek
+                    + ("…" if len(nowe) > 200 else "") + "”. Odpowiedź: "
+                    "echo \"tekst\" >> " + _plik_od_uzytkownika()
+                )
+                print()
+                print("=" * 60)
+                print("  " + linia)
+                print("=" * 60)
+                log("UŻYTKOWNIK", linia)
+                try:
+                    subprocess.run(
+                        [
+                            "termux-notification",
+                            "--id", "ael_poczta_" + (_DRUZYNA or "0"),
+                            "-t", _kto + ": wiadomość dla Ciebie",
+                            "-c", poczatek or _plik_dla_uzytkownika(),
+                        ],
+                        capture_output=True, timeout=15
+                    )
+                except Exception:
+                    pass
+                write_json(
+                    _POCZTA_WIDZIANE_FILE,
+                    {"znak": znak, "rozmiar": len(tresc)}
+                )
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie sprawdziłem DLA_UZYTKOWNIKA.md: " + str(e))
+
+    # 2) Uzytkownik odpisal.
+    try:
+        od = Path(os.path.expanduser(_plik_od_uzytkownika()))
+        if not od.is_file():
+            return
+        tresc = od.read_text(encoding="utf-8", errors="replace").strip()
+        archiwum = od.parent / "archiwum_od_uzytkownika"
+        archiwum.mkdir(parents=True, exist_ok=True)
+        od.rename(
+            archiwum / (
+                "OD_UZYTKOWNIKA_"
+                + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
+            )
+        )
+        if not tresc:
+            return
+        jedna = " ".join(tresc.split())
+        if _WYGLADA_NA_SEKRET_RE.search(jedna):
+            log(
+                "UŻYTKOWNIK",
+                "Twoja wiadomość z " + _plik_od_uzytkownika() + " wygląda "
+                "na klucz albo hasło — nie przekazałem jej zespołowi "
+                "(leży w archiwum_od_uzytkownika)."
+            )
+            return
+        USER_SAID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(USER_SAID_FILE, "a", encoding="utf-8") as f:
+            f.write(jedna + "\n")
+        log(
+            "UŻYTKOWNIK",
+            "Przekazałem zespołowi Twoją wiadomość (krok " + str(step)
+            + "): „" + short(jedna, 200) + "”."
+        )
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie przekazałem wiadomości z OD_UZYTKOWNIKA.txt: " + str(e))
 
 
 def _folder_druzyny(numer):
