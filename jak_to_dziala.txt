@@ -2050,3 +2050,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      `timeout N` w niej, wynik dostaje zdanie, ze najpewniej to on ja
      przerwal (kod 124 ginie za potokiem `| tail`). Bieg 2026-10-20:
      druzyna 2 trzy razy uciela trening po 60 min, widzac "kod 0".
+
+102. Ela nie trafia do Sedziego (v480cy). Wypowiedzi Eli (ocena postepu w
+     formacie {"percent", "summary"}) nie ida juz do materialu Sedziego,
+     tak jak jego wlasne. Bieg 2026-10-21 15:04: Sedzia wzial jej
+     odpowiedz za podrobienie swojej oceny i zdyskwalifikowal druzyne 2.

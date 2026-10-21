@@ -49581,7 +49581,12 @@ def _rozmowa_dla_sedziego(numer):
             continue
         if d.get("typ") == "dyskwalifikacja":
             wpisy = []
-        elif (d.get("typ") == "odpowiedz" and d.get("rola") != "ARBITER"
+        # v480cy: bieg 2026-10-21 15:04 — Sedzia wzial odpowiedz Eli
+        # (jej staly format {"percent", "summary"}) za podrobienie swojej
+        # oceny i zdyskwalifikowal druzyne 2. Ocena postepu to nie praca
+        # zespolu, a w rywalizacji ocenia sam Sedzia — Ela do niego nie idzie.
+        elif (d.get("typ") == "odpowiedz"
+              and d.get("rola") not in ("ARBITER", "PROGRESS_ESTIMATOR")
               and str(d.get("tresc") or "").strip()):
             wpisy.append(d)
     bloki, zostalo = [], _SEDZIA_ROZMOWA_LIMIT
