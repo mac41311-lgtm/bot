@@ -23496,8 +23496,11 @@ def termux_run(command):
     try:
         command_str = str(command or "")
 
+        # v480di: tylko prawdziwy zapis DO tego pliku. Bieg 2026-10-21
+        # 23:22 (druzyna 2): `ls ...OD_UZYTKOWNIKA.txt; cat ... 2>&1`
+        # dostalo odmowe, bo w komendzie byl ">" z "2>&1".
         _za_uzytk = _pisze_za_uzytkownika(command_str)
-        if _za_uzytk and re.search(r">|\btee\b|\bcp\b|\bmv\b|write|open\(", command_str):
+        if _za_uzytk and _ZAPIS_DO_PLIKU_UZYTKOWNIKA_RE.search(command_str):
             log("PROGRAM", _za_uzytk)
             return {
                 "ok": False,
@@ -49008,6 +49011,14 @@ def _plik_od_uzytkownika():
     return _plik_dla_uzytkownika().replace(
         "DLA_UZYTKOWNIKA.md", "OD_UZYTKOWNIKA.txt"
     )
+
+
+_ZAPIS_DO_PLIKU_UZYTKOWNIKA_RE = re.compile(
+    r"(?:>>?|\btee\b(?:\s+-\S+)*)\s*[\"']?[^\s;&|\"']*OD_UZYTKOWNIKA"
+    r"|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s[\"']?[^\s;&|\"']*OD_UZYTKOWNIKA[^\s;&|]*[\"']?\s*(?:$|[;&|\n])"
+    r"|OD_UZYTKOWNIKA[^\n]{0,80}?[\"']\s*,\s*[\"'][wax+]"
+    r"|OD_UZYTKOWNIKA[^\n]{0,80}?\.write_text"
+)
 
 
 def _pisze_za_uzytkownika(tekst):

@@ -2142,3 +2142,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      22:57-23:09, trzy razy). Teraz NEED_USER_LOGIN bez terminala zapisuje
      prosbe do DLA_UZYTKOWNIKA.md i bieg idzie dalej; pusty stdin w
      _read_full_input to pusta odpowiedz, nie wyjatek.
+
+114. Odmowa zapisu do OD_UZYTKOWNIKA.txt tylko przy prawdziwym zapisie
+     (v480di). Odczyt (ls, cat, grep, cp Z tego pliku) przechodzi; odmowe
+     dostaje tylko przekierowanie > / >>, tee, cp/mv/ln DO tego pliku i
+     open(..., 'w'/'a') albo write_text. Bieg 2026-10-21 23:22: `cat
+     ... 2>&1` dostalo odmowe przez ">" z "2>&1".
