@@ -20632,6 +20632,70 @@ def _czy_chodzilo_o(p):
         return ""
 
 
+# v480dd: przy chybionym 'search' — gdzie w pliku jest najblizszy
+# tekst. Bieg 2026-10-21 (druzyna 2): 8 chybionych poprawek, MAIN pisal
+# 'search' z pamieci i nie widzial, czym rozni sie od pliku.
+def _najblizszy_fragment(zrodlo, szukane):
+    try:
+        import difflib
+        linie = str(zrodlo or "").split("\n")
+        szuk = str(szukane or "").strip("\n").split("\n")
+        n = max(1, len(szuk))
+        if not linie or len(linie) > 20000:
+            return ""
+        wzor = "\n".join(l.strip() for l in szuk)
+        najlepszy = (0.0, 0)
+        # Kandydaci: poczatki okien, w ktorych pierwsze linie 'search'
+        # sa podobne do linii pliku (tanie quick_ratio po liniach) — pelne
+        # porownanie okna tylko dla najlepszych, zeby duzy plik nie
+        # stal dziesiatkami sekund na telefonie.
+        kotwice = [
+            (j, l.strip()) for j, l in enumerate(szuk) if l.strip()
+        ][:3]
+        punkty = {}
+        pliku = [l.strip() for l in linie]
+        for j, kl in kotwice:
+            sm1 = difflib.SequenceMatcher(None, kl, "", autojunk=False)
+            for i, fl in enumerate(pliku):
+                if not fl:
+                    continue
+                sm1.set_seq2(fl)
+                q = sm1.quick_ratio()
+                if q >= 0.5:
+                    start = i - j
+                    if 0 <= start <= max(0, len(linie) - n):
+                        punkty[start] = punkty.get(start, 0.0) + q
+        kandydaci = sorted(punkty, key=punkty.get, reverse=True)[:40]
+        if len(linie) <= 400:
+            kandydaci = range(0, max(1, len(linie) - n + 1))
+        for i in kandydaci:
+            okno = "\n".join(l.strip() for l in linie[i:i + n])
+            sm = difflib.SequenceMatcher(None, wzor, okno, autojunk=False)
+            if sm.real_quick_ratio() <= najlepszy[0]:
+                continue
+            if sm.quick_ratio() <= najlepszy[0]:
+                continue
+            r = sm.ratio()
+            if r > najlepszy[0]:
+                najlepszy = (r, i)
+        r, i = najlepszy
+        if r < 0.5:
+            return ""
+        szer = len(str(i + n))
+        fragment = "\n".join(
+            str(nr + 1).rjust(szer) + " | " + linie[nr]
+            for nr in range(i, min(len(linie), i + n))
+        )
+        return (
+            "Najbliższy tekst w pliku (linie " + str(i + 1) + "–"
+            + str(min(len(linie), i + n)) + ", zgodność "
+            + str(int(r * 100)) + "%; numery linii nie są częścią "
+            "pliku):\n" + fragment[:2000]
+        )
+    except Exception:
+        return ""
+
+
 def termux_read_file(path, max_bytes=20000):
     try:
         p = _resolve_home_relative_path(path)
@@ -24738,7 +24802,7 @@ def termux_patch_file(path, search, replace):
     occurrences = source.count(search)
 
     if occurrences == 0:
-        return {
+        _wynik = {
             "ok": False,
             "error": (
                 "Fragment 'search' nie występuje w pliku dokładnie "
@@ -24746,6 +24810,10 @@ def termux_patch_file(path, search, replace):
                 "zgadzać co do znaku)."
             )
         }
+        _blisko = _najblizszy_fragment(source, search)
+        if _blisko:
+            _wynik["najblizszy_fragment"] = _blisko
+        return _wynik
 
     if occurrences > 1:
         return {
@@ -34510,6 +34578,7 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
         wystapienia = zmieniony.count(stary)
 
         if wystapienia == 0:
+            _blisko = _najblizszy_fragment(zmieniony, stary)
             return {
                 "applied": False,
                 "reason": (
@@ -34518,6 +34587,7 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
                     "albo skopiowany z pamięci, nie z pliku). Nic nie "
                     "zmieniono. Poproś o odczytanie pliku i skopiowanie "
                     "fragmentu 1:1."
+                    + ("\n" + _blisko if _blisko else "")
                 ),
             }
 
@@ -41263,6 +41333,37 @@ def _tylko_decyzja(d):
     return None
 
 
+# v480dd: kilka decyzji w jednej odpowiedzi MAIN-a. Bieg 2026-10-21
+# 22:04 i 22:17 (druzyna 2): RUN, a pod nim NEED_USER_LOGIN — wykonal
+# sie RUN, drugi blok przepadl bez slowa i MAIN pisal potem
+# "NEED_USER_LOGIN nie zadziałał". Pytania ASK obok RUN ida dalej
+# osobna droga (v480cl), wiec ich tu nie liczymy.
+def _pominiete_decyzje(raw, wykonana):
+    try:
+        typy = []
+        for m in re.finditer(
+            r"```(?:json)?\s*(\{.*?\})\s*```", str(raw or ""),
+            re.DOTALL | re.IGNORECASE
+        ):
+            try:
+                obj = json.loads(m.group(1))
+            except Exception:
+                continue
+            if _tylko_decyzja(obj):
+                typy.append(str(obj.get("type")).strip().upper())
+        if len(typy) < 2:
+            return []
+        wyk = str((wykonana or {}).get("type") or "").strip().upper()
+        reszta = list(typy)
+        if wyk in reszta:
+            reszta.remove(wyk)
+        if wyk == "RUN":
+            reszta = [t for t in reszta if t != "ASK"]
+        return reszta
+    except Exception:
+        return []
+
+
 def parse_json(text):
 
     if not text:
@@ -46074,6 +46175,18 @@ def run_agent(goal):
         # wzial go za decyzje i krok skonczyl sie UNKNOWN_DECISION zamiast
         # prosba o poprawny JSON.
         decision = _tylko_decyzja(decision)
+
+        _pominiete = _pominiete_decyzje(raw, decision) if decision else []
+        if _pominiete:
+            _o_pominietych = (
+                "W odpowiedzi MAIN-a z kroku " + str(step) + " było "
+                "kilka decyzji; program wykonał jedną ("
+                + str(decision.get("type")) + "), a pominął: "
+                + ", ".join(_pominiete) + ". Jedna odpowiedź = jedna "
+                "decyzja — pominiętą trzeba wysłać w osobnej odpowiedzi."
+            )
+            log("MAIN", _o_pominietych)
+            _pending_team_warnings.append(_o_pominietych)
 
         if isinstance(decision, dict) and decision.get("type") == "ASK":
 

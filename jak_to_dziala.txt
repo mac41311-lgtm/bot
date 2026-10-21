@@ -2096,3 +2096,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - "Plik nie istnieje" (odczyt, poprawka fragmentu) podaje, gdzie
        lezy plik o tej nazwie: najpierw to, co zapisal program, potem
        szukanie w domu (bez ukrytych folderow i folderu drugiej druzyny).
+
+109. Pominieta decyzja i chybiony 'search' (v480dd).
+     - Gdy w jednej odpowiedzi MAIN-a jest kilka decyzji (np. RUN i pod
+       nim NEED_USER_LOGIN), MAIN dostaje w nastepnym kroku zdanie, ktora
+       wykonano, ktore pominieto i ze kazda idzie w osobnej odpowiedzi.
+       Pytania ASK obok RUN ida dalej jak w v480cl.
+     - Gdy fragment 'search' poprawki nie wystepuje w pliku, wynik
+       pokazuje najblizszy tekst z pliku z numerami linii i procentem
+       zgodnosci (gdy jest co najmniej 50%).
