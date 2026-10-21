@@ -45456,6 +45456,47 @@ def _handle_need_user_login(decision):
     login_url = str(decision.get("url") or "").strip()
     login_instructions = str(decision.get("instructions") or "")
 
+    # v480dh: proces bez terminala (druzyna 2 w tle, stdin=/dev/null)
+    # nie ma kogo zapytac. Bieg 2026-10-21 22:57-23:09: input() rzucil
+    # EOFError trzy razy, druzyna 2 padala i startowala od nowa.
+    # Prosba idzie do DLA_UZYTKOWNIKA.md (powiadomienie z v480df), bieg
+    # idzie dalej.
+    try:
+        _jest_terminal = sys.stdin is not None and sys.stdin.isatty()
+    except Exception:
+        _jest_terminal = False
+    if not _jest_terminal:
+        try:
+            _dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+            _dla.parent.mkdir(parents=True, exist_ok=True)
+            with open(_dla, "a", encoding="utf-8") as _f:
+                _f.write(
+                    "\n\n## " + datetime.now().strftime("%Y-%m-%d %H:%M")
+                    + " — prośba o działanie użytkownika\n\n"
+                    + (login_reason + "\n" if login_reason else "")
+                    + ("Strona: " + login_url + "\n" if login_url else "")
+                    + ("Co zrobić: " + login_instructions + "\n"
+                       if login_instructions else "")
+                )
+            _gdzie = _plik_dla_uzytkownika()
+        except Exception as _e:
+            _gdzie = "(nie udało się zapisać: " + str(_e) + ")"
+        log(
+            "MAIN",
+            "Ta drużyna działa w tle, bez terminala — prośba do użytkownika "
+            "zapisana w " + _gdzie + ", bieg idzie dalej."
+        )
+        return {
+            "status": "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
+            "message": (
+                "Ta drużyna działa w tle, bez terminala, więc nikt nie "
+                "odpowie tu od razu. Prośba jest zapisana w " + _gdzie
+                + "; użytkownik dostał powiadomienie i zrobi to, kiedy "
+                "zechce. Bieg nie czeka — jeśli odpisze, odpowiedź "
+                "przyjdzie jako „Użytkownik: …”."
+            )
+        }
+
     print()
     print("=" * 72)
     print("AGENT POTRZEBUJE TWOJEGO DZIAŁANIA W PRZEGLĄDARCE")
@@ -48750,7 +48791,12 @@ def _read_full_input(prompt):
     przypadkowej konsumpcji przez późniejsze input().
     """
 
-    first_line = input(prompt)
+    # v480dh: bez terminala input() rzuca EOFError — to pusta odpowiedz,
+    # nie powod do wylozenia calego programu.
+    try:
+        first_line = input(prompt)
+    except EOFError:
+        return ""
     lines = [first_line]
 
     try:

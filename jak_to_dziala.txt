@@ -2135,3 +2135,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      bieg idzie dalej bez czekania na Enter. Logowanie na stronie (url
      http/https) dziala jak wczesniej. Bieg 2026-10-21 22:56, druzyna 1:
      file://~/MAIN_1/RAPORT...md zatrzymal druzyne na Enterze.
+
+113. Druzyna w tle nie pada na prosbie do uzytkownika (v480dh). Druzyna 2
+     dziala bez terminala (stdin=/dev/null): input() rzucal EOFError i
+     caly proces padal, a straznik startowal go od nowa (bieg 2026-10-21
+     22:57-23:09, trzy razy). Teraz NEED_USER_LOGIN bez terminala zapisuje
+     prosbe do DLA_UZYTKOWNIKA.md i bieg idzie dalej; pusty stdin w
+     _read_full_input to pusta odpowiedz, nie wyjatek.
