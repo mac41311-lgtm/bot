@@ -2055,3 +2055,21 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      formacie {"percent", "summary"}) nie ida juz do materialu Sedziego,
      tak jak jego wlasne. Bieg 2026-10-21 15:04: Sedzia wzial jej
      odpowiedz za podrobienie swojej oceny i zdyskwalifikowal druzyne 2.
+
+103. Kod z pamieci nie zastepuje duzego pliku (v480cz). Gdy MAIN zleca
+     zapis pliku, a autor nie pisal w tym kroku, program siega po jego
+     wczesniejszy kod. Jesli ten kod ma mniej niz 40% pliku na dysku
+     (wiekszego niz 200 B), to fragment, nie plik: plik zostaje, a kod
+     pisze Bartek. Bieg 2026-10-21: ~400 B cytatu wjechalo w 13 KB plik.
+
+104. Program wklejony w komende (v480cz). Gemini nie puszcza programu
+     wklejonego w `python3 -c '...'` albo w heredoc (6 i wiecej linii),
+     jesli tego kodu nie ma w wypowiedziach zespolu. Jednolinijkowe
+     sprawdzenia przechodza. MAIN w RUN pisze dalej, co chce.
+
+105. Kto pisze poprawke i urwany kod (v480cz). Odrzucona poprawka
+     Gemini mowi wprost: plik bez zmian, poprawke pisze Bartek albo
+     Ania w wypowiedzi, albo MAIN w RUN przez termux_patch_file. Plik
+     .py, ktory sie nie kompiluje, nie zastepuje dzialajacego pliku .py
+     (stary zostaje, zespol dostaje linie bledu). Nowy plik zapisuje
+     sie jak dotad.

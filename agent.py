@@ -20002,6 +20002,39 @@ def termux_ls(path="."):
         }
 
 
+# v480cz: plik .py, ktory sie nie kompiluje, nie zastepuje dzialajacego.
+# Bieg 2026-10-21: proposer_small.py konczyl sie na `xp = X.reshape(B`
+# (SyntaxError przed wykonaniem czegokolwiek) — urwany kod zajal miejsce
+# pliku. Nowy plik zapisujemy jak dotad (nie ma czego chronic); istniejacy
+# i kompilujacy sie zostaje, a zespol dostaje dokladny blad.
+def _zepsuty_zastepuje_dzialajacy(p, nowa_tresc):
+    try:
+        p = Path(p)
+        if p.suffix.lower() != ".py" or not p.is_file():
+            return None
+        try:
+            compile(str(nowa_tresc or ""), str(p), "exec")
+            return None
+        except SyntaxError as e:
+            blad = (
+                "linia " + str(e.lineno or "?") + ": "
+                + str(e.msg or "błąd składni")
+                + (" — " + str(e.text).strip()[:120] if e.text else "")
+            )
+        except Exception:
+            return None
+        try:
+            compile(
+                p.read_text(encoding="utf-8", errors="replace"),
+                str(p), "exec"
+            )
+        except Exception:
+            return None
+        return blad
+    except Exception:
+        return None
+
+
 def termux_write_file(path, content, append=False):
     """
     append (opcjonalny, domyślnie False — zachowuje dotychczasowe
@@ -20290,6 +20323,24 @@ def termux_write_file(path, content, append=False):
             new_size = p.stat().st_size
 
         else:
+
+            _zly = _zepsuty_zastepuje_dzialajacy(p, data)
+            if _zly:
+                _msg = (
+                    "Nie nadpisałem " + p.name + " — nowa treść się nie "
+                    "kompiluje (" + _zly + "), a plik na dysku działa, "
+                    "więc zostaje. Wygląda na urwany albo niepełny kod: "
+                    "autor (Bartek, Ania albo MAIN w RUN) musi podać "
+                    "cały plik albo poprawkę fragmentu."
+                )
+                log("GEMINI", _msg)
+                return {
+                    "ok": False,
+                    "error": "KOD_NIE_KOMPILUJE_SIE",
+                    "path": str(p),
+                    "compile_error": _zly,
+                    "message": _msg
+                }
 
             # v480y: zanim nadpiszemy plik wyraznie mniejsza trescia,
             # odkladamy poprzednia obok (jedna kopia na plik). Bieg
@@ -23275,6 +23326,40 @@ def _zamiast_input_text(command_str):
     }
 
 
+# v480cz: program wklejony przez Gemini w sama komende. Bieg 2026-10-21
+# 17:11, krok 1: Gemini napisal i puscil wlasna petle treningowa w
+# `python3 -c '...'` (kilkanascie linii) — kod, ktorego nikt z zespolu
+# nie napisal, tylko ominiety zapis do pliku. Jednolinijkowce (szybkie
+# sprawdzenie, import, policzenie) zostaja; dluzszy program przechodzi,
+# gdy padl w wypowiedzi kogos z zespolu.
+_INLINE_C_RE = re.compile(
+    r"\b(?:python3?|node|bash|sh)\s+-c\s+(?P<q>['\"])(?P<kod>.*?)(?<!\\)(?P=q)",
+    re.S
+)
+_INLINE_HEREDOC_RE = re.compile(
+    r"\b(?:python3?|node)\b[^\n<|;&]*<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)[^\n]*\n"
+    r"(?P<kod>.*?)\n\s*(?P=tag)\s*(?:\n|$)",
+    re.S
+)
+_INLINE_MIN_LINII = 6
+
+
+def _gemini_program_w_komendzie(command_str):
+    """Tresc dluzszego programu wklejonego w komende, ktorego nie
+    napisal zespol — inaczej None."""
+    tekst = str(command_str or "")
+    for rx in (_INLINE_C_RE, _INLINE_HEREDOC_RE):
+        for m in rx.finditer(tekst):
+            kod = m.group("kod")
+            linie = [l for l in kod.splitlines() if l.strip()]
+            if len(linie) < _INLINE_MIN_LINII:
+                continue
+            if _kopia_kodu_zespolu(kod):
+                continue
+            return kod
+    return None
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
@@ -23320,6 +23405,28 @@ def termux_run(command):
                 _tworzy
                 or _gemini_zmienia_cudzy_kod(command_str)
             )
+
+        if not _wykonuje_main and not _pisze_kod:
+            _program_inline = _gemini_program_w_komendzie(command_str)
+            if _program_inline:
+                _ile = len([l for l in _program_inline.splitlines() if l.strip()])
+                _msg = (
+                    "Nie uruchomiłem tej komendy — ma w sobie program ("
+                    + str(_ile) + " linii), którego nie ma w "
+                    "wypowiedziach zespołu. Kod pisze zespół: niech "
+                    "Bartek albo Ania napisze go w swojej wypowiedzi "
+                    "(wtedy kładę go do pliku i uruchamiam), albo MAIN "
+                    "w RUN. Krótkie jednolinijkowe sprawdzenia "
+                    "przechodzą normalnie."
+                )
+                log("GEMINI", _msg)
+                return {
+                    "ok": False,
+                    "error": "BRAK_KODU_DO_ZAPISU",
+                    "command": command_str,
+                    "message": _msg,
+                    "duration_s": 0.0
+                }
 
         if _pisze_kod:
 
@@ -23949,6 +24056,23 @@ def termux_run_background(
                 "message": _program
             }
 
+        if not _wykonuje_main:
+            _program_inline = _gemini_program_w_komendzie(command)
+            if _program_inline:
+                _msg = (
+                    "Nie uruchomiłem tej komendy w tle — ma w sobie "
+                    "program, którego nie ma w wypowiedziach zespołu. "
+                    "Kod pisze zespół (Bartek albo Ania w wypowiedzi, "
+                    "albo MAIN w RUN); potem uruchamiam plik."
+                )
+                globals()["log"]("GEMINI", _msg)
+                return {
+                    "ok": False,
+                    "error": "BRAK_KODU_DO_ZAPISU",
+                    "command": command,
+                    "message": _msg
+                }
+
         if (
             _looks_like_delete_command(command)
             and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
@@ -24509,9 +24633,16 @@ def termux_patch_file(path, search, replace):
         and not _wykonuje_main
         and not _kopia_kodu_zespolu(str(replace if replace is not None else ""))
     ):
+        # v480cz: bylo "w wypowiedziach zespolu nie ma tego fragmentu"
+        # — MAIN (bieg 2026-10-21 17:11, krok 2) czytal to jako "patch
+        # celowal w nieistniejacy fragment pliku" i nie wiedzial, kto ma
+        # poprawke napisac.
         _msg = (
-            "Nie naniosłem zmiany w " + target.name + " — w wypowiedziach "
-            "zespołu nie ma tego fragmentu."
+            "Nie naniosłem zmiany w " + target.name + " — tę poprawkę "
+            "wymyśliło wykonanie, a kod pisze zespół. Plik jest bez "
+            "zmian. Poprawkę może napisać Bartek albo Ania w swojej "
+            "wypowiedzi (wtedy ją nanoszę), albo MAIN w RUN przez "
+            "termux_patch_file."
         )
         log("GEMINI", _msg)
         return {
@@ -46477,6 +46608,42 @@ def run_agent(goal):
                     else _kod_autora_dla(write_target)
                 )
 
+                # v480cz: kod z pamieci nie zastepuje pliku duzo
+                # wiekszego. Bieg 2026-10-21 17:11, kroki 4 i 8: ~400 B
+                # fragmentu Ani/Tomka (cytat do dyskusji) wjechalo w
+                # 13 KB h2_modular.py. Fragment z pamieci to nie decyzja
+                # autora o skroceniu pliku — wtedy pisze Bartek.
+                if _z_pamieci:
+                    try:
+                        _na_dysku = _resolve_home_relative_path(
+                            write_target
+                        )
+                        _rozmiar_dysku = (
+                            _na_dysku.stat().st_size
+                            if _na_dysku.is_file() else 0
+                        )
+                    except Exception:
+                        _rozmiar_dysku = 0
+                    _rozmiar_pamieci = len(
+                        str(_z_pamieci[0]).encode("utf-8")
+                    )
+                    if (
+                        _rozmiar_dysku > 200
+                        and _rozmiar_pamieci < _rozmiar_dysku * 0.4
+                    ):
+                        log(
+                            "MAIN",
+                            Path(str(write_target)).name + ": kod, który "
+                            + _kto_to_napisal(_z_pamieci[1])
+                            + " napisał w kroku " + str(_z_pamieci[2])
+                            + ", ma " + str(_rozmiar_pamieci)
+                            + " B, a plik na dysku "
+                            + str(_rozmiar_dysku) + " B — to wygląda "
+                            "na fragment, nie na cały plik. Plik "
+                            "zostaje, proszę Bartka o kod."
+                        )
+                        _z_pamieci = None
+
                 if _z_pamieci:
 
                     engineer_code = _z_pamieci[0]
@@ -46806,6 +46973,31 @@ def run_agent(goal):
                             + str(write_target).rstrip("/\\")
                             + "/app.py) i zlecę zapis jeszcze raz."
                         )
+                    }
+
+                    continue
+
+                _zly = _zepsuty_zastepuje_dzialajacy(
+                    target_path, engineer_code
+                )
+
+                if _zly:
+
+                    _msg = (
+                        "Nie nadpisałem " + target_path.name + " — nowy "
+                        "kod się nie kompiluje (" + _zly + "), a plik na "
+                        "dysku działa, więc zostaje. Wygląda na urwany "
+                        "albo niepełny kod: autor musi podać cały plik "
+                        "albo poprawkę fragmentu."
+                    )
+
+                    log("MAIN", _msg)
+
+                    last_result = {
+                        "status": "ENGINEER_CODE_WRITE_ERROR",
+                        "error": "KOD_NIE_KOMPILUJE_SIE: " + _zly,
+                        "path": write_target,
+                        "message": _msg
                     }
 
                     continue
