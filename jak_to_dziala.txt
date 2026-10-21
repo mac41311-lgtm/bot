@@ -2105,3 +2105,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Gdy fragment 'search' poprawki nie wystepuje w pliku, wynik
        pokazuje najblizszy tekst z pliku z numerami linii i procentem
        zgodnosci (gdy jest co najmniej 50%).
+
+110. Po odbitym DONE: dokad z pytaniem do uzytkownika (v480de). Wynik
+     odbitego DONE (i pytania, ktore zostalo w zespole po NEED_USER_LOGIN
+     bez strony) mowi jednym zdaniem: bieg nie czeka na uzytkownika,
+     sprawy do niego idą do ~/MAIN_<n>/DLA_UZYTKOWNIKA.md (w trybie 1:
+     ~/DLA_UZYTKOWNIKA.md), a zespol idzie dalej. Bieg 2026-10-21,
+     druzyna 2: 9 odbitych DONE i NEED_USER_LOGIN bez strony jako
+     "eskalacja".

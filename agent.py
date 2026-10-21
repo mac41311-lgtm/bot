@@ -47757,6 +47757,7 @@ def run_agent(goal):
                             "Tomek i Marek nie potwierdzili, że cel "
                             "użytkownika jest zrobiony — ich odpowiedzi "
                             "niżej. Program dalej działa, cel trwa."
+                            + _zdanie_o_pliku_dla_uzytkownika()
                         ),
                         "glosy_zespolu": "\n\n".join(_glosy)
                     }
@@ -47888,7 +47889,10 @@ def run_agent(goal):
                             "użytkownika. Nic się w tym kroku nie wykonało. "
                             "Tomek i Marek nie napisali obaj, że to może "
                             "zrobić tylko użytkownik — ich odpowiedzi "
-                            "niżej. Pytanie nie poszło do użytkownika."
+                            "niżej. Pytanie nie poszło do użytkownika. "
+                            "NEED_USER_LOGIN służy do logowania na stronie "
+                            "(z adresem w url)."
+                            + _zdanie_o_pliku_dla_uzytkownika()
                         ),
                         "glosy_zespolu": "\n\n".join(_glosy)
                     }
@@ -48844,6 +48848,25 @@ _druzyna2_lock = _threading.Lock()
 _sedzia_wiadomosci = []
 _sedzia_lock = _threading.Lock()
 _sedzia_watek = [None]
+
+
+# v480de: dokad zespol pisze sprawy do uzytkownika. Bieg 2026-10-21
+# (druzyna 2): po 9 odbitych DONE MAIN szukal drogi do uzytkownika przez
+# NEED_USER_LOGIN bez strony. Bieg nie czeka na uzytkownika — on czyta
+# ten plik, kiedy zechce.
+def _plik_dla_uzytkownika():
+    if _DRUZYNA in ("1", "2"):
+        return "~/MAIN_" + _DRUZYNA + "/DLA_UZYTKOWNIKA.md"
+    return "~/DLA_UZYTKOWNIKA.md"
+
+
+def _zdanie_o_pliku_dla_uzytkownika():
+    return (
+        " Bieg nie czeka na użytkownika. Jeśli potrzebujecie jego "
+        "decyzji albo chcecie mu coś przekazać, dopiszcie to do "
+        + _plik_dla_uzytkownika() + " — przeczyta, kiedy zechce — "
+        "i idźcie dalej z kolejnym krokiem celu."
+    )
 
 
 def _folder_druzyny(numer):
