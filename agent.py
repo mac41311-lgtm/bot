@@ -12272,7 +12272,9 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
 
     log(
         "AKTUALIZACJA",
-        "Wgrana nowa wersja (" + _commit[:7] + ") — przeładowuję program, "
+        "Wgrana nowa wersja ("
+        + ("pobrana przez drużynę 1" if _commit == "nowy-plik" else _commit[:7])
+        + ") — przeładowuję program, "
         "bieg idzie dalej od kroku " + str(int(step or 0) + 1) + "."
     )
 
