@@ -46041,6 +46041,13 @@ def run_agent(goal):
 
         _poczta_uzytkownika(step)
 
+        try:
+            for _z in _raport_z_tla():
+                log("TERMUX", short(_z, 300))
+                _pending_team_warnings.append(_z)
+        except Exception as _e:
+            log("TERMUX", "Nie sprawdziłem procesów w tle: " + str(_e))
+
         # v480bq: Sedzia zdyskwalifikowal druzyne 1 — nowy zespol od tego kroku.
         if wykonaj_dyskwalifikacje_1():
             del _python_written_files[:]
@@ -49033,6 +49040,141 @@ def _pisze_za_uzytkownika(tekst):
             + _plik_dla_uzytkownika() + "."
         )
     return ""
+
+
+# v480dj: co sie dzieje z robota w tle. Uzytkownik (2026-10-21, gdy obie
+# druzyny instalowaly Debiana i torch w tle): "żeby mieli dobre
+# informacje przy instalacji — ile się zainstalowało, czy błąd, jaki
+# błąd, tak jak z innymi poleceniami". Dotad zespol dowiadywal sie tylko
+# wtedy, gdy sam zajrzal do logu (sleep + tail). Teraz na poczatku kroku
+# MAIN dostaje raz:
+#   - o kazdym procesie, ktory sie skonczyl: kod wyjscia, czas, ostatnie
+#     linie logu (przy bledzie — linie z bledem);
+#   - o kazdym, ktory dalej idzie: czas, rozmiar logu i jego ostatnia
+#     linie — tylko gdy log sie zmienil od poprzedniej wiadomosci.
+_tlo_zgloszone_konce = set()
+_tlo_ostatnio_widziane = {}
+_BLAD_W_LOGU_RE = re.compile(
+    r"(?i)\b(error|errno|failed|failure|fatal|traceback|exception|"
+    r"not found|no such|denied|cannot|unable|killed|no space)\b"
+)
+
+
+def _log_procesu_w_tle(pid):
+    for _sciezka, _wpis in list(_logi_w_tle.items()):
+        if _wpis and _wpis[0] == pid:
+            return _sciezka, float(_wpis[1])
+    return "", 0.0
+
+
+def _ogon_logu(sciezka, ile_bajtow=6000):
+    try:
+        with open(sciezka, "rb") as f:
+            f.seek(0, 2)
+            rozmiar = f.tell()
+            f.seek(max(0, rozmiar - ile_bajtow))
+            tekst = f.read().decode("utf-8", "replace")
+        # paski postepu (\r) — zostaje ostatni stan linii
+        linie = [
+            ([c for c in l.split("\r") if c.strip()] or [""])[-1].rstrip()
+            for l in tekst.split("\n")
+        ]
+        return rozmiar, [l for l in linie if l.strip()]
+    except Exception:
+        return 0, []
+
+
+def _czas_slownie(s):
+    s = int(max(0, s))
+    return (str(s // 60) + " min " + str(s % 60) + " s") if s >= 60 else (str(s) + " s")
+
+
+def _raport_z_tla():
+    zdania = []
+    for pid, proces in list(_procesy_w_tle.items()):
+        try:
+            kod = proces.poll()
+        except Exception:
+            continue
+        komenda = short(" ".join(str(getattr(proces, "args", "")).split()), 140)
+        log_path, start = _log_procesu_w_tle(pid)
+        trwa = _czas_slownie(time.time() - start) if start else ""
+        rozmiar, linie = _ogon_logu(log_path) if log_path else (0, [])
+        if kod is None and not _jeszcze_zyje(pid):
+            kod = "?"
+        if kod is not None:
+            if pid in _tlo_zgloszone_konce:
+                continue
+            _tlo_zgloszone_konce.add(pid)
+            _tlo_ostatnio_widziane.pop(pid, None)
+            if kod == 0:
+                jak = "skończył się poprawnie (kod 0)"
+                pokaz = linie[-8:]
+            elif kod == "?":
+                jak = "już nie działa (kodu wyjścia nie znam — ruszył przed przeładowaniem programu)"
+                pokaz = linie[-8:]
+            else:
+                jak = "przerwał się z błędem (kod " + str(kod) + ")"
+                bledy = [l for l in linie if _BLAD_W_LOGU_RE.search(l)]
+                pokaz = (
+                    (bledy[-6:] + ["…"] + linie[-4:])
+                    if bledy and len(linie) > 10 else linie[-10:]
+                )
+            zdania.append(
+                "Proces w tle " + str(pid) + " (" + komenda + ") " + jak
+                + (", trwał " + trwa if trwa else "")
+                + (". Log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B)"
+                   if log_path else "")
+                + (", końcówka:\n" + "\n".join("  " + short(l, 200) for l in pokaz)
+                   if pokaz else ".")
+            )
+        else:
+            ostatnia = linie[-1] if linie else ""
+            znak = (rozmiar, ostatnia)
+            if _tlo_ostatnio_widziane.get(pid) == znak:
+                continue
+            _tlo_ostatnio_widziane[pid] = znak
+            bledy = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            zdania.append(
+                "Proces w tle " + str(pid) + " (" + komenda + ") dalej działa"
+                + (", od " + trwa if trwa else "")
+                + (". Log " + _sciezka_od_domu(log_path) + ": " + str(rozmiar)
+                   + " B, ostatnia linia: " + short(ostatnia, 200)
+                   if log_path else ".")
+                + ("\n  W ostatnich liniach logu jest: " + short(bledy[-1], 200)
+                   if bledy else "")
+            )
+    # Grupy puszczone w tlo zwykla komenda (`nohup ... &`): kodu wyjscia
+    # nie znamy, ale wiemy, kiedy grupa zniknela.
+    for grupa, (komenda, start) in list(_grupy_z_komend.items()):
+        klucz = ("g", grupa)
+        if klucz in _tlo_zgloszone_konce:
+            continue
+        try:
+            os.killpg(grupa, 0)
+            continue
+        except ProcessLookupError:
+            pass
+        except Exception:
+            continue
+        _tlo_zgloszone_konce.add(klucz)
+        zdania.append(
+            "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
+            + ") już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
+            + ". Jej kodu wyjścia program nie zna — wynik jest w logu, do "
+            "którego ją przekierowano."
+        )
+    return zdania
+
+
+def _jeszcze_zyje(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
 
 
 def _poczta_uzytkownika(step):

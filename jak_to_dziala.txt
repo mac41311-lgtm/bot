@@ -2148,3 +2148,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dostaje tylko przekierowanie > / >>, tee, cp/mv/ln DO tego pliku i
      open(..., 'w'/'a') albo write_text. Bieg 2026-10-21 23:22: `cat
      ... 2>&1` dostalo odmowe przez ">" z "2>&1".
+
+115. Wiadomosci o robocie w tle (v480dj). Uzytkownik (2026-10-21): przy
+     instalacji i wszystkim, co idzie w tle, zespol ma wiedziec, co sie
+     dzieje — postep, koniec, blad. Na poczatku kazdego kroku MAIN dostaje
+     raz:
+     - o procesie z termux_run_background, ktory sie skonczyl: kod wyjscia,
+       czas, rozmiar logu i jego koncowke (przy bledzie linie z bledem);
+     - o procesie, ktory dalej idzie: od kiedy, rozmiar logu, ostatnia
+       linia (paski postepu tez) i linia z bledem, jesli jest — tylko gdy
+       log sie zmienil od poprzedniej wiadomosci;
+     - o komendzie puszczonej w tlo przez "&"/nohup: ze juz nie dziala.
