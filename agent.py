@@ -25792,8 +25792,9 @@ def _siega_do_rywala(name, args):
             return (
                 "Nie wykonałem — to sięga do rzeczy drużyny " + _rywal()
                 + " („" + m.group(0) + "”). W rywalizacji nie wolno "
-                "brać ani podglądać jej pomysłów, kodu, plików, wyników "
-                "ani instalacji; za to grozi dyskwalifikacja. Pracujcie "
+                "brać ani podglądać jej kodu, plików ani pomysłów; za to "
+                "grozi dyskwalifikacja (ogólnodostępne biblioteki i "
+                "programy są wspólne). Pracujcie "
                 "w ~/MAIN_" + _DRUZYNA + ". Jeśli chodziło o Wasz plik, "
                 "podajcie ścieżkę w swoim folderze."
             )
@@ -49709,8 +49710,11 @@ def _rywalizacja_tekst():
         "przetrwa sprawdzenie.\n\n"
         "Wasz folder to ~/MAIN_" + my + " — tam budujecie i zapisujecie "
         "wszystko, co robicie w tej rywalizacji. Każda drużyna dochodzi "
-        "do wyniku sama: pomysłów, kodu, plików, wyników ani instalacji "
-        "drużyny " + oni + " nie wolno brać ani podglądać. Jej folder "
+        "do wyniku sama: kodu, plików z kodem albo wynikami ani pomysłów "
+        "drużyny " + oni + " nie wolno brać ani podglądać. Ogólnodostępne "
+        "biblioteki i programy (np. instalowane przez pip, pkg czy w "
+        "Debianie) są wspólne — możecie ich używać, także gdy "
+        "zainstalowała je drużyna " + oni + ". Jej folder "
         "~/MAIN_" + oni + " jest dla Was zamknięty — program nie wykona "
         "polecenia, które do niego sięga. Wszystko, co powstało przed "
         "rywalizacją, leży tam, gdzie leżało.\n\n"
@@ -49724,8 +49728,8 @@ def _rywalizacja_tekst():
         "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
         + " tylko jej procent, jej sprawdzony wynik i to, kto prowadzi.\n\n"
         "Ta rywalizacja ma dyskwalifikację. Drużyna, która weźmie coś "
-        "od drużyny " + oni + " — pomysł, kod, plik, wynik albo "
-        "instalację — albo spróbuje wprowadzić Sędziego w błąd co do "
+        "od drużyny " + oni + " — jej kod, plik z kodem albo wynikami "
+        "czy jej pomysł — albo spróbuje wprowadzić Sędziego w błąd co do "
         "tego, na czym zbudowała swoją pracę, zostaje zdyskwalifikowana. "
         + ("Drużyna, która jawnie spełni warunek dyskwalifikacji z celu, "
            "dostaje ostrzeżenie, a trzecie ostrzeżenie oznacza "
@@ -50722,13 +50726,16 @@ def uruchom_sedziego():
 # v480dq: uzytkownik (2026-10-22) — branie od rywala to dyskwalifikacja
 # w kazdej rywalizacji; spadek bez rzeczy rywala; druzyny dostaja o
 # rywalu tylko procent. Prompt znow przepisany w calosci.
+# v480dr: uzytkownik (2026-10-22 18:38) — zakaz dotyczy tylko kodu i
+# pomyslow; ogolnodostepne biblioteki i programy (takze zainstalowane
+# przez rywala) sa wspolne.
 ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Mniej więcej co kwadrans dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
 
 Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd ma się wziąć. Jako zrobione liczysz to, co ma wynik potwierdzony przez program i zgadza się z treścią celu; to, co dopiero ruszyło, opisujesz jako rozpoczęte. Potwierdzony wynik mówi tylko, że komenda wypisuje tę liczbę — gdy drużyna sama ustaliła, że był przypadkowy albo nie wytrzymał powtórzenia, liczysz go tak, jak ustaliła. Porównanie z czymś spoza pracy drużyny — innym modelem, programem albo ludzką metodą — liczysz jako potwierdzone tylko wtedy, gdy komenda sprawdzająca sama uruchamia obie strony na tych samych zadaniach i żadna z nich nie była na tych zadaniach uczona; liczba drugiej strony wpisana ręcznie, wzięta z innego pomiaru albo zmierzona na zadaniach, na których drużyna się uczyła, jest tylko opisem. Wynik drugiej strony, który wygląda nieprawdopodobnie słabo jak na to, czym ona jest, traktujesz jako znak, że jej test trzeba sprawdzić, i piszesz to w ocenie. To, co drużyna pisze o sobie, waży mniej niż to, co widać w jej krokach, komendach i plikach.
 
-Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem pomysłów, kodu, plików, wyników ani instalacji, ani zaglądać do folderu rywala. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem. To, co drużyna wzięła od rywala, zanim dostałeś tę zasadę, nie liczy się jej do procentu, ale nie jest powodem do dyskwalifikacji.
+Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem kodu, plików z kodem albo wynikami ani pomysłów, ani zaglądać do folderu rywala. Ogólnodostępne biblioteki i programy — także te, które zainstalował rywal, na przykład wspólne środowisko z torch — są wspólne: korzystanie z nich nie jest braniem od rywala, a wynik na nich liczy się normalnie, także ten, za który wcześniej odjąłeś procent z tego powodu. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem. Kod i pomysły, które drużyna wzięła od rywala, zanim dostałeś tę zasadę, nie liczą się jej do procentu, ale nie jest powodem do dyskwalifikacji.
 
-Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod, pliki, wyniki albo instalację, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
+Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
 Procent opisuje stan celu, a nie ilość pracy: zmieniasz go względem swojej poprzedniej oceny o tyle, o ile zmieniło się to, co drużyna ma potwierdzone i zgodne z celem. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik.
 

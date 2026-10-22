@@ -2228,3 +2228,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - każda drużyna dostaje swoją ocenę Sędziego w całości, a o rywalu
        tylko procent, kto prowadzi i jego sprawdzony wynik (bez opisu).
        Pełną ocenę widzi użytkownik w terminalu.
+
+123. Biblioteki są wspólne (v480dr, użytkownik 2026-10-22 18:38: „mają
+     tylko kodu nie ściągać i pomysłów”). Zakaz z punktu 122 dotyczy
+     tylko kodu, plików z kodem lub wynikami i pomysłów rywala.
+     Ogólnodostępne biblioteki i programy (pip, pkg, Debian, torch),
+     także zainstalowane przez rywala, są wspólne — Sędzia liczy wynik
+     na nich normalnie, także ten, który wcześniej obciął z tego powodu.
+     Blokada folderów drużyn zostaje bez zmian (nie obejmuje /root ani
+     systemu).
