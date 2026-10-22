@@ -49448,10 +49448,16 @@ def _poczta_uzytkownika(step):
                 continue
             tresc = dla.read_text(encoding="utf-8", errors="replace")
             stary = int(byl.get("rozmiar") or 0)
-            nowe = (
-                tresc[stary:]
-                if 0 < stary < len(tresc) else tresc
-            ).strip()
+            # v480do: koncowka tylko, gdy plik zostal DOPISANY (poczatek
+            # bez zmian). Przepisany od nowa — pokazuje jego poczatek,
+            # a nie urwany srodek zdania.
+            dopisany = (
+                0 < stary < len(tresc)
+                and byl.get("skrot") == hashlib.sha1(
+                    tresc[:stary].encode("utf-8")
+                ).hexdigest()
+            )
+            nowe = (tresc[stary:] if dopisany else tresc).strip()
             poczatek = " ".join(nowe.split())[:200]
             na_telefonie = _na_telefon_dla_uzytkownika(dla)
             gdzie = (
@@ -49488,7 +49494,10 @@ def _poczta_uzytkownika(step):
                 )
             except Exception:
                 pass
-            widziane[dla.name] = {"znak": znak, "rozmiar": len(tresc)}
+            widziane[dla.name] = {
+                "znak": znak, "rozmiar": len(tresc),
+                "skrot": hashlib.sha1(tresc.encode("utf-8")).hexdigest(),
+            }
             zmiana = True
         if zmiana:
             write_json(_POCZTA_WIDZIANE_FILE, widziane)

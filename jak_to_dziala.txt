@@ -2195,3 +2195,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      podpowiedź mówi, że cudzysłów kończący komendę był w JSON-ie
      poescapowany. Do tego drużyna 2 przy wersji pobranej przez drużynę 1
      pisze „Drużyna 1 pobrała nową wersję” zamiast „(nowy-pl)”.
+
+120. Podgląd wiadomości od drużyny bez uciętego środka (v480do). Program
+     pamięta skrót całej treści pliku dla użytkownika. Gdy drużyna tylko
+     DOPISAŁA coś na końcu, baner i powiadomienie pokazują dopisek; gdy
+     przepisała plik od nowa, pokazują jego początek (wcześniej wychodził
+     przypadkowy kawałek ze środka zdania).
