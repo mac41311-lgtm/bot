@@ -2177,3 +2177,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      pisal COMPLETED. Teraz proces z termux_run_background liczy sie jako
      zywy, dopoki zyje ktokolwiek z jego grupy (czekanie, raport z tla,
      termux_check_process), a termux_stop_process gasi cala grupe.
+
+118. Wiadomości od drużyn widać w telefonie (v480dm). Każdy plik zespołu
+     do użytkownika w ~/MAIN_<n> (DLA_UZYTKOWNIKA.md, RAPORT_DLA_UZYTKOWNIKA.md,
+     DECYZJA_DLA_UZYTKOWNIKA.md itp.) program przy każdej zmianie kopiuje do
+     AEL-MINI/druzyna_<n> (menedżer plików telefonu), raz ogłasza w terminalu
+     i powiadomieniu z tą ścieżką. Odpowiedź można zapisać jako
+     AEL-MINI/druzyna_<n>/OD_UZYTKOWNIKA.txt (z telefonu) albo jak dotąd
+     ~/MAIN_<n>/OD_UZYTKOWNIKA.txt — trafia do zespołu raz jako
+     „Użytkownik: …”, potem plik idzie do archiwum_od_uzytkownika.

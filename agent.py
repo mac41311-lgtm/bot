@@ -49334,59 +49334,139 @@ def _jeszcze_zyje(pid):
         return True
 
 
+def _pliki_dla_uzytkownika():
+    """Pliki zespolu do uzytkownika: DLA_UZYTKOWNIKA.md i podobne
+    (RAPORT_DLA_UZYTKOWNIKA.md, DECYZJA_DLA_UZYTKOWNIKA.md, ...)."""
+    dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+    pliki = []
+    try:
+        for p in sorted(dla.parent.iterdir()):
+            nazwa = p.name.upper()
+            if (
+                "UZYTKOWNIK" in nazwa
+                and "OD_UZYTKOWNIKA" not in nazwa
+                and p.suffix.lower() in (".md", ".txt")
+                and p.is_file()
+            ):
+                pliki.append(p)
+    except Exception:
+        pass
+    return pliki
+
+
+def _na_telefon_dla_uzytkownika(plik):
+    """v480dm: kopia do AEL-MINI (folder druzyny), bo ~/MAIN_<n> lezy
+    w Termuksie i menedzer plikow telefonu go nie widzi. Zwraca sciezke
+    w telefonie albo "" (brak termux-setup-storage)."""
+    try:
+        if not (HOME / "storage" / "shared").exists():
+            return ""
+        PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
+        cel = PRZEBIEG_NA_TELEFONIE / plik.name
+        shutil.copy2(plik, cel)
+        return "AEL-MINI/" + (
+            ("druzyna_" + _DRUZYNA + "/") if _DRUZYNA else ""
+        ) + plik.name
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie skopiowałem " + plik.name + " do AEL-MINI: " + str(e))
+        return ""
+
+
 def _poczta_uzytkownika(step):
     _kto = ("Drużyna " + _DRUZYNA) if _DRUZYNA in ("1", "2") else "Zespół"
 
-    # 1) Zespol zostawil cos uzytkownikowi.
+    # 1) Zespol zostawil cos uzytkownikowi (kazdy plik *DLA_UZYTKOWNIKA*
+    #    w folderze druzyny). Kazda zmiana: raz baner, log, powiadomienie
+    #    i kopia do AEL-MINI, gdzie widzi ja menedzer plikow telefonu.
     try:
-        dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
-        if dla.is_file():
+        widziane = read_json(_POCZTA_WIDZIANE_FILE, {})
+        if not isinstance(widziane, dict):
+            widziane = {}
+        if "znak" in widziane:
+            # zapis sprzed v480dm: jeden plik, bez nazwy
+            widziane = {"DLA_UZYTKOWNIKA.md": {
+                "znak": widziane.get("znak"),
+                "rozmiar": widziane.get("rozmiar"),
+            }}
+        zmiana = False
+        for dla in _pliki_dla_uzytkownika():
             st = dla.stat()
             znak = [int(st.st_mtime), int(st.st_size)]
-            widziane = read_json(_POCZTA_WIDZIANE_FILE, {})
-            if not isinstance(widziane, dict):
-                widziane = {}
-            if widziane.get("znak") != znak and st.st_size > 0:
-                tresc = dla.read_text(encoding="utf-8", errors="replace")
-                stary = int(widziane.get("rozmiar") or 0)
-                nowe = (
-                    tresc[stary:]
-                    if 0 < stary < len(tresc) else tresc
-                ).strip()
-                poczatek = " ".join(nowe.split())[:200]
-                linia = (
-                    _kto + " zostawiła Ci wiadomość: "
-                    + _plik_dla_uzytkownika() + " — „" + poczatek
-                    + ("…" if len(nowe) > 200 else "") + "”. Odpowiedź: "
-                    "echo \"tekst\" >> " + _plik_od_uzytkownika()
-                )
-                print()
-                print("=" * 60)
-                print("  " + linia)
-                print("=" * 60)
-                log("UŻYTKOWNIK", linia)
+            byl = widziane.get(dla.name)
+            if not isinstance(byl, dict):
+                byl = {}
+            if byl.get("znak") == znak or st.st_size == 0:
+                # juz ogloszony (np. przed v480dm) — tylko dociagnij kopie
+                kopia = PRZEBIEG_NA_TELEFONIE / dla.name
                 try:
-                    subprocess.run(
-                        [
-                            "termux-notification",
-                            "--id", "ael_poczta_" + (_DRUZYNA or "0"),
-                            "-t", _kto + ": wiadomość dla Ciebie",
-                            "-c", poczatek or _plik_dla_uzytkownika(),
-                        ],
-                        capture_output=True, timeout=15
-                    )
+                    if st.st_size and (
+                        not kopia.exists()
+                        or kopia.stat().st_mtime < st.st_mtime
+                    ):
+                        _na_telefon_dla_uzytkownika(dla)
                 except Exception:
                     pass
-                write_json(
-                    _POCZTA_WIDZIANE_FILE,
-                    {"znak": znak, "rozmiar": len(tresc)}
+                continue
+            tresc = dla.read_text(encoding="utf-8", errors="replace")
+            stary = int(byl.get("rozmiar") or 0)
+            nowe = (
+                tresc[stary:]
+                if 0 < stary < len(tresc) else tresc
+            ).strip()
+            poczatek = " ".join(nowe.split())[:200]
+            na_telefonie = _na_telefon_dla_uzytkownika(dla)
+            gdzie = (
+                na_telefonie + " (w menedżerze plików telefonu)"
+                if na_telefonie else
+                str(dla).replace(str(HOME), "~")
+            )
+            odp = (
+                "AEL-MINI/" + (
+                    ("druzyna_" + _DRUZYNA + "/") if _DRUZYNA else ""
+                ) + "OD_UZYTKOWNIKA.txt albo "
+                if na_telefonie else ""
+            ) + _plik_od_uzytkownika()
+            linia = (
+                _kto + " zostawiła Ci wiadomość: " + gdzie + " — „"
+                + poczatek + ("…" if len(nowe) > 200 else "")
+                + "”. Odpowiedź zapisz w " + odp
+            )
+            print()
+            print("=" * 60)
+            print("  " + linia)
+            print("=" * 60)
+            log("UŻYTKOWNIK", linia)
+            try:
+                subprocess.run(
+                    [
+                        "termux-notification",
+                        "--id", "ael_poczta_" + (_DRUZYNA or "0"),
+                        "-t", _kto + ": wiadomość dla Ciebie",
+                        "-c", (poczatek or dla.name)
+                        + (" — " + na_telefonie if na_telefonie else ""),
+                    ],
+                    capture_output=True, timeout=15
                 )
+            except Exception:
+                pass
+            widziane[dla.name] = {"znak": znak, "rozmiar": len(tresc)}
+            zmiana = True
+        if zmiana:
+            write_json(_POCZTA_WIDZIANE_FILE, widziane)
     except Exception as e:
-        log("UŻYTKOWNIK", "Nie sprawdziłem DLA_UZYTKOWNIKA.md: " + str(e))
+        log("UŻYTKOWNIK", "Nie sprawdziłem plików dla użytkownika: " + str(e))
 
-    # 2) Uzytkownik odpisal.
+    # 2) Uzytkownik odpisal — w folderze druzyny albo (v480dm) w AEL-MINI,
+    #    gdzie moze utworzyc plik z menedzera plikow telefonu.
+    for od in (
+        Path(os.path.expanduser(_plik_od_uzytkownika())),
+        PRZEBIEG_NA_TELEFONIE / "OD_UZYTKOWNIKA.txt",
+    ):
+        _odbierz_od_uzytkownika(od, step)
+
+
+def _odbierz_od_uzytkownika(od, step):
     try:
-        od = Path(os.path.expanduser(_plik_od_uzytkownika()))
         if not od.is_file():
             return
         tresc = od.read_text(encoding="utf-8", errors="replace").strip()
@@ -49404,7 +49484,7 @@ def _poczta_uzytkownika(step):
         if _WYGLADA_NA_SEKRET_RE.search(jedna):
             log(
                 "UŻYTKOWNIK",
-                "Twoja wiadomość z " + _plik_od_uzytkownika() + " wygląda "
+                "Twoja wiadomość z " + od.name + " wygląda "
                 "na klucz albo hasło — nie przekazałem jej zespołowi "
                 "(leży w archiwum_od_uzytkownika)."
             )
@@ -49418,7 +49498,7 @@ def _poczta_uzytkownika(step):
             + "): „" + short(jedna, 200) + "”."
         )
     except Exception as e:
-        log("UŻYTKOWNIK", "Nie przekazałem wiadomości z OD_UZYTKOWNIKA.txt: " + str(e))
+        log("UŻYTKOWNIK", "Nie przekazałem wiadomości z " + str(od) + ": " + str(e))
 
 
 def _folder_druzyny(numer):
