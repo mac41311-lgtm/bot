@@ -2186,3 +2186,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      AEL-MINI/druzyna_<n>/OD_UZYTKOWNIKA.txt (z telefonu) albo jak dotąd
      ~/MAIN_<n>/OD_UZYTKOWNIKA.txt — trafia do zespołu raz jako
      „Użytkownik: …”, potem plik idzie do archiwum_od_uzytkownika.
+
+119. Podpowiedź przy źle zacytowanej komendzie (v480dn). Gdy bash odpowie
+     "unexpected EOF while looking for matching", wynik termux_run ma pole
+     "podpowiedz": co się stało (cudzysłów bez pary) i jak to naprawić
+     (dłuższy program do pliku przez termux_write_file). Jeśli na końcu
+     komendy siedzą resztki argumentów narzędzia (", "limit_ciszy_s": …),
+     podpowiedź mówi, że cudzysłów kończący komendę był w JSON-ie
+     poescapowany. Do tego drużyna 2 przy wersji pobranej przez drużynę 1
+     pisze „Drużyna 1 pobrała nową wersję” zamiast „(nowy-pl)”.

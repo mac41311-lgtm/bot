@@ -12136,8 +12136,11 @@ def _pilnuj_aktualizacji():
             _nowa_wersja["commit"] = _commit
             log(
                 "AKTUALIZACJA",
-                "Na GitHubie jest nowa wersja (" + _commit[:7]
-                + ") — wgram ją po tym kroku."
+                (
+                    "Drużyna 1 pobrała nową wersję"
+                    if _commit == "nowy-plik" else
+                    "Na GitHubie jest nowa wersja (" + _commit[:7] + ")"
+                ) + " — wgram ją po tym kroku."
             )
 
 
@@ -23939,6 +23942,40 @@ def termux_run(command):
                     _zgubiony[0] + " szukane nie tam, gdzie leży — "
                     "jest w " + _zgubiony[1] + "."
                 )
+
+        # v480dn: powloka nie domknela cudzyslowu. Bieg 2026-10-22 09:39
+        # (druzyna 1, krok 525, dwa razy): sam blad basha nie mowil, co
+        # poprawic, a w komendzie siedzialy resztki argumentow narzedzia
+        # (\", \"limit_ciszy_s\": 60) — cudzyslow zamykajacy komende byl
+        # w JSON-ie poescapowany i komenda polknela reszte argumentow.
+        if isinstance(result, dict) and "unexpected EOF while looking for matching" in (
+            str(result.get("stdout") or "") + str(result.get("stderr") or "")
+        ):
+            _rada = (
+                "Powłoka nie znalazła pary dla cudzysłowu w komendzie "
+                "(otwarty \" albo ' bez zamknięcia), więc ta część się "
+                "nie wykonała."
+            )
+            _resztki = re.search(
+                r'"\s*,\s*"(limit_ciszy_s|maks_czas_s|workdir|path|timeout)"\s*:',
+                command_str
+            )
+            if _resztki:
+                _rada += (
+                    " Na końcu komendy są resztki argumentów narzędzia "
+                    "(\", \"" + _resztki.group(1) + "\": …) — w JSON-ie "
+                    "cudzysłów kończący komendę był poescapowany (\\\"), "
+                    "więc komenda połknęła resztę argumentów. Zamknij "
+                    "\"command\" zwykłym cudzysłowem przed \"" + _resztki.group(1)
+                    + "\"."
+                )
+            _rada += (
+                " Prościej: dłuższy program zapisz przez termux_write_file "
+                "do pliku i uruchom plik (np. python3 plik.py) — wtedy "
+                "cudzysłowy nie muszą przechodzić przez powłokę."
+            )
+            result["podpowiedz"] = _rada
+            log("TERMUX", _rada)
 
         # v324: "termux-am" bez gniazda Termuksa nie uruchomi niczego.
         #
@@ -45980,9 +46017,11 @@ def run_agent(goal):
             _przywroc_procesy_w_tle()
             globals()["_restart_powiedziany"] = True
             ustaw_krok(step)
+            _c = str(_stan_przed_aktualizacja.get("commit", ""))
             log(
                 "AKTUALIZACJA",
-                "Działa nowa wersja (" + str(_stan_przed_aktualizacja.get("commit", ""))[:7]
+                "Działa nowa wersja ("
+                + ("pobrana przez drużynę 1" if _c == "nowy-plik" else _c[:7])
                 + ") — ciągnę bieg dalej od kroku " + str(step + 1) + "."
             )
         except Exception as e:
