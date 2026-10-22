@@ -2201,3 +2201,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      DOPISAŁA coś na końcu, baner i powiadomienie pokazują dopisek; gdy
      przepisała plik od nowa, pokazują jego początek (wcześniej wychodził
      przypadkowy kawałek ze środka zdania).
+
+121. Jasne dopytanie po samym myśleniu (v480dp). Gdy DeepSeek odda samo
+     myślenie bez odpowiedzi, a nikt nie zwracał się do tej roli po
+     imieniu, program dopytuje: „Program: Twoja poprzednia odpowiedź nie
+     dotarła — przyszło samo myślenie… Napisz jeszcze raz… To nie jest
+     nowe pytanie ani prośba użytkownika.” Wcześniej było samo „Podaj
+     wynik.”, które MAIN brał za prośbę użytkownika o podsumowanie i
+     tracił na to kilka kroków.

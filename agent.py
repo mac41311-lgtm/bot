@@ -7494,6 +7494,19 @@ def _szukanie_bez_myslenia(name, session):
     return False
 
 
+# v480dp: zapasowe dopytanie, gdy przyszlo samo myslenie, a nikt nie
+# zwrocil sie do roli po imieniu. Bylo "Podaj wynik." — bieg 2026-10-22
+# (druzyna 2, kroki 262-264; druzyna 1 piec razy): MAIN bral to za
+# prosbe uzytkownika o podsumowanie i trzy kroki pisal "wynik sesji".
+# Teraz mowi, co sie stalo i co zrobic. Po polsku i pelnym zdaniem —
+# z tego samego powodu co v336 (odpowiedz wraca w jezyku rozmowy).
+_DOPYTANIE_PO_SAMYM_MYSLENIU = (
+    "Program: Twoja poprzednia odpowiedź nie dotarła — przyszło samo "
+    "myślenie, bez tekstu odpowiedzi. Napisz jeszcze raz to, co "
+    "chciałeś odpowiedzieć na ostatnią wiadomość, w tej samej formie "
+    "co zwykle. To nie jest nowe pytanie ani prośba użytkownika."
+)
+
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
 _samo_myslenie_z_rzedu = {}
 
@@ -8617,7 +8630,7 @@ def _deepseek_jedna_rozmowa(name, message):
                         # po chinsku.
                         _dopytanie = (
                             _o_co_pytal_kolega(message, name)
-                            or "Podaj wynik."
+                            or _DOPYTANIE_PO_SAMYM_MYSLENIU
                         )
 
                         # v318: i to dopytanie idzie BEZ MYSLENIA.
