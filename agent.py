@@ -5189,10 +5189,18 @@ def _goal_briefing_for(name):
             and _wpis.get("cel") == _odcisk_celu
         ):
             if _rywal and _wpis.get("rywalizacja") != _odcisk_rywal:
+                _znala_stare = bool(_wpis.get("rywalizacja"))
                 _wpis["rywalizacja"] = _odcisk_rywal
                 _wyslane[name] = _wpis
                 write_json(_CEL_WYSLANY_FILE, _wyslane)
-                return _rywal + "\n\n"
+                # v480dq: rozmowa znala juz poprzednie zasady — mowimy
+                # wprost, ze to zmiana i od kiedy obowiazuje.
+                _zmiana = (
+                    "Zasady rywalizacji się zmieniły — od teraz obowiązują "
+                    "te poniżej (zastępują poprzednie):\n\n"
+                    if _znala_stare else ""
+                )
+                return _zmiana + _rywal + "\n\n"
             return ""
 
         # v480cs: bieg 2026-10-19 14:52 — rozmowa Sedziego dobila do
@@ -25750,6 +25758,48 @@ _TOOL_NAME_ALIASES = {
 }
 
 
+# v480dq: co jest rzecza rywala. Druzyny nie moga zagladac do siebie
+# nawzajem: ~/MAIN_<rywal>, jego katalog agenta, jego kopia w AEL-MINI,
+# jego tablica u Sedziego, pelne oceny Sedziego i archiwa rywalizacji.
+def _rzeczy_rywala_re():
+    oni = _rywal()
+    return re.compile(
+        r"MAIN_" + oni + r"(?![0-9])"
+        r"|MAIN_[*?\[{]"
+        r"|agent_druzyna" + oni + r"(?![0-9])"
+        r"|agent_druzyna[*?\[{]"
+        r"|druzyna_" + oni + r"(?:/|\.json|\b)"
+        r"|druzyna_[*?\[{]"
+        r"|archiwum_rywalizacji"
+        r"|RYWALIZACJA/(?:ocena_sedziego|oceny|ostrzezenia|dyskwalifikacja)"
+    )
+
+
+def _siega_do_rywala(name, args):
+    """Komunikat odmowy, gdy narzedzie siega do rzeczy rywala; inaczej ""."""
+    if not _DRUZYNA or not isinstance(args, dict):
+        return ""
+    if not (str(name).startswith("termux_") or name == "android_run_in_new_window"):
+        return ""
+    teksty = [
+        str(args.get(k)) for k in
+        ("path", "command", "workdir", "cwd", "src", "dst", "source", "target")
+        if args.get(k)
+    ]
+    for t in teksty:
+        m = _rzeczy_rywala_re().search(t)
+        if m:
+            return (
+                "Nie wykonałem — to sięga do rzeczy drużyny " + _rywal()
+                + " („" + m.group(0) + "”). W rywalizacji nie wolno "
+                "brać ani podglądać jej pomysłów, kodu, plików, wyników "
+                "ani instalacji; za to grozi dyskwalifikacja. Pracujcie "
+                "w ~/MAIN_" + _DRUZYNA + ". Jeśli chodziło o Wasz plik, "
+                "podajcie ścieżkę w swoim folderze."
+            )
+    return ""
+
+
 def _dispatch_tool_inner(
     name,
     args
@@ -25771,6 +25821,17 @@ def _dispatch_tool_inner(
         name = aliased
 
     try:
+
+        # v480dq: folder rywala jest zamkniety (uzytkownik 2026-10-22:
+        # "nie mogą od siebie kopiować pomysłów").
+        _do_rywala = _siega_do_rywala(name, args)
+        if _do_rywala:
+            log("RYWALIZACJA", _do_rywala)
+            return {
+                "ok": False,
+                "error": "FOLDER_RYWALA",
+                "message": _do_rywala,
+            }
 
         # ====================================================
         # TERMUX
@@ -49625,7 +49686,14 @@ def _wybierz_tryb():
 
 
 def _rywalizacja_tekst():
-    """Opis rywalizacji dla zespolu tej druzyny; "" w zwyklym programie."""
+    """Opis rywalizacji dla zespolu tej druzyny; "" w zwyklym programie.
+
+    v480dq: uzytkownik (2026-10-22): "nie mogą od siebie kopiować
+    pomysłów", "miał być ban", "dyskwalifikacja z zostawieniem plików,
+    które są zgodne". Tekst przepisany w calosci: bez zaproszenia do
+    folderu rywala, z jasnym zakazem i dyskwalifikacja zawsze w
+    rywalizacji (niezaleznie od celu).
+    """
 
     if not _DRUZYNA:
         return ""
@@ -49640,31 +49708,32 @@ def _rywalizacja_tekst():
         "obie drużyny chcą dojść jak najdalej, a liczy się wynik, który "
         "przetrwa sprawdzenie.\n\n"
         "Wasz folder to ~/MAIN_" + my + " — tam budujecie i zapisujecie "
-        "wszystko, co robicie w tej rywalizacji. Folder drużyny " + oni
-        + " to ~/MAIN_" + oni + ": możecie do niego zaglądać, czytać jej "
-        "kod i wyniki i szukać w nich słabych miejsc. Wszystko, co "
-        "powstało przed rywalizacją, leży tam, gdzie leżało.\n\n"
+        "wszystko, co robicie w tej rywalizacji. Każda drużyna dochodzi "
+        "do wyniku sama: pomysłów, kodu, plików, wyników ani instalacji "
+        "drużyny " + oni + " nie wolno brać ani podglądać. Jej folder "
+        "~/MAIN_" + oni + " jest dla Was zamknięty — program nie wykona "
+        "polecenia, które do niego sięga. Wszystko, co powstało przed "
+        "rywalizacją, leży tam, gdzie leżało.\n\n"
         "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
         "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
         "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
         "liczbę\"}. Program uruchomi tę komendę w bashu, w waszym "
         "folderze (może trwać do " + str(_SEDZIA_MAKS_S // 60) + " minut), i "
-        "porówna liczbę. Werdykt — potwierdzone albo nie wyszło — "
-        "dostają obie drużyny, tak samo jak każdy następny wynik "
-        "drużyny " + oni + "."
-        # v480bt: uzytkownik (2026-10-16) — o dyskwalifikacji, takze za
-        # oszukiwanie Sedziego, wiedza obie druzyny od poczatku.
-        + ("\n\nTa rywalizacja ma dyskwalifikację. Drużyna, która jawnie "
-           "spełni jej warunek z celu, dostaje od Sędziego ostrzeżenie, "
-           "a trzecie ostrzeżenie oznacza dyskwalifikację. Drużyna, która "
-           "spróbuje wprowadzić Sędziego w błąd co do tego, na czym "
-           "zbudowała swoją pracę, zostaje zdyskwalifikowana od razu. "
-           "Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół od "
-           "zera, a powód dostają nowa drużyna i jej rywal. Z jej folderu "
-           "zostaje tylko to, co Sędzia uzna za zgodne z celem — nowa "
-           "drużyna dostaje to w podfolderze spadek."
-           if _cel_przewiduje_dyskwalifikacje() else "")
+        "porówna liczbę. Mniej więcej co kwadrans Sędzia ocenia obie "
+        "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
+        + " tylko jej procent, jej sprawdzony wynik i to, kto prowadzi.\n\n"
+        "Ta rywalizacja ma dyskwalifikację. Drużyna, która weźmie coś "
+        "od drużyny " + oni + " — pomysł, kod, plik, wynik albo "
+        "instalację — albo spróbuje wprowadzić Sędziego w błąd co do "
+        "tego, na czym zbudowała swoją pracę, zostaje zdyskwalifikowana. "
+        + ("Drużyna, która jawnie spełni warunek dyskwalifikacji z celu, "
+           "dostaje ostrzeżenie, a trzecie ostrzeżenie oznacza "
+           "dyskwalifikację. " if _cel_przewiduje_dyskwalifikacje() else "")
+        + "Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół od "
+        "zera, a powód dostają nowa drużyna i jej rywal. Z jej folderu "
+        "zostaje tylko to, co Sędzia uzna za własne i zgodne z zasadami "
+        "— nowa drużyna dostaje to w podfolderze spadek."
     )
 
 
@@ -49702,7 +49771,7 @@ def _swieze_rozmowy_po_poddaniu():
         o = read_json(_PLIK_OCENY_SEDZIEGO, {})
         if isinstance(o, dict) and o.get("druzyna_1"):
             with _sedzia_lock:
-                _sedzia_wiadomosci.append(_ocena_zdaniem(o))
+                _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
     except Exception as e:
         log("RYWALIZACJA", "Nowe rozmowy po FAILED nie wyszły: " + str(e))
 
@@ -49932,6 +50001,13 @@ def _ostrzezenia_dla_sedziego(numer):
 
 def _cel_przewiduje_dyskwalifikacje():
     return "dyskwalifik" in str(_current_goal_text or "").lower()
+
+
+# v480dq: w rywalizacji dyskwalifikacja jest zawsze (za branie od
+# rywala i za wprowadzanie Sedziego w blad); cel moze dodac wlasne
+# warunki — za nie sa ostrzezenia.
+def _jest_dyskwalifikacja():
+    return bool(_DRUZYNA) or _cel_przewiduje_dyskwalifikacje()
 
 
 def _do_archiwum_po_dyskwalifikacji(numer, sciezki):
@@ -50331,12 +50407,14 @@ def _sedzia_ocen(numer):
     return werdykt
 
 
-def _werdykt_zdaniem(w, kto):
+def _werdykt_zdaniem(w, kto, z_opisem=True):
+    # v480dq: wynik rywala bez jego opisu (co i jak zrobil).
     return (
-        kto + ": " + (w.get("opis") or "(bez opisu)")
+        kto + ": " + ((w.get("opis") or "(bez opisu)") if z_opisem else "sprawdzony wynik")
         + (" — ogłoszony wynik " + str(w["wynik"]) if "wynik" in w else "")
         + (" (lepiej: " + w["lepiej"] + ")" if w.get("lepiej") else "")
-        + " — " + str(w.get("werdykt")) + " (" + str(w.get("szczegol", "")) + ")."
+        + " — " + str(w.get("werdykt"))
+        + (" (" + str(w.get("szczegol", "")) + ")." if z_opisem else ".")
     )
 
 
@@ -50406,7 +50484,7 @@ def _sedzia_petla():
                     w2 = json.loads(ich_tablica.read_text(encoding="utf-8"))
                     with _sedzia_lock:
                         _sedzia_wiadomosci.append(
-                            _werdykt_zdaniem(w2, "Drużyna " + _rywal() + " (" + str(w2.get("czas", "")) + ")")
+                            _werdykt_zdaniem(w2, "Drużyna " + _rywal() + " (" + str(w2.get("czas", "")) + ")", z_opisem=False)
                         )
                 except Exception:
                     pass
@@ -50478,7 +50556,7 @@ def _daj_ocene(o, step):
     if not o:
         return
     with _sedzia_lock:
-        _sedzia_wiadomosci.append(_ocena_zdaniem(o))
+        _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
     log("RYWALIZACJA", _ocena_zdaniem(o))
     try:
         if o.get("runda") not in _paski_pokazane:
@@ -50641,15 +50719,18 @@ def uruchom_sedziego():
 # tylko, gdy komenda sprawdzajaca uruchamia obie strony na tych samych,
 # nieuczonych zadaniach (druzyna 1 dostala szczebel za GPT-2 wpisane
 # recznie). Prompt przepisany w calosci, dla spojnosci.
+# v480dq: uzytkownik (2026-10-22) — branie od rywala to dyskwalifikacja
+# w kazdej rywalizacji; spadek bez rzeczy rywala; druzyny dostaja o
+# rywalu tylko procent. Prompt znow przepisany w calosci.
 ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Mniej więcej co kwadrans dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
 
 Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd ma się wziąć. Jako zrobione liczysz to, co ma wynik potwierdzony przez program i zgadza się z treścią celu; to, co dopiero ruszyło, opisujesz jako rozpoczęte. Potwierdzony wynik mówi tylko, że komenda wypisuje tę liczbę — gdy drużyna sama ustaliła, że był przypadkowy albo nie wytrzymał powtórzenia, liczysz go tak, jak ustaliła. Porównanie z czymś spoza pracy drużyny — innym modelem, programem albo ludzką metodą — liczysz jako potwierdzone tylko wtedy, gdy komenda sprawdzająca sama uruchamia obie strony na tych samych zadaniach i żadna z nich nie była na tych zadaniach uczona; liczba drugiej strony wpisana ręcznie, wzięta z innego pomiaru albo zmierzona na zadaniach, na których drużyna się uczyła, jest tylko opisem. Wynik drugiej strony, który wygląda nieprawdopodobnie słabo jak na to, czym ona jest, traktujesz jako znak, że jej test trzeba sprawdzić, i piszesz to w ocenie. To, co drużyna pisze o sobie, waży mniej niż to, co widać w jej krokach, komendach i plikach.
 
-Każda drużyna buduje swoją pracę we własnym folderze i może czytać folder rywala. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem.
+Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem pomysłów, kodu, plików, wyników ani instalacji, ani zaglądać do folderu rywala. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem. To, co drużyna wzięła od rywala, zanim dostałeś tę zasadę, nie liczy się jej do procentu, ale nie jest powodem do dyskwalifikacji.
 
-Ostrzeżenia i dyskwalifikacja istnieją tylko w rywalizacji, której cel przewiduje dyskwalifikację. Drużyna, która spełniła warunek dyskwalifikacji z celu, ale zrobiła to jawnie — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania — zostaje zdyskwalifikowana od razu: w polu "dyskwalifikacja" piszesz powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a oba pola zostawiasz puste. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
+Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod, pliki, wyniki albo instalację, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
-Procent opisuje stan celu, a nie ilość pracy: zmieniasz go względem swojej poprzedniej oceny o tyle, o ile zmieniło się to, co drużyna ma potwierdzone i zgodne z celem. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Twoją ocenę dostają obie drużyny.
+Procent opisuje stan celu, a nie ilość pracy: zmieniasz go względem swojej poprzedniej oceny o tyle, o ile zmieniło się to, co drużyna ma potwierdzone i zgodne z celem. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik.
 
 {
   "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},
@@ -50879,9 +50960,9 @@ def ocen_rywalizacje(kroki):
                 for _n, _cz in sorted(_nowe_po_dyskwalifikacji.items())
             )
             + _stan_druzyny_dla_sedziego("1")
-            + (_ostrzezenia_dla_sedziego("1") if _cel_przewiduje_dyskwalifikacje() else "") + "\n"
+            + (_ostrzezenia_dla_sedziego("1") if _jest_dyskwalifikacja() else "") + "\n"
             + _stan_druzyny_dla_sedziego("2")
-            + (_ostrzezenia_dla_sedziego("2") if _cel_przewiduje_dyskwalifikacje() else "")
+            + (_ostrzezenia_dla_sedziego("2") if _jest_dyskwalifikacja() else "")
         )
         parsed = parse_json(deepseek("ARBITER", prompt))
         _nowe_po_dyskwalifikacji.clear()
@@ -50911,7 +50992,7 @@ def ocen_rywalizacje(kroki):
             "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
             "uzasadnienie": str(parsed.get("uzasadnienie") or "").strip(),
         }
-        if _cel_przewiduje_dyskwalifikacje():
+        if _jest_dyskwalifikacja():
             for _n in ("1", "2"):
                 _d = ocena["druzyna_" + _n]
                 if _d.get("dyskwalifikacja") or not _d.get("ostrzezenie"):
@@ -50949,7 +51030,7 @@ def ocen_rywalizacje(kroki):
         log("RYWALIZACJA", "Sędzia ocenił obie drużyny (drużyna 1 na kroku " + k1
             + ", drużyna 2 na kroku " + k2 + ") — każda dostanie tę ocenę na swoim najbliższym kroku.")
         log_event("ocena_sedziego", ocena)
-        if _cel_przewiduje_dyskwalifikacje():
+        if _jest_dyskwalifikacja():
             for _n in ("1", "2"):
                 if ocena["druzyna_" + _n].get("dyskwalifikacja"):
                     zdyskwalifikuj(_n, ocena["druzyna_" + _n]["dyskwalifikacja"], ocena)
@@ -50966,26 +51047,45 @@ def _kroki_oceny(o):
     return " (po kroku " + str(o.get("krok")) + ")" if o.get("krok") is not None else ""
 
 
-def _ocena_zdaniem(o):
+def _ocena_zdaniem(o, dla=None):
+    """Ocena Sedziego jako zdania.
+
+    v480dq: `dla` = numer druzyny, ktora ja dostaje — swoja ocene widzi
+    w calosci, o rywalu tylko procent (bez opisu jego metod: program nie
+    moze sam podsuwac pomyslow, za ktore potem karze). Bez `dla` (log
+    dla uzytkownika) — cala.
+    """
     def _zd(t):
         t = str(t or "").strip()
         return t if t.endswith((".", "!", "?")) else t + "."
     _prow = str(o.get("prowadzi", "")).strip()
+    dla = str(dla) if dla else None
+
+    def _cala(_n):
+        return dla is None or _n == dla
+
+    def _druz(_n):
+        d = o.get("druzyna_" + _n) or {}
+        t = "drużyna " + _n + " — " + str(d.get("procent")) + "%"
+        return t + (": " + _zd(d.get("ocena")) if _cala(_n) else ".")
+
     return (
-        "Ocena Sędziego z " + str(o.get("czas", "")) + _kroki_oceny(o) + ", wspólna dla obu drużyn: "
-        "drużyna 1 — " + str(o["druzyna_1"]["procent"]) + "%: " + _zd(o["druzyna_1"]["ocena"])
-        + " Drużyna 2 — " + str(o["druzyna_2"]["procent"]) + "%: " + _zd(o["druzyna_2"]["ocena"])
+        "Ocena Sędziego z " + str(o.get("czas", "")) + _kroki_oceny(o)
+        + (", wspólna dla obu drużyn: " if dla is None else
+           " — Wasza w całości, o drużynie " + ("2" if dla == "1" else "1")
+           + " tylko procent: ")
+        + _druz("1") + " " + _druz("2")[0].upper() + _druz("2")[1:]
         + " Prowadzi: " + ("remis" if _prow.lower().startswith("remis") else "drużyna " + _prow)
-        + (" — " + _zd(o["uzasadnienie"]) if o.get("uzasadnienie") else ".")
+        + (" — " + _zd(o["uzasadnienie"]) if o.get("uzasadnienie") and dla is None else ".")
         + "".join(
             " Drużyna " + _n + " dostaje ostrzeżenie ("
             + str(o["druzyna_" + _n].get("ostrzezenie_nr", "?")) + " z "
-            + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + ", trzecie to dyskwalifikacja) — powód: "
-            + _zd(o["druzyna_" + _n]["ostrzezenie"])
+            + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + ", trzecie to dyskwalifikacja)"
+            + (" — powód: " + _zd(o["druzyna_" + _n]["ostrzezenie"]) if _cala(_n) else ".")
             for _n in ("1", "2")
             if (o.get("druzyna_" + _n) or {}).get("ostrzezenie")
             and not (o.get("druzyna_" + _n) or {}).get("dyskwalifikacja")
-            and _cel_przewiduje_dyskwalifikacje()
+            and _jest_dyskwalifikacja()
         )
         + "".join(
             " Drużyna " + _n + " zdyskwalifikowana — powód: "
@@ -50993,7 +51093,7 @@ def _ocena_zdaniem(o):
             + " Zaczyna od nowa, cały zespół od zera."
             for _n in ("1", "2")
             if (o.get("druzyna_" + _n) or {}).get("dyskwalifikacja")
-            and _cel_przewiduje_dyskwalifikacje()
+            and _jest_dyskwalifikacja()
         )
     )
 

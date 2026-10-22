@@ -2209,3 +2209,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      nowe pytanie ani prośba użytkownika.” Wcześniej było samo „Podaj
      wynik.”, które MAIN brał za prośbę użytkownika o podsumowanie i
      tracił na to kilka kroków.
+
+122. Zakaz brania od rywala (v480dq, użytkownik 2026-10-22: „nie mogą od
+     siebie kopiować pomysłów”, „dyskwalifikacja z zostawieniem plików,
+     które są zgodne”). W każdej rywalizacji, niezależnie od celu:
+     - tekst rywalizacji (przepisany w całości) mówi, że pomysłów, kodu,
+       plików, wyników ani instalacji drugiej drużyny nie wolno brać ani
+       podglądać, a za to jest dyskwalifikacja; rozmowy, które znały stare
+       zasady, dostają go raz z dopiskiem, że zasady się zmieniły;
+     - narzędzia termux_* odmawiają (FOLDER_RYWALA), gdy ścieżka albo
+       komenda sięga do ~/MAIN_<rywal>, ~/agent_druzyna<rywal>,
+       AEL-MINI/druzyna_<rywal>, tablicy rywala, pełnych ocen Sędziego
+       albo archiwów rywalizacji (także przez ~/MAIN_*);
+     - Sędzia (prompt przepisany w całości) dyskwalifikuje za branie od
+       rywala od chwili, gdy dostał tę zasadę; wcześniej wzięte rzeczy
+       tylko nie liczą się do procentu; spadek nigdy nie zawiera rzeczy
+       rywala; ostrzeżenia zostają dla warunków z samego celu;
+     - każda drużyna dostaje swoją ocenę Sędziego w całości, a o rywalu
+       tylko procent, kto prowadzi i jego sprawdzony wynik (bez opisu).
+       Pełną ocenę widzi użytkownik w terminalu.
