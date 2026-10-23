@@ -2237,3 +2237,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      na nich normalnie, także ten, który wcześniej obciął z tego powodu.
      Blokada folderów drużyn zostaje bez zmian (nie obejmuje /root ani
      systemu).
+
+124. Blokada folderu rywala celniejsza (v480ds). Bieg 2026-10-22/23:
+     trzy fałszywe odmowy za samą nazwę MAIN_<rywal> w notatce, w echo
+     albo w stringu, a program sam wstawił Tomkowi listing ~/MAIN_2
+     (automatyczna odpowiedź o pliku), za co Sędzia obciął drużynie 1
+     2 pp. Teraz: blokowana jest tylko ścieżka, do której komenda albo
+     narzędzie sięga (po „/” albo jako osobne słowo poza cudzysłowem;
+     tekst po echo/printf się nie liczy); automatyczna odpowiedź o pliku
+     rywala mówi tylko, że to folder drugiej drużyny i jest zamknięty;
+     Sędzia wie, że to, co wstawił sam program, nie jest naruszeniem
+     drużyny, i oddaje to, co za to odjął.
