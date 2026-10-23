@@ -2248,3 +2248,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      rywala mówi tylko, że to folder drugiej drużyny i jest zamknięty;
      Sędzia wie, że to, co wstawił sam program, nie jest naruszeniem
      drużyny, i oddaje to, co za to odjął.
+
+125. Czekanie i prywatność ekranu (v480dt). Bieg 2026-10-23 (drużyna 2):
+     program skrócił „sleep 900; …”, gdy skończył się trening, ale reszta
+     tej komendy żyła dalej i po kwadransie przerwała nowe „sleep 1800”,
+     choć prawdziwy trening wciąż szedł, z mylącym powodem. Teraz:
+     - gdy program skraca czekanie, kończy też resztę tej komendy;
+     - nowe czekanie skraca tylko koniec prawdziwej roboty w tle, nigdy
+       koniec innej komendy, która sama tylko czekała.
+     Prywatność: gdy na wierzchu jest inna aplikacja użytkownika, log
+     [STATE] zapisuje tylko jej nazwę. Pełny tekst ekranu trafia do logu
+     tylko po kroku, w którym zespół sam używał narzędzi android_ (tak
+     samo jak karty Chrome od v480bv). Do ról i tak nie szedł.

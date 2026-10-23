@@ -653,6 +653,12 @@ def _zywe_w_tle():
         except Exception:
             pass
     for grupa, (komenda, _start) in list(_grupy_z_komend.items()):
+        # v480dt: pozostale samo czekanie (`sleep N; tail ...`) to nie
+        # robota w tle — jego koniec nie moze skracac nowego czekania.
+        # Bieg 2026-10-23 (druzyna 2, krok 6, 16:44): stary `sleep 900;
+        # ...` z kroku 4 przerwal `sleep 1800`, choc trening dalej szedl.
+        if _tylko_czeka(komenda):
+            continue
         try:
             os.killpg(grupa, 0)
             zywe[("g", grupa)] = komenda
@@ -22908,6 +22914,16 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 os.killpg(_stara, 0)
             except Exception:
                 _grupy_z_komend.pop(_stara, None)
+
+        # v480dt: czekanie skrocone przez program — komenda tylko czekala
+        # (bez `&` i bez kill), wiec to, co z niej zostalo w grupie (np.
+        # prawdziwy `sleep`), jest resztka. Konczymy ja, zamiast zostawiac
+        # w tle, gdzie pozniej przerwalaby nastepne czekanie.
+        if _zdanie_o_czekaniu and pgid and pgid != os.getpgrp():
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
 
         if pgid and pgid != os.getpgrp():
             try:
@@ -46399,11 +46415,25 @@ def run_agent(goal):
                 )
             )
 
+        # v480dt: prywatnosc, jak przy Chrome wyzej. Bieg 2026-10-23
+        # 16:26: na wierzchu byla inna aplikacja uzytkownika i caly
+        # tekst jej ekranu (prywatne rozmowy) szedl do logu, a log na
+        # telefon (AEL-MINI). Pelny ekran tylko po kroku, w ktorym
+        # zespol sam uzywal narzedzi android_; inaczej sama nazwa
+        # aplikacji na wierzchu (pierwsza linia).
+        _stan_androida = str(step_android_text or "")
+        if not _dzialalo_na(last_result, "android_"):
+            _stan_androida = _stan_androida.strip().split("\n", 1)[0]
+            if not _stan_androida.startswith("Na wierzchu"):
+                _stan_androida = (
+                    "(treści ekranu nie zapisuję — zespół nie używał "
+                    "narzędzi android_)"
+                )
         log(
             "STATE",
             "Android: "
             + short(
-                step_android_text,
+                _stan_androida,
                 900
             )
         )
