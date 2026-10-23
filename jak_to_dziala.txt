@@ -2269,3 +2269,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wykonywana. Rola dostaje zdanie, że odpowiedź doszła uszkodzona,
      które pole jest niepełne, na czym kończy się odczytany kawałek, i
      że trzeba ją wysłać jeszcze raz (długi skrypt pewniej przez plik).
+
+127. Uczciwy podział procesora w rywalizacji (v480du, użytkownik
+     2026-10-23 19:03: „Zrób A”). Bieg 2026-10-23 19:01: drużyna 2
+     (torch, dużo wątków) brała 384% procesora, drużyna 1 223%. Trening
+     drużyny 1 zwolnił z 1,15 do 2,4 s na krok i drużyna przerwała go
+     jako „zbyt wolny”, nie wiedząc, że dzieli procesor. Teraz, tylko w
+     rywalizacji:
+     - każda drużyna ma połowę wątków telefonu (os.cpu_count()/2, na
+       telefonie z 8 rdzeniami 4): program ustawia OMP_NUM_THREADS,
+       MKL/OPENBLAS/NUMEXPR_NUM_THREADS i podobne dla wszystkiego, co
+       drużyna uruchamia, a do Debiana wnosi je atrapa proot-distro
+       (dokleja --env do login/run);
+     - opis rywalizacji mówi, że obie drużyny dzielą jeden procesor po
+       połowie i że czas próby zależy też od tego, czy druga liczy;
+     - gdy komenda albo plik drużyny ustawia więcej wątków
+       (set_num_threads, OMP_NUM_THREADS=…), albo jej proces w tle przez
+       co najmniej minutę bierze wyraźnie ponad połowę, drużyna dostaje
+       raz zdanie, co się stało i jak to poprawić. Bez zabijania i bez
+       innych limitów. Obie drużyny tak samo; zwykły tryb bez zmian.

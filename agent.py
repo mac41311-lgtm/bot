@@ -84,6 +84,24 @@ _DRUZYNA = os.environ.get("AEL_DRUZYNA", "").strip()
 if _DRUZYNA not in ("1", "2"):
     _DRUZYNA = ""
 
+# v480du: uczciwy podzial procesora w rywalizacji (uzytkownik 2026-10-23
+# 19:03, "Zrob A"). Bieg 2026-10-23 19:01: druzyna 2 (torch, duzo
+# watkow) brala 384%, druzyna 1 223% — trening druzyny 1 zwolnil z 1,15
+# do 2,4 s na krok i druzyna przerwala go jako "zbyt wolny", nie wiedzac,
+# ze dzieli procesor. Kazda druzyna dostaje polowe watkow telefonu:
+# biblioteki liczace (torch, numpy, BLAS) czytaja te zmienne, a wszystko,
+# co druzyna uruchamia, dziedziczy je po programie (do Debiana przez
+# proot-distro wnosi je _podstaw_proot_distro). Bez zabijania i limitow.
+_WATKI_DRUZYNY = max(1, (os.cpu_count() or 2) // 2)
+_ZMIENNE_WATKOW = (
+    "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "NUMEXPR_MAX_THREADS", "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS", "RAYON_NUM_THREADS",
+)
+if _DRUZYNA:
+    for _zm in _ZMIENNE_WATKOW:
+        os.environ[_zm] = str(_WATKI_DRUZYNY)
+
 # Start bez pytan: po cichej aktualizacji i w druzynie 2 (ona nie ma
 # terminala — pracuje w tle, odpowiedzi na pytania nikt by nie dal).
 # v480cc: druzyna 1 zamknela bieg jako FAILED i rusza od nowa sama
@@ -537,6 +555,141 @@ def _podstaw_unlock_zespolu():
 
     except Exception as e:
         log("ANDROID", "Nie podstawiłem termux-wake-unlock: " + str(e))
+
+
+def _podstaw_proot_distro():
+    """
+    v480du: proot-distro login/run czysci zmienne srodowiska, wiec
+    limit watkow z _ZMIENNE_WATKOW nie dochodzilby do Pythona w Debianie.
+    Atrapa w bin_programu dokleja je jako --env i wola prawdziwy
+    proot-distro; wszystko inne idzie bez zmian. Tylko w rywalizacji.
+    """
+    if not _DRUZYNA:
+        return
+    try:
+        import shutil
+
+        katalog = AGENT_DIR / "bin_programu"
+        prawdziwy = shutil.which(
+            "proot-distro",
+            path=os.pathsep.join(
+                k for k in os.environ.get("PATH", "").split(os.pathsep)
+                if k and k != str(katalog)
+            )
+        )
+        if not prawdziwy:
+            return
+        dodatki = " ".join(
+            "--env " + zm + "=" + str(_WATKI_DRUZYNY)
+            for zm in _ZMIENNE_WATKOW
+        )
+        katalog.mkdir(parents=True, exist_ok=True)
+        atrapa = katalog / "proot-distro"
+        atrapa.write_text(
+            "#!" + (shutil.which("sh") or "/system/bin/sh") + "\n"
+            "case \"$1\" in\n"
+            "  login|run) _k=\"$1\"; shift; exec " + prawdziwy
+            + " \"$_k\" " + dodatki + " \"$@\" ;;\n"
+            "esac\n"
+            "exec " + prawdziwy + " \"$@\"\n",
+            encoding="utf-8"
+        )
+        atrapa.chmod(0o755)
+        sciezka = os.environ.get("PATH", "")
+        if str(katalog) not in sciezka.split(os.pathsep):
+            os.environ["PATH"] = str(katalog) + os.pathsep + sciezka
+    except Exception as e:
+        log("TERMUX", "Nie podstawiłem proot-distro: " + str(e))
+
+
+# v480du: druzyna sama ustawia wiecej watkow, niz ma — mowimy jej to raz.
+_WATKI_RE = re.compile(
+    r"set_num_threads\(\s*(\d+|os\.cpu_count\(\)|multiprocessing\.cpu_count\(\))"
+    r"|\b(?:OMP|MKL|OPENBLAS|NUMEXPR)_NUM_THREADS['\"]?\s*[\]]?\s*=\s*['\"]?(\d+)"
+    r"|--env\s+(?:OMP|MKL|OPENBLAS)_NUM_THREADS=(\d+)"
+)
+_powiedziane_o_watkach = set()
+
+
+def _za_duzo_watkow(name, args):
+    """v480du: zdanie dla druzyny, gdy komenda/plik ustawia > polowy watkow."""
+    if not _DRUZYNA or not isinstance(args, dict):
+        return ""
+    tekst = "\n".join(
+        str(args.get(k) or "") for k in ("command", "content", "code", "script")
+    )
+    for m in _WATKI_RE.finditer(tekst):
+        surowe = next((g for g in m.groups() if g), "")
+        n = (os.cpu_count() or 2) if not surowe.isdigit() else int(surowe)
+        if n <= _WATKI_DRUZYNY:
+            continue
+        klucz = m.group(0)
+        if klucz in _powiedziane_o_watkach:
+            return ""
+        _powiedziane_o_watkach.add(klucz)
+        return (
+            "Program: \"" + short(klucz, 60) + "\" (w " + str(name)
+            + ") ustawia " + str(n) + " wątków, a każda drużyna ma połowę "
+            "telefonu: " + str(_WATKI_DRUZYNY) + " z "
+            + str(os.cpu_count() or 2) + ". Więcej wątków nie przyspieszy "
+            "tej roboty, tylko zabierze procesor drugiej drużynie i obie "
+            "będą liczyć wolniej. Program ustawia już OMP_NUM_THREADS="
+            + str(_WATKI_DRUZYNY) + " itp. dla wszystkiego, co uruchamiacie; "
+            "wystarczy usunąć to ustawienie albo wpisać "
+            + str(_WATKI_DRUZYNY) + "."
+        )
+    return ""
+
+
+_cpu_grup_druzyny = {}
+
+
+def _sprawdz_procesor_druzyny():
+    """
+    v480du: raz na krok. Proces druzyny w tle, ktory od poprzedniego
+    sprawdzenia bral wyraznie wiecej niz polowe telefonu, dostaje jedno
+    zdanie (raz na proces). Bez zabijania.
+    """
+    if not _DRUZYNA:
+        return ""
+    teraz = time.time()
+    grupy = {}
+    for pid, proces in list(_procesy_w_tle.items()):
+        grupy[pid] = str(getattr(proces, "args", ""))
+    for grupa, (komenda, _s) in list(_grupy_z_komend.items()):
+        grupy.setdefault(grupa, komenda)
+    for pid, opis in grupy.items():
+        try:
+            cpu = _czas_cpu_grupy(pid)
+        except Exception:
+            continue
+        stare = _cpu_grup_druzyny.get(pid)
+        _cpu_grup_druzyny[pid] = (cpu, teraz, stare[2] if stare else False)
+        if not stare or stare[2]:
+            continue
+        dt = teraz - stare[1]
+        if dt < 60:
+            _cpu_grup_druzyny[pid] = stare
+            continue
+        rdzenie = (cpu - stare[0]) / dt
+        if rdzenie > _WATKI_DRUZYNY * 1.25:
+            _cpu_grup_druzyny[pid] = (cpu, teraz, True)
+            return (
+                "Program: proces w tle (" + short(opis, 80) + ") przez "
+                "ostatnie " + str(int(dt // 60)) + " min brał średnio "
+                + str(round(rdzenie, 1)) + " rdzenia, a każda drużyna ma "
+                "połowę telefonu: " + str(_WATKI_DRUZYNY) + " z "
+                + str(os.cpu_count() or 2) + ". Ponad tę połowę zabiera "
+                "procesor drugiej drużynie, więc obie liczą wolniej. "
+                "Zwykle to własne ustawienie wątków w skrypcie (np. "
+                "torch.set_num_threads, OMP_NUM_THREADS, kilka procesów "
+                "naraz) — przy następnym uruchomieniu wystarczy go nie "
+                "ustawiać albo wpisać " + str(_WATKI_DRUZYNY) + "."
+            )
+    for pid in list(_cpu_grup_druzyny):
+        if pid not in grupy:
+            _cpu_grup_druzyny.pop(pid, None)
+    return ""
 
 
 # v480t: `sleep` w komendach zespolu, ktore program moze skonczyc
@@ -25874,6 +26027,12 @@ def _dispatch_tool_inner(
 
         # v480dq: folder rywala jest zamkniety (uzytkownik 2026-10-22:
         # "nie mogą od siebie kopiować pomysłów").
+        # v480du: patrz _za_duzo_watkow() — jedno zdanie, robota idzie.
+        _o_watkach = _za_duzo_watkow(name, args)
+        if _o_watkach:
+            log("RYWALIZACJA", _o_watkach)
+            _pending_team_warnings.append(_o_watkach)
+
         _do_rywala = _siega_do_rywala(name, args)
         if _do_rywala:
             log("RYWALIZACJA", _do_rywala)
@@ -46478,6 +46637,15 @@ def run_agent(goal):
                 )
             )
 
+        # v480du: patrz _sprawdz_procesor_druzyny().
+        try:
+            _o_cpu = _sprawdz_procesor_druzyny()
+        except Exception:
+            _o_cpu = ""
+        if _o_cpu:
+            log("RYWALIZACJA", _o_cpu)
+            _pending_team_warnings.append(_o_cpu)
+
         # v480dt: prywatnosc, jak przy Chrome wyzej. Bieg 2026-10-23
         # 16:26: na wierzchu byla inna aplikacja uzytkownika i caly
         # tekst jej ekranu (prywatne rozmowy) szedl do logu, a log na
@@ -49853,6 +50021,13 @@ def _rywalizacja_tekst():
         "~/MAIN_" + oni + " jest dla Was zamknięty — program nie wykona "
         "polecenia, które do niego sięga. Wszystko, co powstało przed "
         "rywalizacją, leży tam, gdzie leżało.\n\n"
+        "Obie drużyny pracują na jednym telefonie i dzielą jego "
+        "procesor: każda ma połowę, czyli " + str(_WATKI_DRUZYNY) + " z "
+        + str(os.cpu_count() or 2) + " wątków. Program ustawia to sam "
+        "(OMP_NUM_THREADS i podobne) dla wszystkiego, co uruchamiacie, "
+        "także w Debianie. Czas próby zależy więc też od tego, czy druga "
+        "drużyna akurat liczy — wolniejszy krok nie musi znaczyć, że "
+        "Wasz kod jest gorszy.\n\n"
         "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
         "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
@@ -51281,6 +51456,7 @@ def main():
     zacznij_oddech()
     zacznij_straznika_pamieci()
     _podstaw_sleep_zespolu()
+    _podstaw_proot_distro()
 
     # ----------------------------------------------------------
     # Uprawnienia Termux:API — PRZED załadowaniem DeepSeek/Gemini,
