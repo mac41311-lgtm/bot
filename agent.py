@@ -32223,10 +32223,19 @@ def _wykonaj_akcje_maina(decision, step):
         log("MAIN", "RUN #" + str(i + 1) + ": " + name)
         zapisz_zdarzenie("narzedzie", nazwa=name, argumenty=args)
 
-        try:
-            result = dispatch_tool(name, args)
-        except Exception as e:
-            result = {"ok": False, "error": str(e), "error_type": type(e).__name__}
+        if akcja.get("_uciete"):
+            # v480dt: patrz _oznacz_uciete_akcje().
+            log("MAIN", akcja["_uciete"])
+            result = {
+                "ok": False,
+                "error": "UCIETA_AKCJA",
+                "message": akcja["_uciete"],
+            }
+        else:
+            try:
+                result = dispatch_tool(name, args)
+            except Exception as e:
+                result = {"ok": False, "error": str(e), "error_type": type(e).__name__}
 
         if isinstance(result, dict):
             result = _bez_ostrzezen_pythona(result)
@@ -41659,6 +41668,60 @@ def _pominiete_decyzje(raw, wykonana):
         return []
 
 
+def _oznacz_uciete_akcje(obj, text):
+    """
+    v480dt: json_repair naprawia zepsuty JSON, ale niedomkniety string
+    po prostu ucina. Bieg 2026-10-23 16:47 (druzyna 1, krok 7): w
+    odpowiedzi MAINa zginal koniec dlugiej komendy (heredoc z Pythonem),
+    naprawa zostawila z niej 8 linii i program to wykonal — bash i
+    Python zglosily bledy, a druzyna uznala, ze to jej wina. Kazdy
+    napis z args, ktorego w tej postaci nie ma w surowej odpowiedzi,
+    jest ucieta czescia; taka akcja dostaje "_uciete" i nie jest
+    wykonywana (patrz _wykonaj_akcje_maina).
+    """
+    try:
+        akcje = obj.get("actions")
+        if akcje is None:
+            akcje = obj.get("akcje")
+        if isinstance(akcje, dict):
+            akcje = [akcje]
+        if not isinstance(akcje, list):
+            return obj
+        surowy = str(text or "")
+        surowy = surowy + "\n" + surowy.replace("\\/", "/")
+        for akcja in akcje:
+            if not isinstance(akcja, dict):
+                continue
+            args = akcja.get("args")
+            if args is None:
+                args = akcja.get("arguments", akcja.get("argumenty"))
+            if not isinstance(args, dict):
+                continue
+            for klucz, wartosc in args.items():
+                if not isinstance(wartosc, str) or len(wartosc) < 20:
+                    continue
+                if (
+                    json.dumps(wartosc, ensure_ascii=False) in surowy
+                    or json.dumps(wartosc) in surowy
+                ):
+                    continue
+                akcja["_uciete"] = (
+                    "Program: tej akcji nie wykonałem — Twoja odpowiedź "
+                    "doszła uszkodzona. Pole \"" + str(klucz) + "\" nie "
+                    "ma końca (brakuje zamykającego cudzysłowu), więc "
+                    "program nie zna całości. Dało się odczytać tylko początek, kończący się na: "
+                    + json.dumps(wartosc[-80:], ensure_ascii=False)
+                    + ". Wykonanie tylko tego kawałka zepsułoby wynik. "
+                    "Wyślij tę akcję jeszcze raz w całości; długi skrypt "
+                    "pewniej przejdzie, gdy najpierw zapiszesz go do pliku "
+                    "(termux_write_file), a potem go uruchomisz."
+                )
+                break
+    except Exception:
+        pass
+    return obj
+
+
 def parse_json(text):
 
     if not text:
@@ -41727,14 +41790,14 @@ def parse_json(text):
             repaired = _repair_json(text, return_objects=True)
 
             if isinstance(repaired, dict):
-                return repaired
+                return _oznacz_uciete_akcje(repaired, text)
 
             if isinstance(repaired, str):
 
                 obj = json.loads(repaired)
 
                 if isinstance(obj, dict):
-                    return obj
+                    return _oznacz_uciete_akcje(obj, text)
 
         except Exception:
             pass

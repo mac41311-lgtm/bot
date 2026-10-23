@@ -2260,3 +2260,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      [STATE] zapisuje tylko jej nazwę. Pełny tekst ekranu trafia do logu
      tylko po kroku, w którym zespół sam używał narzędzi android_ (tak
      samo jak karty Chrome od v480bv). Do ról i tak nie szedł.
+
+126. Ucięta akcja nie jest wykonywana (v480dt). Bieg 2026-10-23 16:47
+     (drużyna 1): w odpowiedzi MAIN-a zginął koniec długiej komendy
+     (skrypt Pythona w heredoc). Naprawa JSON-a zostawiła z niej 8 linii
+     i program to wykonał, a drużyna uznała błąd bash/Pythona za swój.
+     Teraz akcja, której napis w odpowiedzi nie ma końca, nie jest
+     wykonywana. Rola dostaje zdanie, że odpowiedź doszła uszkodzona,
+     które pole jest niepełne, na czym kończy się odczytany kawałek, i
+     że trzeba ją wysłać jeszcze raz (długi skrypt pewniej przez plik).
