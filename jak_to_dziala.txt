@@ -2560,3 +2560,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zmian od oceny z HH:MM (treść masz wyżej)”. Nowa rozmowa Sędziego
      (albo nieudana ocena) dostaje znów wszystko. Zapis w
      state/sedzia_widzial.json (katalog agenta drużyny 1).
+154. Mniej szumu w wiadomościach do zespołu (v480et, użytkownik
+     2026-10-24 21:20: „popraw, żeby nie było szumu”):
+     - spis katalogu (gdy ktoś wspomni folder, np. ~/MAIN_1) bez kopii
+       zapasowych i ukrytych plików (.bak…, .przed_…, .orig, .pyc,
+       __pycache__, pliki z kropką) — zamiast nich „(+ N kopii
+       zapasowych/ukrytych)”;
+     - Ela: kroki samego czekania (czekanie w tle, to samo sprawdzenie,
+       proces „dalej działa”) jako jedna linia „(N krok(i) tylko
+       czekania na to, co leci w tle)”; lista „Udane wywołania narzędzi”
+       z kawałkami wyników tylko wtedy, gdy nie ma wyniku sprawdzonego
+       przez program;
+     - to samo zdanie użytkownika wpisane dwa razy idzie do ról raz.

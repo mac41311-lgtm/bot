@@ -5100,6 +5100,11 @@ def _co_powiedzial_uzytkownik(rola=None):
         if l.strip() and not l.startswith(_CEL_ZDAN_PREFIX)
     ]
 
+    # v480et: to samo zdanie wpisane dwa razy idzie raz (bieg 2026-10-24:
+    # "Pomysl, nie polecenie: w programie nie ma limitu..." dwa razy
+    # pod rzad u kazdej roli).
+    zdania = list(dict.fromkeys(zdania))
+
     if rola:
         zdania = _jeszcze_niewyslane_zdania(rola, zdania)
 
@@ -33508,6 +33513,17 @@ def _wykonaj_akcje_maina(decision, step):
         "tool_warnings": warnings,
         "confirmed_texts": [],
         "pominiete_akcje": pominiete,
+        # v480et: krok, w ktorym tylko czekano / sprawdzano to samo — Ela
+        # dostaje takie kroki jako jedna linie (patrz _recent_task_summaries).
+        "tylko_czekanie": bool(wyniki) and all(
+            isinstance(w.get("wynik"), dict) and (
+                w["wynik"].get("status") in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE")
+                or w["wynik"].get("bez_zmian")
+                or (w.get("tool") == "termux_check_process"
+                    and w["wynik"].get("running") is True)
+            )
+            for w in wyniki
+        ),
         "dowody": _dowody_z_wykonania(trace, warnings),
         "report": (
             # v460: z powodem MAIN-a — Ela widziala tylko "MAIN wykonal
@@ -36500,6 +36516,7 @@ def _recent_task_summaries(n=8, dlugosc=300):
 
         summaries.append({
             "task_id": f.stem,
+            "tylko_czekanie": bool(data.get("tylko_czekanie")),
             "status": data.get("status"),
             "report": short(
                 str(
@@ -36543,8 +36560,18 @@ _HUMAN_STATUS_LABELS = {
 def _human_task_summary_lines(summaries, dlugosc=140):
 
     lines = []
+    _czekan = 0
 
     for i, s in enumerate(summaries, 1):
+
+        # v480et: kroki samego czekania (bez nowego wyniku) jako jedna
+        # linia — Ela dostawala osiem "Czekam ~5 min…" z rzedu.
+        if s.get("tylko_czekanie"):
+            _czekan += 1
+            continue
+        if _czekan:
+            lines.append("(" + str(_czekan) + " krok(i) tylko czekania na to, co leci w tle)")
+            _czekan = 0
 
         label = _HUMAN_STATUS_LABELS.get(
             s.get("status"), str(s.get("status") or "nieznany status")
@@ -36558,6 +36585,9 @@ def _human_task_summary_lines(summaries, dlugosc=140):
             line += " — " + short(report, dlugosc)
 
         lines.append(line)
+
+    if _czekan:
+        lines.append("(" + str(_czekan) + " krok(i) tylko czekania na to, co leci w tle)")
 
     return "\n".join(lines)
 
@@ -36854,7 +36884,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     prompt = f"""
 Kolejne kroki (co się wykonało):
 {_human_task_summary_lines(summaries, 600)}
-{_ostatni_wynik}{_sprawdzone}{narzedzia_block}
+{_ostatni_wynik}{_sprawdzone}{"" if _sprawdzone else narzedzia_block}
 {device_state_block}"""
 
     raw = deepseek(
@@ -44325,6 +44355,11 @@ _team_file_pytania = []
 _FILE_ANSWER_MAX = 60000
 
 
+_KOPIA_W_SPISIE_RE = re.compile(
+    r"(?:\.bak(?:_[\w.-]*)?$|\.przed_\w+$|\.orig$|\.old$|~$|\.pyc$|^__pycache__/$|^\.)"
+)
+
+
 def _file_answer_body(p):
     """Odpowiedz o pliku: CO w nim jest, nie ile ma bajtow."""
 
@@ -44350,6 +44385,12 @@ def _file_answer_body(p):
     try:
         if p.is_dir():
             _w_srodku = sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir())
+            # v480et: kopie zapasowe i smieci to szum (bieg 2026-10-24,
+            # Tomek dostal ~/MAIN_1 z kilkunastoma BURZA_MOZGOW.md.bak_...).
+            _kopie = [n for n in _w_srodku if _KOPIA_W_SPISIE_RE.search(n)]
+            _w_srodku = [n for n in _w_srodku if not _KOPIA_W_SPISIE_RE.search(n)]
+            if _kopie:
+                _w_srodku.append("(+ " + str(len(_kopie)) + " kopii zapasowych/ukrytych)")
             return (
                 "JEST — to katalog, "
                 + (
