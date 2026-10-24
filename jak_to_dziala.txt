@@ -2451,3 +2451,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (z pełnym sleep) do 15 min, choć proces już się zakończył. Gdy
      czekanie skończyło się wcześniej, bo proces w tle się zakończył,
      wynik idzie od razu. Na v480eh drugie czekanie i tak idzie w tło.
+142. Burza mózgów mówi do MAIN-a (v480ej, użytkownik 2026-10-24 17:31).
+     Tekst co 2 h dostaje tylko MAIN, a był w liczbie mnogiej
+     ("zapytajcie", "zapiszcie"), więc MAIN mógł myśleć, że zespół sam to
+     zrobi. Teraz: "Czas na burzę mózgów. Ten tekst dostajesz tylko Ty —
+     zespół go nie widzi i odezwie się, gdy go zapytasz. Zapytaj po kolei
+     każdego w zespole ... Gdy zbierzesz odpowiedzi, sam dopisz z datą do
+     ~/MAIN_n/BURZA_MOZGOW.md ...".

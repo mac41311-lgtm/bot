@@ -52168,10 +52168,15 @@ def _burza_blok():
             else "~/BURZA_MOZGOW.md"
         )
         tekst = (
-            "Czas na burzę mózgów: zapytajcie każdego w zespole o zdanie o "
-            "tym, co robicie i co dalej. Potem zapiszcie krótko: jakie macie "
-            "wnioski, co z nich realizujecie teraz i do czego tym dążycie w "
-            "celu. Dopiszcie to z datą do " + plik + "."
+            # v480ej (uzytkownik 2026-10-24 17:31): tekst dostaje tylko
+            # MAIN, wiec mowi do niego, nie do "was" — inaczej MAIN myslal,
+            # ze zespol sam to zapisze.
+            "Czas na burzę mózgów. Ten tekst dostajesz tylko Ty — zespół go "
+            "nie widzi i odezwie się, gdy go zapytasz. Zapytaj po kolei "
+            "każdego w zespole o zdanie o tym, co robicie i co dalej. Gdy "
+            "zbierzesz odpowiedzi, sam dopisz z datą do " + plik + " krótko: "
+            "jakie macie wnioski, co z nich realizujecie teraz i do czego tym "
+            "dążycie w celu."
         )
         log("MAIN", "Burza mózgów (co 2 h): " + tekst)
         return tekst + "\n\n"
