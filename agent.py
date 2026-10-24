@@ -33171,6 +33171,26 @@ def _wykonaj_po_skonczonym(name, args):
         "komendy nie czekał — od razu wykonał jej resztę bez sleep. Wynik "
         "tamtego jest na górze tej wiadomości."
     )
+    # v480ey: ten sam odczyt co w karcie "W TLE SKOŃCZONE" nie idzie drugi
+    # raz (bieg 2026-10-24 21:51: caly log treningu dwa razy w jednej
+    # wiadomosci).
+    try:
+        nowe = [l.strip() for l in str(wynik.get("stdout") or "").splitlines() if l.strip()]
+        znane = set()
+        for r in _w_tle_niedostarczone():
+            w = r.get("wynik")
+            if isinstance(w, dict):
+                znane.update(l.strip() for l in str(w.get("stdout") or "").splitlines() if l.strip())
+        if nowe and znane and sum(l in znane for l in nowe) >= 0.9 * len(nowe):
+            wynik["stdout"] = ""
+            wynik["czekanie"] = (
+                "To, na co czekałeś, już się skończyło w tle, więc program od "
+                "razu wykonał resztę tej komendy bez sleep. Wyszło to samo, co "
+                "w karcie „W TLE SKOŃCZONE” na górze tej wiadomości, więc tu "
+                "tego nie powtarzam."
+            )
+    except Exception:
+        pass
     return wynik
 
 
@@ -33582,6 +33602,11 @@ def _wykonaj_akcje_maina(decision, step):
 _POLA_BEZ_ZNACZENIA = frozenset(("limit_ciszy_s", "maks_czas_s", "duration_s"))
 
 
+def _bez_sleep_na_poczatku(cmd):
+    """v480ey: "sleep 420; x" i "true; x" (reszta czekania) to ta sama komenda."""
+    return re.sub(r"^\s*(?:sleep\s+\d+|true)\s*(?:;|&&)\s*", "", str(cmd or "")).strip()
+
+
 def _wynik_dla_maina(wynik, args, limit):
     """Wynik akcji czytelnie: bez powtorzonej komendy i pol programu,
     stdout/stderr jako zwykly tekst."""
@@ -33594,7 +33619,7 @@ def _wynik_dla_maina(wynik, args, limit):
             continue
         if k in ("command", "workdir", "path") and v == args.get(k):
             continue
-        if k == "command" and str(v).strip() == str(args.get("command") or "").strip():
+        if k == "command" and _bez_sleep_na_poczatku(v) == _bez_sleep_na_poczatku(args.get("command")):
             continue
         reszta[k] = v
     out = json.dumps(reszta, ensure_ascii=False, default=str)
@@ -33611,7 +33636,8 @@ def _wynik_dla_maina(wynik, args, limit):
         bl = short(bl, zostalo)
     return (
         out
-        + ("\nstdout:\n" + wyj if wyj else ("\nstdout: (pusto)" if "stdout" in wynik else ""))
+        + ("\nstdout:\n" + wyj if wyj else ("\nstdout: (pusto)"
+                                            if "stdout" in wynik and not wynik.get("czekanie") else ""))
         + ("\nstderr:\n" + bl if bl else "")
     )
 
@@ -50815,10 +50841,17 @@ def _plik_z_przekierowania(komenda, cwd=None):
         str(komenda)
     )
     najlepszy, czas = "", -1.0
+    # v480ey: katalogi z "cd X" w komendzie — gdy proces juz nie zyje,
+    # jego cwd z /proc zniknal (bieg 2026-10-24 21:51: "cd ~/MAIN_1 &&
+    # proot … 2>untie13mv2_stderr.log", a raport szukal pliku w ~).
+    katalogi = ([cwd] if cwd else []) + [
+        str(_resolve_home_relative_path(d))
+        for d in re.findall(r"\bcd\s+[\"']?([^\s;&|\"']+)", str(komenda))
+    ]
     for c in cele:
         if c.startswith("/dev/") or c.startswith("&"):
             continue
-        for pc in ([Path(cwd) / c] if cwd and not c.startswith(("/", "~")) else []) + [
+        for pc in ([Path(k) / c for k in katalogi] if not c.startswith(("/", "~")) else []) + [
             _resolve_home_relative_path(c)
         ]:
             try:
@@ -50857,6 +50890,10 @@ def _raport_z_tla():
                 _r2, _l2 = _ogon_logu(_wlasny)
                 if _l2 or not log_path:
                     log_path, rozmiar, linie = _wlasny, _r2, _l2
+                    # v480ey: przy koncu tylko krotka koncowka — pelny odczyt
+                    # tych plikow zwykle przychodzi w karcie czekania
+                    if proces.poll() is not None and not _grupa_zyje(pid):
+                        linie = linie[-3:]
         if kod is None and not _jeszcze_zyje(pid):
             kod = "?"
         if kod is not None and _grupa_zyje(pid):

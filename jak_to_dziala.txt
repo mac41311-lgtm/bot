@@ -2603,3 +2603,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (.bak_…, .przed_…) — zamiast nich „(+ N kopii zapasowych)”;
      „Ostatnio używane komendy” bez „sleep N;” na początku i każda
      komenda raz (to samo sprawdzenie logu szło 4 razy).
+159. Ten sam wynik nie przychodzi dwa razy (v480ey, bieg 2026-10-24
+     21:51). Czekanie z 21:50 skończyło się, a MAIN w tym samym czasie
+     puścił nowe `sleep 420` na te same pliki — program wykonał je od
+     razu bez sleep i MAIN dostał cały log treningu dwa razy: w karcie
+     „W TLE SKOŃCZONE” i w wyniku RUN. Teraz, gdy świeży odczyt to to
+     samo, co w karcie, wynik RUN mówi tylko, że wyszło to samo co w
+     karcie na górze. Do tego: komenda z „true;” zamiast „sleep N;” też
+     nie wraca w wyniku; raport o końcu procesu w tle szuka pliku z
+     przekierowania także w katalogu z „cd X” w komendzie i podaje tylko
+     3 ostatnie linie (pełny odczyt zwykle jest w karcie czekania).
