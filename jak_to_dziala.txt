@@ -2422,3 +2422,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      miejsce jest zajęte albo czeka tam nieodebrany wynik, nowa komenda
      leci na wierzchu jak dotąd. Czekanie (sleep od 5 min) puszczone, gdy
      komenda liczy w tle, czeka na nią zamiast spać na ślepo.
+139. Samo czekanie od minuty idzie w tło od razu (v480eg). Bieg
+     2026-10-24 17:09: `sleep 240; cat ...` było krótsze niż 5 min, więc
+     leciało na wierzchu i MAIN stał. Teraz komenda, która tylko czeka
+     (sleep od 60 s), od razu idzie w tło z kartą jak w punkcie 137;
+     inne długie komendy przechodzą w tło po 2 min (punkt 138).

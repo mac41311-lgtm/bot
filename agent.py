@@ -32596,6 +32596,9 @@ _RUN_MAX_AKCJI = int(os.environ.get("RUN_MAX_AKCJI", "12"))
 # az tamto sie skonczy (najdluzej tyle, ile nowy sleep), i wykonuje reszte
 # nowej komendy bez sleep.
 _CZEKANIE_W_TLE_OD_S = 300
+# v480eg: bieg 2026-10-24 17:09 — `sleep 240; cat ...` (ponizej 5 min) lecial
+# na wierzchu i MAIN stal. Samo czekanie od minuty idzie w tlo od razu.
+_CZEKANIE_W_TLE_OD_S = 60
 _czekanie_w_tle = {}
 _czekanie_w_tle_lock = _threading.Lock()
 _BEZ_SLEEP_RE = re.compile(
@@ -32812,7 +32815,7 @@ def _karta_komendy_w_tle(c, od, minelo, pierwszy):
         "dalej w tle i oddał Ci głos — działa tak samo, z tymi samymi "
         "limitami, nic jej nie przerwał.",
         "Wynik: program sam poda go na górze Twojej wiadomości, gdy się "
-        "skończy. Gdy puścisz czekanie (sleep od 5 min), program poczeka "
+        "skończy. Gdy puścisz czekanie (sleep od minuty), program poczeka "
         "na tę komendę zamiast spać na ślepo.",
     ]
     if c.get("pominiete"):
