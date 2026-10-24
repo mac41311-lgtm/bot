@@ -2376,3 +2376,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zapytał co najmniej 3 różne osoby z zespołu (Ela i Igor się nie
      liczą). Igor nie dostaje tego nigdy. Plik widzi Sędzia, jak inne
      zmienione pliki drużyny. Pierwsza burza 2 h po starcie.
+     Korekta (użytkownik 13:05): Ela może brać udział w burzy jak każdy
+     z zespołu — MAIN może ją zapytać (ask_role ELA; pytanie idzie wprost
+     do jej rozmowy). Do licznika pomijania burzy Ela i Igor się nie
+     liczą. Igor dalej nie dostaje żadnych instrukcji.

@@ -3600,7 +3600,7 @@ def init_deepseek():
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
 # v480cf: doszedl Igor (IGOR w ask_role). v480ch: zdanie o nim stoi w
 # liscie zespolu w _JAK_TO_DZIALA (prosba uzytkownika), nie tu — raz.
-MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK|IGOR",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
+MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK|ELA|IGOR",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -41030,8 +41030,11 @@ def consult_team(
 
 _MAIN_ASK_ALLOWED_ROLES = (
     "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
-    "IGOR"
+    "IGOR", "PROGRESS_ESTIMATOR"
 )
+# v480ec: uzytkownik (2026-10-24 13:05) — Ela moze brac udzial w burzy
+# mozgow jak kazdy z zespolu, wiec MAIN moze ja zapytac (ask_role ELA).
+_MAIN_ASK_ALIASY = {"ELA": "PROGRESS_ESTIMATOR"}
 
 
 def _main_human_line(decision, dtype):
@@ -41763,6 +41766,7 @@ def _handle_main_ask(
         for pytanie in pytania:
 
             ask_role = str(pytanie.get("ask_role") or "").strip().upper()
+            ask_role = _MAIN_ASK_ALIASY.get(ask_role, ask_role)
             ask_question = str(pytanie.get("ask_question") or "").strip()
 
             if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
@@ -41798,6 +41802,14 @@ def _handle_main_ask(
                 # v480cf: Igor dostaje samo pytanie MAIN-a — bez celu,
                 # bez skrzynki i bez kontekstu zespolu.
                 answer = str(deepseek(ask_role, ask_question) or "")
+                _speak(ask_role, answer)
+
+            elif ask_role == "PROGRESS_ESTIMATOR":
+
+                # v480ec: Ela nie bierze udzialu w naradzie zespolu
+                # (consult_team) — pytanie MAIN-a idzie wprost do jej
+                # rozmowy, ktora zna cel.
+                answer = str(deepseek(ask_role, "MAIN pyta:\n" + ask_question) or "")
                 _speak(ask_role, answer)
 
             else:
