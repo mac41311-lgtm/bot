@@ -23172,6 +23172,15 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 _ile = int(teraz - started.timestamp())
 
+                # v480em: bieg 2026-10-24 19:50-20:05 — `sleep 900; cat ...`
+                # na wierzchu pisalo "Leci N min, nic jeszcze nie wypisal"
+                # co 15 s (60 linii w logu i w terminalu). Samo czekanie
+                # nic nie wypisuje, dopoki nie minie sleep — meldunek raz
+                # na minute, i mowi, na co czeka (uzytkownik 20:07: "czekanie
+                # i nic sie nie odzywa").
+                if _tylko_czeka(command):
+                    nastepny_podglad = teraz + max(PODGLAD_CO_SEKUND, 60)
+
                 _jak_dlugo = (
                     str(_ile) + " s"
                     if _ile < 120
@@ -23231,6 +23240,27 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                         "Leci " + _jak_dlugo + ": nic nowego od "
                         + str(int(czuwa - ostatni_ruch)) + " s ("
                         + short(na_czym, 60) + ")"
+                    )
+
+                elif _tylko_czeka(command):
+                    # v480em: patrz wyzej — mowimy, na co czeka.
+                    _sek_sp = _sekundy_spania(command) or 0
+                    _zywe_teraz = _zywe_w_tle() if _w_tle_przed else {}
+                    _na_co = [
+                        short(_w_tle_przed[k], 70) for k in _w_tle_przed
+                        if k in _zywe_teraz
+                    ]
+                    _log_leci(
+                        "TERMUX",
+                        "Czeka " + _jak_dlugo + " z "
+                        + str(int(_sek_sp // 60)) + " min (do "
+                        + datetime.fromtimestamp(
+                            started.timestamp() + _sek_sp).strftime("%H:%M")
+                        + ")"
+                        + ("; proces w tle, na który czeka, dalej działa: "
+                           + _na_co[0] + " — gdy się skończy, czekanie się "
+                           "skróci" if _na_co else "")
+                        + "."
                     )
 
                 else:

@@ -2488,3 +2488,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      skończyła, a od jej startu nie zmienił się żaden plik z kodem (.py,
      .sh, .yaml, .cfg, .toml) w katalogu — startuje, z uwagą, że wynik
      będzie prawdopodobnie taki sam i jaki był kod wyjścia.
+146. Czekanie na wierzchu mówi, na co czeka (v480em, użytkownik
+     2026-10-24 20:07: "czekanie i nic się nie odzywa"). Bieg 19:50-20:05:
+     `sleep 900; cat ...` pisało co 15 s "Leci N min, nic jeszcze nie
+     wypisał". Teraz samo czekanie melduje się raz na minutę: "Czeka 3 min
+     z 15 min (do 20:06); proces w tle, na który czeka, dalej działa: ...
+     — gdy się skończy, czekanie się skróci."
