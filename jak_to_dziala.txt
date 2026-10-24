@@ -2353,3 +2353,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Rola dostaje raz (do odblokowania) zdanie: co się stało, że
      narzędzia chrome_ zadziałają po odblokowaniu, a do tego czasu stronę
      można pobrać bez przeglądarki (curl, Python).
+
+134. MAIN częściej rozmawia z zespołem (v480eb). Użytkownik
+     (2026-10-24): MAIN rzadko analizuje z zespołem i pyta Igora, „może
+     nie wie, że sam musi”. W logach 23/24.10 drużyna 1 zadała 3 pytania
+     na 125 kroków, drużyna 2 20 na 189. Początek promptu MAIN-a
+     przepisany w całości: MAIN prowadzi zespół, decyzje zapadają w
+     rozmowie, a zespół i Igor odzywają się tylko wtedy, gdy MAIN ich
+     zapyta. MAIN pyta tych, których zdanie może zmienić decyzję (przed
+     nowym kierunkiem, po wyniku do zrozumienia, gdy próby nie dają
+     postępu), a Igor patrzy z zewnątrz. Działające rozmowy dostaną to
+     raz jako aktualizację promptu.
