@@ -2337,3 +2337,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - gdy rola sięga po Chrome, a on nie odpowiada, program wyciąga go na
        wierzch i czeka dłużej (4 s, do 4 prób; wcześniej przez błąd
        budzenie miało tylko 1 próbę).
+
+132. Chrome bez gniazda do sterowania (v480dz). Bieg 2026-10-23/24: od
+     22:32 ani jednego połączenia z Chrome'em, także gdy był na wierzchu.
+     Debugowanie USB było włączone, ale Chrome nie miał gniazda
+     chrome_devtools_remote; pomogło uruchomienie go od nowa (karty
+     zostają). Teraz, gdy rola sięga po Chrome, a on po wyciągnięciu na
+     wierzch dalej nie odpowiada i nie ma tego gniazda, program sam
+     uruchamia go od nowa i sprawdza jeszcze raz.

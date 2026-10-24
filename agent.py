@@ -15142,6 +15142,44 @@ def ensure_chrome_cdp_forward(retries=3, budz=True):
             ok = ensure_chrome_cdp_forward(retries=4, budz=False)
         finally:
             _budzenie_chrome[0] = False
+        if not ok:
+            # v480dz: bieg 2026-10-23/24 — od 22:32 ani jednego "CDP OK".
+            # Chrome dzialal, ale nie mial gniazda chrome_devtools_remote
+            # (w /proc/net/unix byly tylko gniazda Wiadomosci Google);
+            # pomoglo dopiero uruchomienie go od nowa (karty zostaja).
+            try:
+                _gn = subprocess.run(
+                    ["adb", "-s", device, "shell", "cat", "/proc/net/unix"],
+                    capture_output=True, text=True, timeout=10
+                ).stdout
+            except Exception:
+                _gn = None
+            if _gn is not None and "@chrome_devtools_remote" not in _gn:
+                log(
+                    "CHROME",
+                    "Chrome działa, ale nie ma gniazda do sterowania "
+                    "(chrome_devtools_remote) — uruchamiam go od nowa "
+                    "(karty zostają)."
+                )
+                try:
+                    subprocess.run(
+                        ["adb", "-s", device, "shell", "am", "force-stop",
+                         "com.android.chrome"],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    subprocess.run(
+                        ["adb", "-s", device, "shell", "am", "start", "-n",
+                         "com.android.chrome/com.google.android.apps.chrome.Main"],
+                        capture_output=True, text=True, timeout=15
+                    )
+                except Exception:
+                    pass
+                time.sleep(5)
+                _budzenie_chrome[0] = True
+                try:
+                    ok = ensure_chrome_cdp_forward(retries=4, budz=False)
+                finally:
+                    _budzenie_chrome[0] = False
         if ok:
             log("CHROME", "Chrome obudzony — CDP odpowiada.")
         return ok
