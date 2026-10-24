@@ -33568,6 +33568,48 @@ def _wykonaj_akcje_maina(decision, step):
     return wynik
 
 
+# v480eu: pola wyniku, ktore MAIN-owi nic nie mowia (ustawienia programu,
+# czas wykonania). Uzytkownik 2026-10-24 21:24 ("a te logi sa mu
+# potrzebne?"): w wyniku termux_run komenda szla drugi raz (juz byla w
+# naglowku akcji), do tego limit_ciszy_s, maks_czas_s, duration_s, a
+# stdout jako jedna linia JSON z "\n" zamiast nowych linii.
+_POLA_BEZ_ZNACZENIA = frozenset(("limit_ciszy_s", "maks_czas_s", "duration_s"))
+
+
+def _wynik_dla_maina(wynik, args, limit):
+    """Wynik akcji czytelnie: bez powtorzonej komendy i pol programu,
+    stdout/stderr jako zwykly tekst."""
+    if not isinstance(wynik, dict):
+        return short(json.dumps(wynik, ensure_ascii=False, default=str), limit)
+    args = args if isinstance(args, dict) else {}
+    reszta = {}
+    for k, v in wynik.items():
+        if k in _POLA_BEZ_ZNACZENIA or k in ("stdout", "stderr"):
+            continue
+        if k in ("command", "workdir", "path") and v == args.get(k):
+            continue
+        if k == "command" and str(v).strip() == str(args.get("command") or "").strip():
+            continue
+        reszta[k] = v
+    out = json.dumps(reszta, ensure_ascii=False, default=str)
+    wyj = str(wynik.get("stdout") or "").rstrip("\n")
+    bl = str(wynik.get("stderr") or "").rstrip("\n")
+    zostalo = max(300, limit - len(out))
+    if wyj and bl:
+        zostalo_wyj = max(200, zostalo * 2 // 3)
+        bl = short(bl, max(150, zostalo - zostalo_wyj))
+        wyj = short(wyj, zostalo_wyj)
+    elif wyj:
+        wyj = short(wyj, zostalo)
+    elif bl:
+        bl = short(bl, zostalo)
+    return (
+        out
+        + ("\nstdout:\n" + wyj if wyj else ("\nstdout: (pusto)" if "stdout" in wynik else ""))
+        + ("\nstderr:\n" + bl if bl else "")
+    )
+
+
 def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
     """Pelne wyniki akcji RUN dla MAIN-a — to on na nich pracuje."""
 
@@ -33597,7 +33639,7 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
         tekst = (
             str(i + 1) + ". " + str(w.get("tool")) + " "
             + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
-            + "\n" + short(json.dumps(_wynik, ensure_ascii=False, default=str), na_akcje)
+            + "\n" + _wynik_dla_maina(_wynik, w.get("args"), na_akcje)
         )
         ile += len(tekst)
         if ile > razem:

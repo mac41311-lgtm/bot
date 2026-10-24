@@ -2572,3 +2572,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        z kawałkami wyników tylko wtedy, gdy nie ma wyniku sprawdzonego
        przez program;
      - to samo zdanie użytkownika wpisane dwa razy idzie do ról raz.
+155. Wyniki akcji RUN dla MAIN-a bez powtórek (v480eu, użytkownik
+     2026-10-24 21:24: „a te logi są mu potrzebne?”). Dotąd wynik
+     termux_run powtarzał całą komendę (już była w nagłówku akcji),
+     miał pola programu (limit_ciszy_s, maks_czas_s, duration_s), a
+     stdout szedł jako jedna linia JSON z „\n”. Teraz: krótki nagłówek
+     ({"ok": …, "returncode": …} i inne ważne pola), pod nim stdout i
+     stderr jako zwykły tekst; komenda, workdir i ścieżka nie wracają,
+     gdy są takie same jak w akcji.
