@@ -25969,9 +25969,9 @@ def _uwaga_ten_sam_odczyt(name, args, result):
                 "Ten sam wynik co przy tym samym sprawdzeniu od "
                 + datetime.fromtimestamp(poprzedni[1]).strftime("%H:%M")
                 + " — od tego czasu nic się tu nie zmieniło. To, co leci w "
-                "tle, program poda samo, gdy się skończy; gdy nie masz nic "
-                "innego do zrobienia, wyślij RUN z samym czekaniem — program "
-                "poczeka razem z Tobą."
+                "tle, program poda samo, gdy się skończy, a gdy w RUN nie "
+                "ma nic nowego, poczeka, aż coś się wydarzy, i wtedy się "
+                "odezwie."
             )
     except Exception:
         pass
@@ -32942,48 +32942,53 @@ def _rozmiary_plikow(pliki):
     return wynik
 
 
-def _czekaj_razem(name, args, sekundy):
-    """v480el: RUN, w ktorym MAIN tylko czeka (czekanie jest pierwsza akcja,
-    nic innego przed nim), program czeka razem z nim, zamiast od razu pytac
-    go o nastepna decyzje.
+_w_tle_postep = []
 
-    Bieg 2026-10-24 17:41-18:05: po kazdym czekaniu w tle program od razu
-    pytal MAIN-a, co dalej; MAIN nie mial nic innego, wiec na zmiane pisal
-    "Czekam" (nowe czekanie) i "Sprawdzam bezposrednio stan" — co minute to
-    samo sprawdzenie.
 
-    v480en (uzytkownik 2026-10-24 20:15: "chcielismy, zeby mogli dzialac,
-    jak pusci duzy program — on ma wyniki co jakis czas"): czekanie nie stoi
-    juz slepo do konca. Program budzi MAIN-a, gdy:
-    - skonczy sie to, na co czeka (proces w tle albo czekanie z listy),
-    - w plikach, ktore ta komenda czyta (log, stderr), przybyly nowe wyniki
-      — ale nie wczesniej niz po _BUDZ_PO_PRZYROSCIE_S,
-    - minie sleep z komendy.
-    Wtedy wykonuje reszte komendy bez sleep (swiezy odczyt) i mowi, czemu
-    obudzil. Miedzy tymi chwilami nie ma zadnych zapytan do DeepSeeka —
-    program sam patrzy co 5 s na telefonie."""
-    cmd = str(args.get("command") or "")
+def _bezczynnie_czekaj():
+    """v480eo: MAIN w calym RUN nie zrobil nic nowego (tylko czekanie na to,
+    co juz leci w tle, albo to samo sprawdzenie z tym samym wynikiem), wiec
+    program nie pyta go od razu znowu, tylko czeka, az cos sie wydarzy.
+
+    Uzytkownik 2026-10-24 20:19: "chodzilo mi, zeby mogl dzialac jeszcze,
+    jak cos pusci". Dlatego kazde czekanie idzie w tlo i MAIN od razu ma
+    glos (v480el trzymal go przy RUN zaczynajacym sie od czekania — to
+    cofniete). Pusto kreci sie tylko wtedy, gdy sam nic nie robi; wtedy
+    program budzi go, gdy:
+    - skonczy sie cos z listy w tle albo proces w tle,
+    - w plikach, ktore czytaja czekania z listy, przybyly nowe wyniki (nie
+      wczesniej niz po _BUDZ_PO_PRZYROSCIE_S) — wtedy dostaje swiezy
+      odczyt jako "postep",
+    - minie najdalszy czas czekan z listy (najdluzej 30 min).
+    Miedzy tymi chwilami nie ma zapytan do DeepSeeka; program patrzy sam
+    co 5 s na telefonie."""
     zywe = _w_tle_zywe()
     procesy = _zywe_w_tle()
-    pliki = _pliki_czekania(cmd)
-    if not zywe and not procesy and not pliki:
-        return dispatch_tool(name, args)
-    tamto = _to_samo_czekanie(cmd)
+    if not zywe and not procesy:
+        return
+    czekania = [r for r in zywe if r["rodzaj"] == "czekanie"]
+    pliki = set()
+    for r in czekania:
+        pliki |= _pliki_czekania(r["komenda"])
     t0 = time.time()
-    koniec = t0 + sekundy
+    koniec = t0 + 1800
+    if zywe:
+        koniec = min(koniec, max(
+            r["start"] + (r.get("sekundy") or 0) for r in zywe
+        ) + 5)
+        koniec = max(koniec, t0 + 60)
     rozmiary0 = _rozmiary_plikow(pliki)
-    log("MAIN", "MAIN tylko czeka — program czeka razem z nim (najdłużej "
-        + _min_s(sekundy) + ", do " + _hhmm(koniec) + "); obudzi go, gdy "
-        "proces się skończy albo w logach przybędą nowe wyniki.")
+    log("MAIN", "MAIN nic nowego nie zrobił — program czeka, aż coś się "
+        "wydarzy w tle (najdłużej do " + _hhmm(koniec) + "), zamiast pytać "
+        "go od razu znowu.")
     powod = "czas"
     nastepny_meldunek = t0 + 60
     while time.time() < koniec:
-        if zywe and not any(r["watek"].is_alive() for r in zywe):
+        if zywe and any(not r["watek"].is_alive() for r in zywe):
             powod = "koniec_tla"
             break
         if procesy:
             teraz_zywe = _zywe_w_tle()
-            # jak przy skracaniu sleep: wystarczy, ze skonczy sie jeden
             if any(k not in teraz_zywe for k in procesy):
                 powod = "koniec_procesu"
                 break
@@ -32993,33 +32998,36 @@ def _czekaj_razem(name, args, sekundy):
                 break
         if time.time() >= nastepny_meldunek:
             nastepny_meldunek += 60
-            log("TERMUX", "Czeka " + _min_s(time.time() - t0) + " z "
-                + _min_s(sekundy) + " (do " + _hhmm(koniec) + "); obudzi "
-                "MAIN-a, gdy proces się skończy albo w logach przybędzie wyników.")
+            log("TERMUX", "Czeka " + _min_s(time.time() - t0) + " (najdłużej "
+                "do " + _hhmm(koniec) + "); obudzi MAIN-a, gdy coś w tle się "
+                "skończy albo w logach przybędzie wyników.")
         time.sleep(5)
     czekal = _min_s(time.time() - t0)
     zdanie = {
-        "koniec_tla": "to, co leciało w tle, skończyło się; jego wynik jest "
-                      "na górze tej wiadomości",
-        "koniec_procesu": "proces w tle, na który czekałeś, się skończył",
-        "przybylo": "proces dalej działa, ale w plikach, które czytasz, "
-                    "przybyły nowe wyniki — obudziłem Cię, żebyś je zobaczył",
-        "czas": "minął czas z tej komendy",
+        "koniec_tla": "coś z tego, co leciało w tle, się skończyło",
+        "koniec_procesu": "proces w tle się skończył",
+        "przybylo": "proces dalej działa, ale w jego logach przybyły nowe wyniki",
+        "czas": "minął czas czekań z tła",
     }[powod]
-    opis = "Program czekał razem z Tobą " + czekal + " — " + zdanie + "."
-    log("MAIN", "Czekanie z MAIN-em skończone po " + czekal + ": " + zdanie + ".")
-    if tamto and powod == "koniec_tla":
-        return {"ok": True, "status": "POCZEKAL", "command": cmd,
-                "message": opis + " Tej komendy drugi raz nie wykonałem, bo "
-                "tamto czekanie czyta te same pliki."}
-    try:
-        wynik = dispatch_tool(name, dict(args, command=_BEZ_SLEEP_RE.sub("true", cmd)))
-    except Exception as e:
-        wynik = {"ok": False, "error": str(e)}
-    if not isinstance(wynik, dict):
-        wynik = {"ok": True, "wynik": wynik}
-    wynik["czekanie"] = opis + " Potem wykonałem resztę tej komendy bez sleep."
-    return wynik
+    log("MAIN", "Czekanie bez pracy skończone po " + czekal + ": " + zdanie + ".")
+    tekst = (
+        "Poprzedni RUN nie wniósł nic nowego, więc program czekał " + czekal
+        + ", aż coś się wydarzy: " + zdanie + "."
+    )
+    if powod == "przybylo" and czekania:
+        try:
+            odczyt = dispatch_tool("termux_run", {
+                "command": _BEZ_SLEEP_RE.sub("true", czekania[0]["komenda"])
+            })
+            tekst += (
+                "\nPostęp (świeży odczyt z czekania z "
+                + _hhmm(czekania[0]["start"]) + "):\n"
+                + _opis_wyniku_czekania(odczyt)
+            )
+        except Exception:
+            pass
+    with _w_tle_lock:
+        _w_tle_postep.append("═══ POSTĘP W TLE ═══\n" + tekst + "\n═══")
 
 
 def _wykonaj_po_skonczonym(name, args):
@@ -33136,9 +33144,10 @@ def _karta_startu(r, teraz):
         ]
     linie.append(
         "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy "
-        "— nie trzeba puszczać drugiego czekania na to samo. Gdy nie masz "
-        "nic innego do zrobienia, wyślij RUN z samym czekaniem: program "
-        "poczeka wtedy razem z Tobą i odezwie się z wynikiem."
+        "— nie trzeba puszczać drugiego czekania na to samo ani sprawdzać "
+        "w kółko. Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle "
+        "coś się wydarzy (koniec albo nowe wyniki w logach), i wtedy się "
+        "odezwie."
     )
     if r.get("pominiete"):
         linie.append(
@@ -33156,6 +33165,8 @@ def _czekanie_blok():
     karty, linie, nowe = [], [], False
     widziane = {}
     with _w_tle_lock:
+        karty.extend(_w_tle_postep)
+        del _w_tle_postep[:]
         for r in list(_w_tle):
             if r.get("wynik") is not None:
                 if not r.get("dostarczony"):
@@ -33222,6 +33233,8 @@ def _wykonaj_akcje_maina(decision, step):
 
     globals()["_wykonuje_main"] = True
 
+    _nic_nowego = True
+
     for i, akcja in enumerate(akcje[:_RUN_MAX_AKCJI]):
 
         if not isinstance(akcja, dict):
@@ -33268,9 +33281,6 @@ def _wykonaj_akcje_maina(decision, step):
         ):
             # v480ee: patrz _wykonaj_po_skonczonym().
             result = _wykonaj_po_skonczonym(name, args)
-        elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S and i == 0:
-            # v480el: patrz _czekaj_razem().
-            result = _czekaj_razem(name, args, _sek_akcji)
         elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S:
             # v480ed/eh: patrz _pusc_czekanie_w_tle(). Akcje po czekaniu
             # nie ruszaja — zalezaly od jego wyniku, ktorego jeszcze nie ma.
@@ -33325,6 +33335,14 @@ def _wykonaj_akcje_maina(decision, step):
 
         wyniki.append({"tool": name, "args": args, "wynik": result})
 
+        # v480eo: patrz _bezczynnie_czekaj().
+        if not (isinstance(result, dict) and (
+            result.get("status") == "JUZ_CZEKA_W_TLE"
+            or result.get("bez_zmian")
+            or (name == "termux_check_process" and result.get("running") is True)
+        )):
+            _nic_nowego = False
+
         if _do_tla:
             pominiete = len(akcje[i + 1:_RUN_MAX_AKCJI])
             break
@@ -33350,6 +33368,12 @@ def _wykonaj_akcje_maina(decision, step):
             + str(_RUN_MAX_AKCJI) + " (limit na jedno RUN)."
         )
         pominiete = len(akcje) - _RUN_MAX_AKCJI
+
+    if _nic_nowego and wyniki:
+        try:
+            _bezczynnie_czekaj()
+        except Exception:
+            pass
 
     wynik = {
         "ok": ok_all,

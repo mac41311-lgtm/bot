@@ -2504,3 +2504,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (MAIN_BUDZ_PO_PRZYROSCIE_S); minie sleep. Wtedy wykonuje resztę
      komendy bez sleep (świeży odczyt) i pisze, czemu obudził. W logu raz
      na minutę: "Czeka X z Y min (do HH:MM) ...".
+148. MAIN działa, gdy coś leci; czeka tylko, gdy sam nic nie robi
+     (v480eo, użytkownik 2026-10-24 20:19: "chodziło mi, żeby mógł działać
+     jeszcze, jak coś puści"). Każde czekanie (sleep od minuty) idzie w tło
+     i MAIN od razu ma głos — także gdy czekanie jest pierwszą akcją RUN
+     (v480el/en trzymały go wtedy; cofnięte). Gdy cały RUN nie wniósł nic
+     nowego (tylko czekanie na to, co już leci, sprawdzenie z tym samym
+     wynikiem albo check_process "dalej działa"), program nie pyta go od
+     razu znowu, tylko czeka, aż coś się wydarzy: koniec czegoś w tle,
+     koniec procesu, nowe wyniki w logach czytanych przez czekania (nie
+     wcześniej niż po 3 min — wtedy MAIN dostaje kartę "POSTĘP W TLE" ze
+     świeżym odczytem), albo koniec czasu czekań (najdłużej 30 min). Bez
+     zapytań do DeepSeeka w tym czasie.
