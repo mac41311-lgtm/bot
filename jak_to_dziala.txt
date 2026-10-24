@@ -2288,3 +2288,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        co najmniej minutę bierze wyraźnie ponad połowę, drużyna dostaje
        raz zdanie, co się stało i jak to poprawić. Bez zabijania i bez
        innych limitów. Obie drużyny tak samo; zwykły tryb bez zmian.
+
+128. Trzy poprawki z biegu celu v4 (v480dv, 2026-10-24):
+     - flagi narzędzi z napisów: append="false" jako tekst było
+       dopisaniem (bool("false") == True). Drużyna 2 dokleiła nowy
+       wynik.json do starego i Sędzia przez 20 min nie mógł go odczytać.
+       Teraz "false"/"0"/"nie" to fałsz, a "true"/"1"/"tak" to prawda,
+       a parametry DSML z string="false" są czytane jako wartość JSON;
+     - procesy rywala są nietykalne: kill/pkill/killall (także w
+       uruchamianym skrypcie), który trafiłby w proces pracujący w
+       folderze drugiej drużyny, nie jest wykonywany. Drużyna dostaje
+       powód i jak zatrzymać tylko swoje procesy (pid albo wzorzec ze
+       ścieżką we własnym folderze). Bieg 2026-10-24 02:24: drużyna 1
+       zabiła sprawdzanie drużyny 2;
+     - prompt Sędziego przepisany: procent to część CAŁEGO celu (100% =
+       cel osiągnięty w całości), etapy ważą tyle, ile przybliżają do
+       końca, praca i ustalenia nie dodają, każda ocena liczona od stanu
+       celu, a po zmianie celu od nowa (po v4 Sędzia przeniósł 70% z v3
+       i doszedł do 85% przy 3 z 6 szczebli). Nowa rozmowa Sędziego
+       dostaje starą ocenę tylko przy tym samym celu.

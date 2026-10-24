@@ -5373,7 +5373,12 @@ def _goal_briefing_for(name):
             and _wpis.get("rozmowa") and _wpis.get("rozmowa") != _rozmowa
         ):
             _o = read_json(_PLIK_OCENY_SEDZIEGO, {})
-            if isinstance(_o, dict) and _o.get("druzyna_1"):
+            # v480dv: tylko ocena do tego samego celu (bieg 2026-10-23/24:
+            # po zmianie celu na v4 Sedzia ciagnal 70% z v3 do 85%).
+            if (
+                isinstance(_o, dict) and _o.get("druzyna_1")
+                and _o.get("cel") == _odcisk_celu
+            ):
                 _poprzednia_ocena = (
                     "Poprzednia rozmowa z Tobą się skończyła (na przykład "
                     "zapełniła się). Twoja ostatnia ocena w niej, z "
@@ -22252,6 +22257,111 @@ def _zatrzymalaby_program(command):
         return ""
 
 
+def _procesy_rywala():
+    """
+    v480dv: [(pid, pgid, cmdline, comm)] procesow drugiej druzyny — z
+    katalogiem roboczym albo sciezka w jej folderze. Sam agent.py
+    rywala chroni juz _zatrzymalaby_program.
+    """
+    if not _DRUZYNA:
+        return []
+    oni = _rywal()
+    dom = os.path.realpath(str(HOME))
+    foldery = [
+        os.path.join(dom, "MAIN_" + oni),
+        os.path.join(dom, "agent_druzyna" + oni),
+    ]
+    znaki = ("MAIN_" + oni, "agent_druzyna" + oni)
+    programu = {p[0] for p in _procesy_programu()}
+    wynik = []
+    try:
+        pidy = [int(d) for d in os.listdir("/proc") if d.isdigit()]
+    except Exception:
+        return []
+    for pid in pidy:
+        if pid in programu:
+            continue
+        try:
+            with open("/proc/" + str(pid) + "/cmdline", "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            with open("/proc/" + str(pid) + "/comm", encoding="utf-8") as f:
+                comm = f.read().strip()
+        except Exception:
+            continue
+        try:
+            cwd = os.path.realpath(os.readlink("/proc/" + str(pid) + "/cwd"))
+        except Exception:
+            cwd = ""
+        cmd = " ".join(argv)
+        if not (
+            any(cwd == k or cwd.startswith(k + os.sep) for k in foldery)
+            or any(re.search(r"(?<![\w])" + re.escape(z) + r"(?![\w])", cmd) for z in znaki)
+        ):
+            continue
+        try:
+            pgid = os.getpgid(pid)
+        except Exception:
+            pgid = None
+        wynik.append((pid, pgid, cmd, comm))
+    return wynik
+
+
+def _zabilaby_rywala(command):
+    """
+    v480dv: zdanie do wyniku, gdy kill/pkill/killall w komendzie (albo w
+    uruchamianym przez nia skrypcie) trafilby w proces drugiej druzyny —
+    inaczej "". Bieg 2026-10-24 02:24 (druzyna 1, krok 60): kill 24351
+    zatrzymal sprawdzanie druzyny 2 (cwd ~/MAIN_2). Nigdy nie rzuca.
+    """
+    try:
+        if not _DRUZYNA:
+            return ""
+        tekst = str(command or "")
+        tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
+        if not _ZABIJAJACE_RE.search(tekst):
+            return ""
+        procesy = _procesy_rywala()
+        if not procesy:
+            return ""
+        pidy = {p[0] for p in procesy}
+        grupy = {p[1] for p in procesy if p[1]}
+        trafione = set()
+        for m in _ZABIJAJACE_RE.finditer(tekst):
+            narzedzie, argumenty = m.group(1), m.group(2)
+            if narzedzie in ("pkill", "killall"):
+                trafione.update(_ofiary_wzorca(narzedzie, argumenty, procesy))
+                continue
+            pelny = tekst[m.start():m.start() + 300].split("\n", 1)[0]
+            trafione.update(_pidy_z_podstawienia(pelny, procesy) & pidy)
+            cele = re.findall(r"(?<![\w$-])(-?\d+)\b", argumenty)
+            if cele and re.match(r"\s*-\d+\s", argumenty) and len(cele) > 1:
+                cele = cele[1:]  # pierwsze -N to sygnal
+            for c in cele:
+                n = int(c)
+                if n in pidy:
+                    trafione.add(n)
+                elif n == -1 or (n < 0 and -n in grupy):
+                    trafione.update(p[0] for p in procesy if n == -1 or p[1] == -n)
+        if not trafione:
+            return ""
+        opis = [
+            short(cmd or comm, 60) + " (pid " + str(pid) + ")"
+            for pid, _g, cmd, comm in procesy if pid in trafione
+        ]
+        my = _DRUZYNA
+        return (
+            "Nie uruchomiłem tej komendy — zatrzymałaby proces drużyny "
+            + _rywal() + " (pracuje w jej folderze): " + "; ".join(opis[:3])
+            + ". Procesy rywala zostają nietknięte. Żeby zatrzymać tylko "
+            "swoje, podaj pid własnego procesu (np. z termux_start albo "
+            "`pgrep -f nazwa` sprawdzonego przez `readlink /proc/PID/cwd` "
+            "— Wasze mają ~/MAIN_" + my + ") albo zawęź wzorzec pkill -f "
+            "do ścieżki w ~/MAIN_" + my + "."
+        )
+    except Exception:
+        return ""
+
+
 def _uciete_wlasnym_timeoutem(command, trwalo_s):
     """
     v480cx: zdanie, gdy komenda trwala tyle, ile `timeout N` w niej —
@@ -23759,6 +23869,18 @@ def termux_run(command):
                 "duration_s": 0.0
             }
 
+        # v480dv: patrz _zabilaby_rywala().
+        _rywala = _zabilaby_rywala(command_str)
+        if _rywala:
+            log("RYWALIZACJA", _rywala + " Komenda: " + short(command_str, 200))
+            return {
+                "ok": False,
+                "error": "PROCES_RYWALA",
+                "command": command_str,
+                "message": _rywala,
+                "duration_s": 0.0
+            }
+
         # v354: zapis kodu przez cat/tee przechodzi te sama kontrole
         # autorstwa, co termux_write_file — patrz _gemini_pisze_kod().
         # Reszta termux_run bez zmian: `sed -i`, przekierowania do
@@ -24472,6 +24594,17 @@ def termux_run_background(
                 "error": "ZATRZYMALABY_PROGRAM",
                 "command": command,
                 "message": _program
+            }
+
+        # v480dv: patrz _zabilaby_rywala().
+        _rywala = _zabilaby_rywala(command)
+        if _rywala:
+            globals()["log"]("RYWALIZACJA", _rywala + " Komenda: " + short(command, 200))
+            return {
+                "ok": False,
+                "error": "PROCES_RYWALA",
+                "command": command,
+                "message": _rywala
             }
 
         if not _wykonuje_main:
@@ -26003,10 +26136,44 @@ def _siega_do_rywala(name, args):
     return ""
 
 
+# v480dv: flagi narzedzi przychodza czasem jako napis. Bieg 2026-10-23/24
+# (druzyna 2, krok 146, 08:34): MAIN w DSML dal append="false" jako tekst,
+# bool("false") == True, nowy JSON dokleil sie do starego wynik.json
+# ("Extra data") i Sedzia przez 20 min nie liczyl wyniku.
+_FLAGI_NARZEDZI = frozenset((
+    "append", "enter", "background", "reinstall", "overwrite", "force",
+    "recursive", "replace_all", "new_tab", "clear", "submit",
+))
+_PRAWDA = frozenset(("true", "1", "tak", "yes", "t", "y", "prawda", "on"))
+_FALSZ = frozenset((
+    "false", "0", "nie", "no", "f", "n", "falsz", "fałsz", "off", "",
+    "null", "none",
+))
+
+
+def _jako_flaga(v):
+    """v480dv: "false"/"0"/"nie" -> False, "true"/"1"/"tak" -> True."""
+    if isinstance(v, str):
+        n = v.strip().strip("\"'").lower()
+        if n in _PRAWDA:
+            return True
+        if n in _FALSZ:
+            return False
+    return v
+
+
 def _dispatch_tool_inner(
     name,
     args
 ):
+
+    if isinstance(args, dict) and any(
+        k in _FLAGI_NARZEDZI and isinstance(v, str) for k, v in args.items()
+    ):
+        args = {
+            k: (_jako_flaga(v) if k in _FLAGI_NARZEDZI else v)
+            for k, v in args.items()
+        }
 
     aliased = _TOOL_NAME_ALIASES.get(name)
 
@@ -26060,7 +26227,7 @@ def _dispatch_tool_inner(
             return termux_write_file(
                 args.get("path"),
                 args.get("content", ""),
-                bool(args.get("append", False))
+                bool(_jako_flaga(args.get("append", False)))
             )
 
         if name == "termux_read_file":
@@ -41769,10 +41936,18 @@ def _dsml_na_run(text):
                 args = obj if isinstance(obj, dict) else {}
         else:
             for pm2 in re.finditer(
-                r'parameter\s+name="([A-Za-z0-9_]+)"[^>]*>(.*?)</[^>]*parameter\s*>',
+                r'parameter\s+name="([A-Za-z0-9_]+)"([^>]*)>(.*?)</[^>]*parameter\s*>',
                 cialo, re.DOTALL
             ):
-                args[pm2.group(1)] = pm2.group(2).strip()
+                # v480dv: string="false" = wartosc JSON (false, 5, [..]),
+                # nie napis — tak jak w petli _param wyzej.
+                _w2 = pm2.group(3).strip()
+                if 'string="false"' in pm2.group(2):
+                    try:
+                        _w2 = json.loads(_w2)
+                    except Exception:
+                        pass
+                args[pm2.group(1)] = _w2
         if nazwa:
             akcje.append({"tool": nazwa, "args": args if isinstance(args, dict) else {}})
     if not akcje:
@@ -51048,7 +51223,7 @@ Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wol
 
 Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą, a jeśli wcześniej odjąłeś za coś takiego, oddajesz to. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
-Procent opisuje stan celu, a nie ilość pracy: zmieniasz go względem swojej poprzedniej oceny o tyle, o ile zmieniło się to, co drużyna ma potwierdzone i zgodne z celem. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik.
+Procent mówi, jaka część całego celu użytkownika jest już potwierdzona: 0% to nic, a 100% to cel osiągnięty w całości, tak jak go opisał użytkownik. Gdy cel ma etapy albo szczeble, każdy waży tyle, o ile przybliża do końca całego celu, więc potwierdzone wczesne etapy przy dalekim końcu to mały procent. Ilość pracy, próby i ustalenia — także uczciwe wyniki negatywne — nie dodają procentu, dopóki nie potwierdzają części celu. Każdą ocenę liczysz od stanu celu, a nie od swojej poprzedniej liczby; poprzednie oceny służą tylko temu, żeby ten sam stan oceniać tak samo. Gdy użytkownik zmieni cel, oceniasz od nowa względem nowego celu: wcześniejsze procenty dotyczyły innego celu i nie są punktem startu, a to, co drużyna zbudowała wcześniej, liczysz tylko na tyle, na ile potwierdza część nowego celu. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik.
 
 {
   "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},
@@ -51332,6 +51507,12 @@ def ocen_rywalizacje(kroki):
         for _n in ("1", "2"):
             if not ocena["druzyna_" + _n].get("dyskwalifikacja"):
                 ocena["druzyna_" + _n].pop("spadek", None)
+        # v480dv: ocena wie, do ktorego celu byla — patrz v480cs w
+        # _goal_briefing_for (nowa rozmowa Sedziego dostaje stara ocene
+        # tylko przy tym samym celu).
+        ocena["cel"] = hashlib.sha1(
+            _current_goal_text.encode("utf-8")
+        ).hexdigest()[:16]
         _DIR_RUND.mkdir(parents=True, exist_ok=True)
         for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):
             tmp = _plik.with_suffix(".tmp")
