@@ -32927,6 +32927,21 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     }
 
 
+# v480en: najmniej tyle czeka MAIN, zanim obudzi go sam przyrost w logach.
+_BUDZ_PO_PRZYROSCIE_S = int(os.environ.get("MAIN_BUDZ_PO_PRZYROSCIE_S", "180"))
+
+
+def _rozmiary_plikow(pliki):
+    wynik = {}
+    for p in pliki:
+        try:
+            sciezka = os.path.expanduser(p.replace("$HOME", "~"))
+            wynik[p] = os.path.getsize(sciezka)
+        except Exception:
+            wynik[p] = None
+    return wynik
+
+
 def _czekaj_razem(name, args, sekundy):
     """v480el: RUN, w ktorym MAIN tylko czeka (czekanie jest pierwsza akcja,
     nic innego przed nim), program czeka razem z nim, zamiast od razu pytac
@@ -32935,31 +32950,65 @@ def _czekaj_razem(name, args, sekundy):
     Bieg 2026-10-24 17:41-18:05: po kazdym czekaniu w tle program od razu
     pytal MAIN-a, co dalej; MAIN nie mial nic innego, wiec na zmiane pisal
     "Czekam" (nowe czekanie) i "Sprawdzam bezposrednio stan" — co minute to
-    samo sprawdzenie. Teraz samo czekanie trzyma MAIN-a: gdy w tle cos juz
-    leci, program czeka na to (najdluzej ten sleep), a wynik jest na gorze
-    nastepnej wiadomosci; gdy nic nie leci, komenda leci zwyczajnie (sleep
-    skraca sie, gdy proces w tle sie skonczy)."""
+    samo sprawdzenie.
+
+    v480en (uzytkownik 2026-10-24 20:15: "chcielismy, zeby mogli dzialac,
+    jak pusci duzy program — on ma wyniki co jakis czas"): czekanie nie stoi
+    juz slepo do konca. Program budzi MAIN-a, gdy:
+    - skonczy sie to, na co czeka (proces w tle albo czekanie z listy),
+    - w plikach, ktore ta komenda czyta (log, stderr), przybyly nowe wyniki
+      — ale nie wczesniej niz po _BUDZ_PO_PRZYROSCIE_S,
+    - minie sleep z komendy.
+    Wtedy wykonuje reszte komendy bez sleep (swiezy odczyt) i mowi, czemu
+    obudzil. Miedzy tymi chwilami nie ma zadnych zapytan do DeepSeeka —
+    program sam patrzy co 5 s na telefonie."""
     cmd = str(args.get("command") or "")
     zywe = _w_tle_zywe()
-    if not zywe:
+    procesy = _zywe_w_tle()
+    pliki = _pliki_czekania(cmd)
+    if not zywe and not procesy and not pliki:
         return dispatch_tool(name, args)
     tamto = _to_samo_czekanie(cmd)
-    log("MAIN", "MAIN tylko czeka — program czeka razem z nim na to, co leci "
-        "w tle (najdłużej " + _min_s(sekundy) + ").")
     t0 = time.time()
     koniec = t0 + sekundy
-    for r in zywe:
-        r["watek"].join(timeout=max(0.0, koniec - time.time()))
+    rozmiary0 = _rozmiary_plikow(pliki)
+    log("MAIN", "MAIN tylko czeka — program czeka razem z nim (najdłużej "
+        + _min_s(sekundy) + ", do " + _hhmm(koniec) + "); obudzi go, gdy "
+        "proces się skończy albo w logach przybędą nowe wyniki.")
+    powod = "czas"
+    nastepny_meldunek = t0 + 60
+    while time.time() < koniec:
+        if zywe and not any(r["watek"].is_alive() for r in zywe):
+            powod = "koniec_tla"
+            break
+        if procesy:
+            teraz_zywe = _zywe_w_tle()
+            # jak przy skracaniu sleep: wystarczy, ze skonczy sie jeden
+            if any(k not in teraz_zywe for k in procesy):
+                powod = "koniec_procesu"
+                break
+        if pliki and time.time() - t0 >= _BUDZ_PO_PRZYROSCIE_S:
+            if _rozmiary_plikow(pliki) != rozmiary0:
+                powod = "przybylo"
+                break
+        if time.time() >= nastepny_meldunek:
+            nastepny_meldunek += 60
+            log("TERMUX", "Czeka " + _min_s(time.time() - t0) + " z "
+                + _min_s(sekundy) + " (do " + _hhmm(koniec) + "); obudzi "
+                "MAIN-a, gdy proces się skończy albo w logach przybędzie wyników.")
+        time.sleep(5)
     czekal = _min_s(time.time() - t0)
-    zostalo = [r for r in zywe if r["watek"].is_alive()]
-    opis = (
-        "Program czekał razem z Tobą " + czekal + " — "
-        + ("to, co leciało w tle, skończyło się; wynik jest na górze tej "
-           "wiadomości." if not zostalo else
-           "minął czas z tej komendy, a to, co leci w tle, trwa dalej; "
-           "wynik przyjdzie sam.")
-    )
-    if tamto:
+    zdanie = {
+        "koniec_tla": "to, co leciało w tle, skończyło się; jego wynik jest "
+                      "na górze tej wiadomości",
+        "koniec_procesu": "proces w tle, na który czekałeś, się skończył",
+        "przybylo": "proces dalej działa, ale w plikach, które czytasz, "
+                    "przybyły nowe wyniki — obudziłem Cię, żebyś je zobaczył",
+        "czas": "minął czas z tej komendy",
+    }[powod]
+    opis = "Program czekał razem z Tobą " + czekal + " — " + zdanie + "."
+    log("MAIN", "Czekanie z MAIN-em skończone po " + czekal + ": " + zdanie + ".")
+    if tamto and powod == "koniec_tla":
         return {"ok": True, "status": "POCZEKAL", "command": cmd,
                 "message": opis + " Tej komendy drugi raz nie wykonałem, bo "
                 "tamto czekanie czyta te same pliki."}

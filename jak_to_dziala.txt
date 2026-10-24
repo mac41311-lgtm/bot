@@ -2494,3 +2494,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wypisał". Teraz samo czekanie melduje się raz na minutę: "Czeka 3 min
      z 15 min (do 20:06); proces w tle, na który czeka, dalej działa: ...
      — gdy się skończy, czekanie się skróci."
+147. Czekanie z MAIN-em budzi go przy nowych wynikach (v480en,
+     użytkownik 2026-10-24 20:15: "chcieliśmy, żeby mogli działać, jak
+     puści duży program — on ma wyniki co jakiś czas"). RUN zaczynający się
+     od czekania nie stoi już ślepo do końca sleep. Program sam co 5 s (na
+     telefonie, bez DeepSeeka) patrzy i budzi MAIN-a, gdy: skończy się
+     proces w tle albo czekanie z listy; w plikach, które ta komenda czyta
+     (log, stderr), przybędą nowe wyniki — nie wcześniej niż po 3 min
+     (MAIN_BUDZ_PO_PRZYROSCIE_S); minie sleep. Wtedy wykonuje resztę
+     komendy bez sleep (świeży odczyt) i pisze, czemu obudził. W logu raz
+     na minutę: "Czeka X z Y min (do HH:MM) ...".
