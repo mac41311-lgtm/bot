@@ -2315,3 +2315,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      drużyna dostaje raz zdanie, że zmieniła się skala albo cel, a nie
      jej stan: to, co ma potwierdzone, zostaje, i to nie kara. Ocena
      zapisuje odcisk promptu Sędziego („skala”) i celu („cel”).
+
+130. Wynik rywala już nie trafia do drużyny (v480dx). Bieg 2026-10-24:
+     program sam wysyłał każdej drużynie sprawdzony wynik rywala z
+     liczbą (drużyna 2 dostała go 13 razy), a Sędzia o 10:31 odjął
+     drużynie 2 2 pp za to, że zna liczbę drużyny 1. Teraz:
+     - werdykt sprawdzonego wyniku idzie tylko do drużyny, której
+       dotyczy; o rywalu drużyna wie tylko procent i kto prowadzi (tak
+       mówi też opis rywalizacji);
+     - prompt Sędziego (przepisany w całości) mówi, że do tej wersji
+       program sam pokazywał liczby rywala, więc ich znajomość nie jest
+       naruszeniem i Sędzia oddaje, co za to odjął; „ocena” każdej
+       drużyny mówi tylko o niej, bez liczb rywala.
