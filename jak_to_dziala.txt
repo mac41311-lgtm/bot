@@ -2596,3 +2596,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      liście wyników); bez „Nie wykonałem N kolejnych akcji.”, gdy
      czekanie w tle samo mówi, których akcji nie wykonało i czemu; w
      odczytach z tła bez „kod wyjścia: 0” (inny kod zostaje).
+158. Mniej szumu u Sędziego (v480ex, użytkownik 2026-10-24 21:31,
+     wiadomość do Sędziego z 21:29): w „Ostatnich krokach” powód MAIN-a
+     szedł dwa razy (jako zadanie i jako „wynik”) — teraz „wynik” to samo
+     „wykonano N z M akcji”; „Pliki w folderze” bez kopii zapasowych
+     (.bak_…, .przed_…) — zamiast nich „(+ N kopii zapasowych)”;
+     „Ostatnio używane komendy” bez „sleep N;” na początku i każda
+     komenda raz (to samo sprawdzenie logu szło 4 razy).

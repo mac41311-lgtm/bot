@@ -52368,7 +52368,12 @@ def _gdzie_pracowala(katalog, n=8, ile=30):
             co = str(t.get("komenda") or t.get("cel_akcji") or "").strip()
             if not co:
                 continue
+            # v480ex: bez "sleep N;" — to czekanie, nie miejsce pracy
+            co = re.sub(r"^\s*sleep\s+\d+\s*(?:;|&&)\s*", "", co)
             linie.append("- " + str(t.get("tool") or "?") + ": " + short(co, 160))
+    # v480ex: ta sama komenda raz (ostatnie wystapienie) — bieg 2026-10-24
+    # 21:29: to samo sprawdzenie logu 4 razy w jednej ocenie.
+    linie = list(reversed(list(dict.fromkeys(reversed(linie)))))
     linie = linie[-ile:]
     return "\n".join(linie)
 
@@ -52376,6 +52381,7 @@ def _gdzie_pracowala(katalog, n=8, ile=30):
 def _pliki_druzyny(numer, ile=40):
     folder = HOME / ("MAIN_" + str(numer))
     linie = []
+    kopii = 0
     try:
         for korzen, katalogi, pliki in os.walk(folder):
             katalogi[:] = sorted(k for k in katalogi if not k.startswith("."))
@@ -52383,6 +52389,11 @@ def _pliki_druzyny(numer, ile=40):
                 katalogi[:] = []
             for nazwa in sorted(pliki):
                 if nazwa.startswith("."):
+                    continue
+                # v480ex: kopie zapasowe (.bak_…, .przed_…) to szum — bieg
+                # 2026-10-24 21:29: 15 kopii PLATEAU_B_RAPORT.md.bak_… w spisie
+                if _KOPIA_W_SPISIE_RE.search(nazwa):
+                    kopii += 1
                     continue
                 p = Path(korzen) / nazwa
                 try:
@@ -52394,6 +52405,8 @@ def _pliki_druzyny(numer, ile=40):
                     return ", ".join(linie) + ", …"
     except Exception:
         pass
+    if kopii:
+        linie.append("(+ " + str(kopii) + " kopii zapasowych)")
     return ", ".join(linie) if linie else "(pusto)"
 
 
@@ -52422,6 +52435,11 @@ def _kroki_dla_sedziego(katalog, n=8):
         po_co = " ".join(str(data.get("task") or "").split())
         co = " ".join(str(data.get("report") or data.get("message")
                           or data.get("error") or "").split())
+        # v480ex: po RUN raport to powod MAIN-a + "wykonano N z M akcji" —
+        # powod szedl dwa razy (bieg 2026-10-24 21:29, kazdy krok).
+        _wyk = re.search(r"wykonano \d+ z \d+ akcji.*$", co)
+        if po_co and _wyk and co.startswith(po_co[:60]):
+            co = _wyk.group(0)
         linie.append(str(i) + ". " + status + (" — " + short(po_co, 500) if po_co else "")
                      + (" | wynik: " + short(co, 300) if co and co not in po_co else ""))
     return "\n".join(linie)
