@@ -32985,7 +32985,8 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
                 + _hhmm(tamto["start"]) + " już czyta te same pliki i leci "
                 "do ok. " + _hhmm(tamto["start"] + (tamto.get("sekundy") or 0))
                 + " (wcześniej, jeśli proces się skończy). Jego wynik przyjdzie "
-                "sam na górze Twojej wiadomości."
+                "sam na górze Twojej wiadomości, więc nie musisz na nie czekać "
+                "— w tym czasie możesz robić coś innego."
                 + ((" Akcji po nim w tym RUN (" + ", ".join(pominiete)
                     + ") nie wykonałem — mogą zależeć od wyniku; wyślij je, "
                     "gdy przyjdzie.") if pominiete else "")
@@ -33141,7 +33142,9 @@ def _bezczynnie_czekaj():
         tekst += (
             "\nNastępny taki odczyt najwcześniej za "
             + str(_odstep_przyrostu[0] // 60) + " min — koniec procesu albo "
-            "czekania przyjdzie od razu. Czekania nie trzeba puszczać od nowa."
+            "czekania przyjdzie od razu. Czekania nie trzeba puszczać od nowa "
+            "ani na nie czekać: w tym czasie możecie pracować nad czymś innym "
+            "(analiza, następna próba, rozmowa z zespołem)."
         )
     with _w_tle_lock:
         _w_tle_postep.append("═══ POSTĘP W TLE ═══\n" + tekst + "\n═══")
@@ -33323,7 +33326,8 @@ def _czekanie_blok():
             "eksperyment."
         )
     if linie:
-        karty.append("\n".join(linie) + " Wyniki przyjdą same.")
+        karty.append("\n".join(linie) + " Wyniki przyjdą same — na nie nie "
+                     "trzeba czekać, ten krok możecie użyć na coś innego.")
     return ("\n\n".join(karty) + "\n\n") if karty else ""
 
 

@@ -2541,3 +2541,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wynikach komend linie z pid rywala, ścieżką do jego folderu albo jego
      linią poleceń zastępuje jedna informacja: „proces albo plik drużyny
      N — ukryty; to nie Wasze, nie trzeba tego sprawdzać”.
+152. Komunikaty o tle mówią wprost, że MAIN nie musi czekać (v480er,
+     użytkownik 2026-10-24 20:53). Drużyna 1 po każdej karcie postępu
+     tylko odsyłała to samo czekanie. Teraz linia „W tle dalej …”, karta
+     „POSTĘP W TLE” i odmowa drugiego czekania (JUZ_CZEKA_W_TLE) dodają,
+     że wynik przyjdzie sam i w tym czasie można pracować nad czymś innym
+     (analiza, następna próba, rozmowa z zespołem). To opis stanu w
+     komunikacie programu, nie stały tekst w prompcie.
