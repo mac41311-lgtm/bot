@@ -2613,3 +2613,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      nie wraca w wyniku; raport o końcu procesu w tle szuka pliku z
      przekierowania także w katalogu z „cd X” w komendzie i podaje tylko
      3 ostatnie linie (pełny odczyt zwykle jest w karcie czekania).
+160. Sprawdzenie Sędziego przeżywa przeładowanie programu (v480ez, bieg
+     2026-10-24 21:02–21:36, drużyna 2). Po każdej aktualizacji nowy
+     proces programu puszczał „sprawdz” drużyny od nowa, choć poprzedni
+     (~25 min) dalej liczył — trzy sprawdz_v19.py naraz walczyły o RAM i
+     CPU, a Sędzia dostał „test...” zamiast liczby. Teraz stan
+     sprawdzania (pid, treść zgłoszenia, start) jest w
+     ~/RYWALIZACJA/sprawdzanie_N.json, a wyjście w sprawdzanie_N.out:
+     nowy proces czeka na to samo sprawdzanie, zamiast puszczać drugie;
+     przy nowym zgłoszeniu stare sprawdzanie jest kończone. Limit 20 min
+     liczy się od pierwszego startu.

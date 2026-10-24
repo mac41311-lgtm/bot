@@ -51955,24 +51955,77 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="komenda usuwa pliki — sędzia jej nie uruchamia")
         return werdykt
 
+    # v480ez: sprawdzenie przezywa przeladowanie programu. Bieg 2026-10-24
+    # 21:02-21:36 (druzyna 2): po kazdej aktualizacji nowy proces
+    # uruchamial "sprawdz" od nowa, choc poprzedni (~25 min) dalej liczyl —
+    # trzy sprawdz_v19.py naraz walczyly o RAM i CPU, a Sedzia dostal
+    # "test..." zamiast liczby. Teraz stan sprawdzania jest w pliku, a
+    # wyjscie idzie do pliku: nowy proces programu czeka na to samo
+    # sprawdzanie, zamiast puszczac drugie.
+    stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
+    wyj_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".out")
+    klucz = json.dumps([str(dane.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")],
+                       ensure_ascii=False)
+    stan = read_json(stan_plik, {})
+    proces = None
+    kod = None
     try:
-        proces = subprocess.Popen(
-            ["bash", "-c", komenda],
-            cwd=str(folder), stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, start_new_session=True,
-        )
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        if (isinstance(stan, dict) and stan.get("klucz") == klucz
+                and _zyje(stan.get("pid"))):
+            pid = int(stan["pid"])
+            start = float(stan.get("start") or time.time())
+            log("RYWALIZACJA", "Sędzia: to samo sprawdzenie drużyny " + str(numer)
+                + " już liczy (pid " + str(pid) + ", od " + _min_s(time.time() - start)
+                + ") — czekam na nie, nie puszczam drugiego.")
+        else:
+            if isinstance(stan, dict) and _zyje(stan.get("pid")):
+                try:
+                    os.killpg(int(stan["pid"]), signal.SIGKILL)  # stare zgloszenie
+                except Exception:
+                    pass
+            with open(wyj_plik, "w", encoding="utf-8") as _fh:
+                proces = subprocess.Popen(
+                    ["bash", "-c", komenda],
+                    cwd=str(folder), stdin=subprocess.DEVNULL,
+                    stdout=_fh, stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            pid, start = proces.pid, time.time()
+            write_json(stan_plik, {"pid": pid, "klucz": klucz, "start": start})
+        while True:
+            if proces is not None:
+                if proces.poll() is not None:
+                    kod = proces.returncode
+                    break
+            elif not _zyje(pid):
+                break
+            if time.time() - start > _SEDZIA_MAKS_S:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                if proces is not None:
+                    try:
+                        proces.wait(timeout=10)
+                    except Exception:
+                        pass
+                try:
+                    stan_plik.unlink()
+                except Exception:
+                    pass
+                werdykt.update(werdykt="nie wyszło", szczegol="komenda nie skończyła się w "
+                               + str(_SEDZIA_MAKS_S // 60) + " min")
+                return werdykt
+            time.sleep(2)
         try:
-            wyjscie, _ = proces.communicate(timeout=_SEDZIA_MAKS_S)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proces.pid, signal.SIGKILL)
-            except Exception:
-                pass
-            proces.communicate()
-            werdykt.update(werdykt="nie wyszło", szczegol="komenda nie skończyła się w "
-                           + str(_SEDZIA_MAKS_S // 60) + " min")
-            return werdykt
+            wyjscie = wyj_plik.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            wyjscie = ""
+        try:
+            stan_plik.unlink()
+        except Exception:
+            pass
     except Exception as e:
         werdykt.update(werdykt="nie wyszło", szczegol="komenda nie ruszyła: " + str(e)[:200])
         return werdykt
@@ -51981,7 +52034,7 @@ def _sedzia_ocen(numer):
     werdykt["wypisala"] = wypisala
     if wypisala is None:
         werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
-                       + str(proces.returncode) + "): " + short(str(wyjscie or "").strip(), 200))
+                       + str(kod if kod is not None else "?") + "): " + short(str(wyjscie or "").strip(), 200))
     elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):
         werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala))
     else:
