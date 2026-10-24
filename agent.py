@@ -33238,6 +33238,9 @@ def _karta_wyniku(r):
     ])
 
 
+_wyjasnienie_tla_bylo = [False]
+
+
 def _karta_startu(r, teraz):
     czekanie = r["rodzaj"] == "czekanie"
     minelo = int(teraz - r["start"])
@@ -33267,13 +33270,22 @@ def _karta_startu(r, teraz):
             "limitami; nic jej nie przerwał. Pliki, które zapisuje, mogą "
             "być jeszcze niepełne.",
         ]
-    linie.append(
-        "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy "
-        "— nie trzeba puszczać drugiego czekania na to samo ani sprawdzać "
-        "w kółko. Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle "
-        "coś się wydarzy (koniec albo nowe wyniki w logach), i wtedy się "
-        "odezwie."
-    )
+    # v480ev: pelne wyjasnienie raz na uruchomienie programu; potem jedna
+    # linia (bieg 2026-10-24: ten sam akapit 23 razy w godzine).
+    if not _wyjasnienie_tla_bylo[0]:
+        _wyjasnienie_tla_bylo[0] = True
+        linie.append(
+            "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy "
+            "— nie trzeba puszczać drugiego czekania na to samo ani sprawdzać "
+            "w kółko. Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle "
+            "coś się wydarzy (koniec albo nowe wyniki w logach), i wtedy się "
+            "odezwie. W tym czasie zespół może myśleć i pracować nad czymś "
+            "innym: przeanalizować dotychczasowe wyniki, przemyśleć następne "
+            "próby, porozmawiać z kimś z zespołu albo z Igorem, przygotować "
+            "kolejny eksperyment."
+        )
+    else:
+        linie.append("Wynik przyjdzie sam; w tym czasie możecie pracować nad czymś innym.")
     if r.get("pominiete"):
         linie.append(
             "Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
@@ -33287,7 +33299,7 @@ def _czekanie_blok():
     """v480ed/eh: karty tego, co leci w tle (pelna raz, potem linia), i
     wyniki tego, co sie skonczylo (kazdy raz)."""
     teraz = time.time()
-    karty, linie, nowe = [], [], False
+    karty, linie = [], []
     widziane = {}
     with _w_tle_lock:
         karty.extend(_w_tle_postep)
@@ -33314,7 +33326,7 @@ def _czekanie_blok():
                 _w_tle.remove(r)
             elif not r.get("pokazany"):
                 r["pokazany"] = True
-                nowe = True
+
                 karty.append(_karta_startu(r, teraz))
             else:
                 co = "czekanie" if r["rodzaj"] == "czekanie" else "komenda"
@@ -33323,13 +33335,6 @@ def _czekanie_blok():
                     + short(_bez_sleep(r["komenda"]), 60) + "), już "
                     + _min_s(teraz - r["start"]) + "."
                 )
-    if nowe:
-        karty.append(
-            "W tym czasie zespół może myśleć i pracować nad czymś innym: "
-            "przeanalizować dotychczasowe wyniki, przemyśleć następne próby, "
-            "porozmawiać z kimś z zespołu albo z Igorem, przygotować kolejny "
-            "eksperyment."
-        )
     if linie:
         karty.append("\n".join(linie) + " Wyniki przyjdą same — na nie nie "
                      "trzeba czekać, ten krok możecie użyć na coś innego.")

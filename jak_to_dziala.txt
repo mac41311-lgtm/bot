@@ -2580,3 +2580,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ({"ok": …, "returncode": …} i inne ważne pola), pod nim stdout i
      stderr jako zwykły tekst; komenda, workdir i ścieżka nie wracają,
      gdy są takie same jak w akcji.
+156. Krótsze karty „W TLE” (v480ev, użytkownik 2026-10-24 21:27:
+     „uporządkuj to, sprawdź szerzej”). Przegląd wiadomości do MAIN-a z
+     logów 2026-10-24: 60–70% to wyniki akcji RUN (oczyszczone w
+     v480eu), dalej oceny Sędziego (nowe co kwadrans — zostają), karty
+     „W TLE”. Każda karta „W TLE” niosła ten sam akapit (wynik przyjdzie
+     sam, nie sprawdzaj w kółko, program poczeka …) plus osobny akapit „W
+     tym czasie zespół może …” — 23 razy w godzinę. Teraz pełne
+     wyjaśnienie idzie raz na uruchomienie programu, a kolejne karty mają
+     jedną linię: „Wynik przyjdzie sam; w tym czasie możecie pracować nad
+     czymś innym.”
