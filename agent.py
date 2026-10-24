@@ -32641,6 +32641,56 @@ def _min_s(sek):
     )
 
 
+def _watek_narzedzia(name, args):
+    """v480ef: watek wykonujacy narzedzie; wynik trafia do `h["wynik"]`, a
+    jesli watek siedzi juz w miejscu "w tle" (_czekanie_w_tle) — takze tam."""
+    h = {}
+
+    def _praca():
+        try:
+            wynik = dispatch_tool(name, args)
+        except Exception as e:
+            wynik = {"ok": False, "error": str(e), "error_type": type(e).__name__}
+        if isinstance(wynik, dict):
+            wynik = _bez_ostrzezen_pythona(wynik)
+        with _czekanie_w_tle_lock:
+            h["wynik"] = wynik
+            w_tle = _czekanie_w_tle.get("watek") is _threading.current_thread()
+            if w_tle:
+                _czekanie_w_tle["wynik"] = wynik
+                _czekanie_w_tle["koniec"] = time.time()
+        if w_tle:
+            try:
+                log("MAIN", "W tle skończone: " + short(
+                    json.dumps(wynik, ensure_ascii=False, default=str), 600))
+            except Exception:
+                pass
+
+    return _threading.Thread(target=_praca, daemon=True), h
+
+
+def _miejsce_w_tle_wolne():
+    """v480ef: nic nie leci w tle i nie ma niedostarczonego wyniku."""
+    with _czekanie_w_tle_lock:
+        c = _czekanie_w_tle
+        w = c.get("watek")
+        if not w:
+            return True
+        if w.is_alive():
+            return False
+        return c.get("wynik") is None or bool(c.get("dostarczony"))
+
+
+def _zajmij_miejsce_w_tle(watek, start, cmd, sekundy, pominiete, rodzaj):
+    _czekanie_w_tle.clear()
+    _czekanie_w_tle.update({
+        "watek": watek, "start": start, "komenda": cmd,
+        "sekundy": sekundy, "wynik": None, "dostarczony": False,
+        "pokazany": False, "pominiete": list(pominiete or []),
+        "rodzaj": rodzaj,
+    })
+
+
 def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     """v480ed: uruchamia czekajaca komende w watku; zwraca wynik dla MAIN-a.
 
@@ -32650,31 +32700,9 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     sam i ze w tym czasie zespol moze myslec nad czym innym."""
     cmd = str(args.get("command") or "")
     start = time.time()
-
-    def _praca():
-        try:
-            wynik = dispatch_tool(name, args)
-        except Exception as e:
-            wynik = {"ok": False, "error": str(e)}
-        if isinstance(wynik, dict):
-            wynik = _bez_ostrzezen_pythona(wynik)
-        with _czekanie_w_tle_lock:
-            _czekanie_w_tle["wynik"] = wynik
-            _czekanie_w_tle["koniec"] = time.time()
-        try:
-            log("MAIN", "Czekanie w tle skończone: " + short(
-                json.dumps(wynik, ensure_ascii=False, default=str), 600))
-        except Exception:
-            pass
-
-    watek = _threading.Thread(target=_praca, daemon=True)
+    watek, _h = _watek_narzedzia(name, args)
     with _czekanie_w_tle_lock:
-        _czekanie_w_tle.clear()
-        _czekanie_w_tle.update({
-            "watek": watek, "start": start, "komenda": cmd,
-            "sekundy": sekundy, "wynik": None, "dostarczony": False,
-            "pokazany": False, "pominiete": list(pominiete or []),
-        })
+        _zajmij_miejsce_w_tle(watek, start, cmd, sekundy, pominiete, "czekanie")
     watek.start()
     return {
         "ok": True,
@@ -32684,12 +32712,50 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     }
 
 
+# v480ef (uzytkownik 2026-10-24 16:57, "tak"): bieg 2026-10-24 16:31-16:54
+# — `verify_full.sh` (16 min 51 s) i `verify_full_fast.sh` liczyly na
+# wierzchu i MAIN stal, choc nie bylo w nich sleep. Teraz kazda komenda
+# MAIN-a (termux_run), ktora leci dluzej niz _W_TLE_PO_S, dalej liczy, ale
+# w tle: MAIN dostaje glos i karte "leci w tle", a wynik przychodzi na
+# gorze jego wiadomosci, gdy sie skonczy. Tylko gdy miejsce w tle jest
+# wolne — inaczej komenda leci na wierzchu jak dotad.
+_W_TLE_PO_S = int(os.environ.get("MAIN_W_TLE_PO_S", "120"))
+
+
+def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete):
+    """v480ef: zwraca (wynik, czy_poszlo_w_tlo)."""
+    if not _miejsce_w_tle_wolne():
+        try:
+            return dispatch_tool(name, args), False
+        except Exception as e:
+            return {"ok": False, "error": str(e), "error_type": type(e).__name__}, False
+    cmd = str(args.get("command") or "")
+    start = time.time()
+    watek, h = _watek_narzedzia(name, args)
+    watek.start()
+    watek.join(timeout=_W_TLE_PO_S)
+    with _czekanie_w_tle_lock:
+        if "wynik" in h:
+            return h["wynik"], False
+        _zajmij_miejsce_w_tle(watek, start, cmd, 0, pominiete, "komenda")
+    log("MAIN", "Komenda leci dłużej niż " + _min_s(_W_TLE_PO_S)
+        + " — przechodzi w tło, MAIN dostaje głos: " + short(cmd, 200))
+    return {
+        "ok": True,
+        "status": "LECI_W_TLE",
+        "command": cmd,
+        "message": "Komenda leci dalej w tle — opis jest na górze tej wiadomości.",
+    }, True
+
+
 def _dolacz_do_czekania(name, args, sekundy):
     """v480ed: czeka na trwajace czekanie (najdluzej `sekundy`), potem
     wykonuje te komende bez sleep. Zwraca jej wynik z opisem."""
     with _czekanie_w_tle_lock:
         watek = _czekanie_w_tle.get("watek")
         start = _czekanie_w_tle.get("start") or time.time()
+        komenda = _czekanie_w_tle.get("rodzaj") == "komenda"
+    tamto = "komenda, która leciała" if komenda else "czekanie, które trwało"
     t0 = time.time()
     if watek:
         watek.join(timeout=max(1, sekundy))
@@ -32705,26 +32771,65 @@ def _dolacz_do_czekania(name, args, sekundy):
         wynik = {"ok": True, "wynik": wynik}
     if czekal < 2 and skonczone:
         wynik["czekanie"] = (
-            "Czekanie, które program puścił w tle o "
+            ("Komenda, którą" if komenda else "Czekanie, które")
+            + " program puścił w tle o "
             + datetime.fromtimestamp(start).strftime("%H:%M")
-            + ", już się skończyło, więc tej komendy nie czekał — od razu "
-            "wykonał jej resztę bez sleep. Wynik tamtego czekania jest na "
+            + (", już się skończyła" if komenda else ", już się skończyło")
+            + ", więc tej komendy nie czekał — od razu "
+            "wykonał jej resztę bez sleep. Wynik tamtego jest na "
             "górze tej wiadomości."
         )
     else:
         wynik["czekanie"] = (
-            "Program połączył to czekanie z tym, które trwało już od "
+            "Program połączył to czekanie z tym, co w tle ("
+            + tamto + ") już od "
             + datetime.fromtimestamp(start).strftime("%H:%M") + ": czekał "
             + _min_s(czekal) + ", "
             + ("aż tamto się skończyło" if skonczone
                else "aż minął czas z tej komendy (tamto trwa dalej)")
             + ", a potem wykonał resztę tej komendy bez sleep."
-            + (" Wynik tamtego czekania jest na górze tej wiadomości."
+            + (" Wynik tamtego jest na górze tej wiadomości."
                if skonczone else "")
         )
     # v480ee: wynik tamtego czekania program daje na gorze nastepnej
     # wiadomosci MAIN-a (_czekanie_blok), jak kazdy inny.
     return wynik
+
+
+def _karta_komendy_w_tle(c, od, minelo, pierwszy):
+    """v480ef: karta dla komendy, ktora liczy w tle (nie samo czekanie)."""
+    kom = short(c.get("komenda") or "", 200)
+    if not pierwszy:
+        return (
+            "Komenda w tle (od " + od + ") dalej liczy, już " + _min_s(minelo)
+            + ". Wynik przyjdzie sam w Twojej wiadomości.\n\n"
+        )
+    karta = [
+        "═══ KOMENDA LECI W TLE ═══",
+        "Komenda: " + kom,
+        "Puszczona o " + od + ", liczy już " + _min_s(minelo) + ". Liczyła "
+        "dłużej niż " + _min_s(_W_TLE_PO_S) + ", więc program puścił ją "
+        "dalej w tle i oddał Ci głos — działa tak samo, z tymi samymi "
+        "limitami, nic jej nie przerwał.",
+        "Wynik: program sam poda go na górze Twojej wiadomości, gdy się "
+        "skończy. Gdy puścisz czekanie (sleep od 5 min), program poczeka "
+        "na tę komendę zamiast spać na ślepo.",
+    ]
+    if c.get("pominiete"):
+        karta.append(
+            "Nie wykonane akcje z tego RUN (po tej komendzie): "
+            + ", ".join(c["pominiete"])
+            + " — mogą zależeć od wyniku, więc wyślij je, gdy przyjdzie."
+        )
+    karta.append(
+        "W tym czasie zespół może myśleć i pracować nad czymś innym: "
+        "przeanalizować dotychczasowe wyniki, przemyśleć następne próby, "
+        "porozmawiać z kimś z zespołu albo z Igorem, przygotować kolejny "
+        "eksperyment. Pliki, które ta komenda zapisuje, mogą być jeszcze "
+        "niepełne."
+    )
+    karta.append("══════════════════════════")
+    return "\n".join(karta) + "\n\n"
 
 
 def _opis_wyniku_czekania(w):
@@ -32767,6 +32872,14 @@ def _czekanie_blok():
                 return ""
             _czekanie_w_tle["dostarczony"] = True
             trwalo = int((c.get("koniec") or teraz) - start)
+            if c.get("rodzaj") == "komenda":
+                return (
+                    "═══ KOMENDA W TLE SKOŃCZONA ═══\n"
+                    "Puszczona o " + od + ", liczyła " + _min_s(trwalo) + ".\n"
+                    "Komenda: " + short(c.get("komenda") or "", 200) + "\n"
+                    "Wynik:\n" + _opis_wyniku_czekania(c["wynik"]) + "\n"
+                    "═══════════════════════════════\n\n"
+                )
             return (
                 "═══ CZEKANIE W TLE SKOŃCZONE ═══\n"
                 "Puszczone o " + od + ", trwało " + _min_s(trwalo)
@@ -32778,6 +32891,8 @@ def _czekanie_blok():
         pierwszy = not c.get("pokazany")
         _czekanie_w_tle["pokazany"] = True
     minelo = int(teraz - start)
+    if c.get("rodzaj") == "komenda":
+        return _karta_komendy_w_tle(c, od, minelo, pierwszy)
     if not pierwszy:
         return (
             "Czekanie w tle (od " + od + ") trwa: minęło " + _min_s(minelo)
@@ -32889,6 +33004,13 @@ def _wykonaj_akcje_maina(decision, step):
             ]
             result = _pusc_czekanie_w_tle(name, args, _sek_akcji, _po)
             _do_tla = True
+        elif name == "termux_run" and _cmd_akcji:
+            # v480ef: patrz _wykonaj_z_przejsciem_w_tlo().
+            _po = [
+                str(a.get("tool") or a.get("name") or "?")
+                for a in akcje[i + 1:_RUN_MAX_AKCJI] if isinstance(a, dict)
+            ]
+            result, _do_tla = _wykonaj_z_przejsciem_w_tlo(name, args, _po)
         else:
             try:
                 result = dispatch_tool(name, args)

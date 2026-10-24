@@ -2408,3 +2408,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      który już się skończył. Teraz nowe czekanie dołącza do skończonego:
      od razu wykonuje resztę komendy bez sleep, a tamten wynik jest na
      górze wiadomości.
+138. Długa komenda MAIN-a przechodzi w tło (v480ef, użytkownik
+     2026-10-24 16:57, "tak"). Bieg 2026-10-24 16:31-16:54:
+     verify_full.sh (16 min 51 s) i verify_full_fast.sh liczyły na
+     wierzchu i MAIN stał, choć nie było w nich sleep. Teraz każda
+     komenda MAIN-a (termux_run), która liczy dłużej niż 2 min
+     (MAIN_W_TLE_PO_S), dalej liczy w tle bez przerywania i z tymi samymi
+     limitami. MAIN od razu dostaje głos i kartę "KOMENDA LECI W TLE":
+     jaka komenda, od kiedy, które akcje z RUN poczekają, że wynik przyjdzie
+     sam i że pliki tej komendy mogą być jeszcze niepełne. Po końcu
+     dostaje kartę "KOMENDA W TLE SKOŃCZONA" z wyjściem jak w terminalu.
+     W tle naraz leci jedna taka rzecz (komenda albo czekanie); gdy
+     miejsce jest zajęte albo czeka tam nieodebrany wynik, nowa komenda
+     leci na wierzchu jak dotąd. Czekanie (sleep od 5 min) puszczone, gdy
+     komenda liczy w tle, czeka na nią zamiast spać na ślepo.
