@@ -2427,3 +2427,21 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      leciało na wierzchu i MAIN stał. Teraz komenda, która tylko czeka
      (sleep od 60 s), od razu idzie w tło z kartą jak w punkcie 137;
      inne długie komendy przechodzą w tło po 2 min (punkt 138).
+140. Rzeczy w tle uporządkowane (v480eh, użytkownik 2026-10-24 17:15:
+     "to nie jest poukładane ... popraw"). Bieg 2026-10-24 17:09-17:13:
+     `sleep 240; cat ...` stało 2 min na wierzchu, MAIN od razu puścił
+     drugie `sleep 100; cat ...` na to samo, które znów go trzymało, a w
+     logu przeplatały się dwa strumienie "Leci". Teraz w tle może leżeć
+     kilka rzeczy naraz i MAIN nigdy na nie nie stoi:
+     - samo czekanie (sleep od minuty) od razu idzie w tło; gdy w tle już
+       coś leci, nowe czekanie czeka na tamto (najdłużej swój sleep),
+       potem wykonuje resztę bez sleep — też w tle;
+     - inna komenda, która liczy dłużej niż 2 min, liczy dalej w tle;
+     - każda rzecz ma kartę na górze wiadomości MAIN-a ("W TLE: ..."):
+       pełną raz, potem jedną linię; po końcu kartę "W TLE SKOŃCZONE"
+       z godziną końca i wyjściem jak w terminalu;
+     - to, co leci w tle, nie pisze "Leci ..." do logu; log mówi raz,
+       że poszło w tło, i raz, że skończone.
+     Zostaje z punktu 137: nowe czekanie, gdy to, na co czekał, już się
+     skończyło, a MAIN nie widział wyniku, nie śpi — od razu wykonuje
+     resztę komendy.
