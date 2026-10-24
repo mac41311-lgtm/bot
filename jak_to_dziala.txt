@@ -2307,3 +2307,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        celu, a po zmianie celu od nowa (po v4 Sędzia przeniósł 70% z v3
        i doszedł do 85% przy 3 z 6 szczebli). Nowa rozmowa Sędziego
        dostaje starą ocenę tylko przy tym samym celu.
+
+129. Zdanie o nowej skali Sędziego (v480dw). Po v480dv procent spadł z
+     85% na 22% (ocena 2026-10-24 09:25) bez wyjaśnienia, więc drużyna
+     mogła uznać to za karę. Teraz przy pierwszej ocenie po zmianie
+     sposobu liczenia (nowy prompt Sędziego) albo po zmianie celu każda
+     drużyna dostaje raz zdanie, że zmieniła się skala albo cel, a nie
+     jej stan: to, co ma potwierdzone, zostaje, i to nie kara. Ocena
+     zapisuje odcisk promptu Sędziego („skala”) i celu („cel”).

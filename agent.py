@@ -51041,11 +51041,57 @@ def _krok_druzyny(numer):
         return None
 
 
+_PLIK_SKALI_OCENY = STATE_DIR / "skala_oceny_sedziego.json"
+
+
+def _zdanie_o_nowej_skali(o):
+    """
+    v480dw: jedno zdanie przy pierwszej ocenie po zmianie sposobu liczenia
+    (nowy prompt Sedziego) albo celu — inaczej "". Bieg 2026-10-24 09:25:
+    po v480dv procent spadl z 85% na 22% bez slowa wyjasnienia, a druzyna
+    mogla to wziac za kare.
+    """
+    try:
+        skala, cel = o.get("skala"), o.get("cel")
+        if not skala:
+            return ""
+        zn = read_json(_PLIK_SKALI_OCENY, {})
+        if not isinstance(zn, dict):
+            zn = {}
+        write_json(_PLIK_SKALI_OCENY, {"skala": skala, "cel": cel})
+        if zn and zn.get("cel") and cel and zn.get("cel") != cel:
+            return (
+                "Program: cel się zmienił, więc Sędzia ocenia od nowa, "
+                "względem nowego celu — procent to część całego nowego celu. "
+                "Zmiana liczby wynika ze zmiany celu, a nie z kary; to, co "
+                "macie potwierdzone, zostaje i liczy się tam, gdzie pasuje "
+                "do nowego celu."
+            )
+        if (zn and zn.get("skala") != skala) or (
+            not zn and int(o.get("runda") or 1) > 1
+        ):
+            return (
+                "Program: Sędzia liczy teraz procent jako część całego celu "
+                "(100% = cel osiągnięty w całości), a nie jako zmianę od "
+                "swojej poprzedniej oceny. Jeśli liczba jest inna niż "
+                "ostatnio, to dlatego, że zmieniła się skala, a nie Wasz "
+                "stan: to, co macie potwierdzone, zostaje. To nie kara."
+            )
+    except Exception:
+        pass
+    return ""
+
+
 def _daj_ocene(o, step):
     if not o:
         return
+    _skala = _zdanie_o_nowej_skali(o)
     with _sedzia_lock:
         _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
+        if _skala:
+            _sedzia_wiadomosci.append(_skala)
+    if _skala:
+        log("RYWALIZACJA", _skala)
     log("RYWALIZACJA", _ocena_zdaniem(o))
     try:
         if o.get("runda") not in _paski_pokazane:
@@ -51513,6 +51559,9 @@ def ocen_rywalizacje(kroki):
         ocena["cel"] = hashlib.sha1(
             _current_goal_text.encode("utf-8")
         ).hexdigest()[:16]
+        ocena["skala"] = hashlib.sha1(
+            ARBITER_PROMPT.encode("utf-8")
+        ).hexdigest()[:12]
         _DIR_RUND.mkdir(parents=True, exist_ok=True)
         for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):
             tmp = _plik.with_suffix(".tmp")
