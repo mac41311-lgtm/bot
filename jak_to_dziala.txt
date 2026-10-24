@@ -2394,3 +2394,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      czeka, aż tamto się skończy (najdłużej tyle, ile nowy sleep), i
      wykonuje resztę nowej komendy bez sleep. Burza mózgów co 2 h
      (punkt 135) zostaje bez zmian.
+137. Czekanie w tle: czytelna karta i bez zgubionego wyniku (v480ee,
+     użytkownik 2026-10-24 16:33). Opis czekania nie siedzi już w JSON-ie
+     wyniku RUN, tylko jako karta na górze wiadomości MAIN-a: co ma się
+     stać po sleep, od kiedy, do kiedy najdłużej, że skończy się wcześniej
+     razem z procesem, że wynik przyjdzie sam, które akcje z RUN czekają,
+     i że w tym czasie zespół może myśleć nad czym innym. Pełna karta
+     tylko raz; w kolejnych krokach jedna krótka linia. Wynik po końcu
+     przychodzi jako karta "CZEKANIE W TLE SKOŃCZONE" z wyjściem komendy
+     jak w terminalu. Bieg 2026-10-24 16:28: wiadomość zbudowana tuż przed
+     końcem czekania mówiła "trwa", MAIN puścił nowe sleep 600 i nowe
+     czekanie skasowało niedostarczony wynik, czekając 10 min na proces,
+     który już się skończył. Teraz nowe czekanie dołącza do skończonego:
+     od razu wykonuje resztę komendy bez sleep, a tamten wynik jest na
+     górze wiadomości.
