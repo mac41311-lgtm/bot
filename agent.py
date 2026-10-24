@@ -32587,6 +32587,133 @@ def _uruchom_jako_usluge(path, command, powod):
 _RUN_MAX_AKCJI = int(os.environ.get("RUN_MAX_AKCJI", "12"))
 
 
+# v480ed: dlugie czekanie nie trzyma MAIN-a (uzytkownik 2026-10-24
+# 14:13, "zrob ja"). Bieg 2026-10-24 16:00: MAIN puscil `sleep 900; cat
+# ...` i caly zespol stal kwadrans. Teraz komenda, ktora tylko czeka
+# (_tylko_czeka, sleep >= _CZEKANIE_W_TLE_OD_S), idzie w tle, MAIN od razu
+# dostaje glos, a jej wynik przychodzi w jego wiadomosci, gdy sie skonczy.
+# Kolejne takie czekanie, gdy jedno juz trwa, program laczy z nim: czeka,
+# az tamto sie skonczy (najdluzej tyle, ile nowy sleep), i wykonuje reszte
+# nowej komendy bez sleep.
+_CZEKANIE_W_TLE_OD_S = 300
+_czekanie_w_tle = {}
+_czekanie_w_tle_lock = _threading.Lock()
+_BEZ_SLEEP_RE = re.compile(
+    r"(?<![\w-])sleep\s+\d+(?:\.\d+)?[smh]?(?=$|[\s;&|)])"
+)
+
+
+def _czekanie_trwa():
+    with _czekanie_w_tle_lock:
+        w = _czekanie_w_tle.get("watek")
+        return bool(w and w.is_alive())
+
+
+def _pusc_czekanie_w_tle(name, args, sekundy):
+    """v480ed: uruchamia czekajaca komende w watku; zwraca wynik dla MAIN-a."""
+    cmd = str(args.get("command") or "")
+    start = time.time()
+
+    def _praca():
+        try:
+            wynik = dispatch_tool(name, args)
+        except Exception as e:
+            wynik = {"ok": False, "error": str(e)}
+        if isinstance(wynik, dict):
+            wynik = _bez_ostrzezen_pythona(wynik)
+        with _czekanie_w_tle_lock:
+            _czekanie_w_tle["wynik"] = wynik
+            _czekanie_w_tle["koniec"] = time.time()
+        try:
+            log("MAIN", "Czekanie w tle skończone: " + short(
+                json.dumps(wynik, ensure_ascii=False, default=str), 600))
+        except Exception:
+            pass
+
+    watek = _threading.Thread(target=_praca, daemon=True)
+    with _czekanie_w_tle_lock:
+        _czekanie_w_tle.clear()
+        _czekanie_w_tle.update({
+            "watek": watek, "start": start, "komenda": cmd,
+            "sekundy": sekundy, "wynik": None, "dostarczony": False,
+        })
+    watek.start()
+    do = datetime.fromtimestamp(start + sekundy).strftime("%H:%M")
+    return {
+        "ok": True,
+        "status": "CZEKA_W_TLE",
+        "command": cmd,
+        "message": (
+            "Czekanie trwa w tle (do ok. " + str(int(sekundy // 60))
+            + " min, najpóźniej ok. " + do + "; program skróci je, gdy "
+            "proces, na który czeka, się skończy). Wynik tej komendy "
+            "dostaniesz w swojej wiadomości, gdy się skończy. W tym czasie "
+            "możesz rozmawiać z zespołem albo z Igorem, robić inne rzeczy "
+            "albo po prostu czekać dalej — kolejne czekanie program połączy "
+            "z tym, które już trwa."
+        ),
+    }
+
+
+def _dolacz_do_czekania(name, args, sekundy):
+    """v480ed: czeka na trwajace czekanie (najdluzej `sekundy`), potem
+    wykonuje te komende bez sleep. Zwraca jej wynik z opisem."""
+    with _czekanie_w_tle_lock:
+        watek = _czekanie_w_tle.get("watek")
+        start = _czekanie_w_tle.get("start") or time.time()
+    t0 = time.time()
+    if watek:
+        watek.join(timeout=max(1, sekundy))
+    czekal = int(time.time() - t0)
+    skonczone = not (watek and watek.is_alive())
+    cmd = str(args.get("command") or "")
+    reszta = _BEZ_SLEEP_RE.sub("true", cmd)
+    try:
+        wynik = dispatch_tool(name, dict(args, command=reszta))
+    except Exception as e:
+        wynik = {"ok": False, "error": str(e)}
+    if not isinstance(wynik, dict):
+        wynik = {"ok": True, "wynik": wynik}
+    wynik["czekanie"] = (
+        "Program połączył to czekanie z tym, które trwało już od "
+        + datetime.fromtimestamp(start).strftime("%H:%M") + ": czekał "
+        + str(czekal // 60) + " min " + str(czekal % 60) + " s, "
+        + ("aż tamto się skończyło" if skonczone
+           else "aż minął czas z tej komendy (tamto trwa dalej)")
+        + ", a potem wykonał resztę tej komendy bez sleep."
+    )
+    if skonczone:
+        _z = _czekanie_blok()
+        if _z:
+            wynik["wynik_wczesniejszego_czekania"] = _z.strip()
+    return wynik
+
+
+def _czekanie_blok():
+    """v480ed: wynik skonczonego czekania w tle (raz) albo linia, ze trwa."""
+    with _czekanie_w_tle_lock:
+        c = dict(_czekanie_w_tle)
+        if not c.get("watek"):
+            return ""
+        od = datetime.fromtimestamp(c.get("start") or time.time()).strftime("%H:%M")
+        kom = short(c.get("komenda") or "", 160)
+        if c.get("wynik") is not None:
+            if c.get("dostarczony"):
+                return ""
+            _czekanie_w_tle["dostarczony"] = True
+            return (
+                "Wynik czekania z " + od + " (" + kom + "):\n"
+                + short(json.dumps(c["wynik"], ensure_ascii=False, default=str), 4000)
+                + "\n\n"
+            )
+    minelo = int((time.time() - (c.get("start") or time.time())) // 60)
+    return (
+        "Czekanie w tle trwa od " + od + " (minęło " + str(minelo)
+        + " min z ok. " + str(int((c.get("sekundy") or 0) // 60)) + "): "
+        + kom + "\n\n"
+    )
+
+
 def _wykonaj_akcje_maina(decision, step):
     """Wykonuje akcje z decyzji RUN po kolei; zatrzymuje sie na bledzie."""
 
@@ -32636,6 +32763,13 @@ def _wykonaj_akcje_maina(decision, step):
         log("MAIN", "RUN #" + str(i + 1) + ": " + name)
         zapisz_zdarzenie("narzedzie", nazwa=name, argumenty=args)
 
+        _cmd_akcji = str(args.get("command") or "") if name == "termux_run" else ""
+        _sek_akcji = (
+            _sekundy_spania(_cmd_akcji)
+            if _cmd_akcji and _tylko_czeka(_cmd_akcji) else 0
+        )
+        _do_tla = False
+
         if akcja.get("_uciete"):
             # v480dt: patrz _oznacz_uciete_akcje().
             log("MAIN", akcja["_uciete"])
@@ -32644,6 +32778,24 @@ def _wykonaj_akcje_maina(decision, step):
                 "error": "UCIETA_AKCJA",
                 "message": akcja["_uciete"],
             }
+        elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S and _czekanie_trwa():
+            # v480ed: patrz _dolacz_do_czekania().
+            result = _dolacz_do_czekania(name, args, _sek_akcji)
+        elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S:
+            # v480ed: patrz _pusc_czekanie_w_tle(). Akcje po czekaniu
+            # nie ruszaja — zalezaly od jego wyniku, ktorego jeszcze nie ma.
+            result = _pusc_czekanie_w_tle(name, args, _sek_akcji)
+            _po = [
+                str(a.get("tool") or a.get("name") or "?")
+                for a in akcje[i + 1:_RUN_MAX_AKCJI] if isinstance(a, dict)
+            ]
+            if _po:
+                result["message"] += (
+                    " Akcji po tym czekaniu w tym RUN (" + ", ".join(_po)
+                    + ") nie wykonałem — mogą zależeć od wyniku czekania, "
+                    "którego jeszcze nie ma; wyślij je, gdy go dostaniesz."
+                )
+            _do_tla = True
         else:
             try:
                 result = dispatch_tool(name, args)
@@ -32681,6 +32833,10 @@ def _wykonaj_akcje_maina(decision, step):
         })
 
         wyniki.append({"tool": name, "args": args, "wynik": result})
+
+        if _do_tla:
+            pominiete = len(akcje[i + 1:_RUN_MAX_AKCJI])
+            break
 
         padlo = isinstance(result, dict) and result.get("ok") is False
 
@@ -41621,6 +41777,11 @@ def main_decide(
     _burza = _burza_blok()
     if _burza:
         _co_sie_stalo_main = _burza + _co_sie_stalo_main
+
+    # v480ed: patrz _czekanie_blok().
+    _czek = _czekanie_blok()
+    if _czek:
+        _co_sie_stalo_main = _czek + _co_sie_stalo_main
 
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
     # czekal na wyniki RUN sprzed restartu.

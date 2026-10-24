@@ -2380,3 +2380,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      z zespołu — MAIN może ją zapytać (ask_role ELA; pytanie idzie wprost
      do jej rozmowy). Do licznika pomijania burzy Ela i Igor się nie
      liczą. Igor dalej nie dostaje żadnych instrukcji.
+
+136. Długie czekanie nie trzyma MAIN-a (v480ed, użytkownik 2026-10-24
+     14:13: „zrób ją”). Bieg 2026-10-24 16:00: MAIN puścił `sleep 900;
+     cat …` i cały zespół stał kwadrans. Teraz komenda w RUN, która tylko
+     czeka (sleep co najmniej 5 min, bez `&` i kill), idzie w tle, a MAIN
+     od razu dostaje głos: może rozmawiać z zespołem albo Igorem, robić
+     inne rzeczy albo czekać dalej. Wynik czekania przychodzi raz w jego
+     wiadomości, gdy się skończy; dopóki trwa, MAIN widzi jedną linię, od
+     kiedy i ile minęło. Akcje po czekaniu w tym samym RUN nie są
+     wykonywane (mogą zależeć od wyniku) i MAIN wie, które pominięto.
+     Gdy MAIN puści kolejne czekanie, a jedno już trwa, program je łączy:
+     czeka, aż tamto się skończy (najdłużej tyle, ile nowy sleep), i
+     wykonuje resztę nowej komendy bez sleep. Burza mózgów co 2 h
+     (punkt 135) zostaje bez zmian.
