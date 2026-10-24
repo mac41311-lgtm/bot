@@ -2363,3 +2363,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      MAIN kogoś zapyta, więc rozmowę prowadzi MAIN (w logach 23/24.10
      drużyna 1 zadała 3 pytania na 125 kroków). Działające rozmowy
      MAIN-ów dostaną nową wersję raz.
+
+135. Burza mózgów co 2 godziny (v480ec, użytkownik 2026-10-24
+     12:58–13:04; świadomy wyjątek od zasady „bez powtarzanych
+     tekstów”, tylko dla tej jednej rzeczy). Co 2 h (zegar, osobno dla
+     każdej drużyny i w zwykłym trybie) MAIN dostaje osobny akapit, nie w
+     stałym prompcie i nie dla reszty zespołu: „Czas na burzę mózgów:
+     zapytajcie każdego w zespole o zdanie o tym, co robicie i co dalej.
+     Potem zapiszcie krótko: jakie macie wnioski, co z nich realizujecie
+     teraz i do czego tym dążycie w celu. Dopiszcie to z datą do
+     ~/MAIN_<n>/BURZA_MOZGOW.md.” Pomijane, gdy MAIN w ostatnich 2 h sam
+     zapytał co najmniej 3 różne osoby z zespołu (Ela i Igor się nie
+     liczą). Igor nie dostaje tego nigdy. Plik widzi Sędzia, jak inne
+     zmienione pliki drużyny. Pierwsza burza 2 h po starcie.

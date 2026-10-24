@@ -41614,6 +41614,11 @@ def main_decide(
     if _werdykty:
         _co_sie_stalo_main = _werdykty + _co_sie_stalo_main
 
+    # v480ec: patrz _burza_blok().
+    _burza = _burza_blok()
+    if _burza:
+        _co_sie_stalo_main = _burza + _co_sie_stalo_main
+
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
     # czekal na wyniki RUN sprzed restartu.
     #
@@ -41779,6 +41784,7 @@ def _handle_main_ask(
                 "ASK " + str(zadane) + " -> " + ask_role + ": "
                 + short(ask_question, 300)
             )
+            _zapisz_pytanie_maina(ask_role)
 
             _speak(
                 "MAIN",
@@ -51731,6 +51737,78 @@ def _ocena_zdaniem(o, dla=None):
             and _jest_dyskwalifikacja()
         )
     )
+
+
+# v480ec: burza mozgow co 2 h (uzytkownik 2026-10-24 12:58-13:04,
+# swiadomie wyjatek od "bez powtarzanych tekstow", tylko dla tej jednej
+# rzeczy). Osobna wiadomosc do MAIN-a, nie w jego stalym prompcie i nie do
+# reszty zespolu. Pomijana, gdy MAIN w ostatnich 2 h sam zapytal juz co
+# najmniej 3 rozne osoby z zespolu (bez Eli i Igora). Igor nie dostaje
+# nigdy zadnych instrukcji. Logi 23/24.10: druzyna 1 3 pytania na 125
+# krokow; gdy uzytkownik poprosil o burze, MAIN zapytal 5 osob i Marek
+# wylapal zawyzony rekord.
+_BURZA_CO_S = 2 * 3600
+_BURZA_PLIK_STANU = STATE_DIR / "burza_mozgow.json"
+_BURZA_BEZ = ("IGOR", "PROGRESS_ESTIMATOR")
+
+
+def _zapisz_pytanie_maina(rola):
+    """v480ec: kogo i kiedy MAIN zapytal (do pomijania burzy mozgow)."""
+    try:
+        st = read_json(_BURZA_PLIK_STANU, {})
+        if not isinstance(st, dict):
+            st = {}
+        teraz = time.time()
+        pyt = [p for p in (st.get("pytania") or [])
+               if isinstance(p, list) and len(p) == 2
+               and teraz - float(p[0]) < _BURZA_CO_S]
+        pyt.append([teraz, str(rola)])
+        st["pytania"] = pyt
+        write_json(_BURZA_PLIK_STANU, st)
+    except Exception:
+        pass
+
+
+def _burza_blok():
+    """v480ec: tekst burzy mozgow dla MAIN-a, gdy minely 2 h — inaczej ""."""
+    try:
+        st = read_json(_BURZA_PLIK_STANU, {})
+        if not isinstance(st, dict):
+            st = {}
+        teraz = time.time()
+        ostatnio = float(st.get("ostatnio") or 0)
+        if not ostatnio:
+            st["ostatnio"] = teraz
+            write_json(_BURZA_PLIK_STANU, st)
+            return ""
+        if teraz - ostatnio < _BURZA_CO_S:
+            return ""
+        st["ostatnio"] = teraz
+        pytani = {
+            str(p[1]) for p in (st.get("pytania") or [])
+            if isinstance(p, list) and len(p) == 2
+            and teraz - float(p[0]) < _BURZA_CO_S
+            and str(p[1]) not in _BURZA_BEZ
+        }
+        write_json(_BURZA_PLIK_STANU, st)
+        if len(pytani) >= 3:
+            log("MAIN", "Burza mózgów pominięta — MAIN w ostatnich 2 h sam "
+                "zapytał " + str(len(pytani)) + " osoby z zespołu.")
+            return ""
+        plik = (
+            "~/MAIN_" + _DRUZYNA + "/BURZA_MOZGOW.md" if _DRUZYNA
+            else "~/BURZA_MOZGOW.md"
+        )
+        tekst = (
+            "Czas na burzę mózgów: zapytajcie każdego w zespole o zdanie o "
+            "tym, co robicie i co dalej. Potem zapiszcie krótko: jakie macie "
+            "wnioski, co z nich realizujecie teraz i do czego tym dążycie w "
+            "celu. Dopiszcie to z datą do " + plik + "."
+        )
+        log("MAIN", "Burza mózgów (co 2 h): " + tekst)
+        return tekst + "\n\n"
+    except Exception:
+        return ""
 
 
 def _sedzia_blok():
