@@ -15010,7 +15010,9 @@ def ensure_chrome_cdp_forward(retries=3, budz=True):
 
     global _CDP_CONSECUTIVE_FAILURES
 
-    if _CDP_CONSECUTIVE_FAILURES >= 2 or not budz:
+    # v480dy: po wyciagnieciu Chrome'a na wierzch (_budzenie_chrome)
+    # proby zostaja — wczesniej spadaly do 1 i budzenie mialo jedna szanse.
+    if (_CDP_CONSECUTIVE_FAILURES >= 2 or not budz) and not _budzenie_chrome[0]:
         retries = 1
 
     device = find_adb()
@@ -15132,10 +15134,12 @@ def ensure_chrome_cdp_forward(retries=3, budz=True):
             )
         except Exception:
             pass
-        time.sleep(2)
+        # v480dy: zamrozony Chrome po wyciagnieciu na wierzch potrzebuje
+        # chwili, zanim CDP odpowie — 2 s i 2 proby bywalo za malo.
+        time.sleep(4)
         _budzenie_chrome[0] = True
         try:
-            ok = ensure_chrome_cdp_forward(retries=2, budz=False)
+            ok = ensure_chrome_cdp_forward(retries=4, budz=False)
         finally:
             _budzenie_chrome[0] = False
         if ok:
@@ -46791,7 +46795,18 @@ def run_agent(goal):
         # na jeden krok agenta).
         # v480ct: stan na poczatku kroku nie budzi Chrome'a (patrz
         # ensure_chrome_cdp_forward) — budzi go dopiero narzedzie chrome_.
-        step_chrome_text = chrome_summary(budz=False)
+        # v480dy: bieg 2026-10-24 11:06 (krok 137) — co krok proba CDP do
+        # Chrome'a, ktorego Android zamrozil w tle, i w logu "CDP AUTO
+        # ERROR", choc nikt Chrome'a nie uzywal. Chrome sprawdzamy na
+        # poczatku kroku tylko po kroku z narzedziami chrome_; gdy rola po
+        # niego siegnie, narzedzie samo go obudzi (v480ct).
+        if _dzialalo_na(last_result, "chrome_"):
+            step_chrome_text = chrome_summary(budz=False)
+        else:
+            step_chrome_text = (
+                "(Chrome nie był sprawdzany na początku kroku — narzędzia "
+                "chrome_ same go obudzą, gdy będą potrzebne.)"
+            )
         step_android_text = android_summary()
 
         # v432: patrz _tekst_pythona().

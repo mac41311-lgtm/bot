@@ -2327,3 +2327,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        program sam pokazywał liczby rywala, więc ich znajomość nie jest
        naruszeniem i Sędzia oddaje, co za to odjął; „ocena” każdej
        drużyny mówi tylko o niej, bez liczb rywala.
+
+131. Chrome sprawdzany tylko, gdy jest potrzebny (v480dy). Bieg
+     2026-10-24 11:06 (krok 137): na początku każdego kroku program
+     próbował połączyć się z Chrome'em, którego Android zamroził w tle,
+     i w logu było „CDP AUTO ERROR”, choć nikt go nie używał. Teraz:
+     - na początku kroku Chrome jest sprawdzany tylko po kroku, w którym
+       zespół używał narzędzi chrome_;
+     - gdy rola sięga po Chrome, a on nie odpowiada, program wyciąga go na
+       wierzch i czeka dłużej (4 s, do 4 prób; wcześniej przez błąd
+       budzenie miało tylko 1 próbę).
