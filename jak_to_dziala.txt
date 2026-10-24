@@ -2524,3 +2524,20 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      bo proces w tle się skończył, nie wraca już jako zbędne "Komenda
      puszczona w tło (sleep …) już nie działa, trwała ok. 1 s … nie
      widzi pliku" (krok 90 drużyny 2).
+150. Rzadsze karty „POSTĘP W TLE” (v480eq, użytkownik 2026-10-24 20:52:
+     „czy to nie beznadziejny spam … z tym czasem”). Drużyna 1 od 20:35
+     do 20:45 co 3 min dostawała postęp, a MAIN za każdym razem tylko
+     wysyłał to samo czekanie (jedna wiadomość do DeepSeeka co 3 min bez
+     decyzji). Teraz każda taka karta, po której MAIN znów nic nowego nie
+     zrobił, podwaja odstęp do następnej: 3 → 6 → 12 → 24 min. Koniec
+     procesu albo czekania przychodzi od razu jak dotąd; gdy MAIN zrobi
+     coś nowego, odstęp wraca do 3 min. Karta mówi, kiedy najwcześniej
+     będzie następny odczyt i że czekania nie trzeba puszczać od nowa.
+151. Procesy rywala są ukryte w wynikach (v480eq, bieg 2026-10-24 20:50,
+     drużyna 1, krok 106). MAIN zobaczył w ps trzy obce procesy i przez
+     /proc/<pid>/cwd i cmdline poznał folder ~/MAIN_2 i nazwy skryptów
+     drużyny 2. Teraz: komenda czytająca /proc/<pid> procesu rywala nie
+     jest wykonywana (z wyjaśnieniem, jak sprawdzać swoje procesy), a w
+     wynikach komend linie z pid rywala, ścieżką do jego folderu albo jego
+     linią poleceń zastępuje jedna informacja: „proces albo plik drużyny
+     N — ukryty; to nie Wasze, nie trzeba tego sprawdzać”.

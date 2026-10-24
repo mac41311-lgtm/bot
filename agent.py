@@ -26193,6 +26193,8 @@ def dispatch_tool(
 
     result = _czekaj_az_sie_zmieni(name, args, result)
     result = _uwaga_ten_sam_odczyt(name, args, result)
+    if str(name or "").startswith("termux_"):
+        result = _ukryj_rywala_w_wyniku(result)  # v480eq
 
     duration_s = round(
         (datetime.now() - started).total_seconds(),
@@ -26357,12 +26359,96 @@ def _komenda_siega_do_rywala(cmd):
     )
 
 
+_PROC_PID_RE = re.compile(r"/proc/")
+
+
+def _podglada_proces_rywala(cmd):
+    """
+    v480eq: komenda czyta /proc/<pid> (cwd, cmdline, environ, fd …)
+    procesu drugiej druzyny — zwraca opis, inaczej "".
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-24 20:50, druzyna 1,
+    krok 106). MAIN zobaczyl w ps trzy obce procesy i zrobil "for p in
+    19077 19121 19647; do ls -l /proc/$p/cwd; cat /proc/$p/cmdline" —
+    dostal ~/MAIN_2 i nazwy skryptow rywala (sprawdz_v19.py,
+    test_zabojca_act.py), czyli to, czego w rywalizacji nie wolno widziec.
+    """
+    tekst = str(cmd or "")
+    if not _PROC_PID_RE.search(tekst):
+        return ""
+    procesy = _procesy_rywala()
+    if not procesy:
+        return ""
+    pidy = {p[0] for p in procesy}
+    trafione = sorted({int(n) for n in re.findall(r"(?<![\w.])(\d{2,7})(?![\w.])", tekst)} & pidy)
+    if not trafione:
+        return ""
+    return ", ".join(str(t) for t in trafione[:5])
+
+
+def _ukryj_rywala_w_wyniku(result):
+    """
+    v480eq: w wyniku komendy linie o procesach i plikach drugiej druzyny
+    (ps z jej pid, sciezka do jej folderu, jej linia polecen) zastepuje
+    jedna informacja, czyje to jest. Druzyna wie wtedy, ze to nie jej
+    i nie musi tego sprawdzac — a nazw skryptow rywala nie widzi.
+    """
+    if not _DRUZYNA or not isinstance(result, dict):
+        return result
+    try:
+        pola = [k for k in ("stdout", "stderr", "output") if isinstance(result.get(k), str) and result.get(k)]
+        if not pola:
+            return result
+        procesy = None
+        po_ukosniku, _slowo = _rzeczy_rywala_re()
+        notka = "[proces albo plik drużyny " + _rywal() + " — ukryty; to nie Wasze, nie trzeba tego sprawdzać]"
+        for k in pola:
+            linie = result[k].split("\n")
+            zmiana = False
+            for i, l in enumerate(linie):
+                if not l.strip():
+                    continue
+                ukryj = bool(po_ukosniku.search(l))
+                if not ukryj:
+                    if procesy is None:
+                        procesy = _procesy_rywala()
+                        pidy = {str(p[0]) for p in procesy}
+                        cmdy = [p[2].strip() for p in procesy if len(p[2].strip()) >= 8]
+                    if procesy:
+                        pierwsze = l.split(None, 1)[0] if l.split() else ""
+                        ukryj = pierwsze in pidy or any(c in l for c in cmdy)
+                if ukryj:
+                    linie[i] = notka
+                    zmiana = True
+            if zmiana:
+                # kolejne identyczne notki jako jedna linia
+                wynik = []
+                for l in linie:
+                    if l == notka and wynik and wynik[-1].startswith(notka):
+                        continue
+                    wynik.append(l)
+                result[k] = "\n".join(wynik)
+    except Exception:
+        pass
+    return result
+
+
 def _siega_do_rywala(name, args):
     """Komunikat odmowy, gdy narzedzie siega do rzeczy rywala; inaczej ""."""
     if not _DRUZYNA or not isinstance(args, dict):
         return ""
     if not (str(name).startswith("termux_") or name == "android_run_in_new_window"):
         return ""
+    _pidy = _podglada_proces_rywala(args.get("command")) if args.get("command") else ""
+    if _pidy:
+        return (
+            "Nie wykonałem — komenda czyta /proc procesu drużyny "
+            + _rywal() + " (pid " + _pidy + "). Procesy z jej folderu to "
+            "nie Wasze: nie trzeba ich sprawdzać, a ich szczegóły (folder, "
+            "linia poleceń, pliki) to podglądanie rywala. Swoje procesy "
+            "sprawdzajcie po pid, który dostaliście przy uruchomieniu, "
+            "albo w ps po nazwie Waszego skryptu."
+        )
     m = None
     for k in ("path", "workdir", "cwd", "src", "dst", "source", "target"):
         if args.get(k):
@@ -32834,7 +32920,7 @@ def _uruchom_rzecz(rzecz, praca, cichy):
         except Exception as e:
             wynik = {"ok": False, "error": str(e), "error_type": type(e).__name__}
         if isinstance(wynik, dict):
-            wynik = _bez_ostrzezen_pythona(wynik)
+            wynik = _ukryj_rywala_w_wyniku(_bez_ostrzezen_pythona(wynik))
         with _w_tle_lock:
             rzecz["wynik"] = wynik
             rzecz["koniec"] = time.time()
@@ -32956,6 +33042,16 @@ def _rozmiary_plikow(pliki):
 
 _w_tle_postep = []
 
+# v480eq: odstep budzenia samym przyrostem w logach. Uzytkownik 2026-10-24
+# 20:52 ("czy to nie beznadziejny spam ... z tym czasem"): druzyna 1 od
+# 20:35 do 20:45 co 3 min dostawala "POSTĘP W TLE", a MAIN za kazdym razem
+# tylko wysylal to samo czekanie — jedna wiadomosc do DeepSeeka co 3 min
+# bez zadnej decyzji. Teraz kazde takie pobudzenie, po ktorym MAIN znowu
+# nic nowego nie zrobil, podwaja odstep (3 -> 6 -> 12 -> 24 min); koniec
+# czegos w tle albo nowa robota MAIN-a wraca do 3 min.
+_odstep_przyrostu = [_BUDZ_PO_PRZYROSCIE_S]
+_ODSTEP_PRZYROSTU_MAX_S = 1440
+
 
 def _bezczynnie_czekaj():
     """v480eo: MAIN w calym RUN nie zrobil nic nowego (tylko czekanie na to,
@@ -33004,7 +33100,7 @@ def _bezczynnie_czekaj():
             if any(k not in teraz_zywe for k in procesy):
                 powod = "koniec_procesu"
                 break
-        if pliki and time.time() - t0 >= _BUDZ_PO_PRZYROSCIE_S:
+        if pliki and time.time() - t0 >= _odstep_przyrostu[0]:
             if _rozmiary_plikow(pliki) != rozmiary0:
                 powod = "przybylo"
                 break
@@ -33015,6 +33111,10 @@ def _bezczynnie_czekaj():
                 "skończy albo w logach przybędzie wyników.")
         time.sleep(5)
     czekal = _min_s(time.time() - t0)
+    if powod == "przybylo":
+        _odstep_przyrostu[0] = min(_ODSTEP_PRZYROSTU_MAX_S, _odstep_przyrostu[0] * 2)
+    else:
+        _odstep_przyrostu[0] = _BUDZ_PO_PRZYROSCIE_S
     zdanie = {
         "koniec_tla": "coś z tego, co leciało w tle, się skończyło",
         "koniec_procesu": "proces w tle się skończył",
@@ -33038,6 +33138,11 @@ def _bezczynnie_czekaj():
             )
         except Exception:
             pass
+        tekst += (
+            "\nNastępny taki odczyt najwcześniej za "
+            + str(_odstep_przyrostu[0] // 60) + " min — koniec procesu albo "
+            "czekania przyjdzie od razu. Czekania nie trzeba puszczać od nowa."
+        )
     with _w_tle_lock:
         _w_tle_postep.append("═══ POSTĘP W TLE ═══\n" + tekst + "\n═══")
 
@@ -33386,6 +33491,8 @@ def _wykonaj_akcje_maina(decision, step):
             _bezczynnie_czekaj()
         except Exception:
             pass
+    elif wyniki:
+        _odstep_przyrostu[0] = _BUDZ_PO_PRZYROSCIE_S  # v480eq: zrobil cos nowego
 
     wynik = {
         "ok": ok_all,
