@@ -2345,3 +2345,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zostają). Teraz, gdy rola sięga po Chrome, a on po wyciągnięciu na
      wierzch dalej nie odpowiada i nie ma tego gniazda, program sam
      uruchamia go od nowa i sprawdza jeszcze raz.
+
+133. Chrome przy zablokowanym ekranie (v480ea). Za ekranem blokady
+     Android Chrome'a nie budzi, a program telefonu nie odblokowuje
+     (użytkownik 2026-10-24: „a jak jest zablokowany?”). Gdy rola sięga po
+     Chrome, a ekran jest zablokowany, program nie wyciąga go na siłę.
+     Rola dostaje raz (do odblokowania) zdanie: co się stało, że
+     narzędzia chrome_ zadziałają po odblokowaniu, a do tego czasu stronę
+     można pobrać bez przeglądarki (curl, Python).

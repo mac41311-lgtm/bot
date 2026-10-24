@@ -14985,6 +14985,33 @@ _CDP_CONSECUTIVE_FAILURES = 0
 _budzenie_chrome = [False]
 
 
+_powiedziane_o_blokadzie = [False]
+
+
+def _ekran_zablokowany(device):
+    """v480dz: czy na telefonie jest teraz ekran blokady (False, gdy nie wiadomo)."""
+    try:
+        wy = subprocess.run(
+            ["adb", "-s", device, "shell", "dumpsys", "window", "policy"],
+            capture_output=True, text=True, timeout=10
+        ).stdout
+        if not wy.strip():
+            wy = subprocess.run(
+                ["adb", "-s", device, "shell", "dumpsys", "window"],
+                capture_output=True, text=True, timeout=10
+            ).stdout
+        if re.search(
+            r"\b(mShowingLockscreen|mDreamingLockscreen|isStatusBarKeyguard|"
+            r"mKeyguardShowing)=true", wy
+        ):
+            return True
+        # Nowszy Android: sekcja "KeyguardServiceDelegate" z "showing=true".
+        _i = wy.find("KeyguardServiceDelegate")
+        return _i >= 0 and bool(re.search(r"\bshowing=true", wy[_i:_i + 600]))
+    except Exception:
+        return False
+
+
 def ensure_chrome_cdp_forward(retries=3, budz=True):
     """
     Ustawia `adb forward` dla CDP i sprawdza /json/version.
@@ -15121,6 +15148,24 @@ def ensure_chrome_cdp_forward(retries=3, budz=True):
         and not str(last_error).startswith("ADB forward ERROR")
         and not _budzenie_chrome[0]
     ):
+        # v480dz: za zablokowanym ekranem Android Chrome'a nie budzi, a
+        # program telefonu nie odblokowuje (uzytkownik 2026-10-24: "a jak
+        # jest zablokowany?"). Rola dostaje raz zdanie, co i jak dalej.
+        if _ekran_zablokowany(device):
+            _zd = (
+                "Program: Chrome nie odpowiada, bo ekran telefonu jest "
+                "zablokowany — za blokadą Android go nie budzi, a program "
+                "nie odblokowuje telefonu. Narzędzia chrome_ zadziałają, gdy "
+                "użytkownik odblokuje ekran; do tego czasu stronę można "
+                "pobrać bez przeglądarki (np. curl albo Python w Termuksie)."
+            )
+            log("CHROME", _zd)
+            if not _powiedziane_o_blokadzie[0]:
+                _powiedziane_o_blokadzie[0] = True
+                _pending_team_warnings.append(_zd)
+            _CDP_CONSECUTIVE_FAILURES += 1
+            return False
+        _powiedziane_o_blokadzie[0] = False
         log(
             "CHROME",
             "Chrome nie odpowiada (w tle Android go usypia albo nie działa) "
