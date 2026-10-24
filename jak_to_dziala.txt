@@ -2548,3 +2548,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      że wynik przyjdzie sam i w tym czasie można pracować nad czymś innym
      (analiza, następna próba, rozmowa z zespołem). To opis stanu w
      komunikacie programu, nie stały tekst w prompcie.
+153. Sędzia nie dostaje co kwadrans tego samego (v480es, użytkownik
+     2026-10-24 21:02: „czy sędzia nie dostaje tych samych wiadomości,
+     np. ostatnich od zespołu Marka … spam co 15 min”). Bieg 2026-10-24
+     20:24 → 20:39: z 34 tys. znaków 24 tys. było identycznych jak
+     kwadrans wcześniej (wypowiedzi zespołów słowo w słowo, niezmienione
+     pliki, te same kroki). Teraz w tej samej rozmowie Sędziego idzie
+     tylko to, co nowe: wcześniejsze kroki, komendy i wypowiedzi
+     zastępuje jedna linia „(N wcześniejsze — bez zmian, masz je w tej
+     rozmowie z oceny z HH:MM)”, a niezmieniony plik — „--- plik --- bez
+     zmian od oceny z HH:MM (treść masz wyżej)”. Nowa rozmowa Sędziego
+     (albo nieudana ocena) dostaje znów wszystko. Zapis w
+     state/sedzia_widzial.json (katalog agenta drużyny 1).

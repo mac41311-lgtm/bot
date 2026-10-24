@@ -52328,6 +52328,71 @@ def _kroki_dla_sedziego(katalog, n=8):
     return "\n".join(linie)
 
 
+# v480es: Sedzia nie dostaje co kwadrans tego samego. Uzytkownik
+# 2026-10-24 21:02: "sprawdz, czy sedzia nie dostaje tych samych
+# wiadomosci, np. ostatnich od zespolu Marka ... czy jest spam co 15 min".
+# Bieg 2026-10-24 20:24 -> 20:39: z 34 tys. znakow 24 tys. bylo
+# identycznych jak kwadrans wczesniej — "Ostatnie wypowiedzi zespolu"
+# obu druzyn (po ok. 5 tys.) slowo w slowo, niezmienione pliki
+# (wynik.json, DLA_UZYTKOWNIKA.md ...), te same kroki. W tej samej
+# rozmowie Sedzia ma je juz wyzej, wiec idzie tylko to, co nowe, z
+# jedna linia, ile wczesniejszego pominieto. Nowa rozmowa Sedziego
+# (inny chat_session_id) dostaje znow wszystko.
+_SEDZIA_WIDZIAL_FILE = STATE_DIR / "sedzia_widzial.json"
+_sedzia_widzial = {"stare": set(), "nowe": set(), "czas": ""}
+
+
+def _sedzia_klucz(rodzaj, numer, tekst):
+    return rodzaj + str(numer) + ":" + hashlib.sha1(
+        str(tekst)[:300].encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _sedzia_tylko_nowe(tekst, rodzaj, numer):
+    """Linie, ktorych Sedzia w tej rozmowie jeszcze nie dostal."""
+    if not tekst:
+        return tekst
+    zostaja, pominiete = [], 0
+    for l in str(tekst).split("\n"):
+        if not l.strip():
+            zostaja.append(l)
+            continue
+        k = _sedzia_klucz(rodzaj, numer, re.sub(r"^\d+\.\s*", "", l))
+        _sedzia_widzial["nowe"].add(k)
+        if k in _sedzia_widzial["stare"]:
+            pominiete += 1
+            continue
+        zostaja.append(l)
+    if not pominiete:
+        return tekst
+    nota = ("(" + str(pominiete) + " wcześniejsze — bez zmian, masz je w tej "
+            "rozmowie z oceny z " + (_sedzia_widzial["czas"] or "poprzedniej") + ")")
+    if not any(x.strip() for x in zostaja):
+        return nota
+    return nota + "\n" + "\n".join(zostaja).strip("\n")
+
+
+def _sedzia_wczytaj_widziane(rozmowa):
+    d = read_json(_SEDZIA_WIDZIAL_FILE, {})
+    _sedzia_widzial["nowe"] = set()
+    if isinstance(d, dict) and rozmowa and d.get("rozmowa") == rozmowa:
+        _sedzia_widzial["stare"] = set(d.get("klucze") or [])
+        _sedzia_widzial["czas"] = str(d.get("czas") or "")
+    else:
+        _sedzia_widzial["stare"] = set()
+        _sedzia_widzial["czas"] = ""
+
+
+def _sedzia_rozmowa_teraz():
+    try:
+        _s = sessions.get("ARBITER")
+        r = getattr(_s, "chat_session_id", None) if _s is not None else None
+        if r:
+            return str(r)
+        return str((read_json(_CEL_WYSLANY_FILE, {}).get("ARBITER") or {}).get("rozmowa") or "")
+    except Exception:
+        return ""
+
+
 def _kod_dla_sedziego(numer):
     """Tresc ostatnio zmienionych plikow tekstowych z ~/MAIN_N."""
     folder = HOME / ("MAIN_" + str(numer))
@@ -52352,6 +52417,13 @@ def _kod_dla_sedziego(numer):
         try:
             tresc = p.read_text(encoding="utf-8", errors="replace")
         except Exception:
+            continue
+        _k = "plik" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + hashlib.sha1(
+            tresc.encode("utf-8", "replace")).hexdigest()[:12]
+        _sedzia_widzial["nowe"].add(_k)
+        if _k in _sedzia_widzial["stare"]:
+            bloki.append("--- " + str(p.relative_to(folder)) + " --- bez zmian od oceny z "
+                         + (_sedzia_widzial["czas"] or "poprzedniej") + " (treść masz wyżej)")
             continue
         kawalek = tresc[:min(zostalo, 3000)]
         bloki.append("--- " + str(p.relative_to(folder)) + " ---\n" + kawalek
@@ -52417,15 +52489,15 @@ def _stan_druzyny_dla_sedziego(numer):
     return (
         "Drużyna " + numer + " (folder ~/MAIN_" + numer + ")"
         + (", teraz w kroku " + str(_krok_druzyny(numer)) if _krok_druzyny(numer) else "") + ":\n"
-        "Ostatnie kroki (z uzasadnieniem MAIN-a):\n" + (_kroki_dla_sedziego(katalog) or "(jeszcze żadnych)") + "\n"
+        "Ostatnie kroki (z uzasadnieniem MAIN-a):\n" + (_sedzia_tylko_nowe(_kroki_dla_sedziego(katalog), "krok", numer) or "(jeszcze żadnych)") + "\n"
         "Wynik sprawdzony przez program: " + wynik + "\n"
         "Pliki w folderze: " + _pliki_druzyny(numer) + "\n"
         "Ostatnio używane komendy i pliki:\n"
-        + (_gdzie_pracowala(katalog) or "(brak)") + "\n"
+        + (_sedzia_tylko_nowe(_gdzie_pracowala(katalog), "gdzie", numer) or "(brak)") + "\n"
         "Treść ostatnio zmienionych plików w ~/MAIN_" + numer + ":\n"
         + (_kod_dla_sedziego(numer) or "(brak)") + "\n"
         "Ostatnie wypowiedzi zespołu:\n"
-        + (_rozmowa_dla_sedziego(numer) or "(brak)") + "\n"
+        + (_sedzia_tylko_nowe(_rozmowa_dla_sedziego(numer), "mowa", numer) or "(brak)") + "\n"
     )
 
 
@@ -52440,6 +52512,8 @@ def ocen_rywalizacje(kroki):
         return None
     try:
         k1, k2 = (str(k if k is not None else "?") for k in kroki)
+        _rozmowa_przed = _sedzia_rozmowa_teraz()
+        _sedzia_wczytaj_widziane(_rozmowa_przed)
         prompt = (
             "Ocena z godziny " + datetime.now().strftime("%H:%M")
             + " — drużyna 1 jest na kroku " + k1 + ", drużyna 2 na kroku " + k2
@@ -52456,6 +52530,18 @@ def ocen_rywalizacje(kroki):
         )
         parsed = parse_json(deepseek("ARBITER", prompt))
         _nowe_po_dyskwalifikacji.clear()
+        try:
+            _rozmowa_po = _sedzia_rozmowa_teraz()
+            write_json(_SEDZIA_WIDZIAL_FILE, {
+                "rozmowa": _rozmowa_po,
+                "czas": datetime.now().strftime("%H:%M"),
+                # inna rozmowa niz ta, do ktorej liczylismy — nastepnym
+                # razem wszystko od nowa
+                "klucze": sorted(_sedzia_widzial["nowe"])
+                if isinstance(parsed, dict) and _rozmowa_po == _rozmowa_przed else [],
+            })
+        except Exception:
+            pass
         if not isinstance(parsed, dict):
             return None
 
