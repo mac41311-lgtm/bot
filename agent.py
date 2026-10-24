@@ -32708,10 +32708,51 @@ def _do_listy_w_tle(rzecz):
     _w_tle.append(rzecz)
 
 
+_PLIK_W_KOMENDZIE_RE = re.compile(r"(?:~|/data/data|\$HOME)[^\s;&|'\"<>()]+")
+
+
+def _pliki_czekania(cmd):
+    """v480ei: pliki, ktore czekanie czyta po sleep (cat/tail/head ...)."""
+    return set(_PLIK_W_KOMENDZIE_RE.findall(_bez_sleep(cmd)))
+
+
+def _to_samo_czekanie(cmd):
+    """v480ek: zywe czekanie w tle, ktore czyta te same pliki co `cmd`.
+
+    Bieg 2026-10-24 17:36-17:39: MAIN konczyl prawie kazdy RUN nowym
+    `sleep 300; cat <te same logi>`, choc takie czekanie juz lecialo. W tle
+    staly trzy czekania na to samo, skonczyly sie razem i MAIN dostal trzy
+    karty z tym samym wynikiem."""
+    nowe = _pliki_czekania(cmd)
+    if not nowe:
+        return None
+    for r in _w_tle_zywe():
+        if r["rodzaj"] == "czekanie" and nowe <= _pliki_czekania(r["komenda"]):
+            return r
+    return None
+
+
 def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     """v480ed/eh: czekanie idzie w tlo od razu. Gdy w tle juz cos leci,
     czeka na to (najdluzej `sekundy`) i potem wykonuje reszte bez sleep."""
     cmd = str(args.get("command") or "")
+    tamto = _to_samo_czekanie(cmd)
+    if tamto:
+        return {
+            "ok": True,
+            "status": "JUZ_CZEKA_W_TLE",
+            "command": cmd,
+            "message": (
+                "Drugiego czekania nie puściłem: czekanie z "
+                + _hhmm(tamto["start"]) + " już czyta te same pliki i leci "
+                "do ok. " + _hhmm(tamto["start"] + (tamto.get("sekundy") or 0))
+                + " (wcześniej, jeśli proces się skończy). Jego wynik przyjdzie "
+                "sam na górze Twojej wiadomości."
+                + ((" Akcji po nim w tym RUN (" + ", ".join(pominiete)
+                    + ") nie wykonałem — mogą zależeć od wyniku; wyślij je, "
+                    "gdy przyjdzie.") if pominiete else "")
+            ),
+        }
     zywe = _w_tle_zywe()
     rzecz = _rzecz_w_tle("czekanie", cmd, sekundy, pominiete,
                          [r["nr"] for r in zywe])
@@ -32859,8 +32900,8 @@ def _karta_startu(r, teraz):
             "być jeszcze niepełne.",
         ]
     linie.append(
-        "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy. "
-        "Gdy puścisz kolejne czekanie, poczeka ono na to, co już leci w tle."
+        "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy "
+        "— nie trzeba puszczać drugiego czekania na to samo."
     )
     if r.get("pominiete"):
         linie.append(
@@ -32876,12 +32917,27 @@ def _czekanie_blok():
     wyniki tego, co sie skonczylo (kazdy raz)."""
     teraz = time.time()
     karty, linie, nowe = [], [], False
+    widziane = {}
     with _w_tle_lock:
         for r in list(_w_tle):
             if r.get("wynik") is not None:
                 if not r.get("dostarczony"):
                     r["dostarczony"] = True
-                    karty.append(_karta_wyniku(r))
+                    # v480ek: ten sam wynik drugi raz to jedna linia.
+                    _w = r["wynik"] if isinstance(r["wynik"], dict) else {}
+                    _klucz = str(_w.get("stdout") or "") + str(_w.get("stderr") or "")
+                    if _klucz and _klucz in widziane:
+                        karty.append(
+                            "═══ W TLE SKOŃCZONE: czekanie z " + _hhmm(r["start"])
+                            + " — wynik taki sam jak " + widziane[_klucz] + " ═══"
+                        )
+                    else:
+                        if _klucz:
+                            widziane[_klucz] = (
+                                ("czekanie" if r["rodzaj"] == "czekanie" else "komenda")
+                                + " z " + _hhmm(r["start"]) + " wyżej"
+                            )
+                        karty.append(_karta_wyniku(r))
                 _w_tle.remove(r)
             elif not r.get("pokazany"):
                 r["pokazany"] = True

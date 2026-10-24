@@ -2458,3 +2458,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zespół go nie widzi i odezwie się, gdy go zapytasz. Zapytaj po kolei
      każdego w zespole ... Gdy zbierzesz odpowiedzi, sam dopisz z datą do
      ~/MAIN_n/BURZA_MOZGOW.md ...".
+143. Bez podwójnych czekań na to samo (v480ek). Bieg 2026-10-24
+     17:36-17:39 (v480eh działało: MAIN w tym czasie pisał skrypty), ale
+     MAIN kończył prawie każdy RUN nowym `sleep 300; cat <te same logi>`.
+     W tle stały trzy czekania na to samo, skończyły się razem i dostał
+     trzy karty z tym samym wynikiem. Teraz czekanie, które czyta te same
+     pliki co czekanie już lecące w tle, nie startuje drugi raz; MAIN
+     dostaje zdanie, od kiedy i do kiedy leci tamto, i że jego wynik
+     przyjdzie sam. Gdy dwa skończone czekania dają identyczny wynik,
+     drugi jest jedną linią "wynik taki sam jak ... wyżej". Karta mówi,
+     że nie trzeba puszczać drugiego czekania na to samo.
