@@ -23305,7 +23305,15 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             except Exception:
                 pass
 
-        if pgid and pgid != os.getpgrp():
+        # v480ep: tylko gdy czekanie nie bylo skrocone (wtedy grupe
+        # wlasnie zabilismy) i grupa zyje jeszcze chwile po powloce.
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-24 19:20, krok 90):
+        # "sleep 1500; tail …" skrocone, bo proces w tle sie skonczyl —
+        # zabita grupa jeszcze nie zniknela i MAIN dostal zbedne
+        # "Komenda puszczona w tło (sleep 1500; …) już nie działa,
+        # trwała ok. 1 s … nie widzi pliku".
+        if pgid and pgid != os.getpgrp() and not _zdanie_o_czekaniu:
+            time.sleep(0.3)
             try:
                 os.killpg(pgid, 0)
                 _grupy_z_komend[pgid] = (short(command, 300), time.time())
@@ -24922,6 +24930,10 @@ def termux_run_background(
         # _poczekaj_na_komende_w_tle(). Sam pid tego nie da: os.kill(pid, 0)
         # mowi tylko "zyje/nie zyje", nigdy "skonczyl sie bledem".
         _procesy_w_tle[proc.pid] = proc
+        try:
+            proc._ael_cwd = str(cwd or "")  # v480ep: _plik_z_przekierowania
+        except Exception:
+            pass
 
         # v327: zeby dalo sie odpowiedziec na pytanie "log jest
         # pusty, czy to juz koniec?" — patrz _kto_pisze_do_logu().
@@ -50577,6 +50589,37 @@ def _czas_slownie(s):
     return (str(s // 60) + " min " + str(s % 60) + " s") if s >= 60 else (str(s) + " s")
 
 
+def _plik_z_przekierowania(komenda, cwd=None):
+    """
+    v480ep: plik, do ktorego komenda sama pisze ("> plik", ">> plik",
+    "2> plik", "&> plik", "tee plik") — najswiezszy z istniejacych.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-24 20:11). MAIN puscil
+    termux_run_background "python3 -u scratch_tying_fsp.py
+    > scratch_out.log 2> scratch_stderr.log". Log programu
+    (scratch_run.log) zostal pusty, wiec MAIN dostawal tylko "Log …: 0 B,
+    ostatnia linia:" — nic o tym, co skrypt naprawde wypisuje.
+    """
+    cele = re.findall(
+        r"(?:&>>?|(?<![&])[0-9]?>>?|\btee(?:\s+-a)?)\s*[\"']?([^\s;&|\"'<>]+)",
+        str(komenda)
+    )
+    najlepszy, czas = "", -1.0
+    for c in cele:
+        if c.startswith("/dev/") or c.startswith("&"):
+            continue
+        for pc in ([Path(cwd) / c] if cwd and not c.startswith(("/", "~")) else []) + [
+            _resolve_home_relative_path(c)
+        ]:
+            try:
+                if pc.is_file() and pc.stat().st_mtime > czas:
+                    najlepszy, czas = str(pc), pc.stat().st_mtime
+                    break
+            except Exception:
+                pass
+    return najlepszy
+
+
 def _raport_z_tla():
     zdania = []
     for pid, proces in list(_procesy_w_tle.items()):
@@ -50588,6 +50631,22 @@ def _raport_z_tla():
         log_path, start = _log_procesu_w_tle(pid)
         trwa = _czas_slownie(time.time() - start) if start else ""
         rozmiar, linie = _ogon_logu(log_path) if log_path else (0, [])
+        if not linie:
+            # v480ep: skrypt pisze do wlasnych plikow (> plik), nie do logu
+            try:
+                _cwd = os.readlink("/proc/" + str(pid) + "/cwd")
+            except Exception:
+                _cwd = str(getattr(proces, "_ael_cwd", "") or "") or None
+            _wlasny = _plik_z_przekierowania(
+                " ".join(str(a) for a in (getattr(proces, "args", "") or []))
+                if isinstance(getattr(proces, "args", ""), (list, tuple))
+                else str(getattr(proces, "args", "")),
+                _cwd,
+            )
+            if _wlasny:
+                _r2, _l2 = _ogon_logu(_wlasny)
+                if _l2 or not log_path:
+                    log_path, rozmiar, linie = _wlasny, _r2, _l2
         if kod is None and not _jeszcze_zyje(pid):
             kod = "?"
         if kod is not None and _grupa_zyje(pid):

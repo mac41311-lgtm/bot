@@ -2516,3 +2516,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wcześniej niż po 3 min — wtedy MAIN dostaje kartę "POSTĘP W TLE" ze
      świeżym odczytem), albo koniec czasu czekań (najdłużej 30 min). Bez
      zapytań do DeepSeeka w tym czasie.
+149. Raport o procesie w tle czyta plik, do którego skrypt naprawdę pisze
+     (v480ep, logi 2026-10-24). Gdy log programu jest pusty, a komenda
+     sama kieruje wyjście do pliku ("> out.log", "2> err.log", "tee
+     plik"), MAIN dostaje rozmiar i ostatnią linię najświeższego z nich,
+     zamiast "Log …: 0 B, ostatnia linia:". Do tego czekanie skrócone,
+     bo proces w tle się skończył, nie wraca już jako zbędne "Komenda
+     puszczona w tło (sleep …) już nie działa, trwała ok. 1 s … nie
+     widzi pliku" (krok 90 drużyny 2).
