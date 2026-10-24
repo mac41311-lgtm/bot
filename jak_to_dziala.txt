@@ -2445,3 +2445,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Zostaje z punktu 137: nowe czekanie, gdy to, na co czekał, już się
      skończyło, a MAIN nie widział wyniku, nie śpi — od razu wykonuje
      resztę komendy.
+141. Powtarzanie tego samego sprawdzenia nie rusza, gdy proces już się
+     skończył (v480ei). Bieg 2026-10-24 17:24: dwa czekania na ten sam
+     proces dały ten sam wynik, więc program zaczął powtarzać drugie
+     (z pełnym sleep) do 15 min, choć proces już się zakończył. Gdy
+     czekanie skończyło się wcześniej, bo proces w tle się zakończył,
+     wynik idzie od razu. Na v480eh drugie czekanie i tak idzie w tło.

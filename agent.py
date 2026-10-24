@@ -25862,6 +25862,14 @@ def _czekaj_az_sie_zmieni(name, args, result):
         _ostatnie_sprawdzenie[klucz] = wynik
         return result
 
+    # v480ei: bieg 2026-10-24 17:24 — czekanie skonczylo sie wczesniej,
+    # bo proces, na ktory czekalo, sie zakonczyl; wynik byl taki sam jak
+    # z rownoleglego czekania w tle, wiec program powtarzal komende
+    # (z pelnym sleep) do 15 min, a MAIN stal. Gdy proces juz sie skonczyl,
+    # wynik sie nie zmieni — oddajemy go od razu.
+    if "skończone wcześniej, bo proces w tle" in wynik:
+        return result
+
     start = time.time()
     razy = 0
     procesy_na_starcie = _procesy_od_plikow(komenda)
