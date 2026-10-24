@@ -2590,3 +2590,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wyjaśnienie idzie raz na uruchomienie programu, a kolejne karty mają
      jedną linię: „Wynik przyjdzie sam; w tym czasie możecie pracować nad
      czymś innym.”
+157. Drobny szum z wiadomości MAIN-a (v480ew, użytkownik 2026-10-24
+     21:30, przegląd wiadomości ze starszej wersji): bez „liczba wywołań
+     narzędzi: N” po RUN MAIN-a (liczba jest w „wykonano N z M akcji” i w
+     liście wyników); bez „Nie wykonałem N kolejnych akcji.”, gdy
+     czekanie w tle samo mówi, których akcji nie wykonało i czemu; w
+     odczytach z tła bez „kod wyjścia: 0” (inny kod zostaje).

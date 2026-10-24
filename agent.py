@@ -33206,7 +33206,8 @@ def _opis_wyniku_czekania(w):
         czesci.append(short(out, 3500))
     if err:
         czesci.append("stderr:\n" + short(err, 800))
-    if "returncode" in w:
+    # v480ew: "kod wyjścia: 0" przy udanym odczycie nic nie mowi
+    if "returncode" in w and w.get("returncode") not in (0, "0"):
         czesci.append("kod wyjścia: " + str(w.get("returncode")))
     if w.get("czekanie"):
         czesci.append(str(w["czekanie"]))
@@ -33656,6 +33657,13 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
         return ""
 
     pominiete = int(last_result.get("pominiete_akcje") or 0)
+    # v480ew: czekanie w tle samo mowi, ktorych akcji nie wykonalo i czemu
+    try:
+        _ost = (wyniki[-1].get("wynik") or {}) if wyniki else {}
+        if isinstance(_ost, dict) and _ost.get("status") in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE"):
+            pominiete = 0
+    except Exception:
+        pass
 
     return (
         "Wyniki akcji RUN:\n" + "\n\n".join(czesci)
@@ -37744,7 +37752,10 @@ def _condense_last_result_for_team(last_result, limit=2500):
 
     # v429: gdy jest slad wywolan, liczba stoi w nim ("wywołań
     # narzędzi: N, nieudanych: M") — tu byla druga raz.
-    if tool_calls and not last_result.get("tool_trace"):
+    # v480ew: po RUN MAIN-a liczba stoi juz w "wykonano N z M akcji" i w
+    # liscie wynikow — trzecia linia z ta sama liczba to szum.
+    if (tool_calls and not last_result.get("tool_trace")
+            and last_result.get("executed_by") != "main_run"):
         parts.append("liczba wywołań narzędzi: " + str(tool_calls))
 
     # CO GEMINI FAKTYCZNIE WYWOŁAŁO — zapis zbierany przez Pythona,
