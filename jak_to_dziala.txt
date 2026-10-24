@@ -2353,3 +2353,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Rola dostaje raz (do odblokowania) zdanie: co się stało, że
      narzędzia chrome_ zadziałają po odblokowaniu, a do tego czasu stronę
      można pobrać bez przeglądarki (curl, Python).
+
+134. Prompt MAIN-a przepisany w całości (v480eb, użytkownik 2026-10-24:
+     „spójny, logiczny, poprawny, nie mylił, pomagał, nie mówił, co mają
+     robić, nie zakazywał”). Pierwsze zdanie promptu i pierwsza
+     wiadomość („jak to działa”) są teraz w krótkich częściach: telefon,
+     zespół, rozmowa, wykonanie, kod, co widać, użytkownik — same opisy.
+     Nowa jest informacja, że zespół i Igor odzywają się tylko wtedy, gdy
+     MAIN kogoś zapyta, więc rozmowę prowadzi MAIN (w logach 23/24.10
+     drużyna 1 zadała 3 pytania na 125 kroków). Działające rozmowy
+     MAIN-ów dostaną nową wersję raz.
