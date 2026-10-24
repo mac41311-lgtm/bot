@@ -2468,3 +2468,23 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      przyjdzie sam. Gdy dwa skończone czekania dają identyczny wynik,
      drugi jest jedną linią "wynik taki sam jak ... wyżej". Karta mówi,
      że nie trzeba puszczać drugiego czekania na to samo.
+144. Samo czekanie trzyma MAIN-a (v480el). Bieg 2026-10-24 17:41-18:05:
+     po każdym czekaniu w tle program od razu pytał MAIN-a o decyzję, a
+     MAIN, nie mając nic innego, na zmianę pisał "Czekam" i "Sprawdzam
+     bezpośrednio stan" — co minutę to samo. Teraz RUN, w którym czekanie
+     jest pierwszą akcją (MAIN nic innego nie robi), program wykonuje
+     razem z nim: gdy w tle coś leci, czeka na to (najdłużej ten sleep),
+     a wynik jest na górze następnej wiadomości; gdy czekanie czyta te
+     same pliki co tamto, nie wykonuje go drugi raz. Czekanie po innych
+     akcjach w RUN dalej idzie w tło. Karta "W TLE" mówi MAIN-owi, że
+     RUN z samym czekaniem znaczy "poczekaj razem ze mną".
+145. Powtórki bez zmian dostają zdanie (v480el, użytkownik 2026-10-24
+     18:07). (a) MAIN sprawdza bez sleep to samo co chwilę temu i wynik
+     jest taki sam (bez liczenia zegara z ps) — wynik idzie z jednym
+     zdaniem, że od HH:MM nic się nie zmieniło i że wynik tła przyjdzie
+     sam. (b) termux_run_background z dokładnie tą samą komendą, która
+     jeszcze działa — druga kopia nie startuje; rola dostaje pid, od
+     kiedy i jak puścić od nowa. (c) Ta sama komenda w tle, która już się
+     skończyła, a od jej startu nie zmienił się żaden plik z kodem (.py,
+     .sh, .yaml, .cfg, .toml) w katalogu — startuje, z uwagą, że wynik
+     będzie prawdopodobnie taki sam i jaki był kod wyjścia.

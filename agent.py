@@ -24651,6 +24651,62 @@ def termux_run(command):
         }
 
 
+# v480el (uzytkownik 2026-10-24 18:07: "jak uruchamia te same procesy bez
+# edycji pliku, bez sensu, trzeba mu komunikat dac"). Ta sama komenda w tle:
+# - gdy jeszcze dziala — druga kopia nie startuje (pisalyby do tych samych
+#   plikow), rola dostaje pid, od kiedy i jak zaczac od nowa;
+# - gdy juz sie skonczyla, a od jej startu nie zmienil sie zaden plik
+#   z kodem (.py/.sh/.yaml/.cfg/.toml) w katalogu roboczym — startuje, ale z uwaga,
+#   ze wynik bedzie prawdopodobnie taki sam i jaki byl kod wyjscia.
+_uruchomienia_w_tle = {}
+_PLIKI_KODU = (".py", ".sh", ".yaml", ".yml", ".cfg", ".toml")
+
+
+def _powtorka_w_tle(command, cwd):
+    try:
+        for pid, proc in list(_procesy_w_tle.items()):
+            if getattr(proc, "args", None) == command and proc.poll() is None:
+                start = _uruchomienia_w_tle.get(command, (None,))[0]
+                return {
+                    "ok": False,
+                    "error": "TEN_SAM_PROCES_JUZ_DZIALA",
+                    "pid": pid,
+                    "message": (
+                        "Nie uruchomiłem: dokładnie ta sama komenda już działa "
+                        "w tle (pid " + str(pid)
+                        + (", od " + datetime.fromtimestamp(start).strftime("%H:%M")
+                           if start else "")
+                        + ") — druga kopia pisałaby do tych samych plików. Jej "
+                        "wynik zobaczysz, gdy się skończy. Jeśli chcesz puścić "
+                        "ją od nowa (np. po zmianie kodu), najpierw zatrzymaj tę "
+                        "(termux_stop_process z pid " + str(pid) + ")."
+                    ),
+                }
+        poprzednie = _uruchomienia_w_tle.get(command)
+        if not poprzednie:
+            return None
+        start, proc = poprzednie
+        kod = proc.poll()
+        if kod is None:
+            return None
+        katalog = Path(cwd or os.path.expanduser("~"))
+        for plik in katalog.iterdir():
+            if plik.suffix in _PLIKI_KODU and plik.stat().st_mtime > start:
+                return None
+        return {
+            "uwaga": (
+                "Ta sama komenda była już uruchomiona o "
+                + datetime.fromtimestamp(start).strftime("%H:%M")
+                + " i skończyła się z kodem " + str(kod) + ", a od tego czasu "
+                "w " + str(katalog) + " nie zmienił się żaden plik z kodem "
+                "(.py, .sh, .yaml ...). Wynik będzie prawdopodobnie taki sam "
+                "jak wtedy."
+            )
+        }
+    except Exception:
+        return None
+
+
 def termux_run_background(
     command,
     workdir=None,
@@ -24807,6 +24863,11 @@ def termux_run_background(
         # zamykamy u siebie — dziecko ma wlasna kopie deskryptora.
         # Dotad kazde uruchomienie w tle zostawialo w agencie jeden
         # otwarty plik na zawsze.
+        # v480el: patrz _powtorka_w_tle().
+        _powt = _powtorka_w_tle(command, cwd)
+        if _powt and _powt.get("ok") is False:
+            return _powt
+
         _log_fh = open(log, "a", encoding="utf-8")
 
         try:
@@ -24854,6 +24915,10 @@ def termux_run_background(
             "workdir": cwd,
             "log_file": str(log)
         }
+
+        _uruchomienia_w_tle[command] = (time.time(), proc)
+        if _powt and _powt.get("uwaga"):
+            bg_result["bez_zmian"] = _powt["uwaga"]
 
         quoting_warning = _detect_single_quoted_shell_variable(command)
 
@@ -25839,6 +25904,50 @@ def _tylko_czeka_i_czyta(command):
     return True
 
 
+_ostatni_odczyt = {}
+
+
+def _uwaga_ten_sam_odczyt(name, args, result):
+    """v480el: MAIN sprawdza (bez sleep) to samo, co chwile temu, i dostaje
+    ten sam wynik. Bieg 2026-10-24 17:41-18:05: na zmiane "Czekam" i
+    "Sprawdzam bezposrednio stan" — co minute ten sam cat/ps. Wynik idzie
+    jak byl, z jednym zdaniem, ze od poprzedniego razu nic sie nie zmienilo."""
+    try:
+        if (
+            name != "termux_run" or not _wykonuje_main
+            or not isinstance(result, dict) or result.get("ok") is not True
+        ):
+            return result
+        komenda = str((args or {}).get("command") or "")
+        if _sekundy_spania(komenda):
+            return result
+        for czlon in _czlony_komendy(komenda):
+            slowa = shlex.split(czlon)
+            if slowa and os.path.basename(slowa[0]) not in _SAMO_CZYTANIE:
+                return result
+        # Czas z ps (etime) zmienia sie co sekunde — nie liczy sie do
+        # porownania; inne liczby (postep, wyniki) tak.
+        klucz = re.sub(r"\d+", "#", komenda)
+        tekst = re.sub(r"\b(?:\d+-)?\d{1,2}:\d{2}(?::\d{2})?\b", "#",
+                       str(result.get("stdout") or "")
+                       + str(result.get("stderr") or ""))
+        teraz = time.time()
+        poprzedni = _ostatni_odczyt.get(klucz)
+        _ostatni_odczyt[klucz] = (tekst, teraz if not poprzedni or poprzedni[0] != tekst else poprzedni[1])
+        if poprzedni and poprzedni[0] == tekst and tekst.strip():
+            result["bez_zmian"] = (
+                "Ten sam wynik co przy tym samym sprawdzeniu od "
+                + datetime.fromtimestamp(poprzedni[1]).strftime("%H:%M")
+                + " — od tego czasu nic się tu nie zmieniło. To, co leci w "
+                "tle, program poda samo, gdy się skończy; gdy nie masz nic "
+                "innego do zrobienia, wyślij RUN z samym czekaniem — program "
+                "poczeka razem z Tobą."
+            )
+    except Exception:
+        pass
+    return result
+
+
 def _czekaj_az_sie_zmieni(name, args, result):
     if (
         name != "termux_run"
@@ -26041,6 +26150,7 @@ def dispatch_tool(
     )
 
     result = _czekaj_az_sie_zmieni(name, args, result)
+    result = _uwaga_ten_sam_odczyt(name, args, result)
 
     duration_s = round(
         (datetime.now() - started).total_seconds(),
@@ -32787,6 +32897,52 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     }
 
 
+def _czekaj_razem(name, args, sekundy):
+    """v480el: RUN, w ktorym MAIN tylko czeka (czekanie jest pierwsza akcja,
+    nic innego przed nim), program czeka razem z nim, zamiast od razu pytac
+    go o nastepna decyzje.
+
+    Bieg 2026-10-24 17:41-18:05: po kazdym czekaniu w tle program od razu
+    pytal MAIN-a, co dalej; MAIN nie mial nic innego, wiec na zmiane pisal
+    "Czekam" (nowe czekanie) i "Sprawdzam bezposrednio stan" — co minute to
+    samo sprawdzenie. Teraz samo czekanie trzyma MAIN-a: gdy w tle cos juz
+    leci, program czeka na to (najdluzej ten sleep), a wynik jest na gorze
+    nastepnej wiadomosci; gdy nic nie leci, komenda leci zwyczajnie (sleep
+    skraca sie, gdy proces w tle sie skonczy)."""
+    cmd = str(args.get("command") or "")
+    zywe = _w_tle_zywe()
+    if not zywe:
+        return dispatch_tool(name, args)
+    tamto = _to_samo_czekanie(cmd)
+    log("MAIN", "MAIN tylko czeka — program czeka razem z nim na to, co leci "
+        "w tle (najdłużej " + _min_s(sekundy) + ").")
+    t0 = time.time()
+    koniec = t0 + sekundy
+    for r in zywe:
+        r["watek"].join(timeout=max(0.0, koniec - time.time()))
+    czekal = _min_s(time.time() - t0)
+    zostalo = [r for r in zywe if r["watek"].is_alive()]
+    opis = (
+        "Program czekał razem z Tobą " + czekal + " — "
+        + ("to, co leciało w tle, skończyło się; wynik jest na górze tej "
+           "wiadomości." if not zostalo else
+           "minął czas z tej komendy, a to, co leci w tle, trwa dalej; "
+           "wynik przyjdzie sam.")
+    )
+    if tamto:
+        return {"ok": True, "status": "POCZEKAL", "command": cmd,
+                "message": opis + " Tej komendy drugi raz nie wykonałem, bo "
+                "tamto czekanie czyta te same pliki."}
+    try:
+        wynik = dispatch_tool(name, dict(args, command=_BEZ_SLEEP_RE.sub("true", cmd)))
+    except Exception as e:
+        wynik = {"ok": False, "error": str(e)}
+    if not isinstance(wynik, dict):
+        wynik = {"ok": True, "wynik": wynik}
+    wynik["czekanie"] = opis + " Potem wykonałem resztę tej komendy bez sleep."
+    return wynik
+
+
 def _wykonaj_po_skonczonym(name, args):
     """v480ee: nowe czekanie, gdy to, co bylo w tle, juz sie skonczylo, a
     MAIN nie widzial wyniku (bieg 2026-10-24 16:28: nowe `sleep 600` czekalo
@@ -32901,7 +33057,9 @@ def _karta_startu(r, teraz):
         ]
     linie.append(
         "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy "
-        "— nie trzeba puszczać drugiego czekania na to samo."
+        "— nie trzeba puszczać drugiego czekania na to samo. Gdy nie masz "
+        "nic innego do zrobienia, wyślij RUN z samym czekaniem: program "
+        "poczeka wtedy razem z Tobą i odezwie się z wynikiem."
     )
     if r.get("pominiete"):
         linie.append(
@@ -33031,6 +33189,9 @@ def _wykonaj_akcje_maina(decision, step):
         ):
             # v480ee: patrz _wykonaj_po_skonczonym().
             result = _wykonaj_po_skonczonym(name, args)
+        elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S and i == 0:
+            # v480el: patrz _czekaj_razem().
+            result = _czekaj_razem(name, args, _sek_akcji)
         elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S:
             # v480ed/eh: patrz _pusc_czekanie_w_tle(). Akcje po czekaniu
             # nie ruszaja — zalezaly od jego wyniku, ktorego jeszcze nie ma.
