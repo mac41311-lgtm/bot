@@ -2842,3 +2842,35 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      niezależny, spoza zespołu — nie zna celu ani niczego z programu
      i dostaje wyłącznie to, co ktoś sam do niego napisze. Igor dalej
      nie ma żadnego promptu.
+
+179. Pliki zespołu w porządku (v480ft). Bieg 2026-10-25 22:35, krok 3:
+     sześć nowych plików Bartka pod nagłówkami z samą nazwą
+     („**1) `download_corpus.py`** — nowy plik:”, folder tylko w zdaniu
+     „Pliki (wszystkie w `~/MAIN_1/src/`)”) nie trafiło na dysk, a zapis
+     do katalogu ~/MAIN_1/src/ skończył się błędem „to katalog”. Teraz:
+     - plik pod nagłówkiem z samą nazwą program zapisuje od razu,
+       w folderze nazwanym nad nim (w rywalizacji tylko w folderze
+       drużyny), także z narady na początku kroku, nie tylko z ASK;
+       plik o tej nazwie, który już leży w folderze, nie dostaje
+       kopii obok;
+     - write_engineer_code_to z katalogiem kładzie tam każdy plik
+       podany pod nazwą;
+     - każdy nowy plik .py program krótko uruchamia (--help przy
+       argparse, sam import przy if __name__, inaczej do 30 s); błąd
+       wraca do autora, do 3 razy, zanim cokolwiek dostanie MAIN;
+       brak biblioteki to fakt dla MAIN-a (pip install);
+     - MAIN dostaje przy pliku, jak go uruchomić (komenda i opcje);
+     - poprawkę fragmentu od autora pliku program nanosi od razu na
+       jego plik (kopia, sprawdzenie składni); gdy nie wejdzie, wraca
+       do autora, do 3 razy;
+     - cała poprawiona wersja od autora po błędzie składni trafia
+       naprawdę na dysk (wcześniej program brał starą wersję
+       z notatnika);
+     - PODGLĄD: każdy z zespołu (oprócz Igora) może zajrzeć do kodu
+       linią „PODGLĄD: grep -n … plik” (grep, sed -n, head, tail, wc,
+       ls, cat, find…, tylko odczyt, w folderze drużyny); wynik wraca
+       do tej osoby;
+     - kopie zapasowe w ukrytym .kopie/ obok pliku, sprawdzanie
+       składni bez __pycache__.
+     Prompty Bartka, Piotra, Ani, opis rozmowy zespołu i akapit „Kod.”
+     MAIN-a przepisane w całości. Igor bez zmian.

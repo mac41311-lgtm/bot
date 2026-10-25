@@ -3669,9 +3669,14 @@ CRITIC_PROMPT = (
 
 
 
+# v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
+# Piotr sam zaglada do kodu komendami.
 CODE_REVIEWER_PROMPT = (
     "Jesteś Piotrem. Analizujesz błędy i szukasz ich "
-    "rzeczywistej przyczyny, a poprawia je Ania."
+    "rzeczywistej przyczyny, a poprawia je Ania. Do kodu zaglądasz "
+    "sam, linią PODGLĄD: z komendą do odczytu (grep -n, sed -n "
+    "'od,dop' plik, head, ls) — program oddaje Ci wynik, więc "
+    "sprawdzasz dokładnie to miejsce, którego dotyczy błąd."
 )
 
 
@@ -3693,10 +3698,14 @@ CODE_REVIEWER_PROMPT = (
 # Zostaje imie i robota.
 # v480ce: na prosbe uzytkownika (2026-10-17) przepisany w calosci,
 # jak prompt Bartka: zmiana w istniejacym pliku to sama zmiana.
+# v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci.
 CODE_FIXER_PROMPT = (
     "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa. "
     "Poprawkę w pliku, który już istnieje, piszesz jako samą zmianę, "
-    "tak jak zwykły patch: który fragment i na co go zamienić."
+    "tak jak zwykły patch: który fragment i na co go zamienić. "
+    "Fragment bierzesz z pliku, nie z pamięci: zaglądasz do niego "
+    "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
+    "plik), a program oddaje Ci wynik."
 )
 
 
@@ -3712,15 +3721,23 @@ BROWSER_PROMPT = (
 # dwa bloki opisane slowami) z backupem i sprawdzeniem skladni.
 # v480fi: na prosbe uzytkownika (2026-10-25) przepisany w calosci: kod
 # pisze ten, kto ma zadanie, i poprawia go po bledzie skladni/uruchomienia.
+# v480ft: na prosbe uzytkownika (2026-10-25: pliki uporzadkowane, poprawki
+# bez przepisywania calosci, proba uruchomienia z bledem do autora,
+# zagladanie do kodu komendami) przepisany w calosci.
 ENGINEER_PROMPT = (
     "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
-    "i rozwiązaniami technicznymi. Nowy plik piszesz w całości. "
-    "Gdy zmieniasz albo dopisujesz coś w pliku, który już istnieje, "
-    "piszesz samą zmianę, tak jak zwykły patch: który fragment "
-    "i na co go zamienić. Program kładzie Twój kod na dysk i od razu "
-    "sprawdza, czy się kompiluje. Gdy wraca do Ciebie błąd składni "
-    "albo wynik uruchomienia, poprawiasz to miejsce i oddajesz "
-    "poprawkę, aż kod się skompiluje i zadziała."
+    "i rozwiązaniami technicznymi. Nowy plik piszesz w całości, "
+    "w osobnym bloku kodu, a tuż nad blokiem stoi jego ścieżka albo "
+    "nazwa z folderem, w którym ma leżeć. Program od razu kładzie go "
+    "na dysk, sprawdza, czy się kompiluje, i krótko go uruchamia; "
+    "błąd wraca do Ciebie, a Ty poprawiasz to miejsce, do trzech razy. "
+    "Plik, który już istnieje, zmieniasz samą poprawką, tak jak zwykły "
+    "patch: który fragment i na co go zamienić — program nanosi ją na "
+    "Twój plik od razu, z kopią i sprawdzeniem. Do istniejącego kodu "
+    "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
+    "sed -n 'od,dop' plik, head, ls, wc) — program uruchamia ją "
+    "w folderze drużyny i oddaje Ci wynik, więc nie potrzebujesz "
+    "całego pliku, żeby poprawić jego fragment."
 )
 
 
@@ -8414,7 +8431,104 @@ _KOLEJKA_KONTA = _threading.RLock()
 
 def deepseek(name, message):
     with _KOLEJKA_KONTA:
-        return _deepseek_jedna_rozmowa(name, message)
+        odp = _deepseek_jedna_rozmowa(name, message)
+    # v480ft: zespol zaglada do kodu sam (PODGLĄD: grep/sed -n/head...),
+    # zamiast prosic o caly plik — wynik wraca do tej samej rozmowy.
+    if name in _ROLE_Z_PODGLADEM:
+        try:
+            odp = _podglad_dla_roli(name, odp)
+        except Exception as e:
+            log("PROGRAM", "Podgląd dla " + str(name) + " nie wyszedł: " + str(e))
+    return odp
+
+
+# v480ft: uzytkownik (2026-10-25): "moga sobie grzebac komendami po kodzie,
+# jak ty to robisz, nie czytajac calosci". Linia "PODGLĄD: <komenda>" w
+# wypowiedzi roli -> program uruchamia te komende (tylko odczyt) w folderze
+# druzyny i oddaje wynik tej osobie; ona odpowiada dalej.
+_ROLE_Z_PODGLADEM = (
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
+    "CODE_REVIEWER", "CODE_FIXER",
+)
+_PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | re.I)
+_PODGLAD_KOMENDY = ("grep", "sed", "head", "tail", "wc", "ls", "cat", "find", "nl", "sort", "uniq", "cut", "tree", "du", "stat", "file")
+_PODGLAD_RUND = 6
+
+
+def _podglad_odmowa(komenda):
+    """Powod, dla ktorego tej komendy nie uruchomie, albo ""."""
+    if re.search(r"[;&`<>]|\$\(|\|\|", komenda):
+        return ("w podglądzie działa jedna komenda do odczytu (może być potok |), "
+                "bez ; & > < ` $( ) — np. PODGLĄD: grep -n \"def \" src/train.py")
+    for czesc in komenda.split("|"):
+        try:
+            sl = shlex.split(czesc)
+        except ValueError as e:
+            return "nie umiem rozebrać komendy (" + str(e) + ") — sprawdź cudzysłowy"
+        if not sl:
+            return "pusty kawałek potoku"
+        if sl[0] not in _PODGLAD_KOMENDY:
+            return (sl[0] + " nie jest komendą do odczytu — w podglądzie działają: "
+                    + ", ".join(_PODGLAD_KOMENDY) + "; uruchomienie programu zleca MAIN")
+        if sl[0] == "sed" and (any(a.startswith("-i") or a == "--in-place" for a in sl[1:])
+                               or "-n" not in sl
+                               or any(re.search(r"(?:^|[\d$/,;{}\s])[wWe](?:\s|$)", a)
+                                      for a in sl[1:] if not a.startswith("-"))):
+            return "sed w podglądzie tylko jako sed -n 'od,dop' plik (bez -i)"
+        if sl[0] == "find" and any(a in ("-exec", "-execdir", "-delete", "-ok", "-fprint", "-fprintf", "-fls") for a in sl):
+            return "find w podglądzie tylko do wyszukiwania (bez -exec/-delete)"
+        if sl[0] == "sort" and any(a.startswith("-o") for a in sl):
+            return "sort w podglądzie bez -o"
+    return ""
+
+
+def _uruchom_podglad(komenda):
+    """Wynik jednej komendy podgladu, gotowy do oddania roli."""
+    komenda = komenda.strip()
+    odm = _podglad_odmowa(komenda)
+    if not odm and _siega_do_rywala("termux_run", {"command": komenda}):
+        odm = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
+    if odm:
+        return "$ " + komenda + "\n(nie uruchomiłem: " + odm + ")"
+    cwd = str(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else str(Path.home())
+    try:
+        os.makedirs(cwd, exist_ok=True)
+        r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
+                           errors="replace", timeout=20, stdin=subprocess.DEVNULL)
+        out = (r.stdout or "") + (("\n" + r.stderr) if (r.stderr or "").strip() else "")
+        kod = r.returncode
+    except subprocess.TimeoutExpired:
+        return "$ " + komenda + "\n(przerwane po 20 s — zawęź komendę, np. do jednego pliku)"
+    except Exception as e:
+        return "$ " + komenda + "\n(nie uruchomiłem: " + str(e) + ")"
+    out = out.rstrip()
+    if len(out) > 4000:
+        out = out[:4000] + "\n(… ucięte, całość ma " + str(len(out)) + " znaków — zawęź komendę: grep -n, sed -n 'od,dop')"
+    return ("$ " + komenda + " (w " + _sciezka_od_domu(cwd) + ")\n" + (out or "(nic nie wypisało)")
+            + ("" if kod in (0, None) or (kod == 1 and komenda.split()[0] == "grep") else "\nkod wyjścia: " + str(kod)))
+
+
+def _podglad_dla_roli(rola, odp):
+    """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia odpowiedz."""
+    imie = _IMIE_AUTORA.get(rola, (rola, rola))[0]
+    for _ in range(_PODGLAD_RUND):
+        komendy = []
+        for m in _PODGLAD_RE.finditer(str(odp or "")):
+            k = m.group(1).strip()
+            if k and k not in komendy:
+                komendy.append(k)
+        if not komendy:
+            return odp
+        wyniki = []
+        for k in komendy[:5]:
+            log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
+            wyniki.append(_uruchom_podglad(k))
+        with _KOLEJKA_KONTA:
+            odp = _deepseek_jedna_rozmowa(rola, (
+                "Wynik podglądu:\n\n" + "\n\n".join(wyniki)
+                + "\n\nTeraz odpowiedz na pytanie, na które odpowiadasz; możesz też zajrzeć jeszcze raz."
+            ))
+    return odp
 
 
 def _deepseek_jedna_rozmowa(name, message):
@@ -20477,12 +20591,43 @@ def termux_write_file(path, content, append=False):
 _RUND_POPRAWEK_AUTORA = 3
 
 
+def _zapisz_poprawke_autora(path, kod):
+    """v480ft: cala poprawiona wersja od autora prosto na dysk (z kopia
+    w .kopie/); zwraca blad py_compile albo ""."""
+    p = _resolve_home_relative_path(path)
+    try:
+        if p.is_file():
+            k = p.parent / ".kopie" / (p.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+            k.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(p), str(k))
+    except Exception:
+        pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(str(kod).rstrip("\n") + "\n", encoding="utf-8")
+    try:
+        _track_project_path(p)
+        _record_python_written_file(str(p))
+    except Exception:
+        pass
+    return _py_compile_blad(p) if p.suffix.lower() == ".py" else ""
+
+
 def _py_compile_blad(sciezka):
     """Blad py_compile pliku albo "" (tez gdy nie da sie sprawdzic)."""
+    # v480ft: compile() zamiast py_compile — ten sam blad, ale bez
+    # __pycache__/ w folderze druzyny po kazdym sprawdzeniu.
     try:
-        r = subprocess.run([sys.executable, "-m", "py_compile", str(sciezka)],
+        r = subprocess.run([sys.executable, "-c",
+                            "import sys;compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec')",
+                            str(sciezka)],
                            capture_output=True, text=True, timeout=20)
-        return "" if r.returncode == 0 else (r.stderr or r.stdout or "błąd składni")
+        if r.returncode == 0:
+            return ""
+        out = r.stderr or r.stdout or "błąd składni"
+        k = out.rfind('File "<string>"')
+        if k >= 0:
+            out = out[out.find("\n", k) + 1:]
+        return out
     except Exception:
         return ""
 
@@ -20618,10 +20763,13 @@ def _autor_poprawia_skladnie(path, content, wynik):
             kod = _kod_z_wypowiedzi(odp, Path(str(path)).name)
             ok = False
             if kod and kod.strip():
-                w2 = _termux_write_file(path, kod)
-                ok = isinstance(w2, dict) and not w2.get("compile_error")
+                # v480ft: wprost, nie przez _termux_write_file — ta brala
+                # kod tego pliku z notatnika (stara, zepsuta wersje spod
+                # naglowka), wiec poprawka autora nie trafiala na dysk.
+                b2 = _zapisz_poprawke_autora(path, kod)
+                ok = not b2
                 if not ok:
-                    blad = str((w2 or {}).get("compile_error") or blad)
+                    blad = b2
             elif extract_search_replace_blocks(odp):
                 blad = str(r.get("reason") or blad)
         if ok:
@@ -20660,14 +20808,391 @@ _SCIEZKA_KODU_RE = re.compile(
 )
 
 
+_NAZWA_PLIKU_KODU = r"[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt)"
+
+
+def _pliki_pod_naglowkami(text):
+    """
+    v480ft: [(nazwa, kod, folder)] — bloki, nad ktorymi (ostatnia
+    niepusta linia przed blokiem) stoi jedna gola nazwa pliku, np.
+    "**1) `download_corpus.py`** — nowy plik:". folder to ostatni
+    folder ~/.../ nazwany w prozie nad tym naglowkiem ("Pliki (wszystkie
+    w `~/MAIN_1/src/`):"), albo None.
+
+    Bieg 2026-10-25 22:35, krok 3: Bartek dal szesc nowych plikow
+    w ten sposob, zaden nie trafil na dysk, MAIN widzial "[… nie ma go
+    na dysku]", a zapis do katalogu ~/MAIN_1/src/ skonczyl sie bledem.
+    """
+    text = str(text or "")
+    out = []
+    widziane = set()
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", text, re.DOTALL):
+        przed = text[:m.start()]
+        k = przed.rfind("```")
+        linie = [l for l in (przed[k + 3:] if k >= 0 else przed).splitlines() if l.strip()]
+        if not linie or len(linie[-1]) > 160:
+            continue
+        nazwy = set(re.findall(r"(?<![\w/.~$-])(" + _NAZWA_PLIKU_KODU + r")(?![\w-])", linie[-1]))
+        if len(nazwy) != 1:
+            continue
+        nazwa = nazwy.pop()
+        kod = _wyrownaj_blok(m.group(2))
+        if (nazwa in widziane or len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
+                or _obcy_jezyk_dla(nazwa, m.group(1), kod)
+                or re.search(r"^(?:<<<<<<<|=======\s*$|>>>>>>>|@@ |--- a/|\+\+\+ b/)", kod, re.M)):
+            continue
+        proza = re.sub(r"```.*?```", " ", przed, flags=re.DOTALL)
+        foldery = re.findall(r"(?<![\w/.~-])(~/[\w.-]+(?:/[\w.-]+)*)/(?![\w.-])", proza)
+        widziane.add(nazwa)
+        out.append((nazwa, kod, foldery[-1] if foldery else None))
+    return out
+
+
+def _poloz_pliki_w_katalogu(katalog, team):
+    """
+    v480ft: MAIN wskazal do zapisu katalog. Kazdy plik podany przez
+    kogos z zespolu pod naglowkiem z sama nazwa (patrz
+    _pliki_pod_naglowkami) idzie do tego katalogu — przez
+    termux_write_file, wiec ze sprawdzeniem skladni i poprawka autora.
+    Zwraca (zapisane, juz_byly) — opisy do jednego zdania.
+    """
+    katalog = Path(katalog)
+    teksty = [("ENGINEER", (team or {}).get("engineer_full", ""))]
+    teksty += list(((team or {}).get("kod_full") or {}).items())
+    teksty += [(w.get("rola"), w.get("tekst")) for w in reversed(_kod_autorow[-8:])]
+    zapisane, byly, nazwy = [], [], set()
+    for rola, tekst in teksty:
+        for nazwa, kod, fold in _pliki_pod_naglowkami(tekst):
+            if nazwa in nazwy:
+                continue
+            try:
+                if fold and _resolve_home_relative_path(fold).resolve() != katalog.resolve():
+                    continue
+            except Exception:
+                continue
+            nazwy.add(nazwa)
+            p = katalog / nazwa
+            kto = _IMIE_AUTORA.get(rola, (rola, rola))[1]
+            if p.exists():
+                byly.append(nazwa + " (już był, " + str(p.stat().st_size) + " B)")
+                continue
+            if _siega_do_rywala("termux_write_file", {"path": str(p)}) or _code_target_rejection(str(p), kod):
+                continue
+            if not any(w.get("rola") == rola and w.get("tekst") == tekst for w in _kod_autorow[-8:]):
+                _zapamietaj_kod_autora(rola, tekst)
+            w = termux_write_file(str(p), kod)
+            if not isinstance(w, dict) or not p.exists():
+                continue
+            _autor_pliku[nazwa] = rola
+            if w.get("compile_error"):
+                stan = "nie kompiluje się: " + short(str(w["compile_error"]), 200)
+            else:
+                stan = "składnia OK" + (" po poprawce" if w.get("poprawil_autor") else "")
+            if not w.get("compile_error"):
+                try:
+                    _pr = _autor_poprawia_uruchomienie(rola, p)
+                except Exception:
+                    _pr = ""
+                if _pr:
+                    stan += "; " + _pr
+            zapisane.append(nazwa + " od " + kto + " (" + str(p.stat().st_size) + " B, " + stan + ")")
+    return zapisane, byly
+
+
+def _jak_uruchomic(p):
+    """
+    v480ft: krotko, jak uruchomic zapisany plik — z samego kodu, bez
+    zgadywania: komenda (python3/bash/node) i opcje z argparse albo
+    informacja, ze bierze argumenty z linii polecen. Uzytkownik
+    (2026-10-25): "MAIN powinien wiedziec, co jest uruchomione i jak".
+    """
+    try:
+        p = Path(p)
+        kod = p.read_text(encoding="utf-8", errors="replace")
+        sciezka = _sciezka_od_domu(str(p))
+        suf = p.suffix.lower()
+        if suf == ".py":
+            komenda = "python3 " + sciezka
+        elif suf == ".sh":
+            komenda = "bash " + sciezka
+        elif suf in (".js", ".mjs"):
+            komenda = "node " + sciezka
+        else:
+            return ""
+        opcje = []
+        for m in re.finditer(r"add_argument\(\s*['\"](-{1,2}[\w-]+|[A-Za-z_]\w*)['\"]", kod):
+            if m.group(1) not in opcje:
+                opcje.append(m.group(1))
+        if opcje:
+            komenda += " [" + " ".join(opcje[:10]) + (" …" if len(opcje) > 10 else "") + "]"
+        elif re.search(r"\bsys\.argv\[|\$1\b|\$\{1|process\.argv\[", kod):
+            komenda += " <argumenty>"
+        return komenda
+    except Exception:
+        return ""
+
+
+def _pliki_w_folderze(folder, nazwa, limit=3000):
+    """Pliki o tej nazwie w folderze (bez .git, venv, __pycache__, node_modules)."""
+    out = []
+    try:
+        n = 0
+        for root, dirs, files in os.walk(str(folder)):
+            dirs[:] = [d for d in dirs if not d.startswith(".")
+                       and d not in ("__pycache__", "node_modules", "venv", "site-packages")]
+            n += len(files)
+            if nazwa in files:
+                out.append(Path(root) / nazwa)
+            if n > limit:
+                break
+    except Exception:
+        pass
+    return out
+
+
+def _naniesc_poprawke_autora(rola, odp, foldery):
+    """
+    v480ft: poprawka fragmentu (SZUKAJ/ZAMIEN, patch, STARY/NOWY) od
+    autora pliku idzie na jego plik od razu — z kopia, sprawdzeniem
+    skladni i cofnieciem, gdy nie przejdzie (apply_engineer_patch_to_
+    project_file). Uzytkownik (2026-10-25): "swobodnie poprawiac", "nie
+    pisac calego kodu od nowa i przepisywac go ciagle", "ta osoba, co
+    pisze i poprawia". Tylko plik, ktorego autorem jest ta osoba; reszte
+    dalej kladzie MAIN przez write_engineer_code_to.
+    Zwraca zdania dla MAIN-a.
+    """
+    if not extract_search_replace_blocks(odp):
+        return []
+    kandydaci = []
+    for m in _SCIEZKA_KODU_RE.finditer(odp):
+        try:
+            p = _resolve_home_relative_path(m.group(1).rstrip("."))
+        except Exception:
+            continue
+        if p.is_file() and _autor_pliku.get(p.name) == rola and p not in kandydaci:
+            kandydaci.append(p)
+    for nazwa, kto in list(_autor_pliku.items()):
+        if kto != rola or not nazwa or not re.search(r"(?<![\w-])" + re.escape(nazwa) + r"(?![\w-])", odp):
+            continue
+        for f in foldery:
+            for p in _pliki_w_folderze(f, nazwa):
+                if p not in kandydaci:
+                    kandydaci.append(p)
+    imie_d = _IMIE_AUTORA.get(rola, (rola, rola))[1]
+    powod = ""
+    for p in kandydaci[:6]:
+        if _siega_do_rywala("termux_write_file", {"path": str(p)}):
+            continue
+        w = apply_engineer_patch_to_project_file(str(p), odp)
+        if w.get("applied"):
+            _record_python_written_file(w["path"])
+            sciezka = _sciezka_od_domu(str(p))
+            log("PROGRAM", "Poprawka " + imie_d + " naniesiona od razu na " + sciezka
+                + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B).")
+            return ["[Program od razu naniósł poprawkę " + imie_d + " na jego plik " + sciezka
+                    + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
+                    + "kopia: .kopie/" + Path(w["backup"]).name + "). Plik jest gotowy do uruchomienia"
+                    + (": " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
+        powod = powod or str(w.get("reason") or "")
+    # Poprawka nie weszla — wraca do autora (do trzech razy), zanim
+    # cokolwiek dostanie MAIN; autor moze zajrzec do pliku PODGLĄDEM.
+    if kandydaci and powod and not _siega_do_rywala("termux_write_file", {"path": str(kandydaci[0])}):
+        p = kandydaci[0]
+        sciezka = _sciezka_od_domu(str(p))
+        for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
+            log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + " nie weszła — wraca do autora (runda "
+                + str(runda) + ").")
+            odp2 = str(deepseek(rola, (
+                "Twoja poprawka do " + sciezka + " nie weszła: " + short(powod, 800)
+                + "\n\nZajrzyj do pliku (np. PODGLĄD: grep -n \"…\" " + sciezka
+                + " albo PODGLĄD: sed -n 'od,dop' " + sciezka + ") i podaj poprawkę z fragmentem "
+                "skopiowanym 1:1 z pliku. Program naniesie ją od razu."
+            )) or "")
+            _speak(rola, odp2)
+            _zapamietaj_kod_autora(rola, odp2)
+            w = apply_engineer_patch_to_project_file(str(p), odp2)
+            if w.get("applied"):
+                _record_python_written_file(w["path"])
+                log("PROGRAM", "Poprawka " + imie_d + " naniesiona na " + sciezka + " po " + str(runda) + ". próbie.")
+                return ["[Program naniósł poprawkę " + imie_d + " na jego plik " + sciezka
+                        + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
+                        + "za " + str(runda + 1) + ". razem, kopia: .kopie/" + Path(w["backup"]).name + ")"
+                        + (". Uruchomienie: " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
+            powod = str(w.get("reason") or powod)
+    if kandydaci and powod:
+        return ["[Poprawki " + imie_d + " nie dało się nanieść na " + _sciezka_od_domu(str(kandydaci[0]))
+                + " (autor próbował " + str(_RUND_POPRAWEK_AUTORA + 1) + " razy): " + short(powod, 300)
+                + " Plik jest bez zmian.]"]
+    return []
+
+
+_PROBA_URUCHOMIENIA_S = 30
+
+
+def _proba_uruchomienia(p):
+    """
+    v480ft: krotkie uruchomienie nowego pliku .py, zanim dostanie go MAIN.
+    Uzytkownik (2026-10-25): "przed MAIN-em moze go puscic na chwile
+    program i zwrocic kod bledu", "mieli 3 proby".
+
+    Jak najmniej skutkow ubocznych: plik z argparse -> "--help" (kod
+    modulu + parser, bez wlasciwej pracy); plik z `if __name__ ==
+    "__main__"` -> sam import (kod modulu, bez main); inaczej zwykle
+    uruchomienie, przerwane po _PROBA_URUCHOMIENIA_S s. Katalog roboczy
+    = folder pliku, wiec importy sasiednich plikow dzialaja.
+    Zwraca (stan, komenda, wyjscie): stan "ok" / "blad" / "czas" / None.
+    """
+    p = Path(p)
+    if p.suffix.lower() != ".py" or not p.is_file():
+        return None, "", ""
+    try:
+        kod = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None, "", ""
+    sc = _sciezka_od_domu(str(p))
+    if "add_argument(" in kod or "ArgumentParser(" in kod:
+        argv = [sys.executable, str(p), "--help"]
+        komenda = "python3 " + sc + " --help"
+    elif re.search(r"__name__\s*==\s*['\"]__main__['\"]", kod):
+        argv = [sys.executable, "-c",
+                "import importlib.util,sys;sys.path.insert(0,sys.argv[1]);"
+                "s=importlib.util.spec_from_file_location('_proba',sys.argv[2]);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)",
+                str(p.parent), str(p)]
+        komenda = "import " + sc + " (bez main)"
+    else:
+        argv = [sys.executable, str(p)]
+        komenda = "python3 " + sc
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1")
+    try:
+        pr = subprocess.Popen(argv, cwd=str(p.parent), stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                              text=True, errors="replace", env=env, start_new_session=True)
+    except Exception as e:
+        return None, komenda, str(e)
+    try:
+        out, _ = pr.communicate(timeout=_PROBA_URUCHOMIENIA_S)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pr.pid, signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            out, _ = pr.communicate(timeout=5)
+        except Exception:
+            out = ""
+        return "czas", komenda, str(out or "")[-1500:]
+    out = str(out or "")
+    if pr.returncode == 0:
+        return "ok", komenda, out[-800:]
+    return "blad", komenda, "kod wyjścia " + str(pr.returncode) + "\n" + out[-2500:]
+
+
+def _autor_poprawia_uruchomienie(rola, p):
+    """
+    v480ft: blad z krotkiego uruchomienia wraca do autora — do
+    _RUND_POPRAWEK_AUTORA razy, tak jak blad skladni. Brak biblioteki
+    (ModuleNotFoundError dla modulu, ktorego nie ma obok) nie jest
+    bledem w kodzie — idzie do MAIN-a jako fakt (pip install).
+    Zwraca krotki opis do zdania dla MAIN-a.
+    """
+    stan, komenda, wyj = _proba_uruchomienia(p)
+    if stan is None:
+        return ""
+    if stan == "ok":
+        return "próba uruchomienia (" + komenda + ") OK"
+    if stan == "czas":
+        return ("próba uruchomienia (" + komenda + ") działała ponad "
+                + str(_PROBA_URUCHOMIENIA_S) + " s bez błędu — przerwałem ją")
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    sciezka = _sciezka_od_domu(str(p))
+    odpowiedzi_kolegow = ""
+    for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
+        brak = re.search(r"ModuleNotFoundError: No module named '([\w.]+)'", wyj)
+        if brak and not _pliki_w_folderze(p.parent, brak.group(1).split(".")[0] + ".py"):
+            return ("próba uruchomienia (" + komenda + "): brakuje biblioteki "
+                    + brak.group(1) + " — trzeba ją zainstalować (pip install); dalej próba nie doszła")
+        log("PROGRAM", sciezka + " od " + imie_d + " wyłożył się przy próbie uruchomienia — "
+            "błąd wraca do autora (runda " + str(runda) + ").")
+        odp = str(deepseek(rola, (
+            odpowiedzi_kolegow
+            + "Twój plik " + sciezka + " kompiluje się, ale krótka próba uruchomienia ("
+            + komenda + ") kończy się błędem:\n" + short(wyj, 2000)
+            + "\n\nPopraw to miejsce: podaj poprawkę fragmentu (który fragment i na co go "
+            "zamienić) albo cały plik od nowa. Program naniesie ją i od razu uruchomi "
+            "znowu. Możesz też zwrócić się do kogoś z zespołu po imieniu — odpowie Ci od razu."
+        )) or "")
+        _speak(rola, odp)
+        _zapamietaj_kod_autora(rola, odp)
+        try:
+            _role_response_cache[rola] = odp
+            _role_response_step[rola] = _biezacy_krok
+            _collect_role_messages(rola, odp)
+            if rola == "ENGINEER":
+                globals()["_kod_bartka_teraz"] = odp
+        except Exception:
+            pass
+        odpowiedzi_kolegow = _koledzy_odpowiadaja_autorowi(rola, odp, sciezka)
+        r = apply_engineer_patch_to_project_file(str(p), odp)
+        if not r.get("applied"):
+            kod = _kod_z_wypowiedzi(odp, p.name)
+            if kod and kod.strip() and not extract_search_replace_blocks(odp):
+                b2 = _zapisz_poprawke_autora(str(p), kod)
+                if b2:
+                    wyj = "błąd składni po poprawce: " + b2
+                    continue
+            else:
+                wyj = str(r.get("reason") or "Nie było poprawki do naniesienia.") + "\n\nPoprzedni błąd:\n" + short(wyj, 1500)
+                continue
+        stan, komenda, wyj = _proba_uruchomienia(p)
+        if stan in ("ok", "czas", None):
+            log("PROGRAM", imie + " poprawił " + sciezka + " — próba uruchomienia przechodzi.")
+            return ("próba uruchomienia (" + komenda + ") OK po poprawce " + imie_d
+                    + " (" + str(runda) + " " + ("raz" if runda == 1 else "razy") + ")")
+    return ("próba uruchomienia (" + komenda + ") nadal kończy się błędem po "
+            + str(_RUND_POPRAWEK_AUTORA) + " poprawkach " + imie_d + ": "
+            + short(wyj.strip().splitlines()[-1] if wyj.strip() else wyj, 300))
+
+
+_zapis_dla_maina = {}
+
+
+def _dla_maina_z_zapisem(rola, tekst):
+    """
+    v480ft: glos z narady na poczatku kroku idzie do MAIN-a tak samo
+    jak odpowiedz na ASK — nowy plik zapisany od razu, reszta kodu jedna
+    linia. Tylko wypowiedz z TEGO kroku (stara "wczesniej" nie kladzie
+    plikow, ktore zespol mogl celowo usunac); wynik zapamietany, zeby
+    ponowne skladanie promptu nie zapisywalo drugi raz.
+    """
+    tekst = str(tekst or "")
+    if "```" not in tekst or _role_response_step.get(rola) != _biezacy_krok:
+        return _kod_na_jedna_linie(tekst)
+    klucz = (rola, _biezacy_krok, hash(tekst))
+    if klucz not in _zapis_dla_maina:
+        if len(_zapis_dla_maina) > 60:
+            _zapis_dla_maina.clear()
+        try:
+            _zapis_dla_maina[klucz] = _poloz_nowy_plik_autora(
+                rola, tekst, _main_task_for_team)
+        except Exception as e:
+            log("PROGRAM", "Nie zapisałem od razu plików z wypowiedzi " + str(rola) + ": " + str(e))
+            _zapis_dla_maina[klucz] = _kod_na_jedna_linie(tekst)
+    return _zapis_dla_maina[klucz]
+
+
 def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
     """Zwraca odpowiedz dla MAIN-a (kod zastapiony zdaniem) albo odp."""
     odp = str(odp or "")
     # v480fp-fr: uzytkownik (2026-10-25): MAIN nie dostaje calego kodu od
     # nikogo z zespolu — "jest napisane, ze kod jest w pliku", mozna go
     # uruchomic, a blad skladni wraca do autora (do 3 rund, jak u Bartka).
-    if (rola not in _ROLE_DO_ROZMOWY and rola != "PROGRESS_ESTIMATOR") or "```" not in odp:
+    if rola not in _ROLE_DO_ROZMOWY and rola != "PROGRESS_ESTIMATOR":
         return odp
+    if "```" not in odp:
+        _pop = _naniesc_poprawke_autora(rola, odp, [f for f in (
+            _folder_druzyny(_DRUZYNA) if _DRUZYNA else None,) if f])
+        return (odp.rstrip() + "\n\n" + "\n".join(_pop)) if _pop else odp
     imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
     # Autor musi byc w notatniku, zeby zapis wzial jego kod 1:1 i zeby
     # blad skladni wrocil do niego (Ela odpowiada poza narada).
@@ -20710,12 +21235,42 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             if _blok_dokladnie_dla(odp, wzgl):
                 _podpisane.add(Path(wzgl).name)
                 sciezki.append(cel)
-    for s in sciezki[:6]:
+    # v480ft: gola nazwa w naglowku tuz nad blokiem — w folderze nazwanym
+    # nad nim w prozie (w rywalizacji tylko wewnatrz folderu druzyny),
+    # inaczej w folderze druzyny / z pytania.
+    _z_naglowka = {}
+    _zapisane_teraz = []
+    for nazwa, kod_n, fold in _pliki_pod_naglowkami(odp):
+        if nazwa in _podpisane or any(Path(x).name == nazwa for x in sciezki):
+            continue
+        baza = None
+        if fold:
+            try:
+                fp = _resolve_home_relative_path(fold)
+                if not _DRUZYNA or fp.resolve().is_relative_to(
+                        Path(_folder_druzyny(_DRUZYNA)).resolve()):
+                    baza = fp
+            except Exception:
+                baza = None
+        if baza is None:
+            baza = _folder
+        if baza is None:
+            continue
+        # Plik o tej nazwie juz lezy gdzies w tym folderze (np. src/model.py)
+        # — to ten plik, nie nowy obok; zmiane kladzie poprawka albo MAIN.
+        if _pliki_w_folderze(_folder_druzyny(_DRUZYNA) if _DRUZYNA else baza, nazwa):
+            continue
+        cel = str(Path(baza) / nazwa)
+        _podpisane.add(nazwa)
+        _z_naglowka[cel] = kod_n
+        sciezki.append(cel)
+    for s in sciezki[:12]:
         try:
             p = _resolve_home_relative_path(s)
             if p.exists() or _siega_do_rywala("termux_write_file", {"path": str(p)}):
                 continue
-            kod = _blok_podpisany(odp, p.name) or _blok_dokladnie_dla(odp, p.name)
+            kod = (_z_naglowka.get(s) or _blok_podpisany(odp, p.name)
+                   or _blok_dokladnie_dla(odp, p.name))
             if not kod and len(sciezki) == 1 and p.name not in _podpisane:
                 kod = _kod_z_wypowiedzi(odp, p.name)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
@@ -20728,9 +21283,12 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                 stan = "ale się nie kompiluje: " + short(str(w["compile_error"]), 400)
             else:
                 stan = "składnia OK" + (" po poprawce " + imie_d if w.get("poprawil_autor") else "")
+            _jak = _jak_uruchomic(p)
             zdanie = ("[Program od razu zapisał ten plik " + imie_d + " w " + sciezka + " ("
-                      + str(p.stat().st_size) + " B, " + stan + "). Kod jest w pliku — "
-                      "można go uruchomić; całość pokaże termux_read_file.]")
+                      + str(p.stat().st_size) + " B, " + stan + "{proba:" + str(p) + "}). Kod jest w pliku — "
+                      + ("uruchomienie: " + _jak + "; " if _jak else "można go uruchomić; ")
+                      + "całość pokaże termux_read_file.]")
+            _zapisane_teraz.append((p, not w.get("compile_error")))
             _autor_pliku[p.name] = rola
             log("PROGRAM", "Nowy plik od " + imie_d + " zapisany od razu: " + sciezka + " (" + stan[:60] + ").")
             na_dysku = p.read_text(encoding="utf-8", errors="replace").strip()
@@ -20746,6 +21304,28 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                 odp = odp.rstrip() + "\n\n" + zdanie
         except Exception as e:
             log("PROGRAM", "Nie zapisałem od razu pliku " + imie_d + " " + s + ": " + str(e))
+    # v480ft: krotka proba uruchomienia kazdego nowego pliku — po zapisie
+    # WSZYSTKICH (importy sasiednich plikow), blad do autora (3 rundy).
+    for p, kompiluje in _zapisane_teraz:
+        opis = ""
+        if kompiluje:
+            try:
+                opis = _autor_poprawia_uruchomienie(rola, p)
+            except Exception as e:
+                log("PROGRAM", "Próba uruchomienia " + p.name + " nie wyszła: " + str(e))
+        odp = odp.replace("{proba:" + str(p) + "}", ("; " + opis) if opis else "")
+    # v480ft: poprawka fragmentu od autora pliku — od razu na jego plik.
+    _foldery_pop = []
+    for f in [_folder] + [fd for _n, _k, fd in _pliki_pod_naglowkami(odp) if fd]:
+        try:
+            f = _resolve_home_relative_path(f) if isinstance(f, str) else f
+        except Exception:
+            continue
+        if f is not None and f not in _foldery_pop:
+            _foldery_pop.append(f)
+    _pop = _naniesc_poprawke_autora(rola, odp, _foldery_pop)
+    if _pop:
+        odp = odp.rstrip() + "\n\n" + "\n".join(_pop)
     # v480fr: reszta kodu (fragmenty, poprawki, pliki, ktore juz leza)
     # idzie do MAIN-a jedna linia, jak glosy z poczatku kroku; pelna
     # wypowiedz autora zostaje w jego rozmowie i w notatniku autorow,
@@ -25880,13 +26460,15 @@ def termux_patch_file(path, search, replace):
             )
         }
 
-    backup_path = target.with_name(
+    # v480ft: kopia w ukrytym .kopie/ obok pliku (porzadek w folderze).
+    backup_path = target.parent / ".kopie" / (
         target.name
         + ".bak_"
         + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
 
     try:
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
         backup_path.write_text(source, encoding="utf-8")
     except Exception as e:
         return {
@@ -25910,7 +26492,9 @@ def termux_patch_file(path, search, replace):
 
         try:
             compile_check = subprocess.run(
-                [sys.executable, "-m", "py_compile", str(target)],
+                [sys.executable, "-c",
+                 "import sys;compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec')",
+                 str(target)],
                 capture_output=True,
                 text=True,
                 timeout=20
@@ -36747,6 +37331,11 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
 
         wystapienia = zmieniony.count(stary)
 
+        # v480ft: ta zmiana juz jest w pliku (autor naniosl ja od razu,
+        # a MAIN zlecil ten sam zapis) — nie blad "fragmentu nie ma".
+        if wystapienia == 0 and nowy.strip() and zmieniony.count(nowy) == 1:
+            continue
+
         if wystapienia == 0:
             _blisko = _najblizszy_fragment(zmieniony, stary)
             return {
@@ -36793,11 +37382,14 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
             ),
         }
 
-    kopia = target.with_name(
+    # v480ft: kopie w ukrytym .kopie/ obok pliku — folder z kodem zostaje
+    # uporzadkowany (uzytkownik 2026-10-25: "w plikach najgorzej").
+    kopia = target.parent / ".kopie" / (
         target.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
 
     try:
+        kopia.parent.mkdir(parents=True, exist_ok=True)
         kopia.write_text(original, encoding="utf-8")
         target.write_text(zmieniony, encoding="utf-8")
     except Exception as e:
@@ -36805,7 +37397,7 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
 
     log(
         "MAIN",
-        "Poprawka Bartka naniesiona na " + target.name + " ("
+        "Poprawka naniesiona na " + target.name + " ("
         + str(naniesione) + " x SZUKAJ/ZAMIEŃ, "
         + str(len(original)) + " B -> " + str(len(zmieniony))
         + " B). Backup: " + kopia.name
@@ -42890,11 +43482,11 @@ def main_decide(
 
     for _rola, _wstep, _tekst in (
         ("PLANNER", "Tomek:",
-         _kod_na_jedna_linie(team.get("planner", ""))),
+         _dla_maina_z_zapisem("PLANNER", team.get("planner", ""))),
         ("ENGINEER", "Bartek:",
-         _kod_na_jedna_linie(team.get("engineer", ""))),
+         _dla_maina_z_zapisem("ENGINEER", team.get("engineer", ""))),
         ("RESEARCHER", "Kamil:",
-         _kod_na_jedna_linie(team.get("researcher", ""))),
+         _dla_maina_z_zapisem("RESEARCHER", team.get("researcher", ""))),
         # v401: gdy wymiana sie odbyla, Marek idzie RAZ.
         #
         # team_exchange zaczyna sie od ("Marek", _critic_out_full) —
@@ -42905,16 +43497,16 @@ def main_decide(
         # oba wpisy staja obok siebie i MAIN czyta Marka dwa razy.
         ("CRITIC", "Marek:",
          "" if _exchange
-         else _kod_na_jedna_linie(team.get("critic", ""))),
+         else _dla_maina_z_zapisem("CRITIC", team.get("critic", ""))),
         (None, "",
          _kod_na_jedna_linie(_exchange)),
         ("BROWSER", "Ola:",
-         _kod_na_jedna_linie(team.get("browser", ""))),
+         _dla_maina_z_zapisem("BROWSER", team.get("browser", ""))),
         # v416: do v415 szlo to do zespolu, a MAIN-owi nie.
         (None, "Ola:",
          _kod_na_jedna_linie(team.get("odczyt_oli", ""))),
         ("WOJTEK", "Wojtek:",
-         _kod_na_jedna_linie(team.get("wojtek", ""))),
+         _dla_maina_z_zapisem("WOJTEK", team.get("wojtek", ""))),
     ):
 
         # v422: tylko to, co padlo w TYM kroku.
@@ -44635,11 +45227,20 @@ def _pierwsza_wiadomosc(rola=None):
 # v480fp: na prosbe uzytkownika (2026-10-25: "moga ze soba rozmawiac")
 # przepisany w calosci: kto jest w zespole i ze rozmawiaja wprost,
 # bez posrednictwa MAIN-a; MAIN dalej decyduje.
+# v480ft: przepisany w calosci — jak powstaja i zmieniaja sie pliki
+# (autor, poprawka fragmentu, proba uruchomienia) i PODGLĄD.
 _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
-    "dostajecie, co z tego wyszło. Kod, który napiszecie, program "
-    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje. W zespole są: "
+    "dostajecie, co z tego wyszło. Do plików zaglądacie linią "
+    "PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' plik, "
+    "head, ls, wc) — program uruchamia ją w folderze drużyny i oddaje "
+    "wynik temu, kto pytał. Nowy plik z kodem piszecie w całości, "
+    "w osobnym bloku, ze ścieżką tuż nad nim; program od razu kładzie "
+    "go na dysk, sprawdza i krótko uruchamia, a błąd wraca do autora. "
+    "Plik należy do tego, kto go napisał: zmiany w nim to poprawka "
+    "fragmentu (który fragment i na co go zamienić), nie cały plik od "
+    "nowa. Na dłuższe uruchomienie decyzję podejmuje MAIN. W zespole są: "
     "Tomek (następny krok), Kamil (fakty i informacje), Marek (słabe "
     "punkty planów), Bartek (kod i technika), Ola (porządkuje to, co "
     "się wydarzyło) i Wojtek (praktyczny sens). Jest też Igor — "
@@ -44734,23 +45335,27 @@ _JAK_TO_DZIALA = (
     "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
     "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
     "Kod. Kod pisze ten, kto ma to zadanie: Ty sam w RUN albo ktoś z "
-    "zespołu, gdy mu je dasz. Pliki z kodem kładzie na dysk program, "
-    "dokładnie z tego, co ktoś napisał. Kod, który sam piszesz w RUN "
-    "(termux_write_file albo heredoc w termux_run), zapisuje się jako "
-    "Twój. Kodu od zespołu nie dostajesz w całości, tylko jedną linią: "
-    "nowy plik program zapisuje od razu i mówi, gdzie leży, np. [Program "
-    "od razu zapisał ten plik Kamila w ~/projekt/prep.py (…)] — kod jest "
-    "w pliku i można go uruchomić. Resztę (poprawkę istniejącego pliku "
-    "albo kod, który ktoś podał bez nowej ścieżki) widzisz jako "
-    "[nazwa — liczba znaków]; program położy ją z wypowiedzi autora, 1:1, "
-    "gdy w TASK podasz write_engineer_code_to z tą ścieżką. Po każdym "
-    "zapisie albo zmianie pliku .py program od razu sprawdza, czy się "
-    "kompiluje: wynik mówi \"skladnia\": \"OK\" albo podaje błąd z "
-    "numerem linii. Błąd wraca do tego, kto pisał, bo on najlepiej zna "
-    "swój kod: poprawia ten fragment, program sprawdza znowu, do trzech "
-    "razy; potem krótkie uruchomienie pokazuje, czy działa. Kod, który "
-    "już jest na dysku, widzisz jako ścieżkę, np. [~/projekt/build.sh — "
-    "1234 znaków, na dysku], i można go po prostu uruchomić.\n\n"
+    "zespołu, gdy mu je dasz; plik należy do autora i on go poprawia. "
+    "Pliki z kodem kładzie na dysk program, dokładnie z tego, co ktoś "
+    "napisał. Kod, który sam piszesz w RUN (termux_write_file albo "
+    "heredoc w termux_run), zapisuje się jako Twój. Kodu od zespołu nie "
+    "dostajesz w całości, tylko jedną linią: nowy plik program zapisuje "
+    "od razu, sprawdza składnię, krótko go uruchamia (błąd wraca do "
+    "autora, do trzech razy) i mówi, gdzie leży i jak go uruchomić, np. "
+    "[Program od razu zapisał ten plik Kamila w ~/projekt/prep.py (…, "
+    "składnia OK; próba uruchomienia … OK). … uruchomienie: python3 "
+    "~/projekt/prep.py [--wejscie --wyjscie] …]. Poprawkę fragmentu od "
+    "autora pliku program nanosi od razu i też mówi to jedną linią. "
+    "Resztę (kod, który ktoś podał bez ścieżki) widzisz jako [nazwa — "
+    "liczba znaków]; program położy ją z wypowiedzi autora, 1:1, gdy "
+    "w TASK podasz write_engineer_code_to ze ścieżką pliku — albo "
+    "z katalogiem, a wtedy kładzie tam każdy plik podany pod nazwą. Kod, "
+    "który już jest na dysku, widzisz jako ścieżkę, np. "
+    "[~/projekt/build.sh — 1234 znaków, na dysku], i można go po prostu "
+    "uruchomić. Do kodu zaglądasz tak jak zespół: w RUN komendą do "
+    "odczytu (grep -n, sed -n 'od,dop' plik, head, wc -l) zamiast "
+    "czytać cały plik. Dłuższe uruchomienie puszczasz w tle i sprawdzasz "
+    "jego log, więc wiesz, co działa i z jakim wynikiem.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
@@ -49088,6 +49693,27 @@ def run_agent(goal):
                     )
                     write_target = ""
 
+            # v480ft: w polu katalog ("~/MAIN_1/src/") — kladziemy tam
+            # kazdy plik, ktory ktos z zespolu podal pod naglowkiem z sama
+            # nazwa. Bieg 2026-10-25 22:35, krok 3: szesc plikow Bartka,
+            # pole "~/MAIN_1/src/", a krok skonczyl sie bledem "to katalog".
+            if write_target and not _kod_z_pola:
+                try:
+                    _kat = _resolve_home_relative_path(write_target)
+                    _jest_kat = write_target.rstrip().endswith(("/", "\\")) or _kat.is_dir()
+                except Exception:
+                    _jest_kat = False
+                if _jest_kat:
+                    _zap, _byly = _poloz_pliki_w_katalogu(_kat, team)
+                    if _zap or _byly:
+                        _fakt = (
+                            "Do " + _sciezka_od_domu(str(_kat)) + "/ program położył pliki z wypowiedzi zespołu: "
+                            + "; ".join(_zap + _byly) + ". Kod jest w plikach — można je uruchomić."
+                        )
+                        log("MAIN", _fakt)
+                        task_text += "\n\n" + _fakt
+                        write_target = ""
+
             # Bartek odzywa sie w nastepnym kroku, gdy MAIN wlasnie
             # poprosil o kod — patrz consult_team().
             global _main_chcial_kod
@@ -49588,6 +50214,50 @@ def run_agent(goal):
                     write_target
                 )
 
+                # v480ft: katalog sprawdzamy od razu — wczesniej szly
+                # najpierw mylace "wyglada jak komendy… zapisuje" i "nowy kod
+                # ma 280 B, na dysku bylo 3440 B" (rozmiar katalogu).
+                # v358: sciezka wskazujaca KATALOG, nie plik.
+                #
+                # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16
+                # 18:24, krok 2). MAIN podal
+                # write_engineer_code_to = "~/twilio_mvp/" — z
+                # ukosnikiem na koncu, czyli katalog, ktory Gemini
+                # zalozylo krok wczesniej. Probowalismy otworzyc go do
+                # zapisu i oddalismy zespolowi surowy wyjatek Pythona:
+                #
+                #   ENGINEER_CODE_WRITE_ERROR: [Errno 21] Is a
+                #   directory: '/data/.../home/twilio_mvp'
+                #
+                # Ola rozszyfrowala to poprawnie ("sciezka wskazala
+                # folder, nie plik"), ale krok juz przepadl, a ona
+                # sama w tej samej wiadomosci kazala uzytkownikowi
+                # wklepac plik recznie przez nano. Mowimy to wiec
+                # sami, zanim sprobujemy zapisac.
+                if str(write_target).rstrip().endswith(("/", "\\")) \
+                        or target_path.is_dir():
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_WRITE_ERROR",
+                        "error": (
+                            str(write_target)
+                            + " wskazuje katalog, nie plik"
+                        ),
+                        "path": write_target,
+                        "message": (
+                            str(write_target)
+                            + " to katalog, a nie plik — nie mam "
+                            "gdzie zapisać tej treści. Podaj, jak "
+                            "ma się nazywać plik w tym katalogu "
+                            "(np. "
+                            + str(write_target).rstrip("/\\")
+                            + "/app.py) i zlecę zapis jeszcze raz."
+                        )
+                    }
+
+                    continue
+
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: blok kodu może być SKRYPTEM DO
                 # URUCHOMIENIA (np. "cat > plik << EOF ..."), nie
@@ -49737,12 +50407,13 @@ def run_agent(goal):
                         and new_size < existing_size * 0.4
                     ):
 
-                        _kopia = target_path.with_name(
+                        _kopia = target_path.parent / ".kopie" / (
                             target_path.name + ".bak_"
                             + datetime.now().strftime("%Y%m%d_%H%M%S")
                         )
 
                         try:
+                            _kopia.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(str(target_path), str(_kopia))
                         except Exception:
                             _kopia = None
@@ -49752,7 +50423,7 @@ def run_agent(goal):
                             target_path.name + ": nowy kod ma "
                             + str(new_size) + " B, na dysku było "
                             + str(existing_size) + " B — zapisuję, "
-                            + ("stara wersja: " + _kopia.name
+                            + ("stara wersja: .kopie/" + _kopia.name
                                if _kopia else "bez kopii (nie udało się)")
                             + "."
                         )
@@ -49762,50 +50433,9 @@ def run_agent(goal):
                             + ": nowa wersja ma " + str(new_size)
                             + " B, poprzednia miała " + str(existing_size)
                             + " B"
-                            + (" (kopia: " + _kopia.name + ")" if _kopia else "")
+                            + (" (kopia: .kopie/" + _kopia.name + ")" if _kopia else "")
                             + "."
                         )
-
-                # v358: sciezka wskazujaca KATALOG, nie plik.
-                #
-                # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16
-                # 18:24, krok 2). MAIN podal
-                # write_engineer_code_to = "~/twilio_mvp/" — z
-                # ukosnikiem na koncu, czyli katalog, ktory Gemini
-                # zalozylo krok wczesniej. Probowalismy otworzyc go do
-                # zapisu i oddalismy zespolowi surowy wyjatek Pythona:
-                #
-                #   ENGINEER_CODE_WRITE_ERROR: [Errno 21] Is a
-                #   directory: '/data/.../home/twilio_mvp'
-                #
-                # Ola rozszyfrowala to poprawnie ("sciezka wskazala
-                # folder, nie plik"), ale krok juz przepadl, a ona
-                # sama w tej samej wiadomosci kazala uzytkownikowi
-                # wklepac plik recznie przez nano. Mowimy to wiec
-                # sami, zanim sprobujemy zapisac.
-                if str(write_target).rstrip().endswith(("/", "\\")) \
-                        or target_path.is_dir():
-
-                    last_result = {
-                        "status":
-                            "ENGINEER_CODE_WRITE_ERROR",
-                        "error": (
-                            str(write_target)
-                            + " wskazuje katalog, nie plik"
-                        ),
-                        "path": write_target,
-                        "message": (
-                            str(write_target)
-                            + " to katalog, a nie plik — nie mam "
-                            "gdzie zapisać tej treści. Podaj, jak "
-                            "ma się nazywać plik w tym katalogu "
-                            "(np. "
-                            + str(write_target).rstrip("/\\")
-                            + "/app.py) i zlecę zapis jeszcze raz."
-                        )
-                    }
-
-                    continue
 
                 _poprawiony = _popraw_skladnie_u_autora(
                     target_path, engineer_code, team, step
