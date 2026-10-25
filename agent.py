@@ -3704,12 +3704,17 @@ BROWSER_PROMPT = (
 # Rola mowi teraz, jak zmienia istniejacy plik; Python od v203/v330
 # naklada sama zmiane (nasze znaczniki, unified diff albo
 # dwa bloki opisane slowami) z backupem i sprawdzeniem skladni.
+# v480fi: na prosbe uzytkownika (2026-10-25) przepisany w calosci: kod
+# pisze ten, kto ma zadanie, i poprawia go po bledzie skladni/uruchomienia.
 ENGINEER_PROMPT = (
     "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
     "i rozwiązaniami technicznymi. Nowy plik piszesz w całości. "
     "Gdy zmieniasz albo dopisujesz coś w pliku, który już istnieje, "
     "piszesz samą zmianę, tak jak zwykły patch: który fragment "
-    "i na co go zamienić."
+    "i na co go zamienić. Program kładzie Twój kod na dysk i od razu "
+    "sprawdza, czy się kompiluje. Gdy wraca do Ciebie błąd składni "
+    "albo wynik uruchomienia, poprawiasz to miejsce i oddajesz "
+    "poprawkę, aż kod się skompiluje i zadziała."
 )
 
 
@@ -20376,7 +20381,192 @@ def termux_write_file(path, content, append=False):
     if _za_uzytk:
         log("PROGRAM", _za_uzytk)
         return {"ok": False, "error": "PLIK_UZYTKOWNIKA", "message": _za_uzytk}
-    return _termux_write_file(path, content, append)
+    wynik = _termux_write_file(path, content, append)
+    try:
+        if isinstance(wynik, dict) and not append:
+            _sprawdz_skladnie_kodu_autora(wynik)
+            if wynik.get("compile_error"):
+                wynik = _autor_poprawia_skladnie(path, content, wynik)
+    except Exception as e:
+        log("PROGRAM", "Poprawka składni przez autora nie poszła: " + str(e))
+    return wynik
+
+
+# v480fi: uzytkownik (2026-10-25): "nie od razu do MAIN-a, bo MAIN, jak mu
+# wyslemy blad, sam bedzie poprawial i mysli, ze druzyna nic nie robi".
+# Gdy plik .py napisany przez kogos z zespolu (np. Bartka) nie kompiluje
+# sie, blad idzie od razu do autora; jego poprawke program naklada i
+# sprawdza znowu. MAIN dostaje wynik: kto poprawil i ze sie kompiluje,
+# albo — po kilku probach — ostatni blad.
+_RUND_POPRAWEK_AUTORA = 3
+
+
+def _py_compile_blad(sciezka):
+    """Blad py_compile pliku albo "" (tez gdy nie da sie sprawdzic)."""
+    try:
+        r = subprocess.run([sys.executable, "-m", "py_compile", str(sciezka)],
+                           capture_output=True, text=True, timeout=20)
+        return "" if r.returncode == 0 else (r.stderr or r.stdout or "błąd składni")
+    except Exception:
+        return ""
+
+
+def _sprawdz_skladnie_kodu_autora(wynik):
+    """v480fi: plik, ktory program polozyl sam z kodu autora (written_by
+    python), nie przechodzil py_compile — sprawdzamy go tak samo."""
+    if wynik.get("written_by") != "python":
+        return
+    sciezka = str(wynik.get("path") or "")
+    if not sciezka.endswith(".py"):
+        return
+    blad = _py_compile_blad(sciezka)
+    if blad:
+        wynik["ok"] = False
+        wynik["compile_error"] = short(blad, 1500)
+        wynik["warning"] = (
+            "Zapisany, ale się nie kompiluje — błąd składni w miejscu z "
+            "compile_error."
+        )
+    else:
+        wynik["skladnia"] = "OK (program sprawdził py_compile)"
+
+
+def _znormalizuj_kod(t):
+    return "\n".join(l.rstrip() for l in str(t or "").strip().splitlines())
+
+
+def _autor_tresci(path, content):
+    """Rola z zespolu, ktorej kod (dla tego pliku) to dokladnie ta tresc."""
+    nazwa = Path(str(path or "")).name
+    _z_zapisu = str(_autor_pliku.get(nazwa) or "")
+    if _z_zapisu in _IMIE_AUTORA and _z_zapisu != "IGOR":
+        return _z_zapisu
+    cel = _znormalizuj_kod(content)
+    if not nazwa or not cel:
+        return ""
+    for wpis in reversed(_kod_autorow):
+        rola = str(wpis.get("rola") or "")
+        if rola in ("", "MAIN", "IGOR") or rola not in _IMIE_AUTORA:
+            continue
+        kod = _kod_z_wypowiedzi(wpis.get("tekst") or "", nazwa) or extract_code_block(
+            wpis.get("tekst") or "", nazwa)
+        if kod and _znormalizuj_kod(kod) == cel:
+            return rola
+    return ""
+
+
+_NAPRAWCZE_IMIONA = {
+    "ANIU": "CODE_FIXER", "ANIA": "CODE_FIXER", "ANI": "CODE_FIXER",
+    "PIOTRZE": "CODE_REVIEWER", "PIOTR": "CODE_REVIEWER", "PIOTRA": "CODE_REVIEWER",
+}
+_ZAWOLANIE_NAPRAWCZE_RE = re.compile(
+    r"(?:^[\s*_#>-]*|(?<=[.!?\u2026])[ \t]+)("
+    + "|".join(sorted(_NAPRAWCZE_IMIONA, key=len, reverse=True))
+    + r")\**\s*[:,]\**\s*(.+(?:\n(?![\s*_#>-]*(?:"
+    + "|".join(sorted(_NAPRAWCZE_IMIONA, key=len, reverse=True))
+    + r")\b).*)*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _koledzy_odpowiadaja_autorowi(rola, odp, sciezka):
+    """v480fi: autor poprawki zwrocil sie do kogos po imieniu (np. "Aniu:
+    ...") — ta osoba odpowiada od razu, a odpowiedz wraca do autora w
+    nastepnej rundzie (uzytkownik 2026-10-25: "moga sie komunikowac
+    z kims jeszcze, kto robi kod")."""
+    imie = _IMIE_AUTORA.get(rola, (rola, rola))[0]
+    teksty = []
+    zawolania = list(_zawolania(odp))
+    # Ania i Piotr (poprawki i przyczyny bledow) nie sa w zwyklym kanale
+    # zawolan narady — tu, przy poprawianiu kodu, mozna do nich napisac.
+    for m in _ZAWOLANIE_NAPRAWCZE_RE.finditer(str(odp or "")):
+        zawolania.append((_NAPRAWCZE_IMIONA[m.group(1).upper()], m.group(2).strip()))
+    for adresat, tresc in zawolania[:2]:
+        if adresat == rola or adresat not in _IMIE_AUTORA or not tresc.strip():
+            continue
+        wiad = (tresc if adresat in _ROLE_BEZ_CELU else
+                imie + " poprawia " + sciezka + ", który się nie kompiluje, "
+                "i pisze do Ciebie:\n" + tresc)
+        o = str(deepseek(adresat, wiad) or "")
+        if not o.strip():
+            continue
+        _speak(adresat, o)
+        _zapamietaj_kod_autora(adresat, o)
+        # rozmowa juz sie odbyla — list nie czeka w skrzynce na nastepny krok
+        try:
+            _role_inbox[adresat] = [
+                (n, t) for n, t in _role_inbox.get(adresat, []) if t.strip() != tresc.strip()
+            ]
+        except Exception:
+            pass
+        teksty.append(_IMIE_AUTORA[adresat][0] + " odpowiada:\n" + o.strip())
+    return ("\n\n".join(teksty) + "\n\n") if teksty else ""
+
+
+def _autor_poprawia_skladnie(path, content, wynik):
+    rola = _autor_tresci(path, content)
+    if not rola:
+        return wynik
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    sciezka = _sciezka_od_domu(str(_resolve_home_relative_path(path)))
+    blad = str(wynik.get("compile_error") or "")
+    odpowiedzi_kolegow = ""
+    for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
+        log("PROGRAM", sciezka + " od " + imie_d + " się nie kompiluje — błąd wraca "
+            "do autora (runda " + str(runda) + ").")
+        odp = str(deepseek(rola, (
+            odpowiedzi_kolegow
+            + "Twój kod zapisany w " + sciezka + " nie kompiluje się. py_compile:\n"
+            + short(blad, 1500) + "\n\nPopraw to miejsce: podaj poprawkę fragmentu "
+            "(który fragment i na co go zamienić) albo cały plik od nowa. Program "
+            "naniesie ją i od razu sprawdzi znowu. Możesz też zwrócić się do kogoś "
+            "z zespołu po imieniu — odpowie Ci od razu."
+        )) or "")
+        _speak(rola, odp)
+        # tak samo jak _popraw_skladnie_u_autora (droga TASK): odpowiedz
+        # jest zwykla wypowiedzia autora — zespol i MAIN ja widza
+        _zapamietaj_kod_autora(rola, odp)
+        try:
+            _role_response_cache[rola] = odp
+            _role_response_step[rola] = _biezacy_krok
+            _collect_role_messages(rola, odp)
+            if rola == "ENGINEER":
+                globals()["_kod_bartka_teraz"] = odp
+        except Exception:
+            pass
+        odpowiedzi_kolegow = _koledzy_odpowiadaja_autorowi(rola, odp, sciezka)
+        r = apply_engineer_patch_to_project_file(path, odp)
+        if r.get("applied"):
+            ok = True
+        else:
+            kod = _kod_z_wypowiedzi(odp, Path(str(path)).name)
+            ok = False
+            if kod and kod.strip():
+                w2 = _termux_write_file(path, kod)
+                ok = isinstance(w2, dict) and not w2.get("compile_error")
+                if not ok:
+                    blad = str((w2 or {}).get("compile_error") or blad)
+            elif extract_search_replace_blocks(odp):
+                blad = str(r.get("reason") or blad)
+        if ok:
+            log("PROGRAM", imie + " poprawił " + sciezka + " — kompiluje się.")
+            nowy = {k: v for k, v in wynik.items()
+                    if k not in ("compile_error", "warning", "ok")}
+            nowy["ok"] = True
+            nowy["skladnia"] = "OK (program sprawdził py_compile)"
+            nowy["poprawil_autor"] = (
+                "Plik od " + imie_d + " najpierw się nie kompilował; błąd poszedł "
+                "od razu do " + imie_d + ", który go poprawił (" + str(runda) + " "
+                + ("raz" if runda == 1 else "razy") + "). Teraz się kompiluje."
+            )
+            return nowy
+    wynik["poprawki_autora"] = (
+        imie + " dostał błąd od razu i poprawiał " + str(_RUND_POPRAWEK_AUTORA)
+        + " razy, ale plik nadal się nie kompiluje. Ostatni błąd jest w "
+        "compile_error."
+    )
+    wynik["compile_error"] = short(blad, 1500)
+    return wynik
 
 
 def _termux_write_file(path, content, append=False):
@@ -44192,14 +44382,21 @@ _JAK_TO_DZIALA = (
     "cel), więc w zadaniu wystarczy to, co nowe. RUN działa także "
     "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
     "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
-    "Kod. Pliki z kodem kładzie na dysk program, dokładnie z tego, co "
-    "ktoś napisał. Kod, który sam piszesz w RUN (termux_write_file "
-    "albo heredoc w termux_run), zapisuje się jako Twój. Kod Bartka "
-    "trafia na dysk w całości, gdy wkleisz go bez zmian do "
-    "termux_write_file w RUN albo podasz w TASK write_engineer_code_to "
-    "— wtedy leży pod tą ścieżką, zanim Gemini zacznie. Kod, który już "
-    "jest na dysku, widzisz jako ścieżkę, np. [~/projekt/build.sh — "
-    "1234 znaków, na dysku], i można go po prostu uruchomić.\n\n"
+    "Kod. Kod pisze ten, kto ma to zadanie: Ty sam w RUN albo Bartek, "
+    "gdy mu je dasz. Pliki z kodem kładzie na dysk program, dokładnie z "
+    "tego, co ktoś napisał. Kod, który sam piszesz w RUN "
+    "(termux_write_file albo heredoc w termux_run), zapisuje się jako "
+    "Twój. Kod Bartka trafia na dysk w całości, gdy wkleisz go bez zmian "
+    "do termux_write_file w RUN albo podasz w TASK write_engineer_code_to "
+    "— wtedy leży pod tą ścieżką, zanim Gemini zacznie. Po każdym zapisie "
+    "albo zmianie pliku .py program od razu sprawdza, czy się kompiluje: "
+    "wynik mówi \"skladnia\": \"OK\" albo podaje błąd z numerem linii. "
+    "Błąd wraca do tego, kto pisał, bo on najlepiej zna swój kod: "
+    "poprawia ten fragment, program sprawdza znowu, i tak aż się "
+    "skompiluje; potem krótkie uruchomienie pokazuje, czy działa. Kod, "
+    "który już jest na dysku, widzisz jako ścieżkę, np. "
+    "[~/projekt/build.sh — 1234 znaków, na dysku], i można go po prostu "
+    "uruchomić.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "

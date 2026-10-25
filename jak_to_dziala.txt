@@ -2726,3 +2726,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      plik wrócił do wersji sprzed zmiany i patch można wysłać jeszcze
      raz. Błąd zatrzymuje RUN, więc MAIN od razu w następnym kroku widzi,
      co poprawić. Bez zmian w promptach.
+
+169. Błąd składni w kodzie od kolegi z drużyny wraca od razu do autora (v480fi).
+     Gdy Bartek (albo inna rola) napisał plik .py, a program po zapisie
+     widzi, że się nie kompiluje, błąd nie idzie do MAIN-a, tylko od razu
+     do autora: dostaje komunikat z numerem linii i poprawia ten fragment
+     (patch albo cały plik), a program sprawdza znowu, do 3 razy. Autor
+     może przy tym zwrócić się do kolegi po imieniu ("Aniu: ...",
+     "Piotrze: ...", "Igorze: ...") i od razu dostaje odpowiedź do
+     następnej poprawki. MAIN zostaje decyzyjny: w wyniku widzi
+     "Plik od Bartka najpierw się nie kompilował; poprawił go (N razy).
+     Teraz się kompiluje" albo ostatni błąd, gdy po 3 rundach dalej nie
+     działa, i sam decyduje, co dalej. Prompt Bartka i akapit "Kod." w
+     opisie działania przepisane w całości (kto ma zadanie, ten pisze
+     kod i poprawia go aż się skompiluje); nowe teksty dostają nowe
+     czaty ról, czyli od następnego startu drużyn.
