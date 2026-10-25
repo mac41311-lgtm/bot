@@ -50172,6 +50172,9 @@ def maybe_restart_team_sessions_for_new_goal():
         + ") — zespół zacznie od zera, "
         "bez pamięci poprzedniej rozmowy (świeży system_prompt dla "
         "każdej roli)"
+        + ("; w rywalizacji także nowe oceny Sędziego — o foldery z pracą "
+           "drużyn (~/MAIN_1, ~/MAIN_2) będzie osobne pytanie"
+           if _DRUZYNA == "1" else "")
     ):
         log(
             "DEEPSEEK",
@@ -50184,8 +50187,12 @@ def maybe_restart_team_sessions_for_new_goal():
         _clear_session_state(name)
 
     # v480bm: w rywalizacji "t" to nowy start obu druzyn i Sedziego.
+    # v480fe: foldery z praca druzyn tylko po OSOBNYM pytaniu. Bieg
+    # 2026-10-25 08:45: uzytkownik chcial nowych druzyn bez kasowania
+    # plikow, dal "t" na reset rozmow, a to bez slowa usunelo ~/MAIN_1
+    # i ~/MAIN_2 (pytanie mowilo tylko o sesjach DeepSeek).
     if _DRUZYNA == "1":
-        _nowy_start_rywalizacji()
+        _nowy_start_rywalizacji(_zapytaj_o_foldery_druzyn())
 
     # Nowy, niepowiązany cel nie powinien dziedziczyć "już otwarte w
     # tym celu" ostrzeżeń o aplikacjach z POPRZEDNIEGO celu — inaczej
@@ -51655,7 +51662,26 @@ def _zatrzymaj_stara_druzyne_2(skad=""):
     log("RYWALIZACJA", "Zatrzymałem drużynę 2" + (" " + skad if skad else "") + " (pid " + str(stary) + ").")
 
 
-def _nowy_start_rywalizacji():
+def _zapytaj_o_foldery_druzyn():
+    """v480fe: osobne pytanie o usuniecie folderow druzyn (domyslnie NIE)."""
+    opis = []
+    for p in (_folder_druzyny(1), _folder_druzyny(2), HOME / "archiwum_rywalizacji"):
+        try:
+            if p.is_dir():
+                n = sum(1 for _ in p.rglob("*"))
+                opis.append("~/" + p.name + " (" + str(n) + " plików i folderów)")
+        except Exception:
+            opis.append("~/" + p.name)
+    if not opis:
+        return False
+    return _confirm_destructive_action(
+        "USUNIĘCIE FOLDERÓW Z PRACĄ DRUŻYN: " + ", ".join(opis)
+        + " — kod, dane i modele drużyn znikną bezpowrotnie. Odpowiedz NIE, "
+        "jeśli nowe drużyny mają zacząć od nowa, ale z tymi plikami"
+    )
+
+
+def _nowy_start_rywalizacji(usun_foldery=True):
     """v480bm: druzyna 1 zgodzila sie na reset rozmow — nowy start calej gry.
 
     Bieg 2026-10-15 21:13: uzytkownik dal "t" i nowy cel, a Sedzia od razu
@@ -51671,8 +51697,14 @@ def _nowy_start_rywalizacji():
     _zatrzymaj_stara_druzyne_2("ze starego biegu")
 
     usuniete = []
-    for p in (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR,
-              HOME / "archiwum_rywalizacji"):
+    # v480fe: bez zgody na foldery — tylko rozmowy druzyny 2 i oceny
+    # Sedziego (nowe druzyny, nowe oceny); ~/MAIN_1, ~/MAIN_2 zostaja.
+    _co_usunac = (
+        (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR,
+         HOME / "archiwum_rywalizacji")
+        if usun_foldery else (_RYWALIZACJA_DIR, _DRUZYNA2_DIR)
+    )
+    for p in _co_usunac:
         try:
             if not p.exists():
                 continue
@@ -51687,7 +51719,9 @@ def _nowy_start_rywalizacji():
         log(
             "RYWALIZACJA",
             "Nowy start rywalizacji: usunąłem " + ", ".join(usuniete)
-            + " — obie drużyny i Sędzia zaczynają od zera.",
+            + (" — obie drużyny i Sędzia zaczynają od zera." if usun_foldery else
+               " — nowe drużyny i Sędzia zaczynają od nowa, a ~/MAIN_1 i "
+               "~/MAIN_2 z dotychczasową pracą zostają."),
         )
 
 

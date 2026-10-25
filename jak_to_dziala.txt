@@ -2669,3 +2669,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dalej działa” i stan procesu, także gdy ostatnia linia jest ta sama.
      Po takim czekaniu stan procesu jest zawsze pełny (nie skracany o to,
      co MAIN czytał przed czekaniem).
+164. Reset rozmów nie kasuje już folderów drużyn (v480fe, bieg
+     2026-10-25 08:45). Użytkownik chciał nowych drużyn bez kasowania
+     plików i dał „t” na pytanie o reset sesji DeepSeek. Od v480cb to
+     „t” po cichu usuwało też ~/MAIN_1, ~/MAIN_2, ~/RYWALIZACJA,
+     ~/agent_druzyna2 i archiwum, choć pytanie mówiło tylko o
+     rozmowach. Teraz:
+     - pytanie o reset mówi, że w rywalizacji to też nowe oceny Sędziego,
+       a o foldery będzie osobne pytanie;
+     - po „t” przychodzi drugie pytanie: „USUNIĘCIE FOLDERÓW Z PRACĄ
+       DRUŻYN: ~/MAIN_1 (N plików i folderów), ~/MAIN_2 (…) — znikną
+       bezpowrotnie”, domyślnie NIE;
+     - na NIE: nowe drużyny (rozmowy obu drużyn od zera) i nowe oceny
+       Sędziego, a ~/MAIN_1 i ~/MAIN_2 z dotychczasową pracą zostają;
+     - na TAK: jak dotąd, wszystko od zera.
