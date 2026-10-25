@@ -415,10 +415,15 @@ except ImportError:
 try:
     from rich.console import Console as _RichConsole
     from rich.panel import Panel as _RichPanel
+    # v480fc: tresc w ramce jako zwykly tekst — rich bral "[seed 42]",
+    # "[first ep 5/10]" itp. za znaczniki stylu i wycinal je z ekranu
+    # (do DeepSeek szly cale, znikaly tylko w terminalu).
+    from rich.text import Text as _RichText
     _rich_console = _RichConsole()
 except Exception:
     _RichConsole = None
     _RichPanel = None
+    _RichText = None
     _rich_console = None
 
 
@@ -2451,7 +2456,7 @@ def _speak(role, text, preview_chars=400):
         title = speaker + (" — " + topic if topic else "")
         _rich_console.print(
             _RichPanel(
-                body or "(brak treści)",
+                _RichText(body or "(brak treści)"),
                 title=title,
                 title_align="left",
                 border_style=color,
@@ -2646,7 +2651,7 @@ def _wyslano(role, text):
     try:
         _rich_console.print(
             _RichPanel(
-                body or "(pusta wiadomość)",
+                _RichText(body or "(pusta wiadomość)"),
                 title="→ WYSŁANE DO: " + speaker
                 + " (" + str(role) + ")",
                 title_align="left",
@@ -27776,7 +27781,16 @@ def _shell_failure_is_just_missing_file(tool_name, result):
     ]
 
     if not stderr_lines:
-        return False
+        # v480fc: "ls x 2>&1" — blad trafia do stdout; kod wyjscia pochodzi
+        # z ostatniej komendy, wiec patrzymy na ostatnie linie stdout z
+        # "No such file" (bieg 2026-10-25 08:22: zwykle "czy plik juz jest?"
+        # skonczylo sie jako RUN_TOOL_ERROR).
+        stdout_lines = [
+            line.strip()
+            for line in str(result.get("stdout") or "").splitlines()
+            if line.strip()
+        ]
+        return any(_NO_SUCH_FILE_RE.search(line) for line in stdout_lines[-3:])
 
     return all(_NO_SUCH_FILE_RE.search(line) for line in stderr_lines)
 
@@ -33168,6 +33182,11 @@ def _bezczynnie_czekaj():
             "ani na nie czekać: w tym czasie możecie pracować nad czymś innym "
             "(analiza, następna próba, rozmowa z zespołem)."
         )
+    # v480fc: przy koncu czekania/procesu karta wyniku (W TLE SKOŃCZONE /
+    # "Proces w tle ... skończył") i tak przychodzi w tej samej wiadomosci
+    # — osobna karta POSTĘP tylko to zapowiadala (bieg 2026-10-25 08:23).
+    if powod in ("koniec_tla", "koniec_procesu"):
+        return
     with _w_tle_lock:
         _w_tle_postep.append("═══ POSTĘP W TLE ═══\n" + tekst + "\n═══")
 
@@ -33278,6 +33297,31 @@ def _karta_wyniku(r):
 
 _wyjasnienie_tla_bylo = [False]
 
+# v480fc: co MAIN wykonal w ostatnim RUN (komendy i ich wyjscie) — zeby
+# nie powtarzac mu na gorze/dole wiadomosci tego, co sam przed chwila
+# przeczytal (bieg 2026-10-25 08:29: "W tle dalej czekanie (ta sama
+# komenda)" na gorze i "ostatnia linia: loss=0.9213" pod jego tail-em).
+_ostatni_run_maina = {"komendy": [], "wyjscie": "", "krok": -1}
+
+
+def _ostatni_run():
+    """v480fc: dane ostatniego RUN tylko w kroku zaraz po nim."""
+    try:
+        if int(_ostatni_run_maina.get("krok", -1)) >= int(_biezacy_krok) - 1:
+            return _ostatni_run_maina
+    except Exception:
+        pass
+    return {"komendy": [], "wyjscie": ""}
+
+
+def _ta_sama_komenda(a, b):
+    """v480fc: dwie komendy robia praktycznie to samo (bez sleep)."""
+    ta = set(_bez_sleep(a).split())
+    tb = set(_bez_sleep(b).split())
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / float(len(ta | tb)) >= 0.7
+
 
 def _karta_startu(r, teraz):
     czekanie = r["rodzaj"] == "czekanie"
@@ -33368,13 +33412,26 @@ def _czekanie_blok():
                 karty.append(_karta_startu(r, teraz))
             else:
                 co = "czekanie" if r["rodzaj"] == "czekanie" else "komenda"
+                # v480fc: DeepSeek nie czuje uplywu czasu miedzy wiadomosciami
+                # — mowimy wprost, ile jeszcze zostalo do wyniku.
+                _zostalo = ""
+                if r["rodzaj"] == "czekanie" and r.get("sekundy"):
+                    _ile = r["start"] + float(r["sekundy"]) - teraz
+                    if _ile > 5:
+                        _zostalo = (", do wyniku najdłużej ok. " + _min_s(_ile)
+                                    + " (do " + _hhmm(r["start"] + float(r["sekundy"]))
+                                    + ")")
+                _to_samo = any(_ta_sama_komenda(r["komenda"], k)
+                               for k in _ostatni_run()["komendy"])
                 linie.append(
-                    "W tle dalej " + co + " z " + _hhmm(r["start"]) + " ("
-                    + short(_bez_sleep(r["komenda"]), 60) + "), już "
-                    + _min_s(teraz - r["start"]) + "."
+                    "W tle dalej " + co + " z " + _hhmm(r["start"])
+                    + (" — to samo sprawdzenie, które przed chwilą zrobiliście"
+                       if _to_samo else
+                       " (" + short(_bez_sleep(r["komenda"]), 60) + ")")
+                    + ", już " + _min_s(teraz - r["start"]) + _zostalo + "."
                 )
     if linie:
-        karty.append("\n".join(linie) + " Wyniki przyjdą same — na nie nie "
+        karty.append("\n".join(linie) + (" Wyniki przyjdą same" if len(linie) > 1 else " Wynik przyjdzie sam") + " — na nie nie "
                      "trzeba czekać, ten krok możecie użyć na coś innego.")
     return ("\n\n".join(karty) + "\n\n") if karty else ""
 
@@ -33530,6 +33587,23 @@ def _wykonaj_akcje_maina(decision, step):
             break
 
     globals()["_wykonuje_main"] = False
+
+    # v480fc: patrz _ostatni_run_maina
+    _ostatni_run_maina["komendy"] = [
+        str((w.get("args") or {}).get("command") or "")
+        for w in wyniki
+        if str(w.get("tool") or "").startswith("termux_run")
+        and isinstance(w.get("wynik"), dict)
+        and w["wynik"].get("status") not in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE")
+    ]
+    try:
+        _ostatni_run_maina["krok"] = int(_biezacy_krok)
+    except Exception:
+        _ostatni_run_maina["krok"] = -1
+    _ostatni_run_maina["wyjscie"] = "\n".join(
+        str(w["wynik"].get("stdout") or "") + "\n" + str(w["wynik"].get("stderr") or "")
+        for w in wyniki if isinstance(w.get("wynik"), dict)
+    )
 
     if len(akcje) > _RUN_MAX_AKCJI and status == "RUN_FINISHED":
         warnings.append(
@@ -50881,6 +50955,26 @@ def _plik_z_przekierowania(komenda, cwd=None):
     return najlepszy
 
 
+def _log_juz_czytany(log_path, ostatnia):
+    """v480fc: MAIN wlasnie sam czytal ten log (jego ostatnia linia jest w
+    wyjsciu ostatniego RUN albo komenda z RUN / skonczonego czekania, ktore
+    przyjdzie w tej wiadomosci, czyta ten plik) — wtedy bez koncowki."""
+    if ostatnia and ostatnia.strip() and ostatnia.strip() in _ostatni_run()["wyjscie"]:
+        return True
+    nazwa = os.path.basename(str(log_path or ""))
+    if not nazwa:
+        return False
+    wzor = re.compile(r"(?<![\w.-])" + re.escape(nazwa) + r"(?![\w-])")
+    komendy = list(_ostatni_run()["komendy"])
+    try:
+        with _w_tle_lock:
+            komendy += [str(r.get("komenda") or "") for r in _w_tle
+                        if r.get("wynik") is not None and not r.get("dostarczony")]
+    except Exception:
+        pass
+    return any(wzor.search(k) for k in komendy)
+
+
 def _raport_z_tla():
     zdania = []
     for pid, proces in list(_procesy_w_tle.items()):
@@ -50950,10 +51044,18 @@ def _raport_z_tla():
                 continue
             _tlo_ostatnio_widziane[pid] = znak
             bledy = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            # v480fc: tuz po starcie (pusty log) nic nowego — pid MAIN ma
+            # z wyniku akcji; a koncowke, ktora MAIN wlasnie sam przeczytal,
+            # pomijamy (zostaje samo "dalej dziala").
+            if not linie and start and time.time() - start < 30:
+                continue
+            _juz_czytal = _log_juz_czytany(log_path, ostatnia)
             zdania.append(
-                "Proces w tle " + str(pid) + " (" + komenda + ") dalej działa"
+                "Proces w tle " + str(pid)
+                + ("" if _juz_czytal else " (" + komenda + ")") + " dalej działa"
                 + (", od " + trwa if trwa else "")
-                + (". Log " + _sciezka_od_domu(log_path) + ": " + str(rozmiar)
+                + (" (jego log czytaliście w tym kroku)." if _juz_czytal and not bledy else
+                   ". Log " + _sciezka_od_domu(log_path) + ": " + str(rozmiar)
                    + " B, ostatnia linia: " + short(ostatnia, 200)
                    if log_path else ".")
                 + ("\n  W ostatnich liniach logu jest: " + short(bledy[-1], 200)
@@ -50997,6 +51099,9 @@ def _raport_z_tla():
                 continue
             _tlo_ostatnio_widziane[klucz] = (rozmiar, ostatnia)
             _bl = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            if _log_juz_czytany(_plik, ostatnia) and not _bl:
+                # v480fc: MAIN wlasnie sam czytal ten log
+                continue
             zdania.append(
                 "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
                 + ") dalej działa, od " + _czas_slownie(time.time() - float(start or time.time()))

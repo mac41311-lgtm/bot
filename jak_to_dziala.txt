@@ -2636,3 +2636,23 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      celem od miejsca, w którym przerwaliście.”
      Przy okazji: karta czekania pokazuje „cd X && tail …” zamiast
      „cd X && ; tail …” po wycięciu sleep (sama komenda działała dobrze).
+162. Mniej powtórek w wiadomości do MAIN-a (v480fc, bieg 2026-10-25
+     08:22–08:29, drużyna 1). To samo przychodziło na górze i na dole
+     wiadomości. Teraz:
+     - linia „W tle dalej czekanie…” nie powtarza komendy, gdy MAIN
+       przed chwilą sam zrobił to samo sprawdzenie („to samo
+       sprawdzenie, które przed chwilą zrobiliście”), i podaje, ile
+       najdłużej zostało do wyniku („do wyniku najdłużej ok. 3 min (do
+       08:32)”), bo DeepSeek nie czuje upływu czasu między wiadomościami;
+     - linia „Proces w tle … dalej działa” jest bez końcówki logu, gdy
+       MAIN ten log właśnie czytał (albo czyta go czekanie, którego wynik
+       przychodzi w tej samej wiadomości); zaraz po starcie, przy pustym
+       logu („0 B, ostatnia linia:”), nie ma jej wcale;
+     - karta „POSTĘP W TLE … coś się skończyło” nie przychodzi, gdy tuż
+       pod nią jest karta „W TLE SKOŃCZONE” albo raport o końcu procesu;
+     - „ls plik 2>&1” na pliku, którego jeszcze nie ma, to odpowiedź, a
+       nie „RUN_TOOL_ERROR (nieudany)”;
+     - w ramkach w terminalu nie znikają już „[seed 42]”, „[first ep
+       5/10]” itp. (biblioteka ramek brała je za znaczniki kolorów; do
+       DeepSeek zawsze szły całe).
+     Zespół dalej sam decyduje, co puszcza w tle i kiedy zagląda do logów.
