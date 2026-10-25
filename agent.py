@@ -51724,8 +51724,59 @@ def _pliki_druzyn_poza_folderami():
     return wynik
 
 
-_DEBIAN_ROOT = Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr")) / \
-    "var" / "lib" / "proot-distro" / "installed-rootfs" / "debian" / "root"
+def _debian_root():
+    """v480fg: /root Debiana widziany z Termuksa. Miejsce zalezy od wersji
+    proot-distro (telefon uzytkownika 2026-10-25: nie bylo go pod
+    installed-rootfs/debian), wiec szukamy po znanych miejscach; None, gdy
+    nie ma go nigdzie."""
+    prefix = Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+    kandydaci = []
+    for wzor in ("var/lib/proot-distro/installed-rootfs/debian*/root",
+                 "var/lib/proot-distro/containers/debian*/rootfs/root",
+                 "var/lib/proot-distro/*/debian*/root"):
+        kandydaci += sorted(prefix.glob(wzor))
+    for k in kandydaci:
+        if k.is_dir():
+            return k
+    return None
+
+
+def _w_debianie(skrypt, czas=120):
+    try:
+        return subprocess.run(
+            ["proot-distro", "login", "debian", "--", "bash", "-c", skrypt],
+            capture_output=True, text=True, timeout=czas,
+        )
+    except Exception:
+        return None
+
+
+def _usun_pliki_w_debianie_od_srodka():
+    """v480fg: gdy /root Debiana nie widac z Termuksa — lista i usuwanie
+    przez proot-distro (to samo, co komenda dla uzytkownika)."""
+    _lista = ('cd /root && for p in *; do [ -e "$p" ] || continue; '
+              '[ -f "$p/pyvenv.cfg" ] && continue; echo "$p"; done')
+    r = _w_debianie(_lista)
+    if r is None or r.returncode != 0:
+        log("RYWALIZACJA", "Nie zajrzałem do /root Debiana (proot-distro login "
+            "debian nie zadziałał) — pliki w Debianie zostają.")
+        return
+    nazwy = [l for l in r.stdout.splitlines() if l.strip()]
+    if not nazwy:
+        return
+    if not _confirm_destructive_action(
+        "USUNIĘCIE PLIKÓW W DEBIANIE (/root): "
+        + ", ".join(nazwy[:20])
+        + (" i " + str(len(nazwy) - 20) + " więcej" if len(nazwy) > 20 else "")
+        + " — to, co drużyny zostawiły w Debianie poza swoimi folderami; "
+        "biblioteki (venv-y, .local, .cache) i ukryte pliki konfiguracji zostają"
+    ):
+        log("RYWALIZACJA", "Pliki w /root Debiana zostają.")
+        return
+    r = _w_debianie(_lista.replace('echo "$p"', 'rm -rf -- "$p" && echo "$p"'), 600)
+    if r is not None and r.stdout.strip():
+        log("RYWALIZACJA", "Usunąłem z /root Debiana: "
+            + ", ".join(r.stdout.split()))
 
 
 def _usun_pliki_druzyn_w_debianie():
@@ -51734,6 +51785,10 @@ def _usun_pliki_druzyn_w_debianie():
     nli_venv, rung1_semantic*.py z poprzednich biegow. Osobne pytanie z
     lista (domyslnie NIE); ukryte pliki konfiguracji (.bashrc, .cache,
     .local z bibliotekami pip) zostaja."""
+    _DEBIAN_ROOT = _debian_root()
+    if _DEBIAN_ROOT is None:
+        _usun_pliki_w_debianie_od_srodka()
+        return
     try:
         # biblioteki zostaja (uzytkownik 2026-10-25: "biblioteki moga
         # zostac, krzywdy nie robia") — venv-y rozpoznajemy po pyvenv.cfg
