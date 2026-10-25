@@ -2786,6 +2786,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wykonuje i czyści pole w ocenie (log: „Sędzia chciał
      zdyskwalifikować… dyskwalifikacji nie ma”). Opis Sędziego mówi o tym
      wprost (nowy czat Sędziego). Bieg 2026-10-25 18:40: drużyna 2
-     wylosowała dyskwalifikację za zablokowane „ls ~/MAIN_1”.
+     dostała dyskwalifikację za zablokowane „ls ~/MAIN_1”.
      Przy resecie rozmów w rywalizacji program czyści też wyniki kroków
      starej drużyny 1 — Sędzia dostawał je jako kroki nowej drużyny.
