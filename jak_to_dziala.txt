@@ -2941,3 +2941,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        początek rozmowy MAIN-a — leżą w ~/AEL_SRODOWISKO.txt (Bartek,
        Piotr i Ania dalej dostają je na start).
      Bez obowiązkowej konsultacji: MAIN dalej sam decyduje, kogo pyta.
+
+184. Bez szumu w pierwszej wiadomości (v480fy). Użytkownik (2026-10-26):
+     lista bibliotek i dane telefonu (su, Termux:API) w pierwszej
+     wiadomości Bartka, Piotra i Ani to szum i zawęża pole do popisu.
+     Pierwsza wiadomość ról na telefonie to znowu tylko „Termux API,
+     ADB DEBUGOWANIE, Android”; fakty leżą w ~/AEL_SRODOWISKO.txt,
+     a wersje sprawdza się PODGLĄDEM. Z biegu 00:11:
+     - PODGLĄD przepuszcza python3 -c z „import requests” (samo
+       importowanie to odczyt; wywołania requests.get itd. dalej nie);
+     - PODGLĄD przepuszcza curl do odczytu (GET/HEAD na ekran albo
+       -o /dev/null) — Bartek trzy razy chciał sprawdzić, czy API
+       odpowiada, zanim napisał pobieranie;
+     - w rywalizacji zadanie z samą nazwą pliku („python3 eval_bpc.py”)
+       szuka go w folderze drużyny — wcześniej program kładł drugi
+       egzemplarz w ~/eval_bpc.py.

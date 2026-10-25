@@ -8488,6 +8488,8 @@ _PODGLAD_KOMENDY = (
     "getprop", "pwd", "whoami", "id", "ps", "pgrep", "true", "test", "[",
     "pkg", "dpkg", "apt", "git", "ldd", "readlink", "realpath", "basename",
     "dirname",
+    # v480fy: curl tylko GET/HEAD na ekran (patrz _podglad_odmowa)
+    "curl",
 )
 _PODGLAD_RUND = 6
 # python3 -c w podgladzie: tylko odczyt — sprawdzenie wersji, importu,
@@ -8495,8 +8497,9 @@ _PODGLAD_RUND = 6
 _PODGLAD_PY_ZMIANA_RE = re.compile(
     r"\b(remove|unlink|rmdir|rmtree|rename|replace|system|popen|subprocess|"
     r"kill|killpg|mkdir|makedirs|chmod|chown|symlink|truncate|write|"
-    r"write_text|write_bytes|writelines|socket|urlopen|urlretrieve|requests|"
-    r"httpx|exec|eval|shutil|save|dump|to_csv|savez|fork|spawn)\b"
+    r"write_text|write_bytes|writelines|socket|urlopen|urlretrieve|"
+    r"exec|eval|shutil|save|dump|to_csv|savez|fork|spawn)\b"
+    r"|\b(?:requests|httpx)\s*\.\s*(?:get|post|put|patch|delete|head|request|Session|Client)\b"
     r"|open\([^)]*['\"][wax+]"
 )
 _PODGLAD_PRZEKIEROWANIA = ("2>&1", "2>/dev/null", ">/dev/null", "1>/dev/null", "&>/dev/null")
@@ -8561,6 +8564,28 @@ def _podglad_odmowa(komenda):
             return "pkg/apt w podglądzie: list-installed, show, search; instalację zleca MAIN"
         if cmd == "dpkg" and sl[1:2] not in (["-l"], ["-L"], ["-s"]):
             return "dpkg w podglądzie: -l, -L, -s"
+        # v480fy: curl tylko do odczytu (GET na ekran albo -o /dev/null).
+        # Bieg 2026-10-26 00:16: Bartek trzy razy chcial sprawdzic, czy
+        # API odpowiada, zanim napisze pobieranie — podglad odmawial.
+        if cmd == "curl":
+            args = sl[1:]
+            for i, a in enumerate(args):
+                nast = args[i + 1] if i + 1 < len(args) else ""
+                # sklejone krotkie opcje ("-sLo plik") — kazda litera osobno
+                if re.fullmatch(r"-[A-Za-z]{2,}", a):
+                    if set(a[1:]) & set("OTFKcDd"):
+                        return "curl w podglądzie tylko czyta (GET/HEAD, bez zapisu i wysyłania danych)"
+                    if a.endswith("o") and nast != "/dev/null":
+                        return "curl w podglądzie wypisuje na ekran albo -o /dev/null; pobranie do pliku zleca MAIN"
+                    continue
+                if a in ("-o", "--output") and nast != "/dev/null":
+                    return "curl w podglądzie wypisuje na ekran albo -o /dev/null; pobranie do pliku zleca MAIN"
+                if (a in ("-O", "--remote-name", "-T", "--upload-file", "-F", "--form", "-K", "--config",
+                          "-c", "--cookie-jar", "-D", "--dump-header")
+                        or a.startswith(("--data", "-d", "--json", "--remote-name"))
+                        or (a in ("-X", "--request") and nast.upper() not in ("GET", "HEAD"))):
+                    return "curl w podglądzie tylko czyta (GET/HEAD, bez zapisu i wysyłania danych)"
+            continue
         if cmd == "git" and sl[1:2] not in (["log"], ["status"], ["diff"], ["show"], ["branch"], ["ls-files"], ["blame"]):
             return "git w podglądzie: log, status, diff, show, branch, ls-files, blame"
     return ""
@@ -35731,6 +35756,15 @@ def _skrypt_do_uruchomienia_ktorego_nie_ma(task_text):
             _cd = re.findall(r"\bcd\s+([~/][^\s;&|]*)", _tekst[:match.start()])
             if _cd:
                 kandydat = _cd[-1].rstrip("/") + "/" + kandydat
+            # v480fy: w rywalizacji nazwa bez folderu to plik druzyny.
+            # Bieg 2026-10-26 00:19: eval_bpc.py lezal w ~/MAIN_1, a program
+            # polozyl drugi egzemplarz w ~/eval_bpc.py.
+            elif _DRUZYNA:
+                _fd = Path(_folder_druzyny(_DRUZYNA))
+                _jest = _pliki_w_folderze(_fd, Path(kandydat).name) if "/" not in kandydat else []
+                if _jest or (_fd / kandydat).exists():
+                    continue
+                kandydat = str(_fd / kandydat)
 
         try:
             if not _resolve_home_relative_path(kandydat).exists():
@@ -45576,18 +45610,20 @@ def _pierwsza_wiadomosc(rola=None):
 
     # v422: MAIN dostaje na poczatek, jak dziala program.
     # v436: fakty o telefonie pod linia o platformie.
+    # v480fy: uzytkownik (2026-10-26, "nie wiem czy ten szum jest im
+    # potrzebny"): telefon (su, Termux:API) i pelna lista bibliotek leza
+    # w ~/AEL_SRODOWISKO.txt (dla chetnych: PODGLĄD cat), nie w pierwszej wiadomosci.
     _tel = _fakty_o_telefonie()
     _srod = _fakty_o_srodowisku()
-    _platforma = (
-        "Termux API, ADB DEBUGOWANIE, Android"
-        + (("\n\n" + _tel) if _tel else "")
-        + (("\n\n" + _srod) if _srod else "")
-    )
+    # Uzytkownik dalej: "nie wiem, czy w ogole to w pierwszym prompcie
+    # jest potrzebne do roli kazdej" — nie jest: wersje sprawdza sie
+    # PODGLĄDEM (python3 --version, pip show), a plik jest dla chetnych.
+    _zapisz_fakty_srodowiska(_tel, _srod)
+    _platforma = "Termux API, ADB DEBUGOWANIE, Android"
 
     # v480fx: MAIN zaczyna od zespolu; fakty o telefonie i bibliotekach
     # (dziesiatki linii) leza w pliku, nie na poczatku jego rozmowy.
     if str(rola) == "MAIN":
-        _zapisz_fakty_srodowiska(_tel, _srod)
         return _JAK_TO_DZIALA + "\n\nTermux API, ADB DEBUGOWANIE, Android"
 
     if rola is not None:
