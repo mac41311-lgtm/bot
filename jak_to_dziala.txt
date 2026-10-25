@@ -2810,3 +2810,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Mniej szumu w logu: linia „robota na dłużej” nie pojawia się przy
      komendach z własnym krótkim limitem (curl --max-time 15), a nazwa
      aplikacji na wierzchu telefonu tylko, gdy się zmieni.
+
+176. Zespół rozmawia między sobą, nie tylko przez MAIN-a (v480fp).
+     Kto zwróci się do kolegi po imieniu, dostaje odpowiedź od razu,
+     a odpowiedź wraca do pytającego, który może na nią odpisać —
+     także gdy odpowiadający nie powtórzy jego imienia. W jednym kroku
+     tak odpowiada do 8 osób po kolei; nic nie przepada: kto ma od
+     kolegi wiadomość bez odpowiedzi, odpowiada na początku następnego
+     kroku, bez czekania na pytanie MAIN-a. MAIN widzi całą rozmowę
+     i dalej sam decyduje. Opis rozmowy dla zespołu (pierwsza
+     wiadomość) przepisany w całości: kto jest w zespole i że mogą
+     mówić do siebie wprost; Kamil i Wojtek mają to w swoich
+     promptach, przepisanych w całości. Igor bez zmian.
