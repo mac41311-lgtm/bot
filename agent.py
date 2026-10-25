@@ -3605,7 +3605,12 @@ def init_deepseek():
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
 # v480cf: doszedl Igor (IGOR w ask_role). v480ch: zdanie o nim stoi w
 # liscie zespolu w _JAK_TO_DZIALA (prosba uzytkownika), nie tu — raz.
-MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER|WOJTEK|ELA|IGOR",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
+# v480fx: uzytkownik (2026-10-25, "popraw prompt maina"): imiona zamiast
+# nazw rol w ask_role, zespol na samej gorze,
+# przepisany w calosci. Ksztalty JSON bez zmian poza wartoscia ask_role.
+# Bez obowiazkowej konsultacji (uzytkownik: "tego nie chcemy") — MAIN
+# decyduje, prompt tylko opisuje, co daje mu kazda osoba.
+MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W zespole są: Tomek (następny krok), Kamil (fakty i informacje z sieci), Marek (słabe punkty i ryzyko planu), Bartek (kod i technika), Ola (co wyszło z wykonania, po ludzku), Wojtek (praktyczny sens), Ela (ile celu jest naprawdę zrobione) i Igor (świeże oko z zewnątrz — nie zna celu, dostaje tylko Twoje pytanie). Każda z tych osób widzi to, czego sam nie zobaczysz: Bartek wie, jak napisać kod, Marek — co w planie może zawieść, Kamil — jakie są fakty. ASK to pytanie do jednej z nich; w ask_role wpisujesz jej imię, a odpowiedź wraca do Ciebie w tym samym kroku. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "Tomek|Kamil|Marek|Bartek|Ola|Wojtek|Ela|Igor",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -43431,6 +43436,34 @@ _MAIN_ASK_ALLOWED_ROLES = (
 # v480ec: uzytkownik (2026-10-24 13:05) — Ela moze brac udzial w burzy
 # mozgow jak kazdy z zespolu, wiec MAIN moze ja zapytac (ask_role ELA).
 _MAIN_ASK_ALIASY = {"ELA": "PROGRESS_ESTIMATOR"}
+# v480fx: uzytkownik (2026-10-25): w opisie zespolu sa imiona, a w ask_role
+# byly nazwy rol (PLANNER, CRITIC...) — MAIN nie wiedzial, ze Bartek to
+# ENGINEER. Od teraz w prompcie ask_role to imiona; program przyjmuje
+# imie (tez w odmianie i z dopiskiem "Bartek (ENGINEER)") albo nazwe roli.
+_IMIE_NA_ROLE_ASK = {
+    "TOMEK": "PLANNER", "TOMKA": "PLANNER", "TOMKU": "PLANNER",
+    "KAMIL": "RESEARCHER", "KAMILA": "RESEARCHER", "KAMILU": "RESEARCHER",
+    "MAREK": "CRITIC", "MARKA": "CRITIC", "MARKU": "CRITIC",
+    "BARTEK": "ENGINEER", "BARTKA": "ENGINEER", "BARTKU": "ENGINEER",
+    "OLA": "BROWSER", "OLI": "BROWSER", "OLU": "BROWSER", "OLE": "BROWSER", "OLĘ": "BROWSER",
+    "WOJTEK": "WOJTEK", "WOJTKA": "WOJTEK", "WOJTKU": "WOJTEK",
+    "ELA": "PROGRESS_ESTIMATOR", "ELI": "PROGRESS_ESTIMATOR", "ELU": "PROGRESS_ESTIMATOR",
+    "ELE": "PROGRESS_ESTIMATOR", "ELĘ": "PROGRESS_ESTIMATOR",
+    "IGOR": "IGOR", "IGORA": "IGOR", "IGORZE": "IGOR",
+}
+
+
+def _rola_ask(x):
+    """ask_role z decyzji MAIN-a -> nazwa roli w programie."""
+    t = str(x or "").strip().upper()
+    for kawalek in [t] + re.findall(r"[A-ZĄĆĘŁŃÓŚŹŻ_]+", t):
+        if kawalek in _MAIN_ASK_ALLOWED_ROLES:
+            return kawalek
+        if kawalek in _IMIE_NA_ROLE_ASK:
+            return _IMIE_NA_ROLE_ASK[kawalek]
+        if kawalek in _MAIN_ASK_ALIASY:
+            return _MAIN_ASK_ALIASY[kawalek]
+    return t
 
 
 def _main_human_line(decision, dtype):
@@ -44183,8 +44216,7 @@ def _handle_main_ask(
 
         for pytanie in pytania:
 
-            ask_role = str(pytanie.get("ask_role") or "").strip().upper()
-            ask_role = _MAIN_ASK_ALIASY.get(ask_role, ask_role)
+            ask_role = _rola_ask(pytanie.get("ask_role"))
             ask_question = str(pytanie.get("ask_question") or "").strip()
 
             if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
@@ -44193,6 +44225,20 @@ def _handle_main_ask(
                     "ASK odrzucone (nieprawidłowa rola '" + ask_role
                     + "' lub puste pytanie)."
                 )
+                # v480fx: MAIN dowiaduje sie, co bylo nie tak i jak to poprawic.
+                odpowiedzi.insert(0, {
+                    "role": "PROGRAM",
+                    "question": ask_question,
+                    "answer": (
+                        ("Pytanie bez treści (puste ask_question) — nie wysłałem go. "
+                         if not ask_question else
+                         "Nie wysłałem pytania do '" + str(pytanie.get("ask_role") or "")
+                         + "' — nie ma takiej osoby do pytania. ")
+                        + "W ask_role wpisz imię: Tomek, Kamil, Marek, Bartek, Ola, "
+                        "Wojtek, Ela albo Igor (Piotr i Ania pomagają autorowi przy "
+                        "błędzie w kodzie — odezwą się, gdy autor napisze do nich po imieniu)."
+                    ),
+                })
                 continue
 
             if zadane >= _MAIN_ASK_MAX:
@@ -45472,6 +45518,16 @@ def _fakty_o_srodowisku():
     return _fakty_o_srodowisku_cache
 
 
+def _zapisz_fakty_srodowiska(*linie):
+    """v480fx: fakty o telefonie i srodowisku do ~/AEL_SRODOWISKO.txt."""
+    try:
+        tresc = "\n\n".join(l for l in linie if l).strip()
+        if tresc:
+            (HOME / "AEL_SRODOWISKO.txt").write_text(tresc + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _pierwsza_wiadomosc(rola=None):
     """
     Pierwsza wiadomosc w kazdej rozmowie: co to za maszyna. Tyle.
@@ -45528,8 +45584,11 @@ def _pierwsza_wiadomosc(rola=None):
         + (("\n\n" + _srod) if _srod else "")
     )
 
+    # v480fx: MAIN zaczyna od zespolu; fakty o telefonie i bibliotekach
+    # (dziesiatki linii) leza w pliku, nie na poczatku jego rozmowy.
     if str(rola) == "MAIN":
-        return _platforma + "\n\n" + _JAK_TO_DZIALA
+        _zapisz_fakty_srodowiska(_tel, _srod)
+        return _JAK_TO_DZIALA + "\n\nTermux API, ADB DEBUGOWANIE, Android"
 
     if rola is not None:
         return _platforma + "\n\n" + _JAK_ROZMAWIAMY
@@ -45623,11 +45682,6 @@ def _lista_narzedzi_dla_maina():
 
 _JAK_TO_DZIALA = (
     "Kilka słów o tym, jak to wszystko działa.\n\n"
-    "Telefon. Program chodzi na telefonie z Androidem, w Termuxie — "
-    "zwykłym linuksowym terminalu. Katalog domowy to ~ "
-    "(/data/data/com.termux/files/home). Jest Termux:API, a ADB jest "
-    "połączone bezprzewodowo z tym samym telefonem, więc da się przez "
-    "nie instalować APK, uruchamiać aplikacje i zaglądać na ekran.\n\n"
     "Zespół. Każda osoba to osobna rozmowa na DeepSeeku:\n"
     "- Tomek szuka sensownego następnego kroku,\n"
     "- Kamil sprawdza fakty i szuka informacji w sieci,\n"
@@ -45645,10 +45699,10 @@ _JAK_TO_DZIALA = (
     "czego sam nie zobaczysz — Bartek pisze i poprawia kod, Marek "
     "znajduje słabe punkty, zanim kosztują krok, Kamil sprawdza fakty "
     "w sieci, Tomek układa następny krok, Wojtek pyta o praktyczny "
-    "sens, a Igor patrzy świeżym okiem. Odzywa się wtedy, gdy kogoś "
-    "zapytasz — to Ty decydujesz, kogo i kiedy włączasz, więc krok bez "
-    "pytań jest krokiem bez zespołu. ASK to pytanie do jednej "
-    "osoby: dostaje je razem z tym, co się stało od jej ostatniej "
+    "sens, a Igor patrzy świeżym okiem. Pytanie do osoby, której sprawa "
+    "dotyczy, daje Ci przed RUN albo TASK to, czego sam byś nie "
+    "zobaczył. ASK to pytanie do jednej osoby (w ask_role jej "
+    "imię): dostaje je razem z tym, co się stało od jej ostatniej "
     "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu, w tym samym "
     "kroku. W jednym kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX)
     + " razy. Przy Twoim pytaniu zespół może też porozmawiać między "
@@ -45657,6 +45711,13 @@ _JAK_TO_DZIALA = (
     "na nią odpisać. Dostajesz całą tę rozmowę, każdą wypowiedź pod "
     "imieniem i z tym, na czyje słowa odpowiada. Decyzję, co dalej, "
     "podejmujesz Ty.\n\n"
+    "Telefon. Program chodzi na telefonie z Androidem, w Termuxie — "
+    "zwykłym linuksowym terminalu. Katalog domowy to ~ "
+    "(/data/data/com.termux/files/home). Jest Termux:API, a ADB jest "
+    "połączone bezprzewodowo z tym samym telefonem, więc da się przez "
+    "nie instalować APK, uruchamiać aplikacje i zaglądać na ekran. "
+    "Model telefonu, wersja Pythona, pamięć i lista bibliotek leżą "
+    "w ~/AEL_SRODOWISKO.txt (spisane przy starcie programu).\n\n"
     "Wykonanie. RUN to lista do " + str(_RUN_MAX_AKCJI) + " akcji, "
     "które program wykonuje od razu, po kolei, i oddaje Ci pełne "
     "wyniki — także numerowaną listę elementów strony, po której "
@@ -49666,7 +49727,7 @@ def run_agent(goal):
 
             _kogo = ", ".join(
                 _ROLE_DISPLAY_NAME.get(
-                    str(q.get("ask_role") or "").upper(),
+                    _rola_ask(q.get("ask_role")),
                     str(q.get("ask_role") or "")
                 )
                 for q in _ask_przeniesione
@@ -51142,7 +51203,7 @@ def run_agent(goal):
                     "MAIN",
                     "Obok RUN były pytania (" + ", ".join(
                         _ROLE_DISPLAY_NAME.get(
-                            str(q.get("ask_role") or "").upper(),
+                            _rola_ask(q.get("ask_role")),
                             str(q.get("ask_role") or "")
                         ) for q in _pytania_obok
                     ) + ") — idą na początek następnego kroku."
@@ -54706,7 +54767,7 @@ def _rozmowa_dla_sedziego(numer):
             _dec = parse_json(str(d["tresc"]))
             if not (isinstance(_dec, dict) and _dec.get("ask_question")):
                 continue
-            kto = "MAIN do " + str(_IMIONA_ROL.get(_dec.get("ask_role"), _dec.get("ask_role") or "zespołu"))
+            kto = "MAIN do " + str(_IMIONA_ROL.get(_rola_ask(_dec.get("ask_role")), _dec.get("ask_role") or "zespołu"))
             tresc = " ".join(str(_dec["ask_question"]).split())
         kawalek = short(tresc, min(zostalo, 1200))
         bloki.append("[krok " + str(d.get("krok", "?")) + "] " + str(kto) + ": " + kawalek)

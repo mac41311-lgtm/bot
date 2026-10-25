@@ -2925,3 +2925,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Prompty Bartka, Piotra, Ani, Kamila, Wojtka i opis rozmowy
      zespołu przepisane w całości (PODGLĄD także do środowiska). Igor
      bez zmian.
+
+183. Prompt MAIN-a uporządkowany (v480fx). Użytkownik (2026-10-25):
+     MAIN rzadko pyta zespół. Zmiany:
+     - w ask_role MAIN wpisuje imię (Tomek, Kamil, Marek, Bartek, Ola,
+       Wojtek, Ela, Igor) — to samo, co w opisie zespołu; program
+       przyjmuje imię, jego odmianę („Bartka”), „Bartek (ENGINEER)”
+       albo starą nazwę roli;
+     - pytanie do nieistniejącej osoby albo puste nie przepada po
+       cichu: MAIN dostaje, co było nie tak i jakie imiona wpisać;
+     - prompt MAIN-a zaczyna się od zespołu i tego, co każda osoba
+       widzi, czego MAIN sam nie zobaczy; opis programu zaczyna się od
+       zespołu i rozmowy, telefon dopiero potem;
+     - model telefonu, Python, pamięć i lista bibliotek nie idą już na
+       początek rozmowy MAIN-a — leżą w ~/AEL_SRODOWISKO.txt (Bartek,
+       Piotr i Ania dalej dostają je na start).
+     Bez obowiązkowej konsultacji: MAIN dalej sam decyduje, kogo pyta.
