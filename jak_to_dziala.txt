@@ -2883,3 +2883,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      z zespołu odzywa się, gdy MAIN zapyta go przez ASK albo zwróci się
      do niego po imieniu. W rywalizacji stan ocenia Sędzia, a Ela
      odpowiada, gdy MAIN ją zapyta.
+
+181. MAIN wie, po co mu zespół (v480fv). Bieg 2026-10-25 23:05,
+     drużyna 1: przez 15 kroków MAIN robił wszystko sam w RUN, zespół
+     zapytał raz (Marka). Akapit „Rozmowa.” MAIN-a przepisany w całości:
+     zespół to jego główne narzędzie, kto co wnosi (Bartek kod, Marek
+     słabe punkty, Kamil fakty, Tomek następny krok, Wojtek praktyczny
+     sens, Igor świeże oko), a krok bez pytań to krok bez zespołu;
+     decyzja dalej należy do MAIN-a. Proces w tle zakończony sygnałem
+     (kod -15 po kill, -9) nie jest już opisywany jako „przerwał się
+     z błędem”. Ostrzeżenie o Tracebacku w wyniku RUN-a jest w logu pod
+     MAIN, nie GEMINI.

@@ -887,7 +887,7 @@ def _czekanie_na_proces_w_tle(przed, pgid):
         proces = _procesy_w_tle.get(klucz[1])
         kod = getattr(proces, "returncode", None)
         if kod not in (None, 0):
-            jak = "przerwał się z błędem (kod " + str(kod) + ")"
+            jak = _jak_skonczyl_proces(kod)
         elif kod == 0:
             jak = "się zakończył (kod 0)"
     return (
@@ -21154,6 +21154,24 @@ def _autor_poprawia_uruchomienie(rola, p):
             + short(wyj.strip().splitlines()[-1] if wyj.strip() else wyj, 300))
 
 
+def _jak_skonczyl_proces(kod):
+    """v480fv: kod ujemny to sygnal, nie blad w programie. Bieg
+    2026-10-25 23:19: MAIN sam zatrzymal fetcher (kill, kod -15), a
+    program mowil "przerwal sie z bledem"."""
+    try:
+        k = int(kod)
+    except (TypeError, ValueError):
+        return "przerwał się z błędem (kod " + str(kod) + ")"
+    if k == -15:
+        return "został zatrzymany sygnałem SIGTERM (kod -15 — ktoś go zakończył, np. kill)"
+    if k == -9:
+        return ("został zabity sygnałem SIGKILL (kod -9 — kill -9 albo system przy braku "
+                "pamięci)")
+    if k < 0:
+        return "został zatrzymany sygnałem " + str(-k) + " (kod " + str(k) + ")"
+    return "przerwał się z błędem (kod " + str(k) + ")"
+
+
 _zapis_dla_maina = {}
 
 
@@ -27256,7 +27274,7 @@ def dispatch_tool(
                 )
 
                 log(
-                    "GEMINI",
+                    "MAIN" if _wykonuje_main else "GEMINI",
                     "Wykryto sygnaturę błędu w treści wyniku mimo "
                     "ok=true: '" + signature + "' (narzędzie: "
                     + name + ")"
@@ -45311,8 +45329,13 @@ _JAK_TO_DZIALA = (
     "- Igor nie zna celu ani niczego z programu. Dostaje tylko to, co "
     "sam mu napiszesz, jak w nowym czacie, więc patrzy na sprawę "
     "świeżo, z zewnątrz.\n\n"
-    "Rozmowa. Zespół odzywa się wtedy, gdy kogoś zapytasz — to Ty "
-    "decydujesz, kogo i kiedy włączasz. ASK to pytanie do jednej "
+    "Rozmowa. Zespół to Twoje główne narzędzie: każda osoba widzi to, "
+    "czego sam nie zobaczysz — Bartek pisze i poprawia kod, Marek "
+    "znajduje słabe punkty, zanim kosztują krok, Kamil sprawdza fakty "
+    "w sieci, Tomek układa następny krok, Wojtek pyta o praktyczny "
+    "sens, a Igor patrzy świeżym okiem. Odzywa się wtedy, gdy kogoś "
+    "zapytasz — to Ty decydujesz, kogo i kiedy włączasz, więc krok bez "
+    "pytań jest krokiem bez zespołu. ASK to pytanie do jednej "
     "osoby: dostaje je razem z tym, co się stało od jej ostatniej "
     "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu, w tym samym "
     "kroku. W jednym kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX)
@@ -52280,7 +52303,7 @@ def _raport_z_tla():
                 jak = "już nie działa (kodu wyjścia nie znam — ruszył przed przeładowaniem programu)"
                 pokaz = linie[-8:]
             else:
-                jak = "przerwał się z błędem (kod " + str(kod) + ")"
+                jak = _jak_skonczyl_proces(kod)
                 bledy = [l for l in linie if _BLAD_W_LOGU_RE.search(l)]
                 pokaz = (
                     (bledy[-6:] + ["…"] + linie[-4:])
