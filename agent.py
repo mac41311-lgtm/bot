@@ -33431,8 +33431,10 @@ def _czekanie_blok():
                     + ", już " + _min_s(teraz - r["start"]) + _zostalo + "."
                 )
     if linie:
-        karty.append("\n".join(linie) + (" Wyniki przyjdą same" if len(linie) > 1 else " Wynik przyjdzie sam") + " — na nie nie "
-                     "trzeba czekać, ten krok możecie użyć na coś innego.")
+        karty.append("\n".join(linie) + (
+            " Wyniki przyjdą same — na nie nie" if len(linie) > 1
+            else " Wynik przyjdzie sam — na niego nie"
+        ) + " trzeba czekać, ten krok możecie użyć na coś innego.")
     return ("\n\n".join(karty) + "\n\n") if karty else ""
 
 
