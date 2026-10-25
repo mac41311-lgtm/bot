@@ -14708,6 +14708,14 @@ def _confirm_destructive_action(description):
             return False
         answer = str(sys.stdin.readline() or "").strip().lower()
 
+        # v480fl: pytanie i odpowiedz w logu — po restarcie widac, na co
+        # poszlo ktore "t" (bieg 2026-10-25 10:58 nie dal sie odtworzyc).
+        try:
+            log("PYTANIE", short(str(description), 160) + " → "
+                + ("TAK" if answer in ("t", "tak", "y", "yes") else "NIE (" + (answer or "Enter") + ")"))
+        except Exception:
+            pass
+
         return answer in ("t", "tak", "y", "yes")
 
     except (EOFError, KeyboardInterrupt):
@@ -53800,8 +53808,14 @@ def main():
     # v480k: po cichej aktualizacji to ten sam bieg — niczego nie
     # czyscimy i o nic nie pytamy (jak odpowiedz NIE na kazde pytanie).
     if not _BEZ_PYTAN:
-        maybe_clear_previous_session_data()
-        maybe_clear_generated_project_files()
+        # v480fl: w rywalizacji pliki druzyn ma jedno pytanie o foldery
+        # (po resecie rozmow, razem z tym, co druzyny zalozyly poza nimi).
+        # Bieg 2026-10-25 10:58: uzytkownik dal "t t t", ale trzy "t"
+        # poszly na kolejke, "wygenerowane pliki" (bez ~/MAIN_1, bo ten
+        # folder byl sprzed biegu) i reset rozmow — a ~/MAIN_1 zostal.
+        if _DRUZYNA != "1":
+            maybe_clear_previous_session_data()
+            maybe_clear_generated_project_files()
         maybe_clear_stale_final_ok_evidence()
         maybe_clear_custom_tools()
         maybe_restart_team_sessions_for_new_goal()

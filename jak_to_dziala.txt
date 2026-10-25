@@ -2769,3 +2769,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      nową; niedoręczony starszy werdykt wyniku zastępuje nowszy. Dotąd
      MAIN dostał "usuwa pliki" o wersji, którą już poprawił, i szukał
      błędu, którego nie było.
+
+172. Start rywalizacji: trzy pytania, „t t t” usuwa wszystko (v480fl).
+     W rywalizacji program nie pyta już osobno o „dane poprzedniej sesji”
+     i „wygenerowane pliki projektu” — te dwa pytania zjadały „t”, a
+     ~/MAIN_1 (folder sprzed biegu) i tak w nich nie był. Zostają po
+     kolei: reset rozmów, usunięcie folderów drużyn (razem z tym, co
+     drużyny założyły poza nimi) i pliki w /root Debiana. Każde pytanie
+     i odpowiedź trafia do logu jako [PYTANIE] … → TAK/NIE.
