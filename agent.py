@@ -10164,6 +10164,18 @@ def android_summary(with_header=True):
     global android_device
     global adb_target
 
+    # v480fj: bieg 2026-10-25 10:09 — ADB nie dzialal (adb sie nie
+    # uruchamial), a stan na poczatku kazdego kroku i tak czekal 10 s na
+    # uiautomator2 ("android_app_current: brak odpowiedzi po 10 s"), w
+    # obu druzynach, choc nikt nie uzywal telefonu. Gdy ADB jest w
+    # przerwie po nieudanym polaczeniu, odpowiadamy od razu.
+    _za = _adb_offline[0] - time.time()
+    if _za > 0:
+        return (
+            "Android niedostępny — ADB nie odpowiada (kolejna próba połączenia "
+            "za " + str(int(_za)) + " s)."
+        )
+
     if android_device is None:
         try:
             if not init_android():
@@ -14262,8 +14274,13 @@ def android_logcat(package=None, lines=200):
 # operatora w terminalu, zanim cokolwiek faktycznie zniknie.
 # ============================================================
 
+# v480fj: ".unlink(" to metoda w kodzie Pythona (os.unlink, Path.unlink),
+# nie komenda powloki — tak samo jak os.remove, ktorego straznik nigdy nie
+# lapal. Bieg 2026-10-25 10:15, druzyna 2: test tokenizera w heredocu
+# sprzatal po sobie plik z tempfile (os.unlink(tmp)) i caly RUN stanal
+# na "nikt nie potwierdził w terminalu", bo druzyna 2 nie ma terminala.
 _DELETE_COMMAND_PATTERN = re.compile(
-    r"\b(rm|rmdir|unlink)\b|\bfind\b[^\n]*-delete\b",
+    r"(?<![.\w])(rm|rmdir|unlink)\b(?!\s*\()|\bfind\b[^\n]*-delete\b",
     re.IGNORECASE
 )
 
@@ -20569,6 +20586,69 @@ def _autor_poprawia_skladnie(path, content, wynik):
     return wynik
 
 
+# v480fj: bieg 2026-10-25 10:09, druzyna 1, krok 4: MAIN poprosil Bartka
+# o caly nowy plik, Bartek oddal go (18 kB) ze sciezka i slowami "gotowy
+# do polozenia na dysk przez program", a MAIN przepisal te 18 kB 1:1 do
+# termux_write_file. Za pierwszym razem DeepSeek urwal sie na samym
+# mysleniu (szary tekst), dopiero ponowienie dalo odpowiedz; plik w logu
+# byl potem "kodem MAIN-a". Nowy plik autora ze sciezka program kladzie
+# sam, od razu po odpowiedzi — tak jak przy write_engineer_code_to — a
+# MAIN dostaje w miejscu kodu jedno zdanie, gdzie lezy i czy sie
+# kompiluje. Tylko nowe pliki: istniejacych nic tu nie nadpisuje.
+_SCIEZKA_KODU_RE = re.compile(
+    r"(?<![\w/.~-])((?:~|/data/data/com\.termux/files/home)/[\w./-]+\."
+    r"(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])"
+)
+
+
+def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
+    """Zwraca odpowiedz dla MAIN-a (kod zastapiony zdaniem) albo odp."""
+    odp = str(odp or "")
+    if rola != "ENGINEER" or "```" not in odp:
+        return odp
+    sciezki = []
+    for m in _SCIEZKA_KODU_RE.finditer(odp + "\n" + str(pytanie or "")):
+        s = m.group(1).rstrip(".")
+        if s not in sciezki:
+            sciezki.append(s)
+    for s in sciezki[:3]:
+        try:
+            p = _resolve_home_relative_path(s)
+            if p.exists() or _siega_do_rywala("termux_write_file", {"path": str(p)}):
+                continue
+            kod = _blok_podpisany(odp, p.name)
+            if not kod and len(sciezki) == 1:
+                kod = _kod_z_wypowiedzi(odp, p.name)
+            if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
+                continue
+            w = termux_write_file(str(p), kod)
+            if not isinstance(w, dict) or not p.exists():
+                continue
+            sciezka = _sciezka_od_domu(str(p))
+            if w.get("compile_error"):
+                stan = "ale się nie kompiluje: " + short(str(w["compile_error"]), 400)
+            else:
+                stan = "składnia OK" + (" po poprawce Bartka" if w.get("poprawil_autor") else "")
+            zdanie = ("[Program od razu zapisał ten plik Bartka w " + sciezka + " ("
+                      + str(p.stat().st_size) + " B, " + stan + "). Nie trzeba go "
+                      "przepisywać; całość pokaże termux_read_file.]")
+            log("PROGRAM", "Nowy plik od Bartka zapisany od razu: " + sciezka + " (" + stan[:60] + ").")
+            na_dysku = p.read_text(encoding="utf-8", errors="replace").strip()
+            blok = None
+            if na_dysku == kod.strip():
+                for mb in re.finditer(r"```[^\n`]*\n(.*?)```", odp, re.DOTALL):
+                    if _wyrownaj_blok(mb.group(1)).strip() == kod.strip():
+                        blok = mb
+                        break
+            if blok:
+                odp = odp[:blok.start()] + zdanie + odp[blok.end():]
+            else:
+                odp = odp.rstrip() + "\n\n" + zdanie
+        except Exception as e:
+            log("PROGRAM", "Nie zapisałem od razu pliku Bartka " + s + ": " + str(e))
+    return odp
+
+
 def _termux_write_file(path, content, append=False):
     """
     append (opcjonalny, domyślnie False — zachowuje dotychczasowe
@@ -20904,9 +20984,19 @@ def _termux_write_file(path, content, append=False):
         _zapamietaj_gdzie(p)
 
         if _wykonuje_main and (_code_suffix or _has_shebang):
-            _autor_pliku[p.name] = "MAIN"
-            _zapisz_autoryzacje_kodu(p, autor="MAIN")
-            log("MAIN", "Kod MAIN-a zapisany: " + p.name + " (RUN).")
+            # v480fj: MAIN przepisal 1:1 kod kogos z zespolu — autorem
+            # zostaje ten ktos (bieg 2026-10-25 10:22: kod Bartka byl
+            # w logu "kodem MAIN-a").
+            _autor_pliku.pop(p.name, None)
+            _kto = "" if append else _autor_tresci(p, data)
+            _kto = _kto if _kto and _kto != "MAIN" else "MAIN"
+            _autor_pliku[p.name] = _kto
+            _zapisz_autoryzacje_kodu(p, autor=_kto)
+            if _kto == "MAIN":
+                log("MAIN", "Kod MAIN-a zapisany: " + p.name + " (RUN).")
+            else:
+                log("MAIN", "MAIN zapisał 1:1 kod " + _IMIE_AUTORA.get(_kto, (_kto, _kto))[1]
+                    + ": " + p.name + " (RUN).")
 
         result = {
             "ok": True,
@@ -43100,7 +43190,8 @@ def _handle_main_ask(
             odpowiedzi.append({
                 "role": ask_role,
                 "question": ask_question,
-                "answer": answer
+                # v480fj: nowy plik Bartka program kladzie sam
+                "answer": _poloz_nowy_plik_autora(ask_role, answer, ask_question)
             })
 
             # v454: adresat odpowiada od razu — patrz _ROZMOWA_HOP_MAX.
@@ -43151,7 +43242,7 @@ def _handle_main_ask(
                 odpowiedzi.append({
                     "role": _kogo,
                     "question": str(_co),
-                    "answer": _odp2,
+                    "answer": _poloz_nowy_plik_autora(_kogo, _odp2, str(_co)),
                     "na_slowa": ask_role
                 })
 

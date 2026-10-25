@@ -2741,3 +2741,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      opisie działania przepisane w całości (kto ma zadanie, ten pisze
      kod i poprawia go aż się skompiluje); nowe teksty dostają nowe
      czaty ról, czyli od następnego startu drużyn.
+
+170. Nowy plik od Bartka program kładzie sam, a MAIN go nie przepisuje (v480fj).
+     Gdy MAIN pyta Bartka o kod, a Bartek odda cały NOWY plik ze ścieżką
+     (np. ~/MAIN_1/start/x.py), program od razu zapisuje go na dysk jako
+     kod Bartka i sprawdza, czy się kompiluje (błąd wraca do Bartka, jak
+     w punkcie 169). MAIN dostaje odpowiedź Bartka, ale w miejscu kodu
+     jedno zdanie: gdzie plik leży, ile ma bajtów i czy składnia jest OK.
+     Istniejących plików to nie nadpisuje. Dotąd MAIN przepisywał 18 kB
+     kodu 1:1 i DeepSeek urwał się wtedy na samym myśleniu. Gdy MAIN
+     sam zapisze kod, który jest dokładnie kodem kogoś z zespołu, autorem
+     zostaje ten ktoś, nie MAIN.
+     Przy okazji: ".unlink(" w kodzie Pythona (os.unlink, Path.unlink) nie
+     jest już brany za komendę usuwania powłoki (os.remove nigdy nie był),
+     więc test sprzątający po sobie plik tymczasowy nie zatrzymuje RUN-a;
+     a gdy ADB nie odpowiada, stan telefonu na początku kroku nie czeka
+     10 s na uiautomator2.
