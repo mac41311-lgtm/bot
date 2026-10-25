@@ -2811,14 +2811,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      komendach z własnym krótkim limitem (curl --max-time 15), a nazwa
      aplikacji na wierzchu telefonu tylko, gdy się zmieni.
 
-176. Zespół rozmawia między sobą, nie tylko przez MAIN-a (v480fp).
-     Kto zwróci się do kolegi po imieniu, dostaje odpowiedź od razu,
-     a odpowiedź wraca do pytającego, który może na nią odpisać —
-     także gdy odpowiadający nie powtórzy jego imienia. W jednym kroku
-     tak odpowiada do 8 osób po kolei; nic nie przepada: kto ma od
-     kolegi wiadomość bez odpowiedzi, odpowiada na początku następnego
-     kroku, bez czekania na pytanie MAIN-a. MAIN widzi całą rozmowę
-     i dalej sam decyduje. Opis rozmowy dla zespołu (pierwsza
-     wiadomość) przepisany w całości: kto jest w zespole i że mogą
-     mówić do siebie wprost; Kamil i Wojtek mają to w swoich
-     promptach, przepisanych w całości. Igor bez zmian.
+176. Przy pytaniu MAIN-a zespół może porozmawiać między sobą (v480fp, v480fq).
+     Rozmowę dalej prowadzi MAIN: bez jego pytania nikt nie mówi. Gdy
+     zapytany zwróci się do kolegi po imieniu, kolega odpowiada od razu,
+     a odpowiedź wraca do pytającego, który może na nią odpisać — także
+     gdy odpowiadający nie powtórzy jego imienia. Bez pętli: każda para
+     odpowiada sobie najwyżej raz na jedno pytanie MAIN-a, razem do 8
+     odpowiedzi; list bez odpowiedzi czeka w skrzynce do następnego
+     pytania tej osoby. MAIN dostaje całą rozmowę i decyduje. Opis
+     rozmowy dla zespołu przepisany w całości (kto jest w zespole i że
+     mogą mówić do siebie wprost); Kamil i Wojtek mają to w promptach,
+     przepisanych w całości. Igor bez zmian.

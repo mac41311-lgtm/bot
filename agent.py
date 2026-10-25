@@ -43186,11 +43186,12 @@ _ask_przeniesione = []
 # krok 10-11: Bartek prosil o wynik `ls`, dostal go dopiero po
 # kolejnym pytaniu MAIN-a.
 _ROZMOWA_HOP_MAX = 8
-# v480fp: uzytkownik (2026-10-25): zespol ma moc rozmawiac miedzy soba,
-# nie tylko przez MAIN-a. Zawolany odpowiada od razu, a jego odpowiedz
-# moze wolac dalej — do 8 odpowiedzi w jednym kroku. Nic nie przepada:
-# kto zostal zawolany ponad to, odpowiada na poczatku nastepnego kroku
-# (patrz _czekaja_na_kolege w run_agent).
+# v480fp: uzytkownik (2026-10-25): "MAIN ma decyzje, do kogo pisze, on
+# wywoluje; dodatek, zeby mogli miedzy soba rozmawiac, ale zeby to nie
+# bylo w petli". Rozmowa zaczyna sie tylko od pytania MAIN-a: zawolany
+# odpowiada od razu, odpowiedz wraca do pytajacego, kazda para raz na
+# pytanie MAIN-a, do 8 odpowiedzi. Bez pytania MAIN-a nikt nie mowi;
+# niedoreczony list czeka w skrzynce do nastepnego pytania tej osoby.
 
 
 def _czekaja_na_kolege():
@@ -43384,6 +43385,8 @@ def _handle_main_ask(
             if ask_role in _ROLE_BEZ_CELU:
                 continue
 
+            _pary = set()
+
             while _hopy < _ROZMOWA_HOP_MAX:
 
                 _czekaja = sorted(_czekaja_na_kolege())
@@ -43391,11 +43394,19 @@ def _handle_main_ask(
                 if not _czekaja:
                     break
 
-                _kogo = _czekaja[0]
-                _listy = [
-                    (kto, tresc) for kto, tresc in _role_inbox.get(_kogo, [])
-                    if str(kto) != "MAIN"
-                ]
+                # v480fp: kazda para raz na pytanie MAIN-a — B odpowiada A
+                # najwyzej raz, wiec rozmowa nie moze krecic sie w kolko.
+                _kogo = None
+                for _k in _czekaja:
+                    _nowe = [
+                        (kto, tresc) for kto, tresc in _role_inbox.get(_k, [])
+                        if str(kto) != "MAIN" and (str(kto), _k) not in _pary
+                    ]
+                    if _nowe:
+                        _kogo, _listy = _k, _nowe
+                        break
+                if _kogo is None:
+                    break
                 _od = []
                 for kto, _ in _listy:
                     if kto not in _od:
@@ -43403,6 +43414,7 @@ def _handle_main_ask(
                 _co = "\n\n".join(str(t) for _, t in _listy)
 
                 _hopy += 1
+                _pary.update((kto, _kogo) for kto in _od)
 
                 log(
                     "MAIN",
@@ -44594,10 +44606,11 @@ _JAK_ROZMAWIAMY = (
     "Tomek (następny krok), Kamil (fakty i informacje), Marek (słabe "
     "punkty planów), Bartek (kod i technika), Ola (porządkuje to, co "
     "się wydarzyło), Wojtek (praktyczny sens) i Igor (głos z zewnątrz, "
-    "nie zna celu). Możecie rozmawiać ze sobą wprost: gdy zwrócicie "
-    "się do kogoś po imieniu, dostanie to od razu i odpowie, a jego "
-    "odpowiedź wróci do was. MAIN widzi całą rozmowę i to on decyduje, "
-    "co zespół robi dalej. Użytkownik chce, żeby program działał sam: "
+    "nie zna celu). Rozmowę prowadzi MAIN: pyta, kogo potrzebuje. "
+    "Gdy odpowiadacie, możecie też porozmawiać ze sobą wprost: gdy "
+    "zwrócicie się do kogoś po imieniu, dostanie to od razu i odpowie, "
+    "a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i to on "
+    "decyduje, co zespół robi dalej. Użytkownik chce, żeby program działał sam: "
     "loguje się, daje dostęp do kont i podaje dane, których nikt z was "
     "nie ma — resztę ustala zespół."
 )
@@ -44659,17 +44672,17 @@ _JAK_TO_DZIALA = (
     "- Igor nie zna celu ani niczego z programu. Dostaje tylko to, co "
     "sam mu napiszesz, jak w nowym czacie, więc patrzy na sprawę "
     "świeżo, z zewnątrz.\n\n"
-    "Rozmowa. Zespół rozmawia także między sobą: kto zwróci się do "
-    "kolegi po imieniu, dostaje od niego odpowiedź od razu, a "
-    "odpowiedź wraca do pytającego, który może na nią odpisać. Ty "
-    "widzisz całą tę rozmowę, każdą wypowiedź pod imieniem. Kto z "
-    "zespołu ma od kolegi wiadomość, na którą jeszcze nie odpowiedział, "
-    "odpowiada na początku kroku i dostajesz to razem z tym, co się "
-    "stało. ASK to Twoje pytanie do jednej osoby: dostaje je razem "
-    "z tym, co się stało od jej ostatniej wypowiedzi, a jej odpowiedź "
-    "wraca do Ciebie od razu, w tym samym kroku. W jednym kroku możesz "
-    "tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. Decyzję, co "
-    "dalej, podejmujesz Ty.\n\n"
+    "Rozmowa. Zespół odzywa się wtedy, gdy kogoś zapytasz — to Ty "
+    "decydujesz, kogo i kiedy włączasz. ASK to pytanie do jednej "
+    "osoby: dostaje je razem z tym, co się stało od jej ostatniej "
+    "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu, w tym samym "
+    "kroku. W jednym kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX)
+    + " razy. Przy Twoim pytaniu zespół może też porozmawiać między "
+    "sobą: gdy zapytany zwróci się do kolegi po imieniu, kolega "
+    "odpowiada mu od razu, a odpowiedź wraca do pytającego, który może "
+    "na nią odpisać. Dostajesz całą tę rozmowę, każdą wypowiedź pod "
+    "imieniem i z tym, na czyje słowa odpowiada. Decyzję, co dalej, "
+    "podejmujesz Ty.\n\n"
     "Wykonanie. RUN to lista do " + str(_RUN_MAX_AKCJI) + " akcji, "
     "które program wykonuje od razu, po kolei, i oddaje Ci pełne "
     "wyniki — także numerowaną listę elementów strony, po której "
@@ -48597,30 +48610,14 @@ def run_agent(goal):
 
         # v435: z automatu nikt z zespolu sie nie odzywa — MAIN dostaje
         # to, co sie stalo, i sam pyta, kogo potrzebuje (ASK).
-        # v480fp: wyjatek to rozmowa w zespole — kto ma od kolegi
-        # wiadomosc, na ktora jeszcze nie odpowiedzial, odpowiada teraz,
-        # bez czekania, az MAIN go zapyta. MAIN dostaje te odpowiedzi
-        # razem z tym, co sie stalo, i dalej sam decyduje.
-        _do_odpowiedzi = _czekaja_na_kolege()
-        if _do_odpowiedzi:
-            log(
-                "ZESPÓŁ",
-                "Odpowiadają kolegom: " + ", ".join(
-                    _ROLE_DISPLAY_NAME.get(r, r) for r in sorted(_do_odpowiedzi)
-                ) + "."
-            )
         team = consult_team(
             goal,
             last_result,
             step,
             step_chrome_text,
             step_android_text,
-            wolani=_do_odpowiedzi
+            wolani=set()
         )
-        # Jak dotad przy pustym zbiorze: kod Bartka z poprzedniego
-        # kroku nie jest "kodem Bartka teraz", gdy Bartek nie mowil.
-        if "ENGINEER" not in _do_odpowiedzi:
-            globals()["_kod_bartka_teraz"] = ""
 
         # ------------------------------------------------------
         # MAIN
