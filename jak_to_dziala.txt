@@ -2701,3 +2701,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        ~/storage, tokeny ani update_agent.sh.
      - Przy zostawieniu plików lista drużyny 2 przechodzi do listy
        drużyny 1, żeby późniejsze „usuń wszystko” o nich wiedziało.
+166. Pełne usuwanie obejmuje też /root w Debianie (v480ff, bieg
+     2026-10-25 09:17: Sędzia widział tam rung1_semantic*.py i venv-y z
+     poprzednich biegów). Po TAK na foldery przychodzi osobne pytanie
+     „USUNIĘCIE PLIKÓW W DEBIANIE (/root): …” z listą, domyślnie NIE.
+     Biblioteki zostają (venv-y rozpoznane po pyvenv.cfg, .local,
+     .cache) i ukryte pliki konfiguracji też.

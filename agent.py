@@ -51724,6 +51724,51 @@ def _pliki_druzyn_poza_folderami():
     return wynik
 
 
+_DEBIAN_ROOT = Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr")) / \
+    "var" / "lib" / "proot-distro" / "installed-rootfs" / "debian" / "root"
+
+
+def _usun_pliki_druzyn_w_debianie():
+    """v480ff: pelne usuniecie — tez to, co drużyny zostawily w /root
+    Debiana (proot). Bieg 2026-10-25 09:17: Sedzia widzial tam m2_venv,
+    nli_venv, rung1_semantic*.py z poprzednich biegow. Osobne pytanie z
+    lista (domyslnie NIE); ukryte pliki konfiguracji (.bashrc, .cache,
+    .local z bibliotekami pip) zostaja."""
+    try:
+        # biblioteki zostaja (uzytkownik 2026-10-25: "biblioteki moga
+        # zostac, krzywdy nie robia") — venv-y rozpoznajemy po pyvenv.cfg
+        pozycje = sorted(
+            p for p in _DEBIAN_ROOT.iterdir()
+            if not p.name.startswith(".")
+            and not (p.is_dir() and (p / "pyvenv.cfg").is_file())
+        )
+    except Exception:
+        return
+    if not pozycje:
+        return
+    if not _confirm_destructive_action(
+        "USUNIĘCIE PLIKÓW W DEBIANIE (/root): "
+        + ", ".join(p.name for p in pozycje[:20])
+        + (" i " + str(len(pozycje) - 20) + " więcej" if len(pozycje) > 20 else "")
+        + " — to, co drużyny zostawiły w Debianie poza swoimi folderami; "
+        "biblioteki (venv-y, .local, .cache) i ukryte pliki konfiguracji zostają"
+    ):
+        log("RYWALIZACJA", "Pliki w /root Debiana zostają.")
+        return
+    usuniete = []
+    for p in pozycje:
+        try:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            usuniete.append(p.name)
+        except Exception as e:
+            log("RYWALIZACJA", "Nie usunąłem /root/" + p.name + " w Debianie: " + str(e))
+    if usuniete:
+        log("RYWALIZACJA", "Usunąłem z /root Debiana: " + ", ".join(usuniete))
+
+
 def _zapytaj_o_foldery_druzyn():
     """v480fe: osobne pytanie o usuniecie folderow druzyn (domyslnie NIE)."""
     opis = []
@@ -51812,6 +51857,7 @@ def _nowy_start_rywalizacji(usun_foldery=True):
             write_json(PROJECT_DIRS_FILE, [])
         except Exception:
             pass
+        _usun_pliki_druzyn_w_debianie()
     else:
         # v480ff: nowe druzyny dowiaduja sie o plikach poprzednich
         # (_rywalizacja_tekst); flaga znika razem z ~/RYWALIZACJA.
