@@ -12565,14 +12565,27 @@ def _zatrzymane_przy_zamknieciu_blok():
         except Exception:
             continue
 
+    # v480fa: zamkniecie to nie polecenie. Bieg 2026-10-25 08:04 (druzyna
+    # 1): po "Uzytkownik zamknal program … zatrzymalo sie to, co dzialalo w
+    # tle" MAIN uznal to za "sygnal przerwania", nie wznowil przerwanego
+    # testu i przez 10 krokow krecil puste `true` ("sesja domknieta, tryb
+    # oczekiwania"). Mowimy wprost, co to znaczy.
+    _dalej = (
+        "Zamknięcie programu to nie polecenie ani ocena Waszej pracy — "
+        "program zamyka się np. przy aktualizacji, restarcie telefonu albo "
+        "gdy użytkownik go uruchamia od nowa. Cel się nie zmienił, bieg "
+        "trwa dalej i nie czeka na użytkownika. "
+    )
     if zamkniete:
         return (
             "Użytkownik zamknął program (" + zamkniete + ")"
             + (
                 " — razem z nim zatrzymało się to, co działało w tle:\n"
-                + "\n".join(linie) + "\n"
+                + "\n".join(linie) + "\n" + _dalej
+                + "Jeśli to, co się przerwało, jest dalej potrzebne, możecie "
+                "to puścić od nowa.\n"
                 if linie else
-                ". W tle nic wtedy nie działało.\n"
+                ". W tle nic wtedy nie działało. " + _dalej + "\n"
             )
         )
 
@@ -12584,6 +12597,7 @@ def _zatrzymane_przy_zamknieciu_blok():
     return (
         "Przy zamknięciu programu" + (" (" + czas + ")" if czas else "")
         + " zatrzymałem to, co działało w tle:\n" + "\n".join(linie) + "\n"
+        + "Bieg trwa dalej; jeśli to jest dalej potrzebne, możecie to puścić od nowa.\n"
     )
 
 
@@ -32881,6 +32895,9 @@ def _bez_sleep(cmd):
     """v480ee: komenda czekania bez sleep — to, co ma sie stac po nim."""
     reszta = _BEZ_SLEEP_RE.sub("", str(cmd or ""))
     reszta = re.sub(r"^[\s;&|]+", "", reszta).strip()
+    # v480fa: "cd X && sleep 60; tail" -> "cd X && tail", nie "cd X && ; tail"
+    reszta = re.sub(r"(&&|\|\||;)\s*(?:;|&&)\s*", r"\1 ", reszta)
+    reszta = re.sub(r"\s*(?:&&|;)\s*$", "", reszta).strip()
     return reszta or str(cmd or "")
 
 

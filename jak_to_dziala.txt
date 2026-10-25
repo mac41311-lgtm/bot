@@ -2623,3 +2623,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      nowy proces czeka na to samo sprawdzanie, zamiast puszczać drugie;
      przy nowym zgłoszeniu stare sprawdzanie jest kończone. Limit 20 min
      liczy się od pierwszego startu.
+161. Zamknięcie programu to nie polecenie przerwania (v480fa, bieg
+     2026-10-25 08:04, drużyna 1). Po „Użytkownik zamknął program …
+     zatrzymało się to, co działało w tle” MAIN uznał to za „sygnał
+     przerwania”, nie wznowił przerwanego testu i przez 10 kroków kręcił
+     puste `true` („sesja domknięta, tryb oczekiwania”). Teraz komunikat
+     po restarcie mówi wprost: zamknięcie to nie polecenie ani ocena
+     pracy (program zamyka się np. przy aktualizacji albo restarcie),
+     cel się nie zmienił, bieg trwa dalej i nie czeka na użytkownika, a
+     to, co się przerwało, można puścić od nowa, jeśli jest potrzebne.
+     Przy okazji: karta czekania pokazuje „cd X && tail …” zamiast
+     „cd X && ; tail …” po wycięciu sleep (sama komenda działała dobrze).
