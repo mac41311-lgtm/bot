@@ -3652,12 +3652,18 @@ PLANNER_PROMPT = (
 # robota.
 # v480fp: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
 # Kamil nie dostaje _JAK_ROZMAWIAMY, a tez moze rozmawiac z zespolem.
+# v480fw: na prosbe uzytkownika (2026-10-25: "prompty dopisane do kazdej
+# roli") przepisany w calosci — PODGLĄD i jak program kladzie kod.
 RESEARCHER_PROMPT = (
     "Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych "
     "informacji. Pracujesz w zespole z Tomkiem, Markiem, Bartkiem, "
     "Olą i Wojtkiem; gdy zwrócisz się do kogoś z nich po imieniu, "
     "dostanie to od razu i odpowie. Jest też Igor — niezależny, nie "
-    "zna celu i dostaje tylko to, co sam do niego napiszesz. Decyzje "
+    "zna celu i dostaje tylko to, co sam do niego napiszesz. Do plików "
+    "drużyny i tego, co jest zainstalowane, zaglądasz linią PODGLĄD: "
+    "z komendą do odczytu (np. grep -n, head, ls, pip show) — program "
+    "oddaje Ci wynik. Kod, który napiszesz w osobnym bloku ze ścieżką "
+    "tuż nad nim, program od razu kładzie na dysk i sprawdza. Decyzje "
     "podejmuje MAIN."
 )
 
@@ -3671,11 +3677,14 @@ CRITIC_PROMPT = (
 
 # v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
 # Piotr sam zaglada do kodu komendami.
+# v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
 CODE_REVIEWER_PROMPT = (
     "Jesteś Piotrem. Analizujesz błędy i szukasz ich "
-    "rzeczywistej przyczyny, a poprawia je Ania. Do kodu zaglądasz "
-    "sam, linią PODGLĄD: z komendą do odczytu (grep -n, sed -n "
-    "'od,dop' plik, head, ls) — program oddaje Ci wynik, więc "
+    "rzeczywistej przyczyny, a poprawia je Ania. Do kodu i środowiska "
+    "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
+    "sed -n 'od,dop' plik, head, ls, python3 --version, pip show "
+    "pakiet, python3 -c z importem i wypisaniem wersji; kilka komend "
+    "łączysz przez ; albo |) — program oddaje Ci wynik, więc "
     "sprawdzasz dokładnie to miejsce, którego dotyczy błąd."
 )
 
@@ -3699,13 +3708,15 @@ CODE_REVIEWER_PROMPT = (
 # v480ce: na prosbe uzytkownika (2026-10-17) przepisany w calosci,
 # jak prompt Bartka: zmiana w istniejacym pliku to sama zmiana.
 # v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci.
+# v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
 CODE_FIXER_PROMPT = (
     "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa. "
     "Poprawkę w pliku, który już istnieje, piszesz jako samą zmianę, "
     "tak jak zwykły patch: który fragment i na co go zamienić. "
     "Fragment bierzesz z pliku, nie z pamięci: zaglądasz do niego "
     "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
-    "plik), a program oddaje Ci wynik."
+    "plik), a wersję Pythona czy biblioteki sprawdzasz tak samo "
+    "(python3 --version, pip show pakiet) — program oddaje Ci wynik."
 )
 
 
@@ -3724,6 +3735,8 @@ BROWSER_PROMPT = (
 # v480ft: na prosbe uzytkownika (2026-10-25: pliki uporzadkowane, poprawki
 # bez przepisywania calosci, proba uruchomienia z bledem do autora,
 # zagladanie do kodu komendami) przepisany w calosci.
+# v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko, cala
+# nowa wersja istniejacego pliku go zastepuje (z kopia).
 ENGINEER_PROMPT = (
     "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
     "i rozwiązaniami technicznymi. Nowy plik piszesz w całości, "
@@ -3733,10 +3746,14 @@ ENGINEER_PROMPT = (
     "błąd wraca do Ciebie, a Ty poprawiasz to miejsce, do trzech razy. "
     "Plik, który już istnieje, zmieniasz samą poprawką, tak jak zwykły "
     "patch: który fragment i na co go zamienić — program nanosi ją na "
-    "Twój plik od razu, z kopią i sprawdzeniem. Do istniejącego kodu "
+    "Twój plik od razu, z kopią i sprawdzeniem. Gdy dajesz całą nową "
+    "wersję pliku, który już leży, program zastępuje go nią, a "
+    "poprzednią zostawia w kopii. Do istniejącego kodu i środowiska "
     "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
-    "sed -n 'od,dop' plik, head, ls, wc) — program uruchamia ją "
-    "w folderze drużyny i oddaje Ci wynik, więc nie potrzebujesz "
+    "sed -n 'od,dop' plik, head, ls, wc, python3 --version, pip show "
+    "pakiet, python3 -c z importem i wypisaniem wersji; kilka komend "
+    "łączysz przez ; albo |) — program uruchamia ją w folderze drużyny "
+    "i oddaje Ci wynik, więc wiesz, na czym piszesz, i nie potrzebujesz "
     "całego pliku, żeby poprawić jego fragment."
 )
 
@@ -3758,13 +3775,17 @@ PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego cel
 
 # v480fp: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
 # jak u Kamila: Wojtek tez moze rozmawiac z zespolem wprost.
+# v480fw: na prosbe uzytkownika ("prompty dopisane do kazdej roli")
+# przepisany w calosci — moze sam zajrzec, co zespol zrobil.
 WOJTEK_PROMPT = (
     "Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik "
     "i zwracasz uwagę na praktyczny sens. Pracujesz w zespole "
     "z Tomkiem, Kamilem, Markiem, Bartkiem i Olą; gdy zwrócisz się "
     "do kogoś z nich po imieniu, dostanie to od razu i odpowie. Jest "
     "też Igor — niezależny, nie zna celu i dostaje tylko to, co sam "
-    "do niego napiszesz. Decyzje podejmuje MAIN."
+    "do niego napiszesz. To, co zespół naprawdę zrobił, możesz "
+    "zobaczyć sam, linią PODGLĄD: z komendą do odczytu (np. ls, head, "
+    "cat wynik.json) — program oddaje Ci wynik. Decyzje podejmuje MAIN."
 )
 
 
@@ -8451,34 +8472,92 @@ _ROLE_Z_PODGLADEM = (
     "CODE_REVIEWER", "CODE_FIXER",
 )
 _PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | re.I)
-_PODGLAD_KOMENDY = ("grep", "sed", "head", "tail", "wc", "ls", "cat", "find", "nl", "sort", "uniq", "cut", "tree", "du", "stat", "file")
+_PODGLAD_KOMENDY = (
+    "grep", "sed", "head", "tail", "wc", "ls", "cat", "find", "nl", "sort",
+    "uniq", "cut", "tree", "du", "stat", "file", "diff", "cmp", "md5sum",
+    "sha256sum", "xxd", "od", "jq", "tr", "column",
+    # v480fw: srodowisko (bieg 2026-10-25 23:30: Bartek trzy razy probowal
+    # sprawdzic wersje torcha i Pythona, dostal odmowe i pisal na slepo)
+    "python3", "python", "pip", "pip3", "which", "command", "type", "nproc",
+    "free", "df", "uname", "echo", "printf", "date", "env", "printenv",
+    "getprop", "pwd", "whoami", "id", "ps", "pgrep", "true", "test", "[",
+    "pkg", "dpkg", "apt", "git", "ldd", "readlink", "realpath", "basename",
+    "dirname",
+)
 _PODGLAD_RUND = 6
+# python3 -c w podgladzie: tylko odczyt — sprawdzenie wersji, importu,
+# ksztaltu danych. Kod, ktory zmienia pliki, procesy albo siec, odpada.
+_PODGLAD_PY_ZMIANA_RE = re.compile(
+    r"\b(remove|unlink|rmdir|rmtree|rename|replace|system|popen|subprocess|"
+    r"kill|killpg|mkdir|makedirs|chmod|chown|symlink|truncate|write|"
+    r"write_text|write_bytes|writelines|socket|urlopen|urlretrieve|requests|"
+    r"httpx|exec|eval|shutil|save|dump|to_csv|savez|fork|spawn)\b"
+    r"|open\([^)]*['\"][wax+]"
+)
+_PODGLAD_PRZEKIEROWANIA = ("2>&1", "2>/dev/null", ">/dev/null", "1>/dev/null", "&>/dev/null")
 
 
 def _podglad_odmowa(komenda):
     """Powod, dla ktorego tej komendy nie uruchomie, albo ""."""
-    if re.search(r"[;&`<>]|\$\(|\|\|", komenda):
-        return ("w podglądzie działa jedna komenda do odczytu (może być potok |), "
-                "bez ; & > < ` $( ) — np. PODGLĄD: grep -n \"def \" src/train.py")
-    for czesc in komenda.split("|"):
-        try:
-            sl = shlex.split(czesc)
-        except ValueError as e:
-            return "nie umiem rozebrać komendy (" + str(e) + ") — sprawdź cudzysłowy"
+    k = komenda
+    for p in _PODGLAD_PRZEKIEROWANIA:
+        k = k.replace(p, " ")
+    # v480fw: cudzyslowy najpierw (python3 -c "a; b" to jedna komenda).
+    try:
+        lx = shlex.shlex(k, posix=True, punctuation_chars=";&|<>")
+        lx.whitespace_split = True
+        tokeny = list(lx)
+    except ValueError as e:
+        return "nie umiem rozebrać komendy (" + str(e) + ") — sprawdź cudzysłowy"
+    segmenty, biez = [], []
+    for t in tokeny:
+        if t in (";", "&&", "||", "|"):
+            segmenty.append(biez)
+            biez = []
+        elif set(t) <= set(";&|<>") or "`" in t or "$(" in t:
+            return ("w podglądzie komendy do odczytu łączysz przez | ; && ||, a wyjście "
+                    "kierujesz najwyżej do 2>&1 albo /dev/null (bez > do pliku, &, ` i $( )) — "
+                    "np. PODGLĄD: python3 --version; pip show torch | head -3")
+        else:
+            biez.append(t)
+    segmenty.append(biez)
+    for sl in segmenty:
+        while sl and re.fullmatch(r"[A-Za-z_]\w*=\S*", sl[0]):
+            sl = sl[1:]
         if not sl:
-            return "pusty kawałek potoku"
-        if sl[0] not in _PODGLAD_KOMENDY:
+            continue
+        cmd = sl[0].split("/")[-1]
+        if cmd not in _PODGLAD_KOMENDY:
             return (sl[0] + " nie jest komendą do odczytu — w podglądzie działają: "
-                    + ", ".join(_PODGLAD_KOMENDY) + "; uruchomienie programu zleca MAIN")
-        if sl[0] == "sed" and (any(a.startswith("-i") or a == "--in-place" for a in sl[1:])
-                               or "-n" not in sl
-                               or any(re.search(r"(?:^|[\d$/,;{}\s])[wWe](?:\s|$)", a)
-                                      for a in sl[1:] if not a.startswith("-"))):
+                    + ", ".join(_PODGLAD_KOMENDY) + "; dłuższe uruchomienie zleca MAIN")
+        if cmd == "sed" and (any(a.startswith("-i") or a == "--in-place" for a in sl[1:])
+                             or "-n" not in sl
+                             or any(re.search(r"(?:^|[\d$/,;{}\s])[wWe](?:\s|$)", a)
+                                    for a in sl[1:] if not a.startswith("-"))):
             return "sed w podglądzie tylko jako sed -n 'od,dop' plik (bez -i)"
-        if sl[0] == "find" and any(a in ("-exec", "-execdir", "-delete", "-ok", "-fprint", "-fprintf", "-fls") for a in sl):
+        if cmd == "find" and any(a in ("-exec", "-execdir", "-delete", "-ok", "-fprint", "-fprintf", "-fls") for a in sl):
             return "find w podglądzie tylko do wyszukiwania (bez -exec/-delete)"
-        if sl[0] == "sort" and any(a.startswith("-o") for a in sl):
+        if cmd == "sort" and any(a.startswith("-o") for a in sl):
             return "sort w podglądzie bez -o"
+        if cmd in ("python3", "python"):
+            args = sl[1:]
+            if args[:1] in (["--version"], ["-V"]) or args[:3] in (["-m", "pip", "show"], ["-m", "pip", "list"], ["-m", "pip", "freeze"]):
+                continue
+            if args[:1] == ["-c"] and len(args) >= 2:
+                if _PODGLAD_PY_ZMIANA_RE.search(args[1]):
+                    return ("python3 -c w podglądzie służy do odczytu (wersje, importy, kształt "
+                            "danych) — ten kod zmienia pliki, procesy albo sieć; takie "
+                            "uruchomienie zleca MAIN")
+                continue
+            return "python3 w podglądzie: --version, -m pip show/list albo -c \"kod do odczytu\"; uruchomienie skryptu zleca MAIN"
+        if cmd in ("pip", "pip3") and (sl[1:2] not in (["show"], ["list"], ["freeze"], ["--version"])):
+            return "pip w podglądzie: show, list, freeze; instalację zleca MAIN"
+        if cmd in ("pkg", "apt") and sl[1:2] not in (["list-installed"], ["show"], ["search"], ["list"]):
+            return "pkg/apt w podglądzie: list-installed, show, search; instalację zleca MAIN"
+        if cmd == "dpkg" and sl[1:2] not in (["-l"], ["-L"], ["-s"]):
+            return "dpkg w podglądzie: -l, -L, -s"
+        if cmd == "git" and sl[1:2] not in (["log"], ["status"], ["diff"], ["show"], ["branch"], ["ls-files"], ["blame"]):
+            return "git w podglądzie: log, status, diff, show, branch, ls-files, blame"
     return ""
 
 
@@ -8494,11 +8573,11 @@ def _uruchom_podglad(komenda):
     try:
         os.makedirs(cwd, exist_ok=True)
         r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
-                           errors="replace", timeout=20, stdin=subprocess.DEVNULL)
+                           errors="replace", timeout=60, stdin=subprocess.DEVNULL)
         out = (r.stdout or "") + (("\n" + r.stderr) if (r.stderr or "").strip() else "")
         kod = r.returncode
     except subprocess.TimeoutExpired:
-        return "$ " + komenda + "\n(przerwane po 20 s — zawęź komendę, np. do jednego pliku)"
+        return "$ " + komenda + "\n(przerwane po 60 s — zawęź komendę, np. do jednego pliku)"
     except Exception as e:
         return "$ " + komenda + "\n(nie uruchomiłem: " + str(e) + ")"
     out = out.rstrip()
@@ -20811,6 +20890,28 @@ _SCIEZKA_KODU_RE = re.compile(
 _NAZWA_PLIKU_KODU = r"[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt)"
 
 
+def _nazwa_z_naglowka(linia):
+    """
+    v480fw: nazwa pliku z linii tuz nad blokiem — jedyna nazwa w tej
+    linii albo ta, od ktorej linia sie zaczyna. Bieg 2026-10-25 23:39,
+    krok 5: "**`eval_bpb.py`** — nowa wersja zgodna z `model.py`" mialo
+    dwie nazwy, wiec plik nie trafil na dysk, a MAIN widzial
+    "[model.py — 2730 znaków]" i uznal, ze program pomylil pliki.
+    """
+    linia = str(linia or "")
+    nazwy = re.findall(r"(?<![\w/.~$-])(" + _NAZWA_PLIKU_KODU + r")(?![\w-])", linia)
+    if len(set(nazwy)) == 1:
+        return nazwy[0]
+    return _nazwa_na_poczatku(linia)
+
+
+def _nazwa_na_poczatku(linia):
+    """Nazwa pliku, od ktorej zaczyna sie linia ("**`a.py`** — ...", "2) Plik: a.py")."""
+    m = re.match(r"[\s*_#>`(\[-]*(?:\d+[.)]\s*)?[\s*_`]*(?:[\w.-]*:\s*)?[\s*_`]*("
+                 + _NAZWA_PLIKU_KODU + r")(?![\w-])", str(linia or ""))
+    return m.group(1) if m else ""
+
+
 def _pliki_pod_naglowkami(text):
     """
     v480ft: [(nazwa, kod, folder)] — bloki, nad ktorymi (ostatnia
@@ -20832,10 +20933,9 @@ def _pliki_pod_naglowkami(text):
         linie = [l for l in (przed[k + 3:] if k >= 0 else przed).splitlines() if l.strip()]
         if not linie or len(linie[-1]) > 160:
             continue
-        nazwy = set(re.findall(r"(?<![\w/.~$-])(" + _NAZWA_PLIKU_KODU + r")(?![\w-])", linie[-1]))
-        if len(nazwy) != 1:
+        nazwa = _nazwa_z_naglowka(linie[-1])
+        if not nazwa:
             continue
-        nazwa = nazwy.pop()
         kod = _wyrownaj_blok(m.group(2))
         if (nazwa in widziane or len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
                 or _obcy_jezyk_dla(nazwa, m.group(1), kod)
@@ -21186,6 +21286,17 @@ def _dla_maina_z_zapisem(rola, tekst):
     tekst = str(tekst or "")
     if "```" not in tekst or _role_response_step.get(rola) != _biezacy_krok:
         return _kod_na_jedna_linie(tekst)
+    # v480fw: krok tej roli mogla ustawic pozniejsza odpowiedz (ASK), a
+    # glos z narady jest starszy. Bieg 2026-10-25 23:40, krok 5: stary
+    # glos Bartka polozyl po raz drugi pliki sprzed nowej wersji (data/
+    # clean.py obok nowego clean.py). Kod musi byc w ostatniej
+    # odpowiedzi tej roli.
+    def _bloki(t):
+        return {_znormalizuj_kod(_wyrownaj_blok(b))
+                for b in re.findall(r"```[^\n`]*\n(.*?)```", str(t or ""), re.DOTALL)}
+    _ostatnia = _bloki(_role_response_cache.get(rola))
+    if _ostatnia and any(len(k) >= 40 and k not in _ostatnia for k in _bloki(tekst)):
+        return _kod_na_jedna_linie(tekst)
     klucz = (rola, _biezacy_krok, hash(tekst))
     if klucz not in _zapis_dla_maina:
         if len(_zapis_dla_maina) > 60:
@@ -21197,6 +21308,80 @@ def _dla_maina_z_zapisem(rola, tekst):
             log("PROGRAM", "Nie zapisałem od razu plików z wypowiedzi " + str(rola) + ": " + str(e))
             _zapis_dla_maina[klucz] = _kod_na_jedna_linie(tekst)
     return _zapis_dla_maina[klucz]
+
+
+def _wstaw_zdanie_za_blok(odp, kod, zdanie):
+    """Blok z tym kodem w odpowiedzi zamieniony zdaniem (albo zdanie na koncu)."""
+    for mb in re.finditer(r"```[^\n`]*\n(.*?)```", odp, re.DOTALL):
+        if _wyrownaj_blok(mb.group(1)).strip() == str(kod or "").strip():
+            return odp[:mb.start()] + zdanie + odp[mb.end():]
+    return odp.rstrip() + "\n\n" + zdanie
+
+
+_SKROT_W_KODZIE_RE = re.compile(
+    r"^\s*(?:#|//)\s*(?:\.\.\.|…)|^\s*(?:\.\.\.|…)\s*$|reszta (?:bez zmian|jak (?:było|wcześniej))"
+    r"|(?:bez zmian|unchanged)\s*(?:\.\.\.|…)?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _caly_plik_zamiast(stary, nowy):
+    """
+    v480fw: czy nowy tekst to cala nowa wersja pliku (a nie wycinek):
+    inny niz stary, bez "# ... reszta bez zmian", nie krotszy niz
+    polowa starego.
+    """
+    stary, nowy = str(stary or "").strip(), str(nowy or "").strip()
+    if not nowy or _znormalizuj_kod(nowy) == _znormalizuj_kod(stary):
+        return False
+    if _SKROT_W_KODZIE_RE.search(nowy):
+        return False
+    return len(nowy) >= 0.5 * len(stary)
+
+
+def _zastap_plik_autora(rola, p, kod, folder):
+    """
+    v480fw: pelna nowa wersja pliku, ktory juz lezy w folderze druzyny
+    (albo w folderze z pytania MAIN-a), od razu na dysk — poprzednia
+    w .kopie/. Nie kompiluje sie -> blad do autora (3 rundy), a gdy
+    dalej nie, wraca poprzednia wersja. Zwraca zdanie dla MAIN-a albo "".
+    """
+    p = Path(p)
+    if folder is None or not kod or _code_target_rejection(str(p), kod):
+        return ""
+    try:
+        if not p.resolve().is_relative_to(Path(folder).resolve()) or not p.is_file():
+            return ""
+        stary = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    if not _caly_plik_zamiast(stary, kod):
+        return ""
+    imie_d = _IMIE_AUTORA.get(rola, (rola, rola))[1]
+    sciezka = _sciezka_od_domu(str(p))
+    _autor_pliku[p.name] = rola
+    blad = _zapisz_poprawke_autora(p, kod)
+    stan = "składnia OK"
+    if blad:
+        w = _autor_poprawia_skladnie(p, kod, {"ok": False, "path": str(p), "compile_error": blad})
+        if w.get("compile_error"):
+            try:
+                p.write_text(stary, encoding="utf-8")
+            except Exception:
+                pass
+            log("PROGRAM", "Nowa wersja " + sciezka + " od " + imie_d
+                + " się nie kompiluje — została poprzednia.")
+            return ("[Nowa wersja " + sciezka + " od " + imie_d + " nie kompiluje się nawet po "
+                    "poprawkach autora: " + short(str(w["compile_error"]), 300)
+                    + " — na dysku została poprzednia wersja.]")
+        stan = "składnia OK po poprawce " + imie_d
+    log("PROGRAM", "Nowa pełna wersja od " + imie_d + " zastąpiła " + sciezka + " (" + stan + ").")
+    _jak = _jak_uruchomic(p)
+    return ("[Program od razu zastąpił " + sciezka + " nową pełną wersją od " + imie_d + " ("
+            + str(p.stat().st_size) + " B, " + stan + "{proba:" + str(p) + "}; poprzednia wersja "
+            "leży w " + _sciezka_od_domu(str(p.parent / ".kopie")) + "/). Kod jest w pliku — "
+            + ("uruchomienie: " + _jak + "; " if _jak else "można go uruchomić; ")
+            + "całość pokaże termux_read_file.]")
 
 
 def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
@@ -21275,20 +21460,32 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
         if baza is None:
             continue
         # Plik o tej nazwie juz lezy gdzies w tym folderze (np. src/model.py)
-        # — to ten plik, nie nowy obok; zmiane kladzie poprawka albo MAIN.
-        if _pliki_w_folderze(_folder_druzyny(_DRUZYNA) if _DRUZYNA else baza, nazwa):
+        # — to ten plik, nie nowy obok. v480fw: gdy jest dokladnie jeden,
+        # pelna nowa wersja autora go zastepuje (patrz _caly_plik_zamiast);
+        # przy kilku takich plikach nie wiadomo ktory, wiec zostaja.
+        _jest = _pliki_w_folderze(_folder_druzyny(_DRUZYNA) if _DRUZYNA else baza, nazwa)
+        if len(_jest) > 1:
             continue
-        cel = str(Path(baza) / nazwa)
+        cel = str(_jest[0]) if _jest else str(Path(baza) / nazwa)
         _podpisane.add(nazwa)
         _z_naglowka[cel] = kod_n
         sciezki.append(cel)
     for s in sciezki[:12]:
         try:
             p = _resolve_home_relative_path(s)
-            if p.exists() or _siega_do_rywala("termux_write_file", {"path": str(p)}):
+            if _siega_do_rywala("termux_write_file", {"path": str(p)}):
                 continue
             kod = (_z_naglowka.get(s) or _blok_podpisany(odp, p.name)
                    or _blok_dokladnie_dla(odp, p.name))
+            if p.exists():
+                # v480fw: autor dal nowa pelna wersje pliku, ktory juz lezy
+                # — bieg 2026-10-25 23:39: "eval_bpb.py — nowa wersja
+                # (nadpisuje stary plik)" przepadla, a stary plik zostal.
+                zdanie = _zastap_plik_autora(rola, p, kod, _folder)
+                if zdanie:
+                    _zapisane_teraz.append((p, "nie kompiluje" not in zdanie))
+                    odp = _wstaw_zdanie_za_blok(odp, kod, zdanie)
+                continue
             if not kod and len(sciezki) == 1 and p.name not in _podpisane:
                 kod = _kod_z_wypowiedzi(odp, p.name)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
@@ -33184,14 +33381,29 @@ def _nazwa_nad_blokiem(text, start, sciezka):
     # kazdego z nich, choc tuz nad nim stalo "### src/prepare.py".
     sufiks = Path(nazwa).suffix.lower()
     if sufiks:
-        nazwy = [
-            n for n in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", przed)
-            if Path(n).suffix.lower() == sufiks
-        ]
-        if nazwy:
-            return nazwy[-1] == nazwa
+        najblizsza = _najblizsza_nazwa(przed, sufiks)
+        if najblizsza:
+            return najblizsza == nazwa
 
     return nazwa in przed
+
+
+def _najblizsza_nazwa(przed, sufiks):
+    """
+    Nazwa pliku z tym sufiksem, ktora podpisuje blok: ta, od ktorej
+    zaczyna sie linia tuz nad nim (v480fw: "**`eval_bpb.py`** — zgodna
+    z `model.py`" to eval_bpb.py), inaczej ostatnia w tekscie nad nim.
+    """
+    linie = [l for l in str(przed or "").splitlines() if l.strip()]
+    if linie:
+        z_naglowka = _nazwa_z_naglowka(linie[-1])
+        if z_naglowka and Path(z_naglowka).suffix.lower() == sufiks:
+            return z_naglowka
+    nazwy = [
+        n for n in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", str(przed or ""))
+        if Path(n).suffix.lower() == sufiks
+    ]
+    return nazwy[-1] if nazwy else ""
 
 
 # v427: linia tuz nad blokiem zapowiada kawalek poprawki.
@@ -33217,6 +33429,12 @@ def _blok_poprawki(text, start):
         return False
 
     ostatnia = linie[-1]
+
+    # v480fw: naglowek zaczynajacy sie od nazwy pliku ("**`eval_bpb.py`**
+    # — nowa wersja ...") zapowiada caly plik, nie kawalek poprawki.
+    if (_nazwa_na_poczatku(ostatnia) and not _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
+            and not re.search(r"fragment|linij|linie|blok|kawał", ostatnia, re.IGNORECASE)):
+        return False
 
     return bool(
         _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
@@ -35202,11 +35420,8 @@ def _nad_blokiem_inny_plik(text, kod, sciezka):
             continue
         przed = tekst[:m.start()]
         przed = przed[przed.rfind("```") + 3:] if "```" in przed else przed
-        nazwy = [
-            n for n in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", przed[-400:])
-            if Path(n).suffix.lower() == sufiks
-        ]
-        return bool(nazwy) and nazwy[-1] != nazwa
+        najblizsza = _najblizsza_nazwa(przed[-400:], sufiks)
+        return bool(najblizsza) and najblizsza != nazwa
 
     return False
 
@@ -35344,12 +35559,28 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     # odpowiedzi trafi na dysk. Bez tego Bartek czytal zadanie jako
     # polecenie dla siebie i pytal "kto to robi?" (bieg 2026-09-25
     # 16:15, krok 10).
+    # v480fw: katalog to nie plik. Bieg 2026-10-25 23:30: MAIN dal
+    # write_engineer_code_to "~/MAIN_1", Bartek napisal piec plikow
+    # (~/MAIN_1/fetch.py, …), a program probowal zapisac je jako plik
+    # "MAIN_1" (Errno 21) i krok przepadl.
+    def _katalog(x):
+        try:
+            return str(x).rstrip().endswith(("/", "\\")) or _resolve_home_relative_path(x).is_dir()
+        except Exception:
+            return False
+    _kat = [x for x in pliki if _katalog(x)]
+    pliki = [x for x in pliki if not _katalog(x)]
+    _co = []
+    if pliki:
+        _co.append("Do " + ", ".join(Path(x).name for x in pliki)
+                   + " nikt z zespołu nie napisał jeszcze kodu")
+    if _kat:
+        _co.append("pliki z kodem mają leżeć w " + ", ".join(_sciezka_od_domu(str(_resolve_home_relative_path(x))) for x in _kat)
+                   + " — każdy plik w osobnym bloku, z pełną ścieżką tuż nad nim")
     odp = deepseek(
         "ENGINEER",
-        "MAIN zlecił programowi poniższe zadanie. Do "
-        + ", ".join(Path(x).name for x in pliki)
-        + " nikt z zespołu nie napisał jeszcze kodu — program położy "
-        "na dysk to, co napiszesz do tych plików, i je uruchomi.\n\n"
+        "MAIN zlecił programowi poniższe zadanie. " + "; ".join(_co)
+        + ". Program położy na dysk to, co napiszesz, i je uruchomi.\n\n"
         + task_text
     )
 
@@ -35401,6 +35632,16 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         _autor_pliku[p.name] = "ENGINEER"
         polozone.append(p.name + " (" + str(len(kod.encode("utf-8"))) + " B)")
 
+    # v480fw: reszta nowych plikow z odpowiedzi (pelna sciezka albo nazwa
+    # pod naglowkiem) — od razu, ze sprawdzeniem i proba uruchomienia.
+    try:
+        _dla_maina = _poloz_nowy_plik_autora("ENGINEER", odp, task_text)
+        for m in re.finditer(r"\[Program od razu zapisał ten plik \S+ w (\S+) \((\d+) B", _dla_maina):
+            _n = Path(m.group(1)).name
+            if not any(y.startswith(_n + " ") for y in polozone):
+                polozone.append(_n + " (" + m.group(2) + " B)")
+    except Exception as e:
+        log("PROGRAM", "Nie zapisałem nowych plików Bartka: " + str(e))
     nie = [Path(x).name for x in pliki if not any(y.startswith(Path(x).name + " ") for y in polozone)]
 
     _pending_team_warnings.append(
@@ -36044,6 +36285,12 @@ def _kod_na_jedna_linie(tekst):
         for f in _CODE_TARGET_FILENAME_RE.finditer(nad):
             nazwa = str(f.group(0)).strip().strip("`'\"").split("/")[-1]
 
+        # v480fw: nazwa, od ktorej zaczyna sie naglowek nad blokiem, ma
+        # pierwszenstwo przed nazwa wspomniana dalej w tej samej linii.
+        _nad_linie = [l for l in nad.splitlines() if l.strip()]
+        if _nad_linie and _nazwa_z_naglowka(_nad_linie[-1]):
+            nazwa = _nazwa_z_naglowka(_nad_linie[-1])
+
         opis = nazwa or jezyk or "kod"
 
         # v432: MAIN widzi, ze pliku o tej nazwie nie ma na dysku —
@@ -36056,6 +36303,7 @@ def _kod_na_jedna_linie(tekst):
                 _jest = (
                     nazwa in _gdzie_zapisalismy
                     or (HOME / nazwa).exists()
+                    or bool(_DRUZYNA and _pliki_w_folderze(_folder_druzyny(_DRUZYNA), nazwa))
                 )
             except Exception:
                 _jest = True
@@ -45164,6 +45412,66 @@ def _fakty_o_telefonie():
     return linia
 
 
+_fakty_o_srodowisku_cache = None
+
+
+def _fakty_o_srodowisku():
+    """
+    v480fw: Python, rdzenie, pamiec i zainstalowane biblioteki — raz,
+    przy starcie programu. Bieg 2026-10-25 23:33: Bartek trzy razy
+    probowal sprawdzic wersje Pythona i torcha, nie mogl, wiec napisal
+    szesc plikow na slepo ("zakladam, ze torch jest"). Uzytkownik: "nie
+    wiedzial gdzie i co jak".
+    """
+    global _fakty_o_srodowisku_cache
+    if _fakty_o_srodowisku_cache is not None:
+        return _fakty_o_srodowisku_cache
+    czesci = []
+    try:
+        czesci.append("Python " + sys.version.split()[0] + " (" + (shutil.which("python3") or sys.executable) + ")")
+    except Exception:
+        pass
+    try:
+        rdzenie = os.cpu_count() or 0
+        if rdzenie:
+            czesci.append(str(rdzenie) + " rdzeni"
+                          + (" — w rywalizacji drużyna ma " + str(_WATKI_DRUZYNY) + " wątki"
+                             if _DRUZYNA else ""))
+    except Exception:
+        pass
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for l in f:
+                k, _, v = l.partition(":")
+                mem[k] = int(v.split()[0]) if v.split() else 0
+        if mem.get("MemTotal"):
+            czesci.append("RAM " + str(round(mem["MemTotal"] / 1048576, 1)) + " GB, wolne "
+                          + str(round(mem.get("MemAvailable", 0) / 1048576, 1)) + " GB")
+    except Exception:
+        pass
+    pakiety = []
+    try:
+        import importlib.metadata as _md
+        widziane = set()
+        for d in _md.distributions():
+            n = str(d.metadata.get("Name") or "").strip()
+            if n and n.lower() not in widziane and n.lower() not in ("pip", "setuptools", "wheel"):
+                widziane.add(n.lower())
+                pakiety.append(n + " " + str(d.version))
+        pakiety.sort(key=str.lower)
+    except Exception:
+        pakiety = []
+    linia = ""
+    if czesci:
+        linia = "Środowisko (sprawdzone przy starcie programu): " + ", ".join(czesci) + "."
+    if pakiety:
+        linia += (" Biblioteki Pythona: " + ", ".join(pakiety[:80])
+                  + (" i " + str(len(pakiety) - 80) + " innych" if len(pakiety) > 80 else "") + ".")
+    _fakty_o_srodowisku_cache = linia.strip()
+    return _fakty_o_srodowisku_cache
+
+
 def _pierwsza_wiadomosc(rola=None):
     """
     Pierwsza wiadomosc w kazdej rozmowie: co to za maszyna. Tyle.
@@ -45213,9 +45521,11 @@ def _pierwsza_wiadomosc(rola=None):
     # v422: MAIN dostaje na poczatek, jak dziala program.
     # v436: fakty o telefonie pod linia o platformie.
     _tel = _fakty_o_telefonie()
+    _srod = _fakty_o_srodowisku()
     _platforma = (
         "Termux API, ADB DEBUGOWANIE, Android"
         + (("\n\n" + _tel) if _tel else "")
+        + (("\n\n" + _srod) if _srod else "")
     )
 
     if str(rola) == "MAIN":
@@ -45246,13 +45556,15 @@ def _pierwsza_wiadomosc(rola=None):
 # bez posrednictwa MAIN-a; MAIN dalej decyduje.
 # v480ft: przepisany w calosci — jak powstaja i zmieniaja sie pliki
 # (autor, poprawka fragmentu, proba uruchomienia) i PODGLĄD.
+# v480fw: przepisany w calosci — PODGLĄD tez do sprawdzania srodowiska (wersje, pip show), komendy laczone ; i |.
 _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
-    "dostajecie, co z tego wyszło. Do plików zaglądacie linią "
-    "PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' plik, "
-    "head, ls, wc) — program uruchamia ją w folderze drużyny i oddaje "
-    "wynik temu, kto pytał. Nowy plik z kodem piszecie w całości, "
+    "dostajecie, co z tego wyszło. Do plików i środowiska zaglądacie "
+    "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
+    "plik, head, ls, wc, python3 --version, pip show pakiet; kilka "
+    "komend łączycie przez ; albo |) — program uruchamia ją w folderze "
+    "drużyny i oddaje wynik temu, kto pytał. Nowy plik z kodem piszecie w całości, "
     "w osobnym bloku, ze ścieżką tuż nad nim; program od razu kładzie "
     "go na dysk, sprawdza i krótko uruchamia, a błąd wraca do autora. "
     "Plik należy do tego, kto go napisał: zmiany w nim to poprawka "
@@ -49727,6 +50039,12 @@ def run_agent(goal):
                     _jest_kat = False
                 if _jest_kat:
                     _zap, _byly = _poloz_pliki_w_katalogu(_kat, team)
+                    # v480fw: nikt jeszcze nie napisal kodu do tego katalogu
+                    # — najpierw Bartek, jego nowe pliki program kladzie sam.
+                    if not (_zap or _byly):
+                        _zap = list(_zlec_kod_bartkowi(task_text, [write_target], team, step) or [])
+                        _z2, _byly = _poloz_pliki_w_katalogu(_kat, team)
+                        _zap += [x for x in _z2 if x.split(" ")[0] not in " ".join(_zap)]
                     if _zap or _byly:
                         _fakt = (
                             "Do " + _sciezka_od_domu(str(_kat)) + "/ program położył pliki z wypowiedzi zespołu: "

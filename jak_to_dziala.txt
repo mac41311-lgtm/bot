@@ -2894,3 +2894,34 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (kod -15 po kill, -9) nie jest już opisywany jako „przerwał się
      z błędem”. Ostrzeżenie o Tracebacku w wyniku RUN-a jest w logu pod
      MAIN, nie GEMINI.
+
+182. Bartek wie, na czym pisze, i jego pliki nie przepadają (v480fw).
+     Bieg 2026-10-25 23:30, drużyna 1: Bartek trzy razy chciał
+     sprawdzić wersję Pythona i torcha, PODGLĄD mu odmawiał (python3 -c
+     i średnik były zabronione), więc napisał pliki na ślepo; MAIN
+     wskazał do zapisu katalog ~/MAIN_1 i krok skończył się błędem
+     „to katalog, a nie plik”. Potem nowa wersja eval_bpb.py przepadła
+     (nagłówek miał dwie nazwy plików, a plik o tej nazwie już leżał
+     w baselines/), a stara wypowiedź Bartka położyła drugi raz pliki
+     sprzed nowej wersji. Teraz:
+     - PODGLĄD sprawdza też środowisko: python3 --version, pip show,
+       python3 -c (bez zapisu i sieci), nproc, free, which, git log…;
+       komendy łączy się przez ; && || | (cudzysłowy liczą się
+       poprawnie), wyjście najwyżej do 2>&1 albo /dev/null; limit 60 s;
+     - role przy kodzie (MAIN, Bartek, Piotr, Ania) dostają na start
+       wersję Pythona, rdzenie, RAM i listę bibliotek;
+     - katalog jako miejsce zapisu: Bartek dostaje zlecenie, pliki
+       z jego odpowiedzi (ścieżka albo nazwa nad blokiem) lądują od
+       razu w tym katalogu;
+     - nagłówek „eval_bpb.py — zgodny z model.py” to eval_bpb.py
+       (liczy się nazwa na początku linii);
+     - cała nowa wersja pliku, który już leży (jeden taki w folderze
+       drużyny), zastępuje go od razu; poprzednia zostaje w .kopie/,
+       a gdy nowa się nie kompiluje nawet po 3 poprawkach autora,
+       wraca poprzednia; wycinek („# ... reszta bez zmian”) niczego
+       nie zastępuje;
+     - stara wypowiedź roli nie kładzie już plików, gdy ta rola
+       odpowiedziała później w tym samym kroku.
+     Prompty Bartka, Piotra, Ani, Kamila, Wojtka i opis rozmowy
+     zespołu przepisane w całości (PODGLĄD także do środowiska). Igor
+     bez zmian.
