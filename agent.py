@@ -20640,13 +20640,33 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
         s = m.group(1).rstrip(".")
         if s not in sciezki:
             sciezki.append(s)
-    for s in sciezki[:3]:
+    # v480fn: bieg 2026-10-25 18:46 — Bartek podpisal bloki samymi nazwami
+    # ("# core.py - ..."), a folder byl tylko w pytaniu MAIN-a ("~/MAIN_1/").
+    # Gola nazwa liczy sie, gdy blok sam mowi, ze jest tym plikiem; folder
+    # to folder druzyny albo jedyny folder ~/... z pytania.
+    _folder = None
+    if _DRUZYNA:
+        _folder = _folder_druzyny(_DRUZYNA)
+    else:
+        _foldery = set(re.findall(r"(?<![\w/.~-])(~/[\w.-]+(?:/[\w.-]+)*)/(?![\w.-])",
+                                  str(pytanie or "")))
+        if len(_foldery) == 1:
+            _folder = _resolve_home_relative_path(_foldery.pop())
+    _podpisane = set()
+    if _folder is not None:
+        for m in re.finditer(r"(?<![\w/.~-])([\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])", odp):
+            nazwa = m.group(1)
+            if (nazwa not in _podpisane and not any(x.endswith("/" + nazwa) for x in sciezki)
+                    and _blok_podpisany(odp, nazwa)):
+                _podpisane.add(nazwa)
+                sciezki.append(str(Path(_folder) / nazwa))
+    for s in sciezki[:6]:
         try:
             p = _resolve_home_relative_path(s)
             if p.exists() or _siega_do_rywala("termux_write_file", {"path": str(p)}):
                 continue
             kod = _blok_podpisany(odp, p.name)
-            if not kod and len(sciezki) == 1:
+            if not kod and len(sciezki) == 1 and p.name not in _podpisane:
                 kod = _kod_z_wypowiedzi(odp, p.name)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
                 continue

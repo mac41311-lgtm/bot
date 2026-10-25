@@ -2789,3 +2789,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dostała dyskwalifikację za zablokowane „ls ~/MAIN_1”.
      Przy resecie rozmów w rywalizacji program czyści też wyniki kroków
      starej drużyny 1 — Sędzia dostawał je jako kroki nowej drużyny.
+
+174. Nowy plik Bartka także wtedy, gdy podpisze go samą nazwą (v480fn).
+     Gdy blok kodu sam mówi, jakim jest plikiem („# core.py - …”), a
+     ścieżki nie ma, program kładzie go w folderze drużyny (~/MAIN_<n>);
+     poza rywalizacją — w jedynym folderze ~/… z pytania MAIN-a. Bieg
+     2026-10-25 18:46: Bartek oddał probe_env.py i core.py z samymi
+     nazwami i MAIN przepisał oba 1:1 (11 kB). Dalej tylko nowe pliki.
