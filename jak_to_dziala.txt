@@ -2777,3 +2777,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      kolei: reset rozmów, usunięcie folderów drużyn (razem z tym, co
      drużyny założyły poza nimi) i pliki w /root Debiana. Każde pytanie
      i odpowiedź trafia do logu jako [PYTANIE] … → TAK/NIE.
+
+173. Zablokowana komenda to nie powód do dyskwalifikacji (v480fm).
+     Program sam nie wykonuje komend sięgających do folderu albo procesów
+     rywala. Sędzia widzi teraz takie komendy z dopiskiem „PROGRAM
+     ZABLOKOWAŁ: nie wykonała się, drużyna nic z niej nie dostała”, a gdy
+     mimo to wpisze dyskwalifikację za taką komendę, program jej nie
+     wykonuje i czyści pole w ocenie (log: „Sędzia chciał
+     zdyskwalifikować… dyskwalifikacji nie ma”). Opis Sędziego mówi o tym
+     wprost (nowy czat Sędziego). Bieg 2026-10-25 18:40: drużyna 2
+     wylosowała dyskwalifikację za zablokowane „ls ~/MAIN_1”.
+     Przy resecie rozmów w rywalizacji program czyści też wyniki kroków
+     starej drużyny 1 — Sędzia dostawał je jako kroki nowej drużyny.

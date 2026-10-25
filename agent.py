@@ -30665,7 +30665,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         str((args or {}).get("command") or "")
                         if str(name).startswith("termux_run")
                         and isinstance(args, dict) else ""
-                    )
+                    ),
+                    # v480fm: patrz _gdzie_pracowala()
+                    "zablokowane": _zablokowane_przez_program(result),
                 })
 
                 # Patrz komentarz przy _decision_asks_for_contact_info()
@@ -33922,7 +33924,8 @@ def _wykonaj_akcje_maina(decision, step):
             "komenda": (
                 str(args.get("command") or "")
                 if name.startswith("termux_run") else ""
-            )
+            ),
+            "zablokowane": _zablokowane_przez_program(result),
         })
 
         wyniki.append({"tool": name, "args": args, "wynik": result})
@@ -50538,6 +50541,34 @@ def maybe_restart_team_sessions_for_new_goal():
     )
 
 
+def _wyczysc_dane_poprzedniej_sesji():
+    """Kolejka, wyniki krokow i stan poprzedniego biegu (bez pytania)."""
+    for f in list(QUEUE_DIR.glob("*.json")) + list(RESULTS_DIR.glob("*.json")):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+    for extra in (
+        TOOL_ATTEMPTS_FILE,
+        LAST_RESULT_FILE,
+        GEMINI_STATE_FILE,
+        PROGRESS_CHECKLIST_FILE,
+        APPROACHES_FILE,
+        CONTACTS_LOOKUP_ATTEMPTED_FILE,
+        USER_PROVIDED_VALUE_FILE,
+        USER_SAID_FILE,
+        # v480ad: seria bledow narzedzia z poprzedniego celu i to, co
+        # zatrzymal jego koniec, nie dotycza nowego celu.
+        TOOL_FAILURE_STREAK_FILE,
+        _PLIK_ZATRZYMANYCH
+    ):
+        try:
+            extra.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def maybe_clear_previous_session_data():
     """
     Wołane na SAMYM STARCIE programu (v113), przed init_team(),
@@ -50587,30 +50618,7 @@ def maybe_clear_previous_session_data():
         )
         return
 
-    for f in queue_files + result_files:
-        try:
-            f.unlink()
-        except Exception:
-            pass
-
-    for extra in (
-        TOOL_ATTEMPTS_FILE,
-        LAST_RESULT_FILE,
-        GEMINI_STATE_FILE,
-        PROGRESS_CHECKLIST_FILE,
-        APPROACHES_FILE,
-        CONTACTS_LOOKUP_ATTEMPTED_FILE,
-        USER_PROVIDED_VALUE_FILE,
-        USER_SAID_FILE,
-        # v480ad: seria bledow narzedzia z poprzedniego celu i to, co
-        # zatrzymal jego koniec, nie dotycza nowego celu.
-        TOOL_FAILURE_STREAK_FILE,
-        _PLIK_ZATRZYMANYCH
-    ):
-        try:
-            extra.unlink(missing_ok=True)
-        except Exception:
-            pass
+    _wyczysc_dane_poprzedniej_sesji()
 
     log(
         "MAIN",
@@ -52195,6 +52203,15 @@ def _nowy_start_rywalizacji(usun_foldery=True):
 
     _zatrzymaj_stara_druzyne_2("ze starego biegu")
 
+    # v480fm: reset rozmow w rywalizacji to nowe druzyny — wyniki krokow
+    # starej druzyny 1 nie sa ich krokami. Bieg 2026-10-25 18:39: Sedzia
+    # dostal jako "ostatnie kroki druzyny 1" kroki z poprzedniego biegu
+    # (od v480fl pytanie o dane poprzedniej sesji w rywalizacji nie pada).
+    try:
+        _wyczysc_dane_poprzedniej_sesji()
+    except Exception as e:
+        log("RYWALIZACJA", "Nie wyczyściłem wyników kroków starej drużyny 1: " + str(e))
+
     _poza = _pliki_druzyn_poza_folderami() if usun_foldery else []
     if not usun_foldery:
         # v480ff: lista tego, co druzyna 2 zalozyla w ~, przechodzi do
@@ -52415,9 +52432,42 @@ def _wloz_spadek(numer):
         log("RYWALIZACJA", "Spadek nie trafił do nowej drużyny: " + str(e))
 
 
+def _zablokowane_komendy(numer, n=12):
+    """v480fm: komendy druzyny z ostatnich krokow, ktorych program nie
+    wykonal, bo siegaly do rywala."""
+    katalog = RESULTS_DIR if str(numer) == _DRUZYNA else (
+        (_DRUZYNA2_DIR if str(numer) == "2" else _DRUZYNA1_DIR) / "results"
+    )
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return []
+    out = []
+    for f in pliki:
+        data = read_json(f, {})
+        for t in (data.get("tool_trace") or []) if isinstance(data, dict) else []:
+            if isinstance(t, dict) and t.get("zablokowane") and str(t.get("komenda") or "").strip():
+                out.append(str(t["komenda"]))
+    return out
+
+
+def _powod_to_zablokowana_komenda(numer, powod):
+    """Powod dyskwalifikacji wskazuje komende, ktorej program nie wykonal."""
+    p = re.sub(r"\s+", " ", str(powod or ""))
+    for k in _zablokowane_komendy(numer):
+        k = re.sub(r"\s+", " ", k).strip()
+        if k and (k in p or k[:60] in p):
+            return k
+    return ""
+
+
 def zdyskwalifikuj(numer, powod, ocena):
     """Druzyna 1 (proces Sedziego): zapis powodu i nowy start druzyny `numer`."""
     numer = str(numer)
+    # v480fm: za komende, ktora program zablokowal, nie ma dyskwalifikacji —
+    # nic sie nie wykonalo i druzyna nic od rywala nie dostala.
+    if _powod_to_zablokowana_komenda(numer, powod):
+        return
     d = ocena.get("druzyna_" + numer) or {}
     try:
         w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
@@ -53164,7 +53214,7 @@ Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd
 
 Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem kodu, plików z kodem albo wynikami ani pomysłów, ani zaglądać do folderu rywala. Ogólnodostępne biblioteki i programy — także te, które zainstalował rywal, na przykład wspólne środowisko z torch — są wspólne: korzystanie z nich nie jest braniem od rywala, a wynik na nich liczy się normalnie, także ten, za który wcześniej odjąłeś procent z tego powodu. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem. Kod i pomysły, które drużyna wzięła od rywala, zanim dostałeś tę zasadę, nie liczą się jej do procentu, ale nie jest powodem do dyskwalifikacji.
 
-Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą, a jeśli wcześniej odjąłeś za coś takiego, oddajesz to. Dotąd program sam pokazywał każdej drużynie sprawdzony wynik rywala razem z liczbą; teraz już tego nie robi, a drużyna dostaje o rywalu tylko jego procent i to, kto prowadzi. Znajomość liczby rywala z tamtego czasu nie jest więc naruszeniem i nie świadczy o zaglądaniu do jego folderu — jeśli odjąłeś za nią, oddajesz to. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
+Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Program sam pilnuje folderu rywala: komendy, która do niego sięga, nie wykonuje, a na liście komend widzisz ją z dopiskiem, że ją zablokował. Taka komenda nic drużynie nie dała, więc nie jest braniem od rywala ani czytaniem jego folderu; opisujesz ją w ocenie, a o dyskwalifikacji decyduje to, co drużyna od rywala naprawdę dostała. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą, a jeśli wcześniej odjąłeś za coś takiego, oddajesz to. Dotąd program sam pokazywał każdej drużynie sprawdzony wynik rywala razem z liczbą; teraz już tego nie robi, a drużyna dostaje o rywalu tylko jego procent i to, kto prowadzi. Znajomość liczby rywala z tamtego czasu nie jest więc naruszeniem i nie świadczy o zaglądaniu do jego folderu — jeśli odjąłeś za nią, oddajesz to. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
 Procent mówi, jaka część całego celu użytkownika jest już potwierdzona: 0% to nic, a 100% to cel osiągnięty w całości, tak jak go opisał użytkownik. Gdy cel ma etapy albo szczeble, każdy waży tyle, o ile przybliża do końca całego celu, więc potwierdzone wczesne etapy przy dalekim końcu to mały procent. Ilość pracy, próby i ustalenia — także uczciwe wyniki negatywne — nie dodają procentu, dopóki nie potwierdzają części celu. Każdą ocenę liczysz od stanu celu, a nie od swojej poprzedniej liczby; poprzednie oceny służą tylko temu, żeby ten sam stan oceniać tak samo. Gdy użytkownik zmieni cel, oceniasz od nowa względem nowego celu: wcześniejsze procenty dotyczyły innego celu i nie są punktem startu, a to, co drużyna zbudowała wcześniej, liczysz tylko na tyle, na ile potwierdza część nowego celu. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik. Dlatego "ocena" każdej drużyny mówi tylko o niej samej, bez wyników i liczb rywala.
 
@@ -53197,6 +53247,18 @@ def _podsumowania_z(katalog, n=8):
     return _human_task_summary_lines(wpisy)
 
 
+# v480fm: bieg 2026-10-25 18:40 — druzyna 2 sprawdzila "ls ~/MAIN_1", program
+# to zablokowal (nic sie nie wykonalo), a Sedzia widzial sama komende i
+# zdyskwalifikowal druzyne za "zajrzenie do folderu rywala". Zablokowana
+# komenda idzie do Sedziego z dopiskiem, ze program jej nie wykonal.
+_BLOKADY_RYWALIZACJI = ("FOLDER_RYWALA", "PROCES_RYWALA")
+
+
+def _zablokowane_przez_program(result):
+    return bool(isinstance(result, dict)
+                and str(result.get("error") or "") in _BLOKADY_RYWALIZACJI)
+
+
 def _gdzie_pracowala(katalog, n=8, ile=30):
     """v480av: komendy i cele narzedzi z ostatnich krokow druzyny — po nich
     Sedzia widzi, w jakich folderach druzyna naprawde pracowala."""
@@ -53217,7 +53279,9 @@ def _gdzie_pracowala(katalog, n=8, ile=30):
                 continue
             # v480ex: bez "sleep N;" — to czekanie, nie miejsce pracy
             co = re.sub(r"^\s*sleep\s+\d+\s*(?:;|&&)\s*", "", co)
-            linie.append("- " + str(t.get("tool") or "?") + ": " + short(co, 160))
+            linie.append("- " + str(t.get("tool") or "?") + ": " + short(co, 160)
+                         + (" — PROGRAM ZABLOKOWAŁ: nie wykonała się, drużyna nic "
+                            "z niej nie dostała" if t.get("zablokowane") else ""))
     # v480ex: ta sama komenda raz (ostatnie wystapienie) — bieg 2026-10-24
     # 21:29: to samo sprawdzenie logu 4 razy w jednej ocenie.
     linie = list(reversed(list(dict.fromkeys(reversed(linie)))))
@@ -53563,6 +53627,19 @@ def ocen_rywalizacje(kroki):
         ocena["skala"] = hashlib.sha1(
             ARBITER_PROMPT.encode("utf-8")
         ).hexdigest()[:12]
+        # v480fm: dyskwalifikacja za zablokowana komende nie obowiazuje —
+        # pole czyscimy, zanim ocena trafi do druzyn i do pliku.
+        for _n in ("1", "2"):
+            _d = ocena.get("druzyna_" + _n)
+            if isinstance(_d, dict) and _d.get("dyskwalifikacja"):
+                _zabl = _powod_to_zablokowana_komenda(_n, _d["dyskwalifikacja"])
+                if _zabl:
+                    log("RYWALIZACJA", "Sędzia chciał zdyskwalifikować drużynę " + _n
+                        + " za komendę, którą program zablokował (" + short(_zabl, 120)
+                        + ") — nie wykonała się, drużyna nic od rywala nie dostała, "
+                        "więc dyskwalifikacji nie ma.")
+                    _d["dyskwalifikacja"] = ""
+                    _d["spadek"] = []
         _DIR_RUND.mkdir(parents=True, exist_ok=True)
         for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):
             tmp = _plik.with_suffix(".tmp")
