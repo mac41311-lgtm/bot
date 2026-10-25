@@ -42577,7 +42577,8 @@ def main_decide(
         _co_sie_stalo_main = (
             "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
             "— jego ostatnie wyniki nie wracają; to, co się teraz "
-            "wykona, dostaniesz tutaj.\n" + _co_sie_stalo_main
+            "wykona, dostaniesz tutaj. Kontynuujcie pracę nad celem od "
+            "miejsca, w którym przerwaliście.\n" + _co_sie_stalo_main
         )
 
     prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
