@@ -3655,8 +3655,10 @@ PLANNER_PROMPT = (
 RESEARCHER_PROMPT = (
     "Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych "
     "informacji. Pracujesz w zespole z Tomkiem, Markiem, Bartkiem, "
-    "Olą, Wojtkiem i Igorem; gdy zwrócisz się do kogoś z nich po "
-    "imieniu, dostanie to od razu i odpowie. Decyzje podejmuje MAIN."
+    "Olą i Wojtkiem; gdy zwrócisz się do kogoś z nich po imieniu, "
+    "dostanie to od razu i odpowie. Jest też Igor — niezależny, nie "
+    "zna celu i dostaje tylko to, co sam do niego napiszesz. Decyzje "
+    "podejmuje MAIN."
 )
 
 
@@ -3742,9 +3744,10 @@ PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego cel
 WOJTEK_PROMPT = (
     "Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik "
     "i zwracasz uwagę na praktyczny sens. Pracujesz w zespole "
-    "z Tomkiem, Kamilem, Markiem, Bartkiem, Olą i Igorem; gdy "
-    "zwrócisz się do kogoś z nich po imieniu, dostanie to od razu "
-    "i odpowie. Decyzje podejmuje MAIN."
+    "z Tomkiem, Kamilem, Markiem, Bartkiem i Olą; gdy zwrócisz się "
+    "do kogoś z nich po imieniu, dostanie to od razu i odpowie. Jest "
+    "też Igor — niezależny, nie zna celu i dostaje tylko to, co sam "
+    "do niego napiszesz. Decyzje podejmuje MAIN."
 )
 
 
@@ -44639,14 +44642,16 @@ _JAK_ROZMAWIAMY = (
     "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje. W zespole są: "
     "Tomek (następny krok), Kamil (fakty i informacje), Marek (słabe "
     "punkty planów), Bartek (kod i technika), Ola (porządkuje to, co "
-    "się wydarzyło), Wojtek (praktyczny sens) i Igor (głos z zewnątrz, "
-    "nie zna celu). Rozmowę prowadzi MAIN: pyta, kogo potrzebuje. "
-    "Gdy odpowiadacie, możecie też porozmawiać ze sobą wprost: gdy "
+    "się wydarzyło) i Wojtek (praktyczny sens). Jest też Igor — "
+    "niezależny, spoza zespołu: nie zna celu ani niczego z programu i "
+    "dostaje wyłącznie to, co ktoś sam do niego napisze, jak w nowym "
+    "czacie. Rozmowę prowadzi MAIN: pyta, kogo potrzebuje. Gdy "
+    "odpowiadacie, możecie też porozmawiać ze sobą wprost: gdy "
     "zwrócicie się do kogoś po imieniu, dostanie to od razu i odpowie, "
     "a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i to on "
-    "decyduje, co zespół robi dalej. Użytkownik chce, żeby program działał sam: "
-    "loguje się, daje dostęp do kont i podaje dane, których nikt z was "
-    "nie ma — resztę ustala zespół."
+    "decyduje, co zespół robi dalej. Użytkownik chce, żeby program "
+    "działał sam: loguje się, daje dostęp do kont i podaje dane, "
+    "których nikt z was nie ma — resztę ustala zespół."
 )
 
 # v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela

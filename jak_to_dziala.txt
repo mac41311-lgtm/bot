@@ -2836,3 +2836,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Komenda, która sama tworzy plik tymczasowy przekierowaniem i go
      usuwa (echo hi > /tmp/t_$$.txt; rm -f /tmp/t_$$.txt), nie pyta już
      w terminalu o usunięcie (bieg 22:25).
+
+178. Igor w opisie zespołu (v480fs). Opis rozmowy dla zespołu oraz
+     prompty Kamila i Wojtka przepisane w całości: Igor jest tam
+     niezależny, spoza zespołu — nie zna celu ani niczego z programu
+     i dostaje wyłącznie to, co ktoś sam do niego napisze. Igor dalej
+     nie ma żadnego promptu.
