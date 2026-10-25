@@ -2874,3 +2874,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        składni bez __pycache__.
      Prompty Bartka, Piotra, Ani, opis rozmowy zespołu i akapit „Kod.”
      MAIN-a przepisane w całości. Igor bez zmian.
+
+180. Zespół budzi tylko MAIN (v480fu). Bieg 2026-10-25 23:05, drużyna
+     1: MAIN napisał w uzasadnieniu RUN-a „trzeba mieć czym mierzyć
+     postęp”, a program pytał Elę, choć nikt jej nie wołał — słowo
+     „postęp” było słowem-kluczem. Tak samo „ryzyko” budziło Marka,
+     „pomysł” Wojtka, „podsumuj” Olę. Słowa-klucze usunięte: ktoś
+     z zespołu odzywa się, gdy MAIN zapyta go przez ASK albo zwróci się
+     do niego po imieniu. W rywalizacji stan ocenia Sędzia, a Ela
+     odpowiada, gdy MAIN ją zapyta.

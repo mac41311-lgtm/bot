@@ -38476,13 +38476,12 @@ def _o_kogo_prosi_main(tekst):
         if rola and rola != "MAIN" and rola not in _ROLE_BEZ_CELU:
             kto.add(rola)
 
-    # 2. po tym, czego potrzeba
-    maly = t.lower()
-
-    for rola, slowa in _POTRZEBA_ROLI:
-        if any(w in maly for w in slowa):
-            kto.add(rola)
-
+    # v480ft: bez slow-kluczy (_POTRZEBA_ROLI). Bieg 2026-10-25 23:05,
+    # druzyna 1: MAIN napisal w uzasadnieniu RUN-a "trzeba miec czym
+    # mierzyc postęp", a program pytal Ele, choc nikt jej nie wolal —
+    # "postęp" bylo slowem-kluczem, nie prosba. Tak samo "ryzyko" budzilo
+    # Marka, a "pomysl" Wojtka. MAIN decyduje, do kogo pisze (uzytkownik
+    # 2026-10-25): ASK albo imie w zdaniu.
     return kto
 
 # ============================================================
