@@ -2796,3 +2796,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      poza rywalizacją — w jedynym folderze ~/… z pytania MAIN-a. Bieg
      2026-10-25 18:46: Bartek oddał probe_env.py i core.py z samymi
      nazwami i MAIN przepisał oba 1:1 (11 kB). Dalej tylko nowe pliki.
+
+175. Kilka plików Bartka naraz trafia każdy na swoje miejsce (v480fo).
+     Gdy Bartek oddaje kilka plików pod nagłówkami („### src/model.py”),
+     każdy plik dostaje blok spod swojego nagłówka, a ścieżka względna
+     po „cd ~/MAIN_1” liczy się od ~/MAIN_1. Raport „położone” podaje
+     prawdziwe rozmiary. Błąd składni w tak położonym pliku idzie od
+     razu do Bartka, jak przy każdym pliku zespołu. Bieg 2026-10-25
+     19:42: do wszystkich pięciu plików poszedł pierwszy blok, i to do
+     ~/src zamiast ~/MAIN_1/src. Naprawiony też błąd, przez który
+     zadanie dla wykonawcy (TASK) wywalało się od razu
+     („_to_samo_czekanie() takes 1 positional argument”).
+     Mniej szumu w logu: linia „robota na dłużej” nie pojawia się przy
+     komendach z własnym krótkim limitem (curl --max-time 15), a nazwa
+     aplikacji na wierzchu telefonu tylko, gdy się zmieni.

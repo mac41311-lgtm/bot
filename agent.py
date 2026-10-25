@@ -14917,13 +14917,22 @@ def execute_shell(command, timeout=None):
         effective_timeout = int(timeout)
     elif _to_dluga_robota(command):
         effective_timeout = DLUGA_ROBOTA_TIMEOUT
-        log(
-            "TERMUX",
-            "To jest robota na dluzej (pobieranie/kompilacja) — "
-            "czekam do skutku, maks. "
-            + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Co "
-            + str(PODGLAD_CO_SEKUND) + " s bede pisal, na czym stoi."
-        )
+        # v480fo: bez tej linii, gdy komenda sama trzyma krotki limit
+        # (curl --max-time 15, timeout 90). Bieg 2026-10-25 19:09: 22 razy
+        # "robota na dluzej" przy sondach curl, ktore koncza sie po 15 s.
+        _wlasne = [
+            int(x) for x in re.findall(
+                r"(?:--max-time|\btimeout)\s+(\d+)", str(command)
+            )
+        ]
+        if not (_wlasne and max(_wlasne) <= COMMAND_TIMEOUT):
+            log(
+                "TERMUX",
+                "To jest robota na dluzej (pobieranie/kompilacja) — "
+                "czekam do skutku, maks. "
+                + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Co "
+                + str(PODGLAD_CO_SEKUND) + " s bede pisal, na czym stoi."
+            )
     else:
         effective_timeout = COMMAND_TIMEOUT
 
@@ -32519,7 +32528,22 @@ def _nazwa_nad_blokiem(text, start, sciezka):
     if koniec_poprzedniego >= 0:
         przed = przed[koniec_poprzedniego + 3:]
 
-    return nazwa in przed[-400:]
+    przed = przed[-400:]
+
+    # v480fo: nad blokiem liczy sie NAJBLIZSZA nazwa pliku tego rodzaju.
+    # Bieg 2026-10-25 19:42: wstep Bartka wymienial wszystkie piec plikow
+    # (prepare.py, tokenizer.py, model.py...), a pierwszy blok poszedl do
+    # kazdego z nich, choc tuz nad nim stalo "### src/prepare.py".
+    sufiks = Path(nazwa).suffix.lower()
+    if sufiks:
+        nazwy = [
+            n for n in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", przed)
+            if Path(n).suffix.lower() == sufiks
+        ]
+        if nazwy:
+            return nazwy[-1] == nazwa
+
+    return nazwa in przed
 
 
 # v427: linia tuz nad blokiem zapowiada kawalek poprawki.
@@ -33334,8 +33358,11 @@ def _pliki_czekania(cmd):
     return set(_PLIK_W_KOMENDZIE_RE.findall(_bez_sleep(cmd)))
 
 
-def _to_samo_czekanie(cmd):
-    """v480ek: zywe czekanie w tle, ktore czyta te same pliki co `cmd`.
+def _to_samo_czekanie_w_tle(cmd):
+    """v480fo: nazwa zmieniona — ta sama nazwa co _to_samo_czekanie(nazwa,
+    argumenty) wyzej nadpisywala tamta i wykonanie TASK padalo
+    (bieg 2026-10-25 19:42: "takes 1 positional argument but 2 were given").
+    v480ek: zywe czekanie w tle, ktore czyta te same pliki co `cmd`.
 
     Bieg 2026-10-24 17:36-17:39: MAIN konczyl prawie kazdy RUN nowym
     `sleep 300; cat <te same logi>`, choc takie czekanie juz lecialo. W tle
@@ -33354,7 +33381,7 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
     """v480ed/eh: czekanie idzie w tlo od razu. Gdy w tle juz cos leci,
     czeka na to (najdluzej `sekundy`) i potem wykonuje reszte bez sleep."""
     cmd = str(args.get("command") or "")
-    tamto = _to_samo_czekanie(cmd)
+    tamto = _to_samo_czekanie_w_tle(cmd)
     if tamto:
         return {
             "ok": True,
@@ -34381,6 +34408,18 @@ def _pliki_kodu_bez_autora(task_text, team):
         ):
             continue
 
+        # v480fo: "src/prepare.py" po "cd ~/MAIN_1" to ~/MAIN_1/src/prepare.py,
+        # nie ~/src/prepare.py (jak v480aw przy uruchamianiu). Bieg
+        # 2026-10-25 19:42: piec plikow Bartka poszlo do ~/src/, a w
+        # ~/MAIN_1 nie bylo zadnego.
+        if not sciezka.startswith(("~", "/", "$")):
+            _cd = re.findall(r"\bcd\s+([~/][^\s;&|]*)", _tekst[:m.start()])
+            if _cd:
+                sciezka = _cd[-1].rstrip("/") + "/" + sciezka
+
+        if sciezka in out:
+            continue
+
         try:
             p = _resolve_home_relative_path(sciezka)
         except Exception:
@@ -34487,7 +34526,41 @@ def _kod_z_wypowiedzi(text, sciezka):
     if kod and _podpisany_innym(kod, sciezka):
         return None
 
+    # v480fo: blok wybrany po jezyku stoi pod naglowkiem INNEGO pliku
+    # ("### `src/prepare.py`") — to nie ten plik. Bieg 2026-10-25 19:09:
+    # Bartek dal piec plikow .py pod naglowkami, a do wszystkich pieciu
+    # szedl pierwszy blok (prepare.py). Bierzemy blok spod naglowka
+    # tego pliku, a gdy go nie ma — nic.
+    if kod and _nad_blokiem_inny_plik(text, kod, sciezka):
+        return _blok_dokladnie_dla(text, sciezka)
+
     return kod
+
+
+def _nad_blokiem_inny_plik(text, kod, sciezka):
+    """v480fo: najblizsza nazwa pliku tego rodzaju nad blokiem z `kod`
+    to inny plik niz `sciezka`."""
+
+    nazwa = str(sciezka or "").split("/")[-1].strip()
+    sufiks = Path(nazwa).suffix.lower()
+
+    if not nazwa or not sufiks:
+        return False
+
+    tekst = str(text or "")
+
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", tekst, re.DOTALL):
+        if _wyrownaj_blok(m.group(2)).strip() != str(kod).strip():
+            continue
+        przed = tekst[:m.start()]
+        przed = przed[przed.rfind("```") + 3:] if "```" in przed else przed
+        nazwy = [
+            n for n in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", przed[-400:])
+            if Path(n).suffix.lower() == sufiks
+        ]
+        return bool(nazwy) and nazwy[-1] != nazwa
+
+    return False
 
 
 def _podpisany_innym(kod, sciezka):
@@ -34662,6 +34735,17 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         except Exception as e:
             log("MAIN", "Nie położyłem " + p.name + ": " + str(e))
             continue
+
+        # v480fo: blad skladni idzie do Bartka, jak przy kazdym pliku
+        # zespolu (v480fi) — wczesniej ten zapis omijal sprawdzenie.
+        try:
+            w = {"ok": True, "path": str(p), "written_by": "python"}
+            _sprawdz_skladnie_kodu_autora(w)
+            if w.get("compile_error"):
+                _autor_poprawia_skladnie(str(p), kod, w)
+        except Exception as e:
+            log("PROGRAM", "Poprawka składni przez autora nie poszła: " + str(e))
+        kod = p.read_text(encoding="utf-8", errors="replace")
 
         _zapisz_autoryzacje_kodu(p, "ENGINEER")
         _zapamietaj_gdzie(p)
@@ -48359,14 +48443,22 @@ def run_agent(goal):
                     "(treści ekranu nie zapisuję — zespół nie używał "
                     "narzędzi android_)"
                 )
-        log(
-            "STATE",
-            "Android: "
-            + short(
-                _stan_androida,
-                900
+        # v480fo: bez szumu — sama nazwa aplikacji na wierzchu idzie do
+        # logu tylko, gdy sie zmienila. Bieg 2026-10-25 19:09: 66 razy ta
+        # sama linia "Na wierzchu jest teraz: ..." przez caly bieg.
+        if (
+            _dzialalo_na(last_result, "android_")
+            or _stan_androida != globals().get("_ostatni_stan_androida_w_logu")
+        ):
+            globals()["_ostatni_stan_androida_w_logu"] = _stan_androida
+            log(
+                "STATE",
+                "Android: "
+                + short(
+                    _stan_androida,
+                    900
+                )
             )
-        )
 
         # ------------------------------------------------------
         # POSTĘP CELU — co 5 kroków, żeby nie dokładać kolejnego
@@ -53798,7 +53890,9 @@ def _burza_blok():
         write_json(_BURZA_PLIK_STANU, st)
         if len(pytani) >= 3:
             log("MAIN", "Burza mózgów pominięta — MAIN w ostatnich 2 h sam "
-                "zapytał " + str(len(pytani)) + " osoby z zespołu.")
+                "zapytał " + str(len(pytani))
+                + (" osoby" if len(pytani) % 10 in (2, 3, 4) and len(pytani) % 100 not in (12, 13, 14) else " osób")
+                + " z zespołu.")
             return ""
         plik = (
             "~/MAIN_" + _DRUZYNA + "/BURZA_MOZGOW.md" if _DRUZYNA
