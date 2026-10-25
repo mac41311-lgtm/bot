@@ -51431,6 +51431,25 @@ def _wybierz_tryb():
         print("Rywalizacja nie ruszyła (" + str(e) + ") — ruszam zwykły program.")
 
 
+def _stare_pliki_tekst(my):
+    """v480ff: nowy start druzyn bez usuwania plikow (uzytkownik 2026-10-25)."""
+    try:
+        f = _RYWALIZACJA_DIR / ("stare_pliki_" + str(my) + ".txt")
+        if not f.is_file():
+            return ""
+        kiedy = f.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return (
+        "W ~/MAIN_" + str(my) + " leżą pliki poprzednich drużyn " + str(my)
+        + ", które pracowały nad tym samym celem przed Wami — użytkownik "
+        + ("(" + kiedy + ") " if kiedy else "")
+        + "zaczął drużyny od nowa, ale pliki zostawił. Możecie z nich "
+        "korzystać i na nich budować; to praca Waszej drużyny, nie rywala. "
+        "Co w nich jest i co z tego działa, sprawdzicie sami.\n\n"
+    )
+
+
 def _rywalizacja_tekst():
     """Opis rywalizacji dla zespolu tej druzyny; "" w zwyklym programie.
 
@@ -51463,6 +51482,7 @@ def _rywalizacja_tekst():
         "~/MAIN_" + oni + " jest dla Was zamknięty — program nie wykona "
         "polecenia, które do niego sięga. Wszystko, co powstało przed "
         "rywalizacją, leży tam, gdzie leżało.\n\n"
+        + _stare_pliki_tekst(my) +
         "Obie drużyny pracują na jednym telefonie i dzielą jego "
         "procesor: każda ma połowę, czyli " + str(_WATKI_DRUZYNY) + " z "
         + str(os.cpu_count() or 2) + " wątków. Program ustawia to sam "
@@ -51662,9 +51682,52 @@ def _zatrzymaj_stara_druzyne_2(skad=""):
     log("RYWALIZACJA", "Zatrzymałem drużynę 2" + (" " + skad if skad else "") + " (pid " + str(stary) + ").")
 
 
+# v480ff: rzeczy w ~, ktore program albo biblioteki potrzebuja, choc ich
+# nie zakladal (~/test/pow_helper.js — opendeep; 2026-10-16 jego
+# usuniecie zepsulo DeepSeek). Nigdy na liscie do usuniecia.
+_NIGDY_NIE_USUWAJ_Z_HOME = {
+    "test", "agent", "bot", "storage", "update_agent.sh", "api_token.txt",
+    "api_token_2.txt", "agent_druzyna1", "agent_druzyna2",
+}
+
+
+def _pliki_druzyn_poza_folderami():
+    """v480ff: to, co drużyny założyły w ~ poza ~/MAIN_<n> — z list
+    śledzenia obu drużyn (project_dirs.json; tylko pozycje, których nie
+    było w ~ przed biegiem, bez chronionych nazw — patrz
+    _track_project_path)."""
+    pomin = set()
+    for p in (HOME, _folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR,
+              _DRUZYNA1_DIR, _DRUZYNA2_DIR, _AGENT_DIR_WSPOLNY,
+              HOME / "archiwum_rywalizacji"):
+        try:
+            pomin.add(p.resolve())
+        except Exception:
+            pass
+    wynik = []
+    for katalog in (_DRUZYNA1_DIR, _DRUZYNA2_DIR):
+        lista = read_json(katalog / PROJECT_DIRS_FILE.name, [])
+        for e in (lista if isinstance(lista, list) else []):
+            try:
+                p = Path(str(e)).expanduser().resolve()
+                rel = p.relative_to(HOME.resolve())
+            except Exception:
+                continue
+            if len(rel.parts) != 1 or p in pomin or not p.exists():
+                continue
+            if (rel.parts[0] in _PROJECT_TRACKING_EXCLUDED_NAMES
+                    or rel.parts[0] in _NIGDY_NIE_USUWAJ_Z_HOME
+                    or rel.parts[0].startswith(".")):
+                continue
+            if p not in wynik:
+                wynik.append(p)
+    return wynik
+
+
 def _zapytaj_o_foldery_druzyn():
     """v480fe: osobne pytanie o usuniecie folderow druzyn (domyslnie NIE)."""
     opis = []
+    _poza = _pliki_druzyn_poza_folderami()
     for p in (_folder_druzyny(1), _folder_druzyny(2), HOME / "archiwum_rywalizacji"):
         try:
             if p.is_dir():
@@ -51672,6 +51735,12 @@ def _zapytaj_o_foldery_druzyn():
                 opis.append("~/" + p.name + " (" + str(n) + " plików i folderów)")
         except Exception:
             opis.append("~/" + p.name)
+    if _poza:
+        opis.append(
+            "a poza nimi to, co drużyny założyły w ~: "
+            + ", ".join("~/" + p.name for p in _poza[:12])
+            + (" i " + str(len(_poza) - 12) + " więcej" if len(_poza) > 12 else "")
+        )
     if not opis:
         return False
     return _confirm_destructive_action(
@@ -51696,6 +51765,21 @@ def _nowy_start_rywalizacji(usun_foldery=True):
 
     _zatrzymaj_stara_druzyne_2("ze starego biegu")
 
+    _poza = _pliki_druzyn_poza_folderami() if usun_foldery else []
+    if not usun_foldery:
+        # v480ff: lista tego, co druzyna 2 zalozyla w ~, przechodzi do
+        # listy druzyny 1, bo ~/agent_druzyna2 zaraz znika — inaczej
+        # pozniejsze "usun wszystko" by o tych plikach nie wiedzialo.
+        try:
+            _l1 = read_json(PROJECT_DIRS_FILE, [])
+            _l2 = read_json(_DRUZYNA2_DIR / PROJECT_DIRS_FILE.name, [])
+            _l1 = _l1 if isinstance(_l1, list) else []
+            for e in (_l2 if isinstance(_l2, list) else []):
+                if e not in _l1:
+                    _l1.append(e)
+            write_json(PROJECT_DIRS_FILE, _l1)
+        except Exception:
+            pass
     usuniete = []
     # v480fe: bez zgody na foldery — tylko rozmowy druzyny 2 i oceny
     # Sedziego (nowe druzyny, nowe oceny); ~/MAIN_1, ~/MAIN_2 zostaja.
@@ -51703,7 +51787,7 @@ def _nowy_start_rywalizacji(usun_foldery=True):
         (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR,
          HOME / "archiwum_rywalizacji")
         if usun_foldery else (_RYWALIZACJA_DIR, _DRUZYNA2_DIR)
-    )
+    ) + tuple(_poza)
     for p in _co_usunac:
         try:
             if not p.exists():
@@ -51723,6 +51807,22 @@ def _nowy_start_rywalizacji(usun_foldery=True):
                " — nowe drużyny i Sędzia zaczynają od nowa, a ~/MAIN_1 i "
                "~/MAIN_2 z dotychczasową pracą zostają."),
         )
+    if usun_foldery:
+        try:
+            write_json(PROJECT_DIRS_FILE, [])
+        except Exception:
+            pass
+    else:
+        # v480ff: nowe druzyny dowiaduja sie o plikach poprzednich
+        # (_rywalizacja_tekst); flaga znika razem z ~/RYWALIZACJA.
+        for n in (1, 2):
+            try:
+                if _folder_druzyny(n).is_dir() and any(_folder_druzyny(n).iterdir()):
+                    _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+                    (_RYWALIZACJA_DIR / ("stare_pliki_" + str(n) + ".txt")).write_text(
+                        datetime.now().strftime("%Y-%m-%d %H:%M"), encoding="utf-8")
+            except Exception:
+                pass
 
 
 # v480bq: DYSKWALIFIKACJA. Uzytkownik (2026-10-16): gdy cel przewiduje

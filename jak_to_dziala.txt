@@ -2683,3 +2683,21 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - na NIE: nowe drużyny (rozmowy obu drużyn od zera) i nowe oceny
        Sędziego, a ~/MAIN_1 i ~/MAIN_2 z dotychczasową pracą zostają;
      - na TAK: jak dotąd, wszystko od zera.
+165. Nowy start drużyn: pliki zostają albo znikają wszystkie (v480ff,
+     użytkownik 2026-10-25).
+     - Zostawiasz pliki (NIE na pytanie o foldery): każda nowa rola
+       dostaje w opisie rywalizacji akapit „W ~/MAIN_n leżą pliki
+       poprzednich drużyn n, które pracowały nad tym samym celem przed
+       Wami — użytkownik zaczął drużyny od nowa, ale pliki zostawił.
+       Możecie z nich korzystać i na nich budować; to praca Waszej
+       drużyny, nie rywala.” (tylko gdy folder nie jest pusty; znak
+       leży w ~/RYWALIZACJA/stare_pliki_n.txt i znika przy pełnym
+       usunięciu).
+     - Usuwasz (TAK): poza ~/MAIN_1, ~/MAIN_2, ocenami i archiwum
+       znika też to, co drużyny założyły w ~ poza swoimi folderami
+       (z list śledzenia obu drużyn, tylko rzeczy, których nie było
+       przed biegiem). Pytanie wypisuje je z nazwy. Nigdy nie trafiają
+       tam ~/test (pow_helper.js dla DeepSeek), ~/agent, ~/bot,
+       ~/storage, tokeny ani update_agent.sh.
+     - Przy zostawieniu plików lista drużyny 2 przechodzi do listy
+       drużyny 1, żeby późniejsze „usuń wszystko” o nich wiedziało.
