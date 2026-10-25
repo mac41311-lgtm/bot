@@ -2714,3 +2714,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      znajdzie, wypisuje i usuwa pliki od środka Debiana
      (proot-distro login debian). Zasady jak w punkcie 166: osobne
      pytanie z listą, domyślnie NIE, biblioteki zostają.
+168. Wynik zapisu pliku .py mówi, że składnia jest sprawdzona (v480fh).
+     Program od dawna sprawdza py_compile po termux_write_file i
+     termux_patch_file, ale o udanym sprawdzeniu nic nie mówił. W biegu
+     2026-10-25 (09:28, 09:32) MAIN sam puszczał osobne
+     „python3 -m py_compile …”. Teraz udany zapis albo patch pliku .py ma
+     w wyniku "skladnia": "OK (program sprawdził py_compile)". Przy
+     błędzie wynik mówi, co zrobić: „Zapisany, ale się nie kompiluje —
+     błąd składni w miejscu z compile_error. Popraw ten fragment
+     (termux_patch_file) i program sprawdzi go znowu”, a przy patchu, że
+     plik wrócił do wersji sprzed zmiany i patch można wysłać jeszcze
+     raz. Błąd zatrzymuje RUN, więc MAIN od razu w następnym kroku widzi,
+     co poprawić. Bez zmian w promptach.

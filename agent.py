@@ -20814,9 +20814,15 @@ def _termux_write_file(path, content, append=False):
                         1500
                     )
                     result["warning"] = (
-                        "Zapisany; py_compile zgłasza błąd "
-                        "(compile_error)."
+                        "Zapisany, ale się nie kompiluje — błąd składni "
+                        "w miejscu z compile_error. Popraw ten fragment "
+                        "(termux_patch_file) i program sprawdzi go znowu."
                     )
+                else:
+                    # v480fh: MAIN nie wiedzial, ze skladnia jest juz
+                    # sprawdzona, i sam puszczal py_compile (bieg
+                    # 2026-10-25 09:28 i 09:32, osobne akcje).
+                    result["skladnia"] = "OK (program sprawdził py_compile)"
 
             except Exception:
                 # py_compile samo w sobie niedostępne — nie
@@ -25515,6 +25521,7 @@ def termux_patch_file(path, search, replace):
             "backup": str(backup_path)
         }
 
+    _skladnia_ok = False
     if target.suffix == ".py":
 
         try:
@@ -25533,14 +25540,17 @@ def termux_patch_file(path, search, replace):
                     "ok": False,
                     "rolled_back": True,
                     "error": (
-                        "py_compile nie przeszedł po patchu — "
-                        "przywrócono poprzednią wersję pliku."
+                        "Po tej zmianie plik się nie kompiluje (błąd "
+                        "składni w compile_error), więc przywróciłem "
+                        "poprzednią wersję — plik jest taki jak przed "
+                        "patchem. Popraw fragment i wyślij patch jeszcze raz."
                     ),
                     "compile_error": short(
                         compile_check.stderr, 1500
                     ),
                     "backup": str(backup_path)
                 }
+            _skladnia_ok = True
 
         except Exception:
             # py_compile samo w sobie niedostępne — nie blokuj
@@ -25550,13 +25560,16 @@ def termux_patch_file(path, search, replace):
     _track_project_path(target)
     _zapamietaj_gdzie(target)
 
-    return {
+    _wynik_patcha = {
         "ok": True,
         "path": str(target),
         "backup": str(backup_path),
         "bytes_before": len(source.encode("utf-8")),
         "bytes_after": len(new_source.encode("utf-8"))
     }
+    if _skladnia_ok:
+        _wynik_patcha["skladnia"] = "OK (program sprawdził py_compile)"
+    return _wynik_patcha
 
 
 def ask_deepseek_hint(question):
