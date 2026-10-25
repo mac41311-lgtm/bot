@@ -14655,7 +14655,16 @@ def _usuwa_wlasny_plik_tymczasowy(command):
             return False
         wczesniej = tekst[:start]
         for arg in cele:
-            if any(z in arg for z in "*?$`") or arg not in wczesniej:
+            if any(z in arg for z in "*?`") or arg not in wczesniej:
+                return False
+            # v480fr: ze zmienna ($$, $PREFIX) tylko plik, ktory ta sama
+            # komenda wczesniej utworzyla przekierowaniem (> plik).
+            # Bieg 2026-10-25 22:25: "echo hi > /tmp/t_$$.txt ... rm -f
+            # /tmp/t_$$.txt" stanelo na pytaniu w terminalu.
+            if "$" in arg and (
+                arg.rstrip("/") != arg
+                or not re.search(r">>?\s*" + re.escape(arg) + r"(?![\w./$-])", wczesniej)
+            ):
                 return False
         usuwajace += 1
     return usuwajace > 0
@@ -20651,8 +20660,16 @@ _SCIEZKA_KODU_RE = re.compile(
 def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
     """Zwraca odpowiedz dla MAIN-a (kod zastapiony zdaniem) albo odp."""
     odp = str(odp or "")
-    if rola != "ENGINEER" or "```" not in odp:
+    # v480fp-fr: uzytkownik (2026-10-25): MAIN nie dostaje calego kodu od
+    # nikogo z zespolu — "jest napisane, ze kod jest w pliku", mozna go
+    # uruchomic, a blad skladni wraca do autora (do 3 rund, jak u Bartka).
+    if (rola not in _ROLE_DO_ROZMOWY and rola != "PROGRESS_ESTIMATOR") or "```" not in odp:
         return odp
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    # Autor musi byc w notatniku, zeby zapis wzial jego kod 1:1 i zeby
+    # blad skladni wrocil do niego (Ela odpowiada poza narada).
+    if not any(w.get("rola") == rola and w.get("tekst") == odp for w in _kod_autorow[-6:]):
+        _zapamietaj_kod_autora(rola, odp)
     sciezki = []
     for m in _SCIEZKA_KODU_RE.finditer(odp + "\n" + str(pytanie or "")):
         s = m.group(1).rstrip(".")
@@ -20678,12 +20695,24 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                     and _blok_podpisany(odp, nazwa)):
                 _podpisane.add(nazwa)
                 sciezki.append(str(Path(_folder) / nazwa))
+        # v480fr: sciezka wzgledna w naglowku tuz nad blokiem
+        # ("## Skrypt: `scripts/d0_prepare_data.py`") — w folderze
+        # druzyny / z pytania. Bieg 2026-10-25 22:06: skrypt Kamila
+        # (7,7 tys. znakow) szedl do MAIN-a w calosci.
+        for m in re.finditer(r"(?<![\w/.~$-])((?:[\w-]+/)+[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])", odp):
+            wzgl = m.group(1)
+            cel = str(Path(_folder) / wzgl)
+            if cel in sciezki or any(x.endswith("/" + wzgl) for x in sciezki):
+                continue
+            if _blok_dokladnie_dla(odp, wzgl):
+                _podpisane.add(Path(wzgl).name)
+                sciezki.append(cel)
     for s in sciezki[:6]:
         try:
             p = _resolve_home_relative_path(s)
             if p.exists() or _siega_do_rywala("termux_write_file", {"path": str(p)}):
                 continue
-            kod = _blok_podpisany(odp, p.name)
+            kod = _blok_podpisany(odp, p.name) or _blok_dokladnie_dla(odp, p.name)
             if not kod and len(sciezki) == 1 and p.name not in _podpisane:
                 kod = _kod_z_wypowiedzi(odp, p.name)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
@@ -20695,11 +20724,12 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             if w.get("compile_error"):
                 stan = "ale się nie kompiluje: " + short(str(w["compile_error"]), 400)
             else:
-                stan = "składnia OK" + (" po poprawce Bartka" if w.get("poprawil_autor") else "")
-            zdanie = ("[Program od razu zapisał ten plik Bartka w " + sciezka + " ("
-                      + str(p.stat().st_size) + " B, " + stan + "). Nie trzeba go "
-                      "przepisywać; całość pokaże termux_read_file.]")
-            log("PROGRAM", "Nowy plik od Bartka zapisany od razu: " + sciezka + " (" + stan[:60] + ").")
+                stan = "składnia OK" + (" po poprawce " + imie_d if w.get("poprawil_autor") else "")
+            zdanie = ("[Program od razu zapisał ten plik " + imie_d + " w " + sciezka + " ("
+                      + str(p.stat().st_size) + " B, " + stan + "). Kod jest w pliku — "
+                      "można go uruchomić; całość pokaże termux_read_file.]")
+            _autor_pliku[p.name] = rola
+            log("PROGRAM", "Nowy plik od " + imie_d + " zapisany od razu: " + sciezka + " (" + stan[:60] + ").")
             na_dysku = p.read_text(encoding="utf-8", errors="replace").strip()
             blok = None
             if na_dysku == kod.strip():
@@ -20712,8 +20742,12 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             else:
                 odp = odp.rstrip() + "\n\n" + zdanie
         except Exception as e:
-            log("PROGRAM", "Nie zapisałem od razu pliku Bartka " + s + ": " + str(e))
-    return odp
+            log("PROGRAM", "Nie zapisałem od razu pliku " + imie_d + " " + s + ": " + str(e))
+    # v480fr: reszta kodu (fragmenty, poprawki, pliki, ktore juz leza)
+    # idzie do MAIN-a jedna linia, jak glosy z poczatku kroku; pelna
+    # wypowiedz autora zostaje w jego rozmowie i w notatniku autorow,
+    # skad program kladzie kod 1:1, gdy MAIN zleci zapis.
+    return _kod_na_jedna_linie(odp)
 
 
 def _termux_write_file(path, content, append=False):
@@ -44694,21 +44728,24 @@ _JAK_TO_DZIALA = (
     "cel), więc w zadaniu wystarczy to, co nowe. RUN działa także "
     "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
     "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
-    "Kod. Kod pisze ten, kto ma to zadanie: Ty sam w RUN albo Bartek, "
-    "gdy mu je dasz. Pliki z kodem kładzie na dysk program, dokładnie z "
-    "tego, co ktoś napisał. Kod, który sam piszesz w RUN "
+    "Kod. Kod pisze ten, kto ma to zadanie: Ty sam w RUN albo ktoś z "
+    "zespołu, gdy mu je dasz. Pliki z kodem kładzie na dysk program, "
+    "dokładnie z tego, co ktoś napisał. Kod, który sam piszesz w RUN "
     "(termux_write_file albo heredoc w termux_run), zapisuje się jako "
-    "Twój. Kod Bartka trafia na dysk w całości, gdy wkleisz go bez zmian "
-    "do termux_write_file w RUN albo podasz w TASK write_engineer_code_to "
-    "— wtedy leży pod tą ścieżką, zanim Gemini zacznie. Po każdym zapisie "
-    "albo zmianie pliku .py program od razu sprawdza, czy się kompiluje: "
-    "wynik mówi \"skladnia\": \"OK\" albo podaje błąd z numerem linii. "
-    "Błąd wraca do tego, kto pisał, bo on najlepiej zna swój kod: "
-    "poprawia ten fragment, program sprawdza znowu, i tak aż się "
-    "skompiluje; potem krótkie uruchomienie pokazuje, czy działa. Kod, "
-    "który już jest na dysku, widzisz jako ścieżkę, np. "
-    "[~/projekt/build.sh — 1234 znaków, na dysku], i można go po prostu "
-    "uruchomić.\n\n"
+    "Twój. Kodu od zespołu nie dostajesz w całości, tylko jedną linią: "
+    "nowy plik program zapisuje od razu i mówi, gdzie leży, np. [Program "
+    "od razu zapisał ten plik Kamila w ~/projekt/prep.py (…)] — kod jest "
+    "w pliku i można go uruchomić. Resztę (poprawkę istniejącego pliku "
+    "albo kod, który ktoś podał bez nowej ścieżki) widzisz jako "
+    "[nazwa — liczba znaków]; program położy ją z wypowiedzi autora, 1:1, "
+    "gdy w TASK podasz write_engineer_code_to z tą ścieżką. Po każdym "
+    "zapisie albo zmianie pliku .py program od razu sprawdza, czy się "
+    "kompiluje: wynik mówi \"skladnia\": \"OK\" albo podaje błąd z "
+    "numerem linii. Błąd wraca do tego, kto pisał, bo on najlepiej zna "
+    "swój kod: poprawia ten fragment, program sprawdza znowu, do trzech "
+    "razy; potem krótkie uruchomienie pokazuje, czy działa. Kod, który "
+    "już jest na dysku, widzisz jako ścieżkę, np. [~/projekt/build.sh — "
+    "1234 znaków, na dysku], i można go po prostu uruchomić.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "

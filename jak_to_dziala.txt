@@ -2822,3 +2822,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      rozmowy dla zespołu przepisany w całości (kto jest w zespole i że
      mogą mówić do siebie wprost); Kamil i Wojtek mają to w promptach,
      przepisanych w całości. Igor bez zmian.
+
+177. MAIN nie dostaje całego kodu od zespołu (v480fr). Nowy plik od
+     kogokolwiek z zespołu (nie tylko od Bartka) program zapisuje od
+     razu, także gdy ścieżka stoi w nagłówku nad blokiem
+     („## Skrypt: `scripts/prep.py`” — w folderze drużyny), a MAIN
+     dostaje jedną linię: gdzie leży i że można go uruchomić. Błąd
+     składni wraca do autora, do 3 rund. Reszta kodu w odpowiedziach
+     (poprawki, pliki, które już są) idzie do MAIN-a jako
+     [nazwa — liczba znaków]; całość pokaże termux_read_file, a program
+     położy kod 1:1, gdy MAIN poda write_engineer_code_to. Bieg
+     2026-10-25 22:06: MAIN dostał 7,7 tys. znaków skryptu Kamila.
+     Komenda, która sama tworzy plik tymczasowy przekierowaniem i go
+     usuwa (echo hi > /tmp/t_$$.txt; rm -f /tmp/t_$$.txt), nie pyta już
+     w terminalu o usunięcie (bieg 22:25).
