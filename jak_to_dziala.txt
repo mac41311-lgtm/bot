@@ -2656,3 +2656,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        5/10]” itp. (biblioteka ramek brała je za znaczniki kolorów; do
        DeepSeek zawsze szły całe).
      Zespół dalej sam decyduje, co puszcza w tle i kiedy zagląda do logów.
+163. Długi proces w tle bez czekania (v480fd). Gdy MAIN puścił np.
+     trening w tle i nie ustawił czekania, a potem nic nowego nie robił,
+     program budził go tylko przy końcu procesu albo po 30 min, bo nowych
+     wyników szukał wyłącznie w plikach czytanych przez czekania. Teraz
+     patrzy też na log samego procesu (log programu i plik z „> plik”).
+     Gdy przybędzie wyników, MAIN dostaje kartę „POSTĘP W TLE” z czasem
+     czekania i pod nią stan procesu: od kiedy działa i ostatnią linię
+     logu. Przerwy między takimi kartami rosną jak przy czekaniach (3, 6,
+     12, 24 min), a koniec procesu przychodzi od razu. Gdy przez 30 min
+     log stoi, MAIN dostaje „minęło 30 min bez zmian, a proces w tle
+     dalej działa” i stan procesu, także gdy ostatnia linia jest ta sama.
+     Po takim czekaniu stan procesu jest zawsze pełny (nie skracany o to,
+     co MAIN czytał przed czekaniem).

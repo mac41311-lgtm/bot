@@ -33115,6 +33115,26 @@ def _bezczynnie_czekaj():
     pliki = set()
     for r in czekania:
         pliki |= _pliki_czekania(r["komenda"])
+    # v480fd: dlugi proces w tle bez czekania — budzimy tez przyrostem w
+    # jego wlasnym logu (wczesniej tylko pliki czytane przez czekania, wiec
+    # sam trening budzil MAIN-a dopiero po 30 min).
+    for (_rodz, _id), _kom in procesy.items():
+        try:
+            if _rodz == "p":
+                _lp, _ = _log_procesu_w_tle(_id)
+                if _lp:
+                    pliki.add(_lp)
+                try:
+                    _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
+                except Exception:
+                    _cwd = None
+                _pz = _plik_z_przekierowania(_kom, _cwd)
+            else:
+                _pz = _plik_z_przekierowania(_kom)
+            if _pz:
+                pliki.add(_pz)
+        except Exception:
+            pass
     t0 = time.time()
     koniec = t0 + 1800
     if zywe:
@@ -33156,8 +33176,21 @@ def _bezczynnie_czekaj():
         "koniec_tla": "coś z tego, co leciało w tle, się skończyło",
         "koniec_procesu": "proces w tle się skończył",
         "przybylo": "proces dalej działa, ale w jego logach przybyły nowe wyniki",
-        "czas": "minął czas czekań z tła",
+        "czas": ("minął czas czekań z tła" if czekania else
+                 "minęło " + czekal + " bez zmian, a proces w tle dalej działa "
+                 "(jego stan jest niżej)"),
     }[powod]
+    # v480fd: to, co MAIN czytal przed czekaniem, jest juz nieswieze —
+    # raport z tla ma pokazac pelny stan, nie skracac go.
+    _ostatni_run_maina["komendy"] = []
+    _ostatni_run_maina["wyjscie"] = ""
+    if powod in ("czas", "przybylo") and procesy:
+        # v480fd: przy dlugim procesie MAIN zawsze dostaje jego stan z czasem
+        # trwania, takze gdy ostatnia linia logu sie nie zmienila.
+        try:
+            _tlo_ostatnio_widziane.clear()
+        except Exception:
+            pass
     log("MAIN", "Czekanie bez pracy skończone po " + czekal + ": " + zdanie + ".")
     tekst = (
         "Poprzedni RUN nie wniósł nic nowego, więc program czekał " + czekal
@@ -33181,6 +33214,15 @@ def _bezczynnie_czekaj():
             "czekania przyjdzie od razu. Czekania nie trzeba puszczać od nowa "
             "ani na nie czekać: w tym czasie możecie pracować nad czymś innym "
             "(analiza, następna próba, rozmowa z zespołem)."
+        )
+    elif powod in ("przybylo", "czas") and procesy:
+        # v480fd: sam proces, bez czekania — stan idzie w raporcie z tla
+        tekst += (
+            "\nStan procesu (czas trwania i końcówka logu) jest niżej. "
+            "Następna taka wiadomość najwcześniej za "
+            + str(max(1, _odstep_przyrostu[0] // 60)) + " min, gdy w logu "
+            "przybędzie wyników (najpóźniej po 30 min) — koniec procesu "
+            "przyjdzie od razu. W tym czasie możecie pracować nad czymś innym."
         )
     # v480fc: przy koncu czekania/procesu karta wyniku (W TLE SKOŃCZONE /
     # "Proces w tle ... skończył") i tak przychodzi w tej samej wiadomosci
