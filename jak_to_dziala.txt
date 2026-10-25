@@ -2757,3 +2757,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      więc test sprzątający po sobie plik tymczasowy nie zatrzymuje RUN-a;
      a gdy ADB nie odpowiada, stan telefonu na początku kroku nie czeka
      10 s na uiautomator2.
+
+171. Sędzia i usuwanie we własnym folderze drużyny (v480fk).
+     Drużyna może usuwać pliki w środku swojego ~/MAIN_<n> bez pytania w
+     terminalu, także gdy folder został z poprzedniej sesji (restart na
+     tym samym celu). Cały folder naraz dalej wymaga pytania. Sędzia
+     uruchamia "sprawdz" z rm, gdy usuwa ono tylko coś w środku folderu
+     tej drużyny; inaczej mówi, co jest nie tak i jak to poprawić.
+     Gdy w trakcie sprawdzania drużyna zapisze nowy wynik.json, werdykt
+     starej wersji nie idzie do MAIN-a, tylko Sędzia od razu sprawdza
+     nową; niedoręczony starszy werdykt wyniku zastępuje nowszy. Dotąd
+     MAIN dostał "usuwa pliki" o wersji, którą już poprawił, i szukał
+     błędu, którego nie było.

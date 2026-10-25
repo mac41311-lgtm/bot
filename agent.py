@@ -14438,7 +14438,7 @@ def _czlony_komendy(command):
     return czlony
 
 
-def _usuwa_tylko_wlasne_katalogi(command):
+def _usuwa_tylko_wlasne_katalogi(command, folder=None):
     """
     v465: czy ta komenda usuwa WYLACZNIE rzeczy wewnatrz katalogow, ktore
     program sam zalozyl w tym albo poprzednich biegach (PROJECT_DIRS_FILE —
@@ -14447,15 +14447,33 @@ def _usuwa_tylko_wlasne_katalogi(command):
     rm -rf ogloszenia` — ~/olx zalozyl MAIN 6 minut wczesniej).
     False przy najmniejszej watpliwosci — wtedy zostaje pytanie.
     """
+    # v480fj: folder= — tylko wnetrze tego folderu, a komenda startuje w
+    # nim (Sedzia uruchamia "sprawdz" druzyny w jej ~/MAIN_<n>).
     try:
-        wlasne = [
+        wlasne = [] if folder is not None else [
             Path(str(p)).expanduser().resolve()
             for p in (read_json(PROJECT_DIRS_FILE, []) or [])
             if str(p).strip()
         ]
     except Exception:
         wlasne = []
-    if not wlasne:
+    # v480fj: w rywalizacji ~/MAIN_<n> to warsztat tej druzyny, nawet gdy
+    # istnial przed biegiem (restart na tym samym celu zostawia pliki, a
+    # v437 nie liczy takiego katalogu jako zalozonego przez program). Bieg
+    # 2026-10-25 10:33: "cd ~/MAIN_1 && rm -f wynik.json" stanelo na
+    # pytaniu w terminalu.
+    warsztat = None
+    if folder is not None:
+        try:
+            warsztat = Path(str(folder)).expanduser().resolve()
+        except Exception:
+            return False
+    elif _DRUZYNA:
+        try:
+            warsztat = _folder_druzyny(_DRUZYNA).resolve()
+        except Exception:
+            warsztat = None
+    if not wlasne and warsztat is None:
         return False
 
     def _wlasna(sciezka):
@@ -14463,9 +14481,12 @@ def _usuwa_tylko_wlasne_katalogi(command):
             cel = sciezka.resolve()
         except Exception:
             return False
+        # caly ~/MAIN_<n> naraz — dalej z pytaniem; to, co w srodku — bez
+        if warsztat is not None and warsztat in cel.parents:
+            return True
         return any(w == cel or w in cel.parents for w in wlasne)
 
-    cwd = Path.home()
+    cwd = warsztat if folder is not None else Path.home()
     usuwajace = 0
     for czlon in _czlony_komendy(command):
         try:
@@ -52654,8 +52675,17 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="brak komendy \"sprawdz\"")
         return werdykt
 
-    if _looks_like_delete_command(komenda):
-        werdykt.update(werdykt="nie wyszło", szczegol="komenda usuwa pliki — sędzia jej nie uruchamia")
+    # v480fj: rm wewnatrz wlasnego ~/MAIN_<n> (np. czyszczenie katalogu
+    # wynikow przed przebiegiem) to porzadek we wlasnym folderze. Bieg
+    # 2026-10-25 10:31: "rm -rf wyniki/krok1_sedzia && python ..." bylo
+    # odrzucone zdaniem bez wskazowki i MAIN zgadywal, co jest nie tak.
+    if (_looks_like_delete_command(komenda)
+            and not _usuwa_tylko_wlasne_katalogi(komenda, folder=folder)):
+        werdykt.update(werdykt="nie wyszło", szczegol=(
+            "komenda usuwa coś poza Waszym folderem ~/MAIN_" + str(numer)
+            + " albo cały folder naraz — sędzia jej nie uruchamia; zostawcie "
+            "w \"sprawdz\" usuwanie tylko w środku swojego folderu albo żadne "
+            "(program może po prostu nadpisać pliki wyników)"))
         return werdykt
 
     # v480ez: sprawdzenie przezywa przeladowanie programu. Bieg 2026-10-24
@@ -52803,6 +52833,17 @@ def _sedzia_petla():
                     continue
                 ostatni_klucz = k
                 w = _sedzia_ocen(_DRUZYNA)
+                # v480fj: bieg 2026-10-25 10:32 — w trakcie sprawdzania
+                # druzyna zapisala nowy wynik.json, a MAIN dostal werdykt
+                # starej wersji ("usuwa pliki") jako odpowiedz na nowa i
+                # szukal bledu, ktorego juz nie bylo. Werdykt starej wersji
+                # nie idzie do MAIN-a; nowa jest sprawdzana od razu.
+                _k_po = _klucz()
+                if _k_po and _k_po != k:
+                    log("RYWALIZACJA", "Sędzia, drużyna " + _DRUZYNA + ": w trakcie "
+                        "sprawdzania wynik.json się zmienił — sprawdzam nową wersję.")
+                    widziany_wynik = 0.0
+                    continue
                 # sprawdzenie moglo samo nadpisac wynik.json — to nie nowe zgloszenie
                 widziany_wynik = _mtime(moj_plik)
                 ostatni_klucz = _klucz() or k
@@ -52813,6 +52854,11 @@ def _sedzia_petla():
                 tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
                 os.replace(tmp, moja_tablica)
                 with _sedzia_lock:
+                    # starszy, jeszcze niedoręczony werdykt wyniku jest nieaktualny
+                    _sedzia_wiadomosci[:] = [
+                        l for l in _sedzia_wiadomosci
+                        if not str(l).startswith("Wasz wynik")
+                    ]
                     _sedzia_wiadomosci.append(_werdykt_zdaniem(w, "Wasz wynik"))
                 log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA))
 
