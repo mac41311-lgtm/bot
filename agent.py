@@ -8484,15 +8484,17 @@ _PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | r
 # v480gd: uzytkownik (2026-10-26, krok z 16:37): "MAIN ma wywolac, trzeba
 # mu to napisac" — linia mowi teraz wprost, ze wywoluje sie ich decyzja
 # ASK z imieniem, i pokazuje jej ksztalt.
+# v480ge: "Ten czas jest dla zespolu" MAIN czytal tak, jakby zespol sam
+# sie dogadywal (uzytkownik 2026-10-26) — zdanie mowi teraz, kto zaczyna.
 _CZAS_DLA_ZESPOLU = (
-    "Ten czas jest dla zespołu: Bartek może sprawdzić albo dopisać kod, "
-    "Marek obejrzeć wyniki i znaleźć słabe punkty, Tomek ułożyć następny "
-    "krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, Ola "
-    "podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
-    "okiem. Wywołujesz ich teraz, w tej odpowiedzi, decyzją ASK z imieniem, "
-    "np. {\"type\": \"ASK\", \"ask_role\": \"Bartek\", \"ask_question\": "
-    "\"...\"} — odpowiedź wraca do Ciebie od razu, a wynik z tła i tak "
-    "przyjdzie sam."
+    "Zespół odzywa się tylko wtedy, gdy Ty go wywołasz — sami między sobą "
+    "nie pracują. Czekanie na wynik to dobry moment, żeby to zrobić: wyślij "
+    "teraz ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
+    "\"Bartek\", \"ask_question\": \"...\"}. Bartek może sprawdzić albo "
+    "dopisać kod, Marek obejrzeć wyniki i znaleźć słabe punkty, Tomek ułożyć "
+    "następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
+    "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
+    "okiem. Odpowiedź wraca do Ciebie od razu, a wynik z tła i tak przyjdzie sam."
 )
 
 

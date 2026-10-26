@@ -3010,3 +3010,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        i pokazuje jej kształt: {"type": "ASK", "ask_role": "Bartek",
        "ask_question": "..."}; odpowiedź wraca od razu, wynik z tła
        przychodzi sam.
+
+190. Kto zaczyna rozmowę z zespołem (v480ge)
+     - "Ten czas jest dla zespołu" MAIN rozumiał tak, jakby zespół sam się
+       dogadywał; linia przy czekaniu zaczyna się teraz od: "Zespół odzywa
+       się tylko wtedy, gdy Ty go wywołasz — sami między sobą nie pracują.
+       Czekanie na wynik to dobry moment, żeby to zrobić: wyślij teraz ASK
+       z imieniem …", dalej kto co może i że wynik z tła przyjdzie sam.
