@@ -8486,6 +8486,8 @@ _PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | r
 # ASK z imieniem, i pokazuje jej ksztalt.
 # v480ge: "Ten czas jest dla zespolu" MAIN czytal tak, jakby zespol sam
 # sie dogadywal (uzytkownik 2026-10-26) — zdanie mowi teraz, kto zaczyna.
+# v480gf: bez "wynik z tla i tak przyjdzie sam" na koncu — kazde miejsce,
+# ktore dokleja te linie, mowi to juz przed nia (echo, uzytkownik 17:03).
 _CZAS_DLA_ZESPOLU = (
     "Zespół odzywa się tylko wtedy, gdy Ty go wywołasz — sami między sobą "
     "nie pracują. Czekanie na wynik to dobry moment, żeby to zrobić: wyślij "
@@ -8494,7 +8496,7 @@ _CZAS_DLA_ZESPOLU = (
     "dopisać kod, Marek obejrzeć wyniki i znaleźć słabe punkty, Tomek ułożyć "
     "następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
     "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
-    "okiem. Odpowiedź wraca do Ciebie od razu, a wynik z tła i tak przyjdzie sam."
+    "okiem. Odpowiedź wraca do Ciebie od razu."
 )
 
 
@@ -35338,6 +35340,15 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
             + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
             + "\n" + _wynik_dla_maina(w["_dla_maina"], w.get("args"), na_akcje)
         )
+        # v480gf: komenda czekania stala drugi raz — w ramce "W TLE" na
+        # gorze i tu z JSON-em "opis jest na gorze" (uzytkownik 2026-10-26:
+        # "dwa razy to samo"). Tu zostaje jedna linia.
+        if isinstance(_wynik, dict) and _wynik.get("status") == "CZEKA_W_TLE":
+            tekst = (str(i + 1) + ". " + str(w.get("tool"))
+                     + " — poszło w tle jako czekanie (ramka W TLE na górze).")
+        elif isinstance(_wynik, dict) and _wynik.get("status") == "JUZ_CZEKA_W_TLE":
+            tekst = (str(i + 1) + ". " + str(w.get("tool")) + " — "
+                     + str(_wynik.get("message") or "to samo czekanie już leci w tle."))
         ile += len(tekst)
         if ile > razem:
             czesci.append("(dalsze wyniki pominięte — za długie)")
@@ -44015,10 +44026,17 @@ def main_decide(
 
     # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
     # poprawki Ani) — raz, do MAIN-a.
+    # v480gf: stan procesow w tle idzie obok ramki "W TLE", nie na dole
+    # pod wynikami (uzytkownik 2026-10-26: "nie poukładane").
+    _stan_tla = ""
     if _pending_team_warnings:
-        _facts += "\n" + "\n".join(
-            str(w) for w in _pending_team_warnings[:8]
-        )
+        _tlo_w = [str(w) for w in _pending_team_warnings[:8]
+                  if str(w).startswith(("Proces w tle ", "Komenda puszczona w tło "))]
+        _inne_w = [str(w) for w in _pending_team_warnings[:8] if str(w) not in _tlo_w]
+        if _inne_w:
+            _facts += "\n" + "\n".join(_inne_w)
+        if _tlo_w:
+            _stan_tla = "\n".join(_tlo_w) + "\n\n"
         del _pending_team_warnings[:]
 
     if isinstance(last_result, dict):
@@ -44349,8 +44367,17 @@ def main_decide(
 
     # v480ed: patrz _czekanie_blok().
     _czek = _czekanie_blok()
-    if _czek:
-        _co_sie_stalo_main = _czek + _co_sie_stalo_main
+    # v480gf: kolejnosc — co leci w tle i stan procesow, potem co sie
+    # stalo, a linia o zespole raz, na koncu.
+    _jest_czas_dla_zespolu = _CZAS_DLA_ZESPOLU in (_czek + _co_sie_stalo_main)
+    if _czek or _stan_tla:
+        _co_sie_stalo_main = _czek + _stan_tla + _co_sie_stalo_main
+    if _jest_czas_dla_zespolu:
+        _co_sie_stalo_main = (
+            _co_sie_stalo_main.replace(" " + _CZAS_DLA_ZESPOLU, "")
+            .replace(_CZAS_DLA_ZESPOLU, "").rstrip("\n")
+            + "\n\n" + _CZAS_DLA_ZESPOLU + "\n"
+        )
 
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
     # czekal na wyniki RUN sprzed restartu.

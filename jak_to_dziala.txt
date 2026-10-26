@@ -3017,3 +3017,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        się tylko wtedy, gdy Ty go wywołasz — sami między sobą nie pracują.
        Czekanie na wynik to dobry moment, żeby to zrobić: wyślij teraz ASK
        z imieniem …", dalej kto co może i że wynik z tła przyjdzie sam.
+
+191. Wiadomość do MAIN-a przy czekaniu — każda rzecz raz (v480gf)
+     - komenda czekania stała dwa razy: w ramce "W TLE" na górze i w
+       wynikach RUN razem z JSON-em; w wynikach RUN jest teraz jedna
+       linia "poszło w tle jako czekanie (ramka W TLE na górze)";
+     - kolejność: ramka W TLE, stan procesów w tle (czas trwania,
+       ostatnia linia logu), potem "Co się właśnie stało", a na końcu
+       raz linia o zespole (wcześniej była w środku ramki i kończyła się
+       drugim "wynik przyjdzie sam").
