@@ -8494,6 +8494,10 @@ _PODGLAD_RE = re.compile(
 
 def _komenda_z_podgladu(k):
     k = str(k or "").strip()
+    # v480gk: ogon znacznikow wywolania narzedzi DeepSeeka ("cat data.py
+    # </parameter>") — bieg 2026-10-26 19:27: bash dostawal go jako czesc
+    # komendy, a Bartek kilka rund nie wiedzial, czemu cat nie dziala.
+    k = re.sub(r"(?:\s*</[A-Za-z_][\w:.-]*\s*>)+\s*$", "", k).strip()
     for _ in range(3):
         k2 = re.sub(r"^(?:\*\*|__|`+)\s*", "", k)
         k2 = re.sub(r"\s*(?:\*\*|__|`+)$", "", k2).strip()
@@ -8717,15 +8721,20 @@ def _uruchom_podglad(komenda):
     # v480fz: ogon znacznikow narzedzi DeepSeeka ("</｜｜DSML｜｜ parameter>")
     # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
     komenda = re.split(r"</?\s*[｜|]{1,2}\s*DSML|<[｜|]", str(komenda or ""))[0]
-    komenda = komenda.strip()
+    komenda = _komenda_z_podgladu(komenda)
     rywal = ""
     if _siega_do_rywala("termux_run", {"command": komenda}):
         rywal = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
-    elif _DRUZYNA:
+    odm = rywal or _podglad_odmowa(komenda)
+    # v480gk: scisle sprawdzenie sciezek podgladu (bez ~, .., sciezek
+    # absolutnych w python3 -c) jest dla samego odczytu, ktory idzie
+    # wprost do basha. Uruchomienie idzie przez termux_run z jego
+    # wlasna blokada folderu rywala — bieg 2026-10-26 19:49: zapis
+    # wynik.json do WLASNEGO folderu po pelnej sciezce byl odrzucony.
+    if not odm and _DRUZYNA:
         _r = _podglad_siega_do_rywala(komenda)
         if _r and "nie umiem rozebrać" not in _r:
-            rywal = _r
-    odm = rywal or _podglad_odmowa(komenda)
+            rywal = odm = _r
     cwd = str(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else str(Path.home())
     if odm and not rywal:
         # v480gi: uzytkownik (2026-10-26): zespol sam uruchamia kod,
@@ -21244,12 +21253,16 @@ def _pliki_pod_naglowkami(text):
         if not nazwa:
             continue
         kod = _wyrownaj_blok(m.group(2))
-        if (nazwa in widziane or len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
+        if (len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
                 or _obcy_jezyk_dla(nazwa, m.group(1), kod)
                 or re.search(r"^(?:<<<<<<<|=======\s*$|>>>>>>>|@@ |--- a/|\+\+\+ b/)", kod, re.M)):
             continue
         proza = re.sub(r"```.*?```", " ", przed, flags=re.DOTALL)
         foldery = re.findall(r"(?<![\w/.~-])(~/[\w.-]+(?:/[\w.-]+)*)/(?![\w.-])", proza)
+        # v480gk: ten sam plik drugi raz w jednej wypowiedzi — liczy sie
+        # ostatnia wersja (szkic wyzej, plik koncowy nizej).
+        if nazwa in widziane:
+            out = [o for o in out if o[0] != nazwa]
         widziane.add(nazwa)
         out.append((nazwa, kod, foldery[-1] if foldery else None))
     return out
@@ -21782,8 +21795,9 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             p = _resolve_home_relative_path(s)
             if _siega_do_rywala("termux_write_file", {"path": str(p)}):
                 continue
-            kod = (_z_naglowka.get(s) or _blok_podpisany(odp, p.name)
-                   or _blok_dokladnie_dla(odp, p.name))
+            # v480gk: ostatni blok przypisany temu plikowi (nazwa nad nim
+            # albo podpis w nim) — wersja koncowa, nie szkic wyzej.
+            kod = _z_naglowka.get(s) or _blok_tego_pliku(odp, p.name)
             if p.exists():
                 # v480fw: autor dal nowa pelna wersje pliku, ktory juz lezy
                 # — bieg 2026-10-25 23:39: "eval_bpb.py — nowa wersja
@@ -35775,7 +35789,12 @@ def _blok_dokladnie_dla(text, sciezka):
     ktory jest ktory.
     """
 
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL):
+    # v480gk: od konca — ostatni blok tego pliku to wersja koncowa autora.
+    # Bieg 2026-10-26 19:24: Bartek pisal na glos szkice ("# ~/MAIN_1/
+    # check.py" z "from baselines import main, load_text, ...") i dopiero
+    # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
+    # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
+    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))):
 
         kod = _wyrownaj_blok(m.group(2))
 
@@ -35807,7 +35826,12 @@ def _blok_podpisany(text, sciezka):
     server.py nad soba (bieg 2026-09-21 21:01).
     """
 
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL):
+    # v480gk: od konca — ostatni blok tego pliku to wersja koncowa autora.
+    # Bieg 2026-10-26 19:24: Bartek pisal na glos szkice ("# ~/MAIN_1/
+    # check.py" z "from baselines import main, load_text, ...") i dopiero
+    # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
+    # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
+    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))):
 
         kod = _wyrownaj_blok(m.group(2))
 
@@ -35828,6 +35852,18 @@ def _blok_podpisany(text, sciezka):
     return None
 
 
+def _blok_tego_pliku(text, sciezka):
+    """v480gk: blok podpisany tym plikiem albo z jego nazwa tuz nad nim —
+    z dwoch kandydatow ten, ktory stoi w wypowiedzi pozniej (wersja
+    koncowa autora, nie szkic wyzej)."""
+    a = _blok_podpisany(text, sciezka)
+    b = _blok_dokladnie_dla(text, sciezka)
+    if a and b and a != b:
+        t = str(text or "")
+        return a if t.rfind(a.strip()[:200]) > t.rfind(b.strip()[:200]) else b
+    return a or b
+
+
 def _kod_z_wypowiedzi(text, sciezka):
     """
     v430: kod tego pliku z jednej wypowiedzi. Blok, ktory sam mowi, ze
@@ -35837,7 +35873,7 @@ def _kod_z_wypowiedzi(text, sciezka):
     od "# probe.sh — read-only diagnoza" (1271 B).
     """
 
-    kod = _blok_podpisany(text, sciezka)
+    kod = _blok_tego_pliku(text, sciezka)
 
     if kod:
         return kod

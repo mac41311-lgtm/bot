@@ -3076,3 +3076,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        raportu z tła);
      - mówią o tym _JAK_ROZMAWIAMY i akapit MAIN-a "Kod." (przepisane w
        całości); w rywalizacji ogólnodostępne biblioteki są wspólne.
+
+196. Wersja końcowa pliku, ogon "</parameter>", własna pełna ścieżka (v480gk)
+     - gdy w jednej wypowiedzi jest kilka bloków tego samego pliku
+       (szkic wyżej, plik końcowy niżej), na dysk idzie OSTATNI — bieg
+       26.10 19:24: zapisał się szkic check.py z "from baselines import
+       main, load_text, ...", który się nie kompilował, a Bartek przez
+       ~25 min szukał, skąd się wziął;
+     - ogon znaczników wywołania narzędzi ("cat data.py</parameter>")
+       jest zdejmowany z komendy PODGLĄD/URUCHOM;
+     - uruchomienie, które pisze do WŁASNEGO folderu po pełnej ścieżce
+       (/data/data/…/MAIN_1), nie jest już odrzucane jako folder rywala;
+       ścisłe reguły ścieżek zostają dla samego odczytu, a uruchomienie
+       pilnuje folderu rywala tak jak RUN MAIN-a.
