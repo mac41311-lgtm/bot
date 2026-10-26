@@ -3038,3 +3038,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - tekst w cudzysłowie po echo/printf jest tekstem także wtedy, gdy
        ma w sobie "->", ";" albo "|" — notatka "nie dotykamy ~/MAIN_2"
        w printf nie jest już blokowana jako folder rywala.
+
+193. Pliki z odpowiedzi z PODGLĄDEM i zerwane połączenie z Gemini (v480gh)
+     - gdy autor w jednej odpowiedzi daje pliki i PODGLĄD (np. ls, czy
+       leżą), program najpierw kładzie pliki, a dopiero potem uruchamia
+       podgląd; autor dostaje linię "[Program od razu zapisał …]" razem
+       z wynikiem podglądu, a MAIN dostaje ją w odpowiedzi autora (bieg
+       26.10 18:56: ls pokazał pusty folder i Bartek pisał 5 plików drugi
+       raz);
+     - błąd sieci przy wysyłaniu do Gemini (np. "No address associated
+       with hostname") nie kończy zadania: program czeka, aż sieć wróci
+       (albo chwilę, gdy już jest), i ponawia to samo wysłanie, do 3 razy
+       — nic nie uruchamia się drugi raz (bieg 26.10 19:00: run_all.sh
+       dał WYNIK 3.585351, a zadanie skończyło się GEMINI_EXECUTOR_ERROR).

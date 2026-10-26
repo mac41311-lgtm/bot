@@ -8735,7 +8735,17 @@ def _uruchom_podglad(komenda):
 
 
 def _podglad_dla_roli(rola, odp):
-    """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia odpowiedz."""
+    """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
+    odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
+    zapisane = []
+    odp = _podglad_dla_roli_rundy(rola, odp, zapisane)
+    nowe = [z for z in zapisane if z not in str(odp)]
+    if nowe:
+        odp = str(odp).rstrip() + "\n\n" + "\n".join(nowe)
+    return odp
+
+
+def _podglad_dla_roli_rundy(rola, odp, zapisane):
     imie = _IMIE_AUTORA.get(rola, (rola, rola))[0]
     for _ in range(_PODGLAD_RUND):
         komendy = []
@@ -8745,7 +8755,21 @@ def _podglad_dla_roli(rola, odp):
                 komendy.append(k)
         if not komendy:
             return odp
-        wyniki = []
+        # v480gg/gh: bieg 2026-10-26 18:56 — Bartek dal 5 plikow i w tej
+        # samej odpowiedzi PODGLĄD (ls, czy leza). Pliki program kladl
+        # dopiero z OSTATNIEJ odpowiedzi, wiec ls pokazal pusty folder i
+        # Bartek pisal wszystko drugi raz. Pliki z tej odpowiedzi ida na
+        # dysk najpierw, a podglad widzi je juz na miejscu.
+        zapis = []
+        if "```" in str(odp or ""):
+            try:
+                _po = _poloz_nowy_plik_autora(rola, odp, "")
+                zapis = [l.strip() for l in str(_po).split("\n")
+                         if l.strip().startswith("[Program") and l.strip() not in str(odp)]
+            except Exception as e:
+                log("PROGRAM", "Pliki z odpowiedzi " + imie + " przed podglądem: " + str(e))
+        zapisane.extend(zapis)
+        wyniki = list(zapis)
         for k in komendy[:5]:
             log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
             wyniki.append(_uruchom_podglad(k))
@@ -30280,8 +30304,19 @@ def _gemini_create(client, **kwargs):
     # WYSLANIE wynikow, ktore nie doszlo. Limit dzienny idzie w gore od
     # razu — czekanie 29 s na polnoc nie ma sensu.
     _ponowien_429 = 0
+    # v480gh: bieg 2026-10-26 19:00 — wykonawca uruchomil run_all.sh
+    # (WYNIK 3.585351), a odeslanie wyniku do Gemini padlo na "[Errno 7]
+    # No address associated with hostname"; cale zadanie skonczylo sie
+    # GEMINI_EXECUTOR_ERROR. Blad sieci: czekamy, az siec wroci (albo
+    # chwile, gdy juz jest), i ponawiamy TO SAMO wyslanie — nic nie
+    # uruchamia sie drugi raz.
+    _ponowien_sieci = 0
+    _przerwy = list(_GEMINI_PRZECIAZONY_PONOW_S + (None,))
+    proba = 0
 
-    for proba, przerwa in enumerate(_GEMINI_PRZECIAZONY_PONOW_S + (None,)):
+    while True:
+
+        przerwa = _przerwy[min(proba, len(_przerwy) - 1)]
 
         _policz_zapytanie()
 
@@ -30289,6 +30324,18 @@ def _gemini_create(client, **kwargs):
             return client.interactions.create(**kwargs)
 
         except Exception as e:
+
+            if _wyglada_na_blad_sieci(e) and not _to_limit(e) and _ponowien_sieci < 3:
+                _ponowien_sieci += 1
+                if not _czekaj_na_internet("Gemini", e):
+                    time.sleep(5 * _ponowien_sieci)
+                log(
+                    "GEMINI",
+                    "Połączenie z Gemini zerwane (" + short(str(e), 120)
+                    + ") — ponawiam to samo wysłanie (" + str(_ponowien_sieci)
+                    + "/3), nic nie uruchamia się drugi raz."
+                )
+                continue
 
             if (
                 _to_limit(e)
@@ -30318,6 +30365,7 @@ def _gemini_create(client, **kwargs):
             )
 
             time.sleep(przerwa)
+            proba += 1
 
 
 def _raport_po_limicie(client, model, interaction, interaction_id, tools):
