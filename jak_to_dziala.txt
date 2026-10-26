@@ -3051,3 +3051,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (albo chwilę, gdy już jest), i ponawia to samo wysłanie, do 3 razy
        — nic nie uruchamia się drugi raz (bieg 26.10 19:00: run_all.sh
        dał WYNIK 3.585351, a zadanie skończyło się GEMINI_EXECUTOR_ERROR).
+
+194. Zespół sam uruchamia swój kod (v480gi)
+     - obok "PODGLĄD:" jest "URUCHOM: <komenda>" (np. URUCHOM: python3
+       eval.py --szybko); komenda, która nie jest samym odczytem, idzie
+       przez to samo termux_run co RUN MAIN-a (folder rywala zablokowany,
+       pytanie przy usuwaniu, wątki, strażnik pamięci), w folderze
+       drużyny, a wynik albo błąd (z tracebackiem) wraca do tego, kto
+       uruchomił;
+     - także "PODGLĄD: bash run_all.sh" po prostu się uruchamia, zamiast
+       kończyć się odmową;
+     - bez stałej liczby rund: rola sprawdza i poprawia, dopóki
+       potrzebuje; program kończy dopiero, gdy dwa razy z rzędu prosi o
+       to samo i dostaje to samo;
+     - prompty Bartka, Piotra, Ani, _JAK_ROZMAWIAMY i akapit MAIN-a "Kod."
+       przepisane w całości: autor uruchamia i poprawia swój kod, aż
+       działa; długie przebiegi w tle puszcza MAIN.

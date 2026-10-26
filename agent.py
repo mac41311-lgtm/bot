@@ -3683,14 +3683,17 @@ CRITIC_PROMPT = (
 # v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
 # Piotr sam zaglada do kodu komendami.
 # v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
+# v480gi: przepisany w calosci — Piotr sam uruchamia kod (URUCHOM:).
 CODE_REVIEWER_PROMPT = (
     "Jesteś Piotrem. Analizujesz błędy i szukasz ich "
     "rzeczywistej przyczyny, a poprawia je Ania. Do kodu i środowiska "
     "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
     "sed -n 'od,dop' plik, head, ls, python3 --version, pip show "
-    "pakiet, python3 -c z importem i wypisaniem wersji; kilka komend "
-    "łączysz przez ; albo |) — program oddaje Ci wynik, więc "
-    "sprawdzasz dokładnie to miejsce, którego dotyczy błąd."
+    "pakiet; kilka komend łączysz przez ; albo |), a błąd odtwarzasz "
+    "linią URUCHOM: z komendą, która uruchamia kod (np. URUCHOM: "
+    "python3 skrypt.py --test). Program wykonuje ją w folderze drużyny "
+    "i oddaje Ci wynik razem z błędem, więc sprawdzasz dokładnie to "
+    "miejsce, którego dotyczy błąd, i widzisz, czy po poprawce znika."
 )
 
 
@@ -3714,14 +3717,16 @@ CODE_REVIEWER_PROMPT = (
 # jak prompt Bartka: zmiana w istniejacym pliku to sama zmiana.
 # v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci.
 # v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
+# v480gi: przepisany w calosci — Ania sama sprawdza poprawke (URUCHOM:).
 CODE_FIXER_PROMPT = (
     "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa. "
     "Poprawkę w pliku, który już istnieje, piszesz jako samą zmianę, "
     "tak jak zwykły patch: który fragment i na co go zamienić. "
     "Fragment bierzesz z pliku, nie z pamięci: zaglądasz do niego "
     "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
-    "plik), a wersję Pythona czy biblioteki sprawdzasz tak samo "
-    "(python3 --version, pip show pakiet) — program oddaje Ci wynik."
+    "plik), a to, czy poprawka działa, sprawdzasz linią URUCHOM: z "
+    "komendą, która uruchamia kod — program wykonuje ją w folderze "
+    "drużyny i oddaje Ci wynik albo błąd."
 )
 
 
@@ -3742,24 +3747,27 @@ BROWSER_PROMPT = (
 # zagladanie do kodu komendami) przepisany w calosci.
 # v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko, cala
 # nowa wersja istniejacego pliku go zastepuje (z kopia).
+# v480gi: przepisany w calosci — Bartek sam uruchamia i sprawdza swoj
+# kod (URUCHOM:), poprawia, az dziala; MAIN dostaje dzialajacy kod.
 ENGINEER_PROMPT = (
     "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
     "i rozwiązaniami technicznymi. Nowy plik piszesz w całości, "
     "w osobnym bloku kodu, a tuż nad blokiem stoi jego ścieżka albo "
     "nazwa z folderem, w którym ma leżeć. Program od razu kładzie go "
-    "na dysk, sprawdza, czy się kompiluje, i krótko go uruchamia; "
-    "błąd wraca do Ciebie, a Ty poprawiasz to miejsce, do trzech razy. "
+    "na dysk, sprawdza, czy się kompiluje, i krótko go uruchamia. "
     "Plik, który już istnieje, zmieniasz samą poprawką, tak jak zwykły "
     "patch: który fragment i na co go zamienić — program nanosi ją na "
     "Twój plik od razu, z kopią i sprawdzeniem. Gdy dajesz całą nową "
     "wersję pliku, który już leży, program zastępuje go nią, a "
-    "poprzednią zostawia w kopii. Do istniejącego kodu i środowiska "
-    "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
-    "sed -n 'od,dop' plik, head, ls, wc, python3 --version, pip show "
-    "pakiet, python3 -c z importem i wypisaniem wersji; kilka komend "
-    "łączysz przez ; albo |) — program uruchamia ją w folderze drużyny "
-    "i oddaje Ci wynik, więc wiesz, na czym piszesz, i nie potrzebujesz "
-    "całego pliku, żeby poprawić jego fragment."
+    "poprzednią zostawia w kopii. Do kodu i środowiska zaglądasz linią "
+    "PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' plik, "
+    "head, ls, python3 --version, pip show pakiet), a swój kod "
+    "uruchamiasz linią URUCHOM: z komendą (np. URUCHOM: python3 "
+    "eval.py --szybko albo URUCHOM: bash run_all.sh). Program wykonuje "
+    "ją w folderze drużyny i oddaje Ci wynik albo błąd, a Ty poprawiasz "
+    "i uruchamiasz znowu, tyle razy, ile trzeba — tak oddajesz kod, "
+    "który naprawdę działa. Długie przebiegi, jak trening na godziny, "
+    "MAIN puszcza w tle."
 )
 
 
@@ -8479,7 +8487,9 @@ _ROLE_Z_PODGLADEM = (
 # v480gg: "**PODGLĄD:** `komenda`" (pogrubienie i kod z markdownu) —
 # bieg 2026-10-26 18:30: Bartek 4 razy z rzedu dostal odmowe, bo "**" i
 # "`" szly do basha jako czesc komendy.
-_PODGLAD_RE = re.compile(r"^[ \t>*_`-]*PODGL(?:Ą|A)D[*_]*:[*_]*\s*(.+?)\s*$", re.M | re.I)
+# v480gi: "URUCHOM: <komenda>" — ta sama linia, ale do uruchomienia kodu.
+_PODGLAD_RE = re.compile(
+    r"^[ \t>*_`-]*(?:PODGL(?:Ą|A)D|URUCHOM)[*_]*:[*_]*\s*(.+?)\s*$", re.M | re.I)
 
 
 def _komenda_z_podgladu(k):
@@ -8528,7 +8538,6 @@ _PODGLAD_KOMENDY = (
     # v480fy: curl tylko GET/HEAD na ekran (patrz _podglad_odmowa)
     "curl",
 )
-_PODGLAD_RUND = 6
 # python3 -c w podgladzie: tylko odczyt — sprawdzenie wersji, importu,
 # ksztaltu danych. Kod, ktory zmienia pliki, procesy albo siec, odpada.
 _PODGLAD_PY_ZMIANA_RE = re.compile(
@@ -8709,14 +8718,24 @@ def _uruchom_podglad(komenda):
     # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
     komenda = re.split(r"</?\s*[｜|]{1,2}\s*DSML|<[｜|]", str(komenda or ""))[0]
     komenda = komenda.strip()
-    odm = _podglad_odmowa(komenda)
-    if not odm and _siega_do_rywala("termux_run", {"command": komenda}):
-        odm = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
-    if not odm:
-        odm = _podglad_siega_do_rywala(komenda)
+    rywal = ""
+    if _siega_do_rywala("termux_run", {"command": komenda}):
+        rywal = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
+    elif _DRUZYNA:
+        _r = _podglad_siega_do_rywala(komenda)
+        if _r and "nie umiem rozebrać" not in _r:
+            rywal = _r
+    odm = rywal or _podglad_odmowa(komenda)
+    cwd = str(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else str(Path.home())
+    if odm and not rywal:
+        # v480gi: uzytkownik (2026-10-26): zespol sam uruchamia kod,
+        # sprawdza i dostaje bledy. Komenda, ktora nie jest samym odczytem
+        # (python3 skrypt.py, bash run_all.sh, pip install …), idzie przez
+        # to samo termux_run co RUN MAIN-a — te same zabezpieczenia
+        # (folder rywala, pytanie przy usuwaniu, watki, straznik pamieci).
+        return _uruchom_dla_zespolu(komenda, cwd)
     if odm:
         return "$ " + komenda + "\n(nie uruchomiłem: " + odm + ")"
-    cwd = str(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else str(Path.home())
     try:
         os.makedirs(cwd, exist_ok=True)
         r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
@@ -8734,6 +8753,29 @@ def _uruchom_podglad(komenda):
             + ("" if kod in (0, None) or (kod == 1 and komenda.split()[0] == "grep") else "\nkod wyjścia: " + str(kod)))
 
 
+def _uruchom_dla_zespolu(komenda, cwd):
+    """v480gi: uruchomienie kodu przez role zespolu — wynik jak w terminalu."""
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except Exception:
+        pass
+    wynik = dispatch_tool("termux_run", {"command": "cd " + shlex.quote(cwd) + " && " + komenda})
+    if isinstance(wynik, dict) and ("stdout" in wynik or "stderr" in wynik):
+        opis = _opis_wyniku_czekania({
+            k: wynik[k] for k in ("stdout", "stderr", "returncode", "czekanie") if k in wynik})
+    elif isinstance(wynik, dict):
+        # odmowa programu (np. folder rywala) — jej komunikat, bez pol technicznych
+        opis = str(wynik.get("message") or wynik.get("error") or "")
+    else:
+        opis = str(wynik)
+    log("PROGRAM", "Uruchomione dla zespołu: " + short(komenda, 120))
+    opis = str(opis or "").rstrip()
+    if len(opis) > 5000:
+        # przy bledzie liczy sie koniec (traceback), wiec zostaje poczatek i koniec
+        opis = opis[:1500] + "\n(… " + str(len(opis) - 4500) + " znaków pominięte …)\n" + opis[-3000:]
+    return "$ " + komenda + " (uruchomione w " + _sciezka_od_domu(cwd) + ")\n" + (opis or "(nic nie wypisało)")
+
+
 def _podglad_dla_roli(rola, odp):
     """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
     odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
@@ -8747,7 +8789,12 @@ def _podglad_dla_roli(rola, odp):
 
 def _podglad_dla_roli_rundy(rola, odp, zapisane):
     imie = _IMIE_AUTORA.get(rola, (rola, rola))[0]
-    for _ in range(_PODGLAD_RUND):
+    # v480gi: bez stalej liczby rund (uzytkownik: "bez limitow") — rola
+    # sprawdza i poprawia, dopoki potrzebuje; konczy sie, gdy dwa razy z
+    # rzedu prosi o to samo i dostaje to samo (nic sie nie zmienia).
+    poprzednio = None
+    powtorki = 0
+    while True:
         komendy = []
         for m in _PODGLAD_RE.finditer(str(odp or "")):
             k = _komenda_z_podgladu(m.group(1))
@@ -8773,25 +8820,20 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         for k in komendy[:5]:
             log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
             wyniki.append(_uruchom_podglad(k))
+        _teraz = (tuple(komendy[:5]), tuple(wyniki))
+        if _teraz == poprzednio and not zapis:
+            powtorki += 1
+            if powtorki >= 2:
+                log("PROGRAM", imie + " prosi w kółko o to samo i dostaje to samo — kończę sprawdzanie.")
+                return odp
+        else:
+            powtorki = 0
+        poprzednio = _teraz
         with _KOLEJKA_KONTA:
             odp = _deepseek_jedna_rozmowa(rola, (
-                "Wynik podglądu:\n\n" + "\n\n".join(wyniki)
-                + "\n\nTeraz odpowiedz na pytanie, na które odpowiadasz; możesz też zajrzeć jeszcze raz."
+                "Wynik:\n\n" + "\n\n".join(wyniki)
+                + "\n\nTeraz odpowiedz na pytanie, na które odpowiadasz; możesz też zajrzeć albo uruchomić jeszcze raz."
             ))
-    # v480gg: po ostatniej rundzie odpowiedz bywa sama prosba o podglad
-    # ("Jak wroci — mam wszystko"); wynik idzie wtedy razem z nia, zeby
-    # czytajacy (MAIN albo kolega) mial to, na co rola czekala.
-    try:
-        komendy = []
-        for m in _PODGLAD_RE.finditer(str(odp or "")):
-            k = _komenda_z_podgladu(m.group(1))
-            if k and k not in komendy:
-                komendy.append(k)
-        if komendy:
-            odp = (str(odp).rstrip() + "\n\n[Wynik podglądu, o który prosi " + imie + ":]\n"
-                   + "\n\n".join(_uruchom_podglad(k) for k in komendy[:5]))
-    except Exception:
-        pass
     return odp
 
 
@@ -46021,19 +46063,23 @@ def _pierwsza_wiadomosc(rola=None):
 # v480ft: przepisany w calosci — jak powstaja i zmieniaja sie pliki
 # (autor, poprawka fragmentu, proba uruchomienia) i PODGLĄD.
 # v480fw: przepisany w calosci — PODGLĄD tez do sprawdzania srodowiska (wersje, pip show), komendy laczone ; i |.
+# v480gi: przepisany w calosci — zespol sam uruchamia kod (URUCHOM:).
 _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
     "dostajecie, co z tego wyszło. Do plików i środowiska zaglądacie "
     "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
     "plik, head, ls, wc, python3 --version, pip show pakiet; kilka "
-    "komend łączycie przez ; albo |) — program uruchamia ją w folderze "
-    "drużyny i oddaje wynik temu, kto pytał. Nowy plik z kodem piszecie w całości, "
-    "w osobnym bloku, ze ścieżką tuż nad nim; program od razu kładzie "
-    "go na dysk, sprawdza i krótko uruchamia, a błąd wraca do autora. "
-    "Plik należy do tego, kto go napisał: zmiany w nim to poprawka "
-    "fragmentu (który fragment i na co go zamienić), nie cały plik od "
-    "nowa. Na dłuższe uruchomienie decyzję podejmuje MAIN. W zespole są: "
+    "komend łączycie przez ; albo |), a kod uruchamiacie linią "
+    "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
+    "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
+    "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
+    "działa. Nowy plik z kodem piszecie w całości, w osobnym bloku, ze "
+    "ścieżką tuż nad nim; program od razu kładzie go na dysk, sprawdza "
+    "i krótko uruchamia, a błąd wraca do autora. Plik należy do tego, "
+    "kto go napisał: zmiany w nim to poprawka fragmentu (który "
+    "fragment i na co go zamienić), nie cały plik od nowa. Długie "
+    "przebiegi w tle puszcza MAIN. W zespole są: "
     "Tomek (następny krok), Kamil (fakty i informacje), Marek (słabe "
     "punkty planów), Bartek (kod i technika), Ola (porządkuje to, co "
     "się wydarzyło) i Wojtek (praktyczny sens). Jest też Igor — "
@@ -46137,28 +46183,30 @@ _JAK_TO_DZIALA = (
     "cel), więc w zadaniu wystarczy to, co nowe. RUN działa także "
     "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
     "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
+    # v480gi: akapit przepisany w calosci — zespol sam uruchamia i
+    # sprawdza swoj kod (URUCHOM:), MAIN dostaje kod, ktory dziala.
     "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
     "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
-    "pisze poprawkę. Plik należy do autora i on go poprawia, więc "
-    "zmiana w pliku Bartka to pytanie do Bartka. Ty uruchamiasz, "
-    "sprawdzasz wyniki i decydujesz, co dalej. Pliki z kodem kładzie na "
-    "dysk program, dokładnie z tego, co ktoś napisał; kodu nie "
-    "dostajesz w całości, tylko jedną linią: nowy plik program zapisuje "
-    "od razu, sprawdza składnię, krótko go uruchamia (błąd wraca do "
-    "autora, do trzech razy) i mówi, gdzie leży i jak go uruchomić, np. "
-    "[Program od razu zapisał ten plik Bartka w ~/projekt/prep.py (…, "
-    "składnia OK; próba uruchomienia … OK). … uruchomienie: python3 "
-    "~/projekt/prep.py [--wejscie --wyjscie] …]. Poprawkę fragmentu od "
-    "autora program nanosi od razu i też mówi to jedną linią. Kod podany "
-    "bez ścieżki widzisz jako [nazwa — liczba znaków]; program położy go "
-    "z wypowiedzi autora, 1:1, gdy w TASK podasz write_engineer_code_to "
-    "ze ścieżką pliku albo katalogu. Kod, który już jest na dysku, "
-    "widzisz jako ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na "
-    "dysku], i można go po prostu uruchomić. Do kodu zaglądasz komendą "
-    "do odczytu (grep -n, sed -n 'od,dop' plik, head, wc -l) zamiast "
-    "czytać cały plik. Dłuższe uruchomienie puszczasz w tle: program sam "
-    "da znać, gdy w logu przybędzie wyników albo proces się skończy, "
-    "a ten czas jest dla zespołu.\n\n"
+    "pisze poprawkę. Zespół sam uruchamia swój kod i widzi błędy, więc "
+    "autor poprawia go, aż działa, i oddaje Ci kod sprawdzony. Plik "
+    "należy do autora i on go poprawia, więc zmiana w pliku Bartka to "
+    "pytanie do Bartka. Ty puszczasz właściwe przebiegi, sprawdzasz "
+    "wyniki i decydujesz, co dalej. Pliki z kodem kładzie na dysk "
+    "program, dokładnie z tego, co ktoś napisał; kodu nie dostajesz w "
+    "całości, tylko jedną linią, np. [Program od razu zapisał ten plik "
+    "Bartka w ~/projekt/prep.py (…, składnia OK; próba uruchomienia … "
+    "OK). … uruchomienie: python3 ~/projekt/prep.py [--wejscie "
+    "--wyjscie] …]. Poprawkę fragmentu od autora program nanosi od razu "
+    "i też mówi to jedną linią. Kod podany bez ścieżki widzisz jako "
+    "[nazwa — liczba znaków]; program położy go z wypowiedzi autora, "
+    "1:1, gdy w TASK podasz write_engineer_code_to ze ścieżką pliku "
+    "albo katalogu. Kod, który już jest na dysku, widzisz jako ścieżkę, "
+    "np. [~/projekt/build.sh — 1234 znaków, na dysku], i można go po "
+    "prostu uruchomić. Do kodu zaglądasz komendą do odczytu (grep -n, "
+    "sed -n 'od,dop' plik, head, wc -l) zamiast czytać cały plik. "
+    "Dłuższe uruchomienie puszczasz w tle: program sam da znać, gdy w "
+    "logu przybędzie wyników albo proces się skończy, a ten czas jest "
+    "dla zespołu.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
