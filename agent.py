@@ -34368,7 +34368,7 @@ def _uruchom_rzecz(rzecz, praca, cichy):
             rzecz["wynik"] = wynik
             rzecz["koniec"] = time.time()
             w_tle = rzecz["w_tle"]
-        if w_tle:
+        if w_tle and not rzecz.get("anulowane"):
             try:
                 log("MAIN", "W tle skończone (" + short(rzecz["komenda"], 80)
                     + "): " + short(json.dumps(
@@ -34871,11 +34871,19 @@ def _czekanie_blok():
                                     + ")")
                 _to_samo = any(_ta_sama_komenda(r["komenda"], k)
                                for k in _ostatni_run()["komendy"])
+                # v480gb: MAIN zrobil to samo sprawdzenie wprost i ma jego
+                # wynik w tej wiadomosci — czekanie na nie oddaloby ten sam
+                # wynik drugi raz, wiec znika (uzytkownik 2026-10-26: "to
+                # samo sprawdzenie, które przed chwilą zrobiliście" obok
+                # wyniku tego sprawdzenia to szum). Koniec procesu albo nowe
+                # wyniki w logu i tak obudza MAIN-a.
+                if _to_samo and r["rodzaj"] == "czekanie":
+                    r["anulowane"] = True
+                    _w_tle.remove(r)
+                    continue
                 linie.append(
                     "W tle dalej " + co + " z " + _hhmm(r["start"])
-                    + (" — to samo sprawdzenie, które przed chwilą zrobiliście"
-                       if _to_samo else
-                       " (" + short(_bez_sleep(r["komenda"]), 60) + ")")
+                    + " (" + short(_bez_sleep(r["komenda"]), 60) + ")"
                     + ", już " + _min_s(teraz - r["start"]) + _zostalo + "."
                 )
     if linie:
@@ -54897,12 +54905,45 @@ def _kod_dla_sedziego(numer):
         _k = "plik" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + hashlib.sha1(
             tresc.encode("utf-8", "replace")).hexdigest()[:12]
         _sedzia_widzial["nowe"].add(_k)
+        _rel = str(p.relative_to(folder))
         if _k in _sedzia_widzial["stare"]:
-            bloki.append("--- " + str(p.relative_to(folder)) + " --- bez zmian od oceny z "
+            bloki.append("--- " + _rel + " --- bez zmian od oceny z "
                          + (_sedzia_widzial["czas"] or "poprzedniej") + " (treść masz wyżej)")
+            _sedzia_widzial["nowe"].update(
+                x for x in _sedzia_widzial["stare"] if x.startswith("dl" + str(numer) + ":" + _rel + ":"))
+            continue
+        # v480gb: plik dopisywany (NOTES.md, log) — Sedzia dostawal co
+        # runde te same pierwsze 3000 znakow, a dopisanego konca nie
+        # widzial wcale (bieg 2026-10-26 nocny: "## 00:38 — baseline"
+        # 10 razy). Gdy poczatek jest ten sam, co juz widzial, idzie
+        # tylko to, co przybylo.
+        _przybylo_od = 0
+        for x in _sedzia_widzial["stare"]:
+            if not x.startswith("dl" + str(numer) + ":" + _rel + ":"):
+                continue
+            try:
+                _dl, _h = x.rsplit(":", 2)[-2:]
+                _dl = int(_dl)
+            except Exception:
+                continue
+            if (_przybylo_od < _dl <= len(tresc) and hashlib.sha1(
+                    tresc[:_dl].encode("utf-8", "replace")).hexdigest()[:12] == _h):
+                _przybylo_od = _dl
+        if _przybylo_od:
+            _sedzia_widzial["nowe"].add("dl" + str(numer) + ":" + _rel + ":" + str(len(tresc)) + ":"
+                                        + hashlib.sha1(tresc.encode("utf-8", "replace")).hexdigest()[:12])
+            nowe = tresc[_przybylo_od:]
+            kawalek = nowe[-min(zostalo, 3000):]
+            bloki.append("--- " + _rel + " --- (pierwsze " + str(_przybylo_od) + " znaków bez zmian "
+                         "od oceny z " + (_sedzia_widzial["czas"] or "poprzedniej") + ", masz je wyżej; "
+                         "dopisane:)" + ("\n…(pominięto " + str(len(nowe) - len(kawalek)) + " znaków dopisanych wcześniej)"
+                                        if len(kawalek) < len(nowe) else "") + "\n" + kawalek)
+            zostalo -= len(kawalek)
             continue
         kawalek = tresc[:min(zostalo, 3000)]
-        bloki.append("--- " + str(p.relative_to(folder)) + " ---\n" + kawalek
+        _sedzia_widzial["nowe"].add("dl" + str(numer) + ":" + _rel + ":" + str(len(kawalek)) + ":"
+                                    + hashlib.sha1(kawalek.encode("utf-8", "replace")).hexdigest()[:12])
+        bloki.append("--- " + _rel + " ---\n" + kawalek
                      + ("\n…(dalej " + str(len(tresc) - len(kawalek)) + " znaków)"
                         if len(kawalek) < len(tresc) else ""))
         zostalo -= len(kawalek)

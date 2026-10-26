@@ -2982,3 +2982,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Ela ocenić postęp, Igor spojrzeć świeżym okiem. Akapit „Kod.”
      MAIN-a przepisany w całości: kod piszą Bartek i zespół, MAIN
      zleca, uruchamia i decyduje. Bez przymusu i bez nowych wstawek.
+
+187. Bez dubli przy czekaniu i u Sędziego (v480gb). Użytkownik
+     (2026-10-26) zauważył w wiadomości do MAIN-a „W tle dalej czekanie
+     — to samo sprawdzenie, które przed chwilą zrobiliście” obok wyniku
+     tego samego sprawdzenia:
+     - gdy MAIN zrobi wprost to samo sprawdzenie, na które czekało coś
+       w tle, to czekanie znika (oddałoby ten sam wynik drugi raz);
+       koniec procesu albo nowe wyniki w logu i tak budzą MAIN-a;
+     - Sędzia przy pliku dopisywanym (NOTES.md, log) dostawał co rundę
+       te same pierwsze 3000 znaków, a dopisanego końca nie widział;
+       teraz dostaje tylko to, co przybyło od jego poprzedniej oceny.
