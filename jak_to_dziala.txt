@@ -2993,3 +2993,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Sędzia przy pliku dopisywanym (NOTES.md, log) dostawał co rundę
        te same pierwsze 3000 znaków, a dopisanego końca nie widział;
        teraz dostaje tylko to, co przybyło od jego poprzedniej oceny.
+
+188. Gdy MAIN sprawdza drugi raz to samo (v480gc)
+     - ta sama komenda (np. tail tego samego logu, także po sleep w tle)
+       nie przychodzi do MAIN-a cała od nowa: program pamięta, co MAIN
+       dostał przy poprzednim takim sprawdzeniu w tej rozmowie, i
+       pokazuje tylko nowe linie; reszta to jedna linia
+       "… (N linii jak o HH:MM)", nagłówek sekcji nad nową linią zostaje;
+     - gdy nic się nie zmieniło, MAIN dostaje jedną linię "to samo co
+       przy tym samym sprawdzeniu o HH:MM — nic nowego";
+     - nowa rozmowa MAIN-a dostaje znów całość.

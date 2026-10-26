@@ -34730,6 +34730,103 @@ def _hhmm(t, sek=False):
         "%H:%M:%S" if sek else "%H:%M")
 
 
+# v480gc: MAIN sprawdza to samo (np. tail tego samego logu co krok) i
+# dostawal za kazdym razem cale wyjscie od nowa. Uzytkownik 2026-10-26:
+# "bez sensu mu wysylac ciagle to samo, mozna mu od cos tylko". Dla tej
+# samej komendy program pamieta poprzednie wyjscie, ktore MAIN dostal, i
+# przy kolejnym pokazuje tylko linie nowe; reszta to jedna linia, ile
+# bylo jak poprzednio. Nowa rozmowa MAIN-a dostaje znow wszystko.
+_main_widzial = {"rozmowa": None, "komendy": {}}
+
+
+def _main_rozmowa_teraz():
+    try:
+        _s = sessions.get("MAIN")
+        return str(getattr(_s, "chat_session_id", None) or "")
+    except Exception:
+        return ""
+
+
+def _klucz_komendy_maina(cmd):
+    return re.sub(r"\s+", " ", _bez_sleep(cmd)).strip()
+
+
+def _tylko_nowe_dla_maina(cmd, wyj):
+    """Wyjscie komendy bez linii, ktore MAIN dostal przy poprzednim
+    takim samym sprawdzeniu w tej rozmowie."""
+    klucz = _klucz_komendy_maina(cmd)
+    if not klucz or not wyj:
+        return wyj
+    rozmowa = _main_rozmowa_teraz()
+    if _main_widzial["rozmowa"] != rozmowa:
+        _main_widzial["rozmowa"] = rozmowa
+        _main_widzial["komendy"] = {}
+    kom = _main_widzial["komendy"]
+    stare = kom.pop(klucz, None)
+    linie = str(wyj).split("\n")
+    wynik_txt = _tylko_nowe_tekst(linie, stare) if stare else wyj
+    # zapamietane tylko to, co MAIN naprawde zobaczyl (dlugie wyjscie
+    # jest dalej ucinane) plus to, co mial juz wczesniej
+    widac = set(l.strip() for l in wynik_txt[:2500].split("\n") if l.strip())
+    kom[klucz] = {"linie": set(l.strip() for l in linie if l.strip() and (
+        l.strip() in widac or (stare and l.strip() in stare["linie"]))),
+        "czas": _hhmm(time.time())}
+    while len(kom) > 60:
+        kom.pop(next(iter(kom)))
+    return wynik_txt
+
+
+def _tylko_nowe_tekst(linie, stare):
+    widziane = stare["linie"]
+    nowe = [l for l in linie if l.strip() and l.strip() not in widziane]
+    if not nowe:
+        return ("(to samo co przy tym samym sprawdzeniu o " + stare["czas"]
+                + " — nic nowego, " + str(len(linie)) + " linii bez zmian)")
+    stare_ile = sum(1 for l in linie if l.strip() and l.strip() in widziane)
+    if stare_ile < 3:
+        return "\n".join(linie)
+    wynik, run = [], []
+
+    def _zamknij():
+        if len(run) == 1:
+            wynik.extend(run)
+        elif run:
+            wynik.append("… (" + str(len(run)) + " linii jak o " + stare["czas"] + ")")
+        del run[:]
+
+    # naglowek nad nowa linia zostaje, zeby bylo wiadomo, czego dotyczy
+    naglowki, ost = set(), None
+    for i, l in enumerate(linie):
+        st = l.strip()
+        if not st:
+            continue
+        if st not in widziane:
+            if ost is not None:
+                naglowki.add(ost)
+        elif st.startswith(("=", "#", "---")) or st.endswith(":"):
+            ost = i
+    for i, l in enumerate(linie):
+        st = l.strip()
+        if not st:
+            continue
+        if st not in widziane or i in naglowki:
+            _zamknij()
+            wynik.append(l)
+            continue
+        run.append(l)
+    _zamknij()
+    return ("(pokazuję tylko to, co nowe od tego samego sprawdzenia o "
+            + stare["czas"] + ")\n" + "\n".join(wynik))
+
+
+def _wynik_tylko_nowe(w, cmd):
+    if not isinstance(w, dict) or not w.get("stdout"):
+        return w
+    w = dict(w)
+    w["stdout"] = _tylko_nowe_dla_maina(cmd, str(w["stdout"]).rstrip("\n"))
+    return w
+
+
 def _karta_wyniku(r):
     czekanie = r["rodzaj"] == "czekanie"
     trwalo = int((r.get("koniec") or time.time()) - r["start"])
@@ -34741,7 +34838,7 @@ def _karta_wyniku(r):
         + _min_s(trwalo) + ".",
         ("Komenda po sleep: " if czekanie else "Komenda: ") + short(kom, 200),
         "Wynik:",
-        _opis_wyniku_czekania(r["wynik"]),
+        _opis_wyniku_czekania(_wynik_tylko_nowe(r["wynik"], kom)),
         "═══",
     ])
 
@@ -35218,10 +35315,20 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
         # kazdym chrome_open. Karty MAIN dostaje osobno.
         if isinstance(_wynik, dict) and "snapshot" in _wynik:
             _wynik = {k: v for k, v in _wynik.items() if k != "snapshot"}
+        # v480gc: tylko to, co nowe od tego samego sprawdzenia; policzone
+        # raz na wynik, zeby ponowne skladanie wiadomosci nie zjadlo linii.
+        if "_dla_maina" not in w:
+            _args = w.get("args") if isinstance(w.get("args"), dict) else {}
+            _kom = _args.get("command") or (
+                str(w.get("tool")) + " " + json.dumps(_args, ensure_ascii=False, sort_keys=True, default=str))
+            try:
+                w["_dla_maina"] = _wynik_tylko_nowe(_wynik, _kom)
+            except Exception:
+                w["_dla_maina"] = _wynik
         tekst = (
             str(i + 1) + ". " + str(w.get("tool")) + " "
             + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
-            + "\n" + _wynik_dla_maina(_wynik, w.get("args"), na_akcje)
+            + "\n" + _wynik_dla_maina(w["_dla_maina"], w.get("args"), na_akcje)
         )
         ile += len(tekst)
         if ile > razem:
