@@ -8716,7 +8716,7 @@ def _podglad_siega_do_rywala(komenda):
     return ""
 
 
-def _uruchom_podglad(komenda):
+def _uruchom_podglad(komenda, rola=None):
     """Wynik jednej komendy podgladu, gotowy do oddania roli."""
     # v480fz: ogon znacznikow narzedzi DeepSeeka ("</｜｜DSML｜｜ parameter>")
     # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
@@ -8742,7 +8742,7 @@ def _uruchom_podglad(komenda):
         # (python3 skrypt.py, bash run_all.sh, pip install …), idzie przez
         # to samo termux_run co RUN MAIN-a — te same zabezpieczenia
         # (folder rywala, pytanie przy usuwaniu, watki, straznik pamieci).
-        return _uruchom_dla_zespolu(komenda, cwd)
+        return _uruchom_dla_zespolu(komenda, cwd, rola)
     if odm:
         return "$ " + komenda + "\n(nie uruchomiłem: " + odm + ")"
     try:
@@ -8762,8 +8762,42 @@ def _uruchom_podglad(komenda):
             + ("" if kod in (0, None) or (kod == 1 and komenda.split()[0] == "grep") else "\nkod wyjścia: " + str(kod)))
 
 
-def _uruchom_dla_zespolu(komenda, cwd):
-    """v480gi: uruchomienie kodu przez role zespolu — wynik jak w terminalu."""
+def _uruchom_dla_zespolu(komenda, cwd, rola=None):
+    """v480gi: uruchomienie kodu przez role zespolu — wynik jak w terminalu.
+    v480gl: gdy liczy dluzej niz _W_TLE_PO_S, idzie dalej w tle (jak RUN
+    MAIN-a): rola odpowiada od razu, MAIN dostaje karte W TLE, a wynik
+    dostaje autor (skrzynka, przy jego nastepnej turze) i MAIN (karta
+    W TLE SKONCZONE)."""
+    imie = _IMIE_AUTORA.get(rola, (None, None)) if rola else (None, None)
+    # ta sama komenda tej samej osoby jeszcze leci w tle — nie puszczamy drugiej
+    for r in _w_tle_zywe():
+        if r.get("autor") == rola and r.get("komenda") == komenda:
+            return ("$ " + komenda + "\n(ta komenda jeszcze liczy w tle od "
+                    + _hhmm(r["start"]) + " — nie puściłem drugiej. Wynik dostaniesz "
+                    "sam, gdy się skończy; teraz odpowiedz tym, co już wiesz.)")
+    rzecz = _rzecz_w_tle("komenda", komenda, 0, [])
+    rzecz["autor"] = rola
+    rzecz["autor_dop"] = imie[1]
+    rzecz["cwd"] = cwd
+    watek = _uruchom_rzecz(rzecz, lambda: _wynik_dla_zespolu(komenda, cwd), True)
+    watek.join(timeout=_W_TLE_PO_S)
+    with _w_tle_lock:
+        wynik = rzecz["wynik"]
+        if wynik is None:
+            _do_listy_w_tle(rzecz)
+    if wynik is None:
+        log("PROGRAM", "Komenda " + (imie[1] or "zespołu") + " liczy dłużej niż "
+            + _min_s(_W_TLE_PO_S) + " — idzie dalej w tle: " + short(komenda, 120))
+        return ("$ " + komenda + " (uruchomione w " + _sciezka_od_domu(cwd) + ")\n"
+                "(liczy już dłużej niż " + _min_s(_W_TLE_PO_S) + ", więc liczy dalej w tle — "
+                "nic jej nie przerwał. Wynik dostaniesz Ty i MAIN, gdy się skończy. "
+                "Teraz odpowiedz tym, co już wiesz; pliki, które zapisuje, mogą być "
+                "jeszcze niepełne.)")
+    return _opis_dla_zespolu(komenda, cwd, wynik)
+
+
+def _wynik_dla_zespolu(komenda, cwd):
+    """v480gl: sama praca komendy zespolu (watek, moze skonczyc sie w tle)."""
     try:
         os.makedirs(cwd, exist_ok=True)
     except Exception:
@@ -8795,10 +8829,14 @@ def _uruchom_dla_zespolu(komenda, cwd):
             pass
         wynik = {"stdout": tekst[-6000:], "returncode": kod if kod is not None else 0}
         try:
-            # wynik dostala rola — MAIN nie dostaje o tym osobnego raportu z tla
+            # wynik idzie przez komende zespolu — bez osobnego raportu procesu z tla
             _tlo_zgloszone_konce.add(pid)
         except Exception:
             pass
+    return wynik
+
+
+def _opis_dla_zespolu(komenda, cwd, wynik):
     if isinstance(wynik, dict) and ("stdout" in wynik or "stderr" in wynik):
         opis = _opis_wyniku_czekania({
             k: wynik[k] for k in ("stdout", "stderr", "returncode", "czekanie") if k in wynik})
@@ -8858,7 +8896,7 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         wyniki = list(zapis)
         for k in komendy[:5]:
             log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
-            wyniki.append(_uruchom_podglad(k))
+            wyniki.append(_uruchom_podglad(k, rola))
         _teraz = (tuple(komendy[:5]), tuple(wyniki))
         if _teraz == poprzednio and not zapis:
             powtorki += 1
@@ -34544,6 +34582,15 @@ def _uruchom_rzecz(rzecz, praca, cichy):
             rzecz["wynik"] = wynik
             rzecz["koniec"] = time.time()
             w_tle = rzecz["w_tle"]
+        if w_tle and rzecz.get("autor") and not rzecz.get("anulowane"):
+            # v480gl: komenda roli zespolu skonczona w tle — wynik do autora
+            try:
+                _role_inbox.setdefault(rzecz["autor"], []).append((
+                    "Program",
+                    "Twoja komenda z " + _hhmm(rzecz["start"]) + " skończyła się w tle:\n"
+                    + _opis_dla_zespolu(rzecz["komenda"], rzecz.get("cwd") or "~", wynik)))
+            except Exception:
+                pass
         if w_tle and not rzecz.get("anulowane"):
             try:
                 log("MAIN", "W tle skończone (" + short(rzecz["komenda"], 80)
@@ -35009,6 +35056,7 @@ def _karta_wyniku(r):
     kom = _bez_sleep(r["komenda"]) if czekanie else r["komenda"]
     return "\n".join([
         "═══ W TLE SKOŃCZONE: " + ("czekanie" if czekanie else "komenda")
+        + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
         + " z " + _hhmm(r["start"]) + " ═══",
         "Skończone o " + _hhmm(r.get("koniec"), True) + ", trwało "
         + _min_s(trwalo) + ".",
@@ -35069,7 +35117,8 @@ def _karta_startu(r, teraz):
             )
     else:
         linie = [
-            "═══ W TLE: komenda z " + _hhmm(r["start"]) + " ═══",
+            "═══ W TLE: komenda" + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+            + " z " + _hhmm(r["start"]) + " ═══",
             "Komenda: " + short(r["komenda"], 200),
             "Liczy już " + _min_s(minelo) + " — dłużej niż "
             + _min_s(_W_TLE_PO_S) + ", więc liczy dalej w tle, z tymi samymi "

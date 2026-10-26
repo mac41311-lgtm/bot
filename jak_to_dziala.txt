@@ -3089,3 +3089,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (/data/data/…/MAIN_1), nie jest już odrzucane jako folder rywala;
        ścisłe reguły ścieżek zostają dla samego odczytu, a uruchomienie
        pilnuje folderu rywala tak jak RUN MAIN-a.
+
+197. Długie uruchomienie zespołu idzie w tło (v480gl)
+     - komenda, którą rola puszcza przez URUCHOM, liczy najpierw na wierzchu;
+       gdy trwa dłużej niż 2 min (tyle samo co RUN MAIN-a), liczy dalej
+       w tle, nic jej nie przerywa, a rola od razu odpowiada MAIN-owi tym,
+       co już wie — MAIN nie stoi 12 minut w jednym pytaniu;
+     - MAIN dostaje kartę "W TLE: komenda Bartka z HH:MM", a po końcu
+       "W TLE SKOŃCZONE: komenda Bartka …" z wynikiem; czeka na to tak samo
+       jak na swoje komendy w tle;
+     - autor dostaje wynik ("Twoja komenda z HH:MM skończyła się w tle")
+       przy swojej najbliższej turze;
+     - ta sama komenda tej samej osoby, gdy jeszcze leci, nie startuje drugi
+       raz — rola słyszy, od kiedy liczy.
