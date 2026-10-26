@@ -3067,3 +3067,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - prompty Bartka, Piotra, Ani, _JAK_ROZMAWIAMY i akapit MAIN-a "Kod."
        przepisane w całości: autor uruchamia i poprawia swój kod, aż
        działa; długie przebiegi w tle puszcza MAIN.
+
+195. Instalowanie bibliotek (v480gj)
+     - zespół instaluje to, czego brakuje, tak jak uruchamia kod:
+       URUCHOM: pip install pakiet albo URUCHOM: pkg install -y pakiet;
+       instalacja idzie w tło jak u MAIN-a, ale program czeka za rolą do
+       końca i oddaje jej końcówkę logu (MAIN nie dostaje o tym osobnego
+       raportu z tła);
+     - mówią o tym _JAK_ROZMAWIAMY i akapit MAIN-a "Kod." (przepisane w
+       całości); w rywalizacji ogólnodostępne biblioteki są wspólne.

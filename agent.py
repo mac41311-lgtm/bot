@@ -8760,6 +8760,36 @@ def _uruchom_dla_zespolu(komenda, cwd):
     except Exception:
         pass
     wynik = dispatch_tool("termux_run", {"command": "cd " + shlex.quote(cwd) + " && " + komenda})
+    # v480gj: instalacja (pip/pkg install), pobieranie czy build idzie
+    # w tlo automatycznie — rola nie ma narzedzi do sledzenia procesu,
+    # wiec program czeka za nia do konca i oddaje koncowke logu.
+    if isinstance(wynik, dict) and wynik.get("status") == "AUTO_BACKGROUNDED" and wynik.get("pid"):
+        pid = wynik["pid"]
+        log("PROGRAM", "Komenda zespołu liczy się dłużej (" + short(komenda, 80)
+            + ") — czekam, aż się skończy.")
+        proc = _procesy_w_tle.get(pid)
+        kod = None
+        while True:
+            try:
+                if proc is not None and proc.poll() is not None and not _grupa_zyje(pid):
+                    kod = proc.returncode
+                    break
+                if proc is None and not _jeszcze_zyje(pid):
+                    break
+            except Exception:
+                break
+            time.sleep(2)
+        tekst = ""
+        try:
+            tekst = Path(str(wynik.get("log_file") or "")).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        wynik = {"stdout": tekst[-6000:], "returncode": kod if kod is not None else 0}
+        try:
+            # wynik dostala rola — MAIN nie dostaje o tym osobnego raportu z tla
+            _tlo_zgloszone_konce.add(pid)
+        except Exception:
+            pass
     if isinstance(wynik, dict) and ("stdout" in wynik or "stderr" in wynik):
         opis = _opis_wyniku_czekania({
             k: wynik[k] for k in ("stdout", "stderr", "returncode", "czekanie") if k in wynik})
@@ -46064,6 +46094,7 @@ def _pierwsza_wiadomosc(rola=None):
 # (autor, poprawka fragmentu, proba uruchomienia) i PODGLĄD.
 # v480fw: przepisany w calosci — PODGLĄD tez do sprawdzania srodowiska (wersje, pip show), komendy laczone ; i |.
 # v480gi: przepisany w calosci — zespol sam uruchamia kod (URUCHOM:).
+# v480gj: przepisany w calosci — zespol sam instaluje biblioteki.
 _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
@@ -46074,7 +46105,10 @@ _JAK_ROZMAWIAMY = (
     "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
     "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
     "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
-    "działa. Nowy plik z kodem piszecie w całości, w osobnym bloku, ze "
+    "działa. Bibliotekę albo program, którego brakuje, instalujecie "
+    "tak samo (URUCHOM: pip install pakiet albo URUCHOM: pkg install -y "
+    "pakiet) — program czeka, aż instalacja się skończy, i oddaje jej "
+    "wynik. Nowy plik z kodem piszecie w całości, w osobnym bloku, ze "
     "ścieżką tuż nad nim; program od razu kładzie go na dysk, sprawdza "
     "i krótko uruchamia, a błąd wraca do autora. Plik należy do tego, "
     "kto go napisał: zmiany w nim to poprawka fragmentu (który "
@@ -46185,13 +46219,16 @@ _JAK_TO_DZIALA = (
     "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
     # v480gi: akapit przepisany w calosci — zespol sam uruchamia i
     # sprawdza swoj kod (URUCHOM:), MAIN dostaje kod, ktory dziala.
+    # v480gj: przepisany w calosci — doinstalowanie bibliotek.
     "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
     "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
     "pisze poprawkę. Zespół sam uruchamia swój kod i widzi błędy, więc "
     "autor poprawia go, aż działa, i oddaje Ci kod sprawdzony. Plik "
     "należy do autora i on go poprawia, więc zmiana w pliku Bartka to "
-    "pytanie do Bartka. Ty puszczasz właściwe przebiegi, sprawdzasz "
-    "wyniki i decydujesz, co dalej. Pliki z kodem kładzie na dysk "
+    "pytanie do Bartka. Bibliotekę albo program, którego brakuje, "
+    "instaluje zespół albo Ty (pip install, pkg install -y) — to, co "
+    "jest ogólnodostępne, wolno doinstalować. Ty puszczasz właściwe "
+    "przebiegi, sprawdzasz wyniki i decydujesz, co dalej. Pliki z kodem kładzie na dysk "
     "program, dokładnie z tego, co ktoś napisał; kodu nie dostajesz w "
     "całości, tylko jedną linią, np. [Program od razu zapisał ten plik "
     "Bartka w ~/projekt/prep.py (…, składnia OK; próba uruchomienia … "
