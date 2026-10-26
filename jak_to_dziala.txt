@@ -2971,3 +2971,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - „rm -f "$out"” w skrypcie drużyny, gdzie out to nazwa ustawiona
        w tej samej komendzie (out="$slug.txt", for slug in …), bez -r,
        w folderze drużyny, nie pyta już w terminalu.
+
+186. Czas czekania jest dla zespołu (v480ga). Bieg 2026-10-26: przez
+     noc MAIN zrobił 275 kroków, prawie same RUN-y — sam pisał kod
+     i co 2–4 min sprawdzał trening („Czekam 6 min”). Linia, którą
+     MAIN i tak dostaje przy czekaniu na proces w tle („Wynik przyjdzie
+     sam…”), mówi teraz, na co jest ten czas: Bartek może sprawdzić
+     albo dopisać kod, Marek obejrzeć wyniki, Tomek ułożyć następny
+     krok, Kamil sprawdzić fakty, Wojtek ocenić sens, Ola podsumować,
+     Ela ocenić postęp, Igor spojrzeć świeżym okiem. Akapit „Kod.”
+     MAIN-a przepisany w całości: kod piszą Bartek i zespół, MAIN
+     zleca, uruchamia i decyduje. Bez przymusu i bez nowych wstawek.

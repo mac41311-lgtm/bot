@@ -8477,6 +8477,19 @@ _ROLE_Z_PODGLADEM = (
     "CODE_REVIEWER", "CODE_FIXER",
 )
 _PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | re.I)
+# v480ga: uzytkownik (2026-10-26): MAIN przy czekaniu na proces w tle
+# odpowiadal "Czekam 6 min" — "pracować nad czymś innym" nic mu nie mowilo.
+# Ta sama linia, ktora i tak przychodzi przy czekaniu, mowi teraz, na co
+# jest ten czas; caly zespol (prosba uzytkownika), bez przymusu.
+_CZAS_DLA_ZESPOLU = (
+    "Ten czas jest dla zespołu: Bartek może sprawdzić albo dopisać kod, "
+    "Marek obejrzeć wyniki i znaleźć słabe punkty, Tomek ułożyć następny "
+    "krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, Ola "
+    "podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
+    "okiem — zapytaj tego, kogo potrzebujesz."
+)
+
+
 _PODGLAD_KOMENDY = (
     "grep", "sed", "head", "tail", "wc", "ls", "cat", "find", "nl", "sort",
     "uniq", "cut", "tree", "du", "stat", "file", "diff", "cmp", "md5sum",
@@ -34609,8 +34622,7 @@ def _bezczynnie_czekaj():
             "\nNastępny taki odczyt najwcześniej za "
             + str(_odstep_przyrostu[0] // 60) + " min — koniec procesu albo "
             "czekania przyjdzie od razu. Czekania nie trzeba puszczać od nowa "
-            "ani na nie czekać: w tym czasie możecie pracować nad czymś innym "
-            "(analiza, następna próba, rozmowa z zespołem)."
+            "ani na nie czekać. " + _CZAS_DLA_ZESPOLU
         )
     elif powod in ("przybylo", "czas") and procesy:
         # v480fd: sam proces, bez czekania — stan idzie w raporcie z tla
@@ -34619,7 +34631,7 @@ def _bezczynnie_czekaj():
             "Następna taka wiadomość najwcześniej za "
             + str(max(1, _odstep_przyrostu[0] // 60)) + " min, gdy w logu "
             "przybędzie wyników (najpóźniej po 30 min) — koniec procesu "
-            "przyjdzie od razu. W tym czasie możecie pracować nad czymś innym."
+            "przyjdzie od razu. " + _CZAS_DLA_ZESPOLU
         )
     # v480fc: przy koncu czekania/procesu karta wyniku (W TLE SKOŃCZONE /
     # "Proces w tle ... skończył") i tak przychodzi w tej samej wiadomosci
@@ -34800,13 +34812,10 @@ def _karta_startu(r, teraz):
             "— nie trzeba puszczać drugiego czekania na to samo ani sprawdzać "
             "w kółko. Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle "
             "coś się wydarzy (koniec albo nowe wyniki w logach), i wtedy się "
-            "odezwie. W tym czasie zespół może myśleć i pracować nad czymś "
-            "innym: przeanalizować dotychczasowe wyniki, przemyśleć następne "
-            "próby, porozmawiać z kimś z zespołu albo z Igorem, przygotować "
-            "kolejny eksperyment."
+            "odezwie. " + _CZAS_DLA_ZESPOLU
         )
     else:
-        linie.append("Wynik przyjdzie sam; w tym czasie możecie pracować nad czymś innym.")
+        linie.append("Wynik przyjdzie sam. " + _CZAS_DLA_ZESPOLU)
     if r.get("pominiete"):
         linie.append(
             "Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
@@ -34873,7 +34882,7 @@ def _czekanie_blok():
         karty.append("\n".join(linie) + (
             " Wyniki przyjdą same — na nie nie" if len(linie) > 1
             else " Wynik przyjdzie sam — na niego nie"
-        ) + " trzeba czekać, ten krok możecie użyć na coś innego.")
+        ) + " trzeba czekać. " + _CZAS_DLA_ZESPOLU)
     return ("\n\n".join(karty) + "\n\n") if karty else ""
 
 
@@ -45846,6 +45855,9 @@ def _lista_narzedzi_dla_maina():
         return ""
 
 
+# v480ga: akapit "Kod." przepisany w calosci (uzytkownik 2026-10-26: MAIN
+# pisal kod sam w RUN i tylko czekal) — kod pisze zespol, MAIN zleca,
+# uruchamia i decyduje; czas procesu w tle jest dla zespolu.
 _JAK_TO_DZIALA = (
     "Kilka słów o tym, jak to wszystko działa.\n\n"
     "Zespół. Każda osoba to osobna rozmowa na DeepSeeku:\n"
@@ -45895,28 +45907,28 @@ _JAK_TO_DZIALA = (
     "cel), więc w zadaniu wystarczy to, co nowe. RUN działa także "
     "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
     "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
-    "Kod. Kod pisze ten, kto ma to zadanie: Ty sam w RUN albo ktoś z "
-    "zespołu, gdy mu je dasz; plik należy do autora i on go poprawia. "
-    "Pliki z kodem kładzie na dysk program, dokładnie z tego, co ktoś "
-    "napisał. Kod, który sam piszesz w RUN (termux_write_file albo "
-    "heredoc w termux_run), zapisuje się jako Twój. Kodu od zespołu nie "
+    "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
+    "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
+    "pisze poprawkę. Plik należy do autora i on go poprawia, więc "
+    "zmiana w pliku Bartka to pytanie do Bartka. Ty uruchamiasz, "
+    "sprawdzasz wyniki i decydujesz, co dalej. Pliki z kodem kładzie na "
+    "dysk program, dokładnie z tego, co ktoś napisał; kodu nie "
     "dostajesz w całości, tylko jedną linią: nowy plik program zapisuje "
     "od razu, sprawdza składnię, krótko go uruchamia (błąd wraca do "
     "autora, do trzech razy) i mówi, gdzie leży i jak go uruchomić, np. "
-    "[Program od razu zapisał ten plik Kamila w ~/projekt/prep.py (…, "
+    "[Program od razu zapisał ten plik Bartka w ~/projekt/prep.py (…, "
     "składnia OK; próba uruchomienia … OK). … uruchomienie: python3 "
     "~/projekt/prep.py [--wejscie --wyjscie] …]. Poprawkę fragmentu od "
-    "autora pliku program nanosi od razu i też mówi to jedną linią. "
-    "Resztę (kod, który ktoś podał bez ścieżki) widzisz jako [nazwa — "
-    "liczba znaków]; program położy ją z wypowiedzi autora, 1:1, gdy "
-    "w TASK podasz write_engineer_code_to ze ścieżką pliku — albo "
-    "z katalogiem, a wtedy kładzie tam każdy plik podany pod nazwą. Kod, "
-    "który już jest na dysku, widzisz jako ścieżkę, np. "
-    "[~/projekt/build.sh — 1234 znaków, na dysku], i można go po prostu "
-    "uruchomić. Do kodu zaglądasz tak jak zespół: w RUN komendą do "
-    "odczytu (grep -n, sed -n 'od,dop' plik, head, wc -l) zamiast "
-    "czytać cały plik. Dłuższe uruchomienie puszczasz w tle i sprawdzasz "
-    "jego log, więc wiesz, co działa i z jakim wynikiem.\n\n"
+    "autora program nanosi od razu i też mówi to jedną linią. Kod podany "
+    "bez ścieżki widzisz jako [nazwa — liczba znaków]; program położy go "
+    "z wypowiedzi autora, 1:1, gdy w TASK podasz write_engineer_code_to "
+    "ze ścieżką pliku albo katalogu. Kod, który już jest na dysku, "
+    "widzisz jako ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na "
+    "dysku], i można go po prostu uruchomić. Do kodu zaglądasz komendą "
+    "do odczytu (grep -n, sed -n 'od,dop' plik, head, wc -l) zamiast "
+    "czytać cały plik. Dłuższe uruchomienie puszczasz w tle: program sam "
+    "da znać, gdy w logu przybędzie wyników albo proces się skończy, "
+    "a ten czas jest dla zespołu.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
