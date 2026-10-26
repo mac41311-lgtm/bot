@@ -8500,7 +8500,7 @@ _PODGLAD_PY_ZMIANA_RE = re.compile(
     r"write_text|write_bytes|writelines|socket|urlopen|urlretrieve|"
     r"exec|eval|shutil|save|dump|to_csv|savez|fork|spawn)\b"
     r"|\b(?:requests|httpx)\s*\.\s*(?:get|post|put|patch|delete|head|request|Session|Client)\b"
-    r"|open\([^)]*['\"][wax+]"
+    r"|open\([^)]*,\s*(?:mode\s*=\s*)?['\"][^'\"]*[wax+]"
 )
 _PODGLAD_PRZEKIEROWANIA = ("2>&1", "2>/dev/null", ">/dev/null", "1>/dev/null", "&>/dev/null")
 
@@ -8522,7 +8522,10 @@ def _podglad_odmowa(komenda):
         if t in (";", "&&", "||", "|"):
             segmenty.append(biez)
             biez = []
-        elif set(t) <= set(";&|<>") or "`" in t or "$(" in t:
+        elif t == "<":
+            # v480fz: wejscie z pliku (wc -c < plik) to tez odczyt
+            continue
+        elif (t and set(t) <= set(";&|<>")) or "`" in t or "$(" in t:
             return ("w podglądzie komendy do odczytu łączysz przez | ; && ||, a wyjście "
                     "kierujesz najwyżej do 2>&1 albo /dev/null (bez > do pliku, &, ` i $( )) — "
                     "np. PODGLĄD: python3 --version; pip show torch | head -3")
@@ -8532,7 +8535,18 @@ def _podglad_odmowa(komenda):
     for sl in segmenty:
         while sl and re.fullmatch(r"[A-Za-z_]\w*=\S*", sl[0]):
             sl = sl[1:]
-        if not sl:
+        # v480fz: petla i warunek powloki wokol komend do odczytu
+        # ("for f in a b; do head -c 250 "$f"; done", "cd ~/MAIN_1; ls").
+        # Bieg 2026-10-26: Bartek dostal odmowe za "cd" i za "for".
+        while sl and sl[0] in ("do", "then", "else", "if", "while", "until", "!", "{", "}"):
+            sl = sl[1:]
+        if not sl or sl[0] in ("done", "fi", "}"):
+            continue
+        if sl[0] == "for":
+            if len(sl) >= 3 and re.fullmatch(r"[A-Za-z_]\w*", sl[1]) and sl[2] == "in":
+                continue
+            return "pętla w podglądzie: for nazwa in a b c; do komenda do odczytu; done"
+        if sl[0] == "cd":
             continue
         cmd = sl[0].split("/")[-1]
         if cmd not in _PODGLAD_KOMENDY:
@@ -8591,12 +8605,78 @@ def _podglad_odmowa(komenda):
     return ""
 
 
+_PODGLAD_PY_RYWAL_RE = re.compile(
+    r"\b(?:walk|listdir|scandir|glob|rglob|iterdir|expanduser|getenv|environ|chdir|home)\b|\.\.|~|MAIN_")
+
+
+def _podglad_siega_do_rywala(komenda):
+    """
+    v480fz: w rywalizacji podglad nie siega do folderu rywala ani do
+    folderu, ktory go zawiera (~, .., /) — takze przez cd, maske
+    (M*_2) albo grep -r. Sprawdzone na plikach: kazda sciezka z komendy,
+    po rozwinieciu maski, wzgledem katalogu z ostatniego cd.
+    """
+    if not _DRUZYNA:
+        return ""
+    import glob
+    try:
+        rywal = _folder_druzyny(_rywal()).resolve()
+        cwd = _folder_druzyny(_DRUZYNA).resolve()
+        lx = shlex.shlex(komenda, posix=True, punctuation_chars=";&|<>")
+        lx.whitespace_split = True
+        tokeny = list(lx)
+    except Exception:
+        return "nie umiem rozebrać tej komendy"
+    powod = ("w rywalizacji podgląd sięga tylko do folderu drużyny ("
+             + _sciezka_od_domu(str(_folder_druzyny(_DRUZYNA))) + ") i plików poza katalogiem "
+             "domowym — nie do ~, .. ani folderu drugiej drużyny")
+
+    def _zle(p):
+        try:
+            p = p.resolve()
+        except Exception:
+            return True
+        return p == rywal or rywal in p.parents or p in rywal.parents
+
+    poprzedni = ""
+    for t in tokeny + [";"]:
+        if t in (";", "&&", "||", "|"):
+            poprzedni = ""
+            continue
+        if poprzedni in ("python3", "python") or (poprzedni == "-c"):
+            if poprzedni == "-c" and _PODGLAD_PY_RYWAL_RE.search(t):
+                return powod + " (python3 -c czyta tylko pliki z folderu drużyny, po nazwie)"
+        if t.startswith("-") and "=" not in t:
+            poprzedni = t
+            continue
+        wart = t.split("=", 1)[1] if t.startswith("-") else t
+        if not wart or poprzedni == "-c":
+            poprzedni = t
+            continue
+        p = Path(os.path.expanduser(wart)) if wart.startswith(("~", "/")) else cwd / wart
+        trafione = [Path(x) for x in glob.glob(str(p))] if any(z in wart for z in "*?[") else [p]
+        if any(z in wart for z in "*?["):
+            trafione.append(Path(re.split(r"[*?\[]", str(p), 1)[0]).parent)
+        if any(_zle(x) for x in trafione if x.exists() or x == p):
+            return powod
+        if poprzedni == "cd" and (p.exists() or wart in ("..", "~")):
+            cwd = p.resolve()
+        poprzedni = t
+    # katalog roboczy na koniec cd (np. "cd ..; grep -r x .")
+    return ""
+
+
 def _uruchom_podglad(komenda):
     """Wynik jednej komendy podgladu, gotowy do oddania roli."""
+    # v480fz: ogon znacznikow narzedzi DeepSeeka ("</｜｜DSML｜｜ parameter>")
+    # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
+    komenda = re.split(r"</?\s*[｜|]{1,2}\s*DSML|<[｜|]", str(komenda or ""))[0]
     komenda = komenda.strip()
     odm = _podglad_odmowa(komenda)
     if not odm and _siega_do_rywala("termux_run", {"command": komenda}):
         odm = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
+    if not odm:
+        odm = _podglad_siega_do_rywala(komenda)
     if odm:
         return "$ " + komenda + "\n(nie uruchomiłem: " + odm + ")"
     cwd = str(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else str(Path.home())
@@ -14673,6 +14753,44 @@ def _czlony_komendy(command):
     return czlony
 
 
+def _zmienna_wzgledna_w_komendzie(command, arg, slowa):
+    """
+    v480fz: arg z $zmienna to na pewno wzgledna nazwa pliku: bez -r, bez `,
+    arg nie zaczyna sie od / ~ ani zmiennej domu, a kazda jego zmienna jest
+    w tej komendzie ustawiona (NAZWA=... albo for NAZWA in ...) wylacznie
+    na wartosci, ktore nie zaczynaja sie od / ~ $HOME i nie maja "..".
+    """
+    if "`" in arg or "$(" in arg or arg.startswith(("/", "~")):
+        return False
+    if any(re.fullmatch(r"-[A-Za-z]*[rR][A-Za-z]*|--recursive", a) for a in slowa[1:]):
+        return False
+    nazwy = re.findall(r"\$\{?([A-Za-z_]\w*)", arg)
+    if not nazwy:
+        return False
+    tekst = str(command or "")
+
+    def _ok(w):
+        w = w.strip().strip("'\"")
+        return bool(w) and not w.startswith(("/", "~", "$HOME", "${HOME", "$PWD", "$OLDPWD")) and ".." not in w
+
+    for n in nazwy:
+        if n in ("HOME", "PWD", "OLDPWD", "TMPDIR", "PREFIX"):
+            return False
+        wartosci = re.findall(r"(?:^|[\s;&|(])" + n + r"=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)", tekst)
+        for m in re.finditer(r"\bfor\s+" + n + r"\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b", tekst):
+            lista = m.group(1).strip()
+            if lista.startswith("$"):
+                zrodlo = re.findall(r"(?:^|[\s;&|(])" + re.escape(lista.strip("$\"{}")) + r"=(\"[^\"]*\"|'[^']*')", tekst)
+                if not zrodlo:
+                    return False
+                wartosci += zrodlo[-1].strip("'\"").split()
+            else:
+                wartosci += lista.split()
+        if not wartosci or not all(_ok(w) for w in wartosci):
+            return False
+    return True
+
+
 def _usuwa_tylko_wlasne_katalogi(command, folder=None):
     """
     v465: czy ta komenda usuwa WYLACZNIE rzeczy wewnatrz katalogow, ktore
@@ -14728,6 +14846,10 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
             slowa = shlex.split(czlon) if czlon.strip() else []
         except ValueError:
             return False
+        # v480fz: "do rm -f x", "then rm ...", "{ rm ...": slowo skladni
+        # powloki przed komenda nie zmienia tego, co usuwa
+        while slowa and slowa[0] in ("do", "then", "else", "{", "(", "!"):
+            slowa = slowa[1:]
         if not slowa:
             continue
         if slowa[0] == "cd":
@@ -14747,6 +14869,14 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
             return False
         for arg in cele:
             if any(z in arg for z in "$`"):
+                # v480fz: w warsztacie druzyny `rm -f "$out"`, gdzie out to
+                # nazwa ustawiona w tej samej komendzie (out="$slug.txt",
+                # for slug in a b c) — wzgledna, bez .. i bez -r. Bieg
+                # 2026-10-26 00:38, druzyna 2: skrypt pobierania kasowal
+                # nieudane pobrania i stanal na pytaniu w terminalu.
+                if (warsztat is not None and _zmienna_wzgledna_w_komendzie(command, arg, slowa)
+                        and (cwd.resolve() == warsztat or warsztat in cwd.resolve().parents)):
+                    continue
                 return False
             # v467: `rm -f ~/ocr2docx/out/multi.*` — maska wewnatrz
             # wlasnego katalogu; liczy sie czesc przed pierwsza maska.

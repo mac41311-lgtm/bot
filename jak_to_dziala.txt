@@ -2956,3 +2956,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - w rywalizacji zadanie z samą nazwą pliku („python3 eval_bpc.py”)
        szuka go w folderze drużyny — wcześniej program kładł drugi
        egzemplarz w ~/eval_bpc.py.
+
+185. PODGLĄD i porządki w folderze drużyny (v480fz). Biegi 2026-10-26
+     00:35 i 15:35:
+     - PODGLĄD przyjmuje cd, pętlę „for f in a b; do head "$f"; done”,
+       wejście z pliku (wc -c < plik) i grep -c "" (pusty napis był
+       brany za znak przekierowania); ogon znaczników narzędzi
+       DeepSeeka („</｜｜DSML｜｜ parameter>”) jest odcinany;
+     - python3 -c "open('a.py').read()" to odczyt (nazwa pliku na a/w/x
+       była brana za tryb zapisu);
+     - w rywalizacji PODGLĄD nie sięga do ~, .., / ani maski typu M*_2
+       — wcześniej „grep -r … ~” pokazałby pliki drugiej drużyny;
+       python3 -c nie listuje katalogów poza folderem drużyny;
+     - „rm -f "$out"” w skrypcie drużyny, gdzie out to nazwa ustawiona
+       w tej samej komendzie (out="$slug.txt", for slug in …), bez -r,
+       w folderze drużyny, nie pyta już w terminalu.
