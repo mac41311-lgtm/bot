@@ -3003,3 +3003,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - gdy nic się nie zmieniło, MAIN dostaje jedną linię "to samo co
        przy tym samym sprawdzeniu o HH:MM — nic nowego";
      - nowa rozmowa MAIN-a dostaje znów całość.
+
+189. Jak MAIN wywołuje zespół przy czekaniu (v480gd)
+     - linia "Ten czas jest dla zespołu" mówi teraz wprost, że osoby z
+       zespołu wywołuje się w tej samej odpowiedzi decyzją ASK z imieniem,
+       i pokazuje jej kształt: {"type": "ASK", "ask_role": "Bartek",
+       "ask_question": "..."}; odpowiedź wraca od razu, wynik z tła
+       przychodzi sam.

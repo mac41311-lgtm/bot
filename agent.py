@@ -8481,12 +8481,18 @@ _PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | r
 # odpowiadal "Czekam 6 min" — "pracować nad czymś innym" nic mu nie mowilo.
 # Ta sama linia, ktora i tak przychodzi przy czekaniu, mowi teraz, na co
 # jest ten czas; caly zespol (prosba uzytkownika), bez przymusu.
+# v480gd: uzytkownik (2026-10-26, krok z 16:37): "MAIN ma wywolac, trzeba
+# mu to napisac" — linia mowi teraz wprost, ze wywoluje sie ich decyzja
+# ASK z imieniem, i pokazuje jej ksztalt.
 _CZAS_DLA_ZESPOLU = (
     "Ten czas jest dla zespołu: Bartek może sprawdzić albo dopisać kod, "
     "Marek obejrzeć wyniki i znaleźć słabe punkty, Tomek ułożyć następny "
     "krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, Ola "
     "podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
-    "okiem — zapytaj tego, kogo potrzebujesz."
+    "okiem. Wywołujesz ich teraz, w tej odpowiedzi, decyzją ASK z imieniem, "
+    "np. {\"type\": \"ASK\", \"ask_role\": \"Bartek\", \"ask_question\": "
+    "\"...\"} — odpowiedź wraca do Ciebie od razu, a wynik z tła i tak "
+    "przyjdzie sam."
 )
 
 
