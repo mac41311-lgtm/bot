@@ -8476,7 +8476,21 @@ _ROLE_Z_PODGLADEM = (
     "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
     "CODE_REVIEWER", "CODE_FIXER",
 )
-_PODGLAD_RE = re.compile(r"^[ \t>*`-]*PODGL(?:Ą|A)D:\s*`?(.+?)`?\s*$", re.M | re.I)
+# v480gg: "**PODGLĄD:** `komenda`" (pogrubienie i kod z markdownu) —
+# bieg 2026-10-26 18:30: Bartek 4 razy z rzedu dostal odmowe, bo "**" i
+# "`" szly do basha jako czesc komendy.
+_PODGLAD_RE = re.compile(r"^[ \t>*_`-]*PODGL(?:Ą|A)D[*_]*:[*_]*\s*(.+?)\s*$", re.M | re.I)
+
+
+def _komenda_z_podgladu(k):
+    k = str(k or "").strip()
+    for _ in range(3):
+        k2 = re.sub(r"^(?:\*\*|__|`+)\s*", "", k)
+        k2 = re.sub(r"\s*(?:\*\*|__|`+)$", "", k2).strip()
+        if k2 == k:
+            break
+        k = k2
+    return k
 # v480ga: uzytkownik (2026-10-26): MAIN przy czekaniu na proces w tle
 # odpowiadal "Czekam 6 min" — "pracować nad czymś innym" nic mu nie mowilo.
 # Ta sama linia, ktora i tak przychodzi przy czekaniu, mowi teraz, na co
@@ -8726,7 +8740,7 @@ def _podglad_dla_roli(rola, odp):
     for _ in range(_PODGLAD_RUND):
         komendy = []
         for m in _PODGLAD_RE.finditer(str(odp or "")):
-            k = m.group(1).strip()
+            k = _komenda_z_podgladu(m.group(1))
             if k and k not in komendy:
                 komendy.append(k)
         if not komendy:
@@ -8740,6 +8754,20 @@ def _podglad_dla_roli(rola, odp):
                 "Wynik podglądu:\n\n" + "\n\n".join(wyniki)
                 + "\n\nTeraz odpowiedz na pytanie, na które odpowiadasz; możesz też zajrzeć jeszcze raz."
             ))
+    # v480gg: po ostatniej rundzie odpowiedz bywa sama prosba o podglad
+    # ("Jak wroci — mam wszystko"); wynik idzie wtedy razem z nia, zeby
+    # czytajacy (MAIN albo kolega) mial to, na co rola czekala.
+    try:
+        komendy = []
+        for m in _PODGLAD_RE.finditer(str(odp or "")):
+            k = _komenda_z_podgladu(m.group(1))
+            if k and k not in komendy:
+                komendy.append(k)
+        if komendy:
+            odp = (str(odp).rstrip() + "\n\n[Wynik podglądu, o który prosi " + imie + ":]\n"
+                   + "\n\n".join(_uruchom_podglad(k) for k in komendy[:5]))
+    except Exception:
+        pass
     return odp
 
 
@@ -27743,7 +27771,11 @@ def _sciezka_rywala(p):
     return po_ukosniku.search(t) or slowo.search(t)
 
 
-_ECHO_RE = re.compile(r"\b(?:echo|printf)\b[^\n;&|>]*")
+# v480gg: tekst w cudzyslowie po echo/printf to tekst, nawet gdy ma w
+# sobie "->", ";" albo "|" (bieg 2026-10-26 18:35: notatka w printf z
+# "L1 -> L2" i "nie dotykamy ~/MAIN_2" zablokowana jako folder rywala).
+_ECHO_RE = re.compile(
+    r"\b(?:echo|printf)\b(?:'[^'\n]*'|\"(?:[^\"\\\n]|\\.)*\"|[^\n;&|>'\"])*")
 _W_CUDZYSLOWIE_RE = re.compile(r"'[^'\n]*'|\"(?:[^\"\\\n]|\\.)*\"")
 
 

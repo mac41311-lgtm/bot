@@ -3026,3 +3026,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        ostatnia linia logu), potem "Co się właśnie stało", a na końcu
        raz linia o zespole (wcześniej była w środku ramki i kończyła się
        drugim "wynik przyjdzie sam").
+
+192. PODGLĄD z markdownem i notatka w printf (v480gg)
+     - "**PODGLĄD:** `komenda`" (pogrubienie, komenda w `…`) działa jak
+       zwykłe "PODGLĄD: komenda" — program zdejmuje ** i ` zamiast
+       oddawać je bashowi (bieg 26.10 18:30: Bartek dostał 4 odmowy z
+       rzędu i nie doszedł do pisania kodu);
+     - gdy po ostatniej rundzie odpowiedź roli dalej prosi o podgląd,
+       program dokleja do niej wynik, więc MAIN dostaje to, na co rola
+       czekała, a nie samo "jak wróci wynik…";
+     - tekst w cudzysłowie po echo/printf jest tekstem także wtedy, gdy
+       ma w sobie "->", ";" albo "|" — notatka "nie dotykamy ~/MAIN_2"
+       w printf nie jest już blokowana jako folder rywala.
