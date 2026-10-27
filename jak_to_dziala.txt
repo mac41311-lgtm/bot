@@ -3156,3 +3156,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        w wielu liniach (wyjście, kod);
      - "W tle dalej …" pokazuje całą komendę (do 200 znaków, bez sleep);
        komenda w kilku liniach — pierwsza linia i ile jest dalszych.
+
+202. MAIN dostaje czas jako "ile trwa / ile jeszcze", nie godziny (v480gq)
+     - DeepSeek nie zna bieżącej godziny, więc "czekanie z 10:13, do ok. 10:16"
+       nic mu nie mówiło; karty i linie W TLE mówią teraz: "W tle dalej
+       czekanie (komenda) — trwa 47 s, wynik najpóźniej za 2 min 12 s",
+       "W TLE SKOŃCZONE: komenda Bartka (trwało 5 min 24 s)";
+     - "nic nowego od tego samego sprawdzenia 5 min temu", "Twoja komenda
+       puszczona 6 min temu skończyła się w tle", "liczy już w tle od 4 min";
+     - godziny zostają tylko w logu dla użytkownika.

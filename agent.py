@@ -34699,7 +34699,7 @@ def _uruchom_rzecz(rzecz, praca, cichy):
             try:
                 _role_inbox.setdefault(rzecz["autor"], []).append((
                     "Program",
-                    "Twoja komenda z " + _hhmm(rzecz["start"]) + " skończyła się w tle:\n"
+                    "Twoja komenda puszczona " + _temu(rzecz["start"]) + " skończyła się w tle:\n"
                     + _opis_dla_zespolu(rzecz["komenda"], rzecz.get("cwd") or "~", wynik)))
             except Exception:
                 pass
@@ -34763,9 +34763,9 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
             "status": "JUZ_CZEKA_W_TLE",
             "command": cmd,
             "message": (
-                "Drugiego czekania nie puściłem: czekanie z "
-                + _hhmm(tamto["start"]) + " już czyta te same pliki i leci "
-                "do ok. " + _hhmm(tamto["start"] + (tamto.get("sekundy") or 0))
+                "Drugiego czekania nie puściłem: czekanie puszczone "
+                + _temu(tamto["start"]) + " już czyta te same pliki; wynik "
+                "najpóźniej za " + _min_s(max(0, tamto["start"] + (tamto.get("sekundy") or 0) - time.time()))
                 + " (wcześniej, jeśli proces się skończy). Jego wynik przyjdzie "
                 "sam na górze Twojej wiadomości, więc nie musisz na nie czekać "
                 "— w tym czasie możesz robić coś innego."
@@ -34948,8 +34948,8 @@ def _bezczynnie_czekaj():
                 "command": _BEZ_SLEEP_RE.sub("true", czekania[0]["komenda"])
             })
             tekst += (
-                "\nPostęp (świeży odczyt z czekania z "
-                + _hhmm(czekania[0]["start"]) + "):\n"
+                "\nPostęp (świeży odczyt z czekania puszczonego "
+                + _temu(czekania[0]["start"]) + "):\n"
                 + _opis_wyniku_czekania(odczyt)
             )
         except Exception:
@@ -35042,7 +35042,7 @@ def _juz_liczy_w_tle(cmd):
         if r.get("rodzaj") == "komenda" and _rdzen_komendy(r.get("komenda")) == rdzen:
             kto = ("Komenda " + r["autor_dop"]) if r.get("autor_dop") else "Ta komenda"
             return (kto + " (" + short(rdzen, 120) + ") liczy już w tle od "
-                    + _hhmm(r["start"]) + " — nie puściłem jej drugi raz, żeby dwie kopie "
+                    + _min_s(time.time() - r["start"]) + " — nie puściłem jej drugi raz, żeby dwie kopie "
                     "nie dzieliły procesora. Wynik przyjdzie sam, gdy się skończy.")
     return ""
 
@@ -35118,6 +35118,13 @@ def _opis_kodu_wyjscia(kod):
     return "kod wyjścia: " + str(k)
 
 
+def _temu(t):
+    """v480gq: DeepSeek nie zna biezacej godziny — zamiast "z 10:13" mowimy,
+    ile temu (uzytkownik 2026-10-27: "on moze te godziny nie liczyc")."""
+    sek = max(0, int(time.time() - (t or time.time())))
+    return "przed chwilą" if sek < 60 else _min_s(sek) + " temu"
+
+
 def _hhmm(t, sek=False):
     return datetime.fromtimestamp(t or time.time()).strftime(
         "%H:%M:%S" if sek else "%H:%M")
@@ -35163,7 +35170,7 @@ def _tylko_nowe_dla_maina(cmd, wyj):
     widac = set(l.strip() for l in wynik_txt[:2500].split("\n") if l.strip())
     kom[klucz] = {"linie": set(l.strip() for l in linie if l.strip() and (
         l.strip() in widac or (stare and l.strip() in stare["linie"]))),
-        "czas": _hhmm(time.time())}
+        "czas": _hhmm(time.time()), "t": time.time()}
     while len(kom) > 60:
         kom.pop(next(iter(kom)))
     return wynik_txt
@@ -35173,7 +35180,7 @@ def _tylko_nowe_tekst(linie, stare):
     widziane = stare["linie"]
     nowe = [l for l in linie if l.strip() and l.strip() not in widziane]
     if not nowe:
-        return ("(to samo co przy tym samym sprawdzeniu o " + stare["czas"]
+        return ("(to samo co przy tym samym sprawdzeniu " + _temu(stare.get("t"))
                 + " — nic nowego, " + str(len(linie)) + " linii bez zmian)")
     stare_ile = sum(1 for l in linie if l.strip() and l.strip() in widziane)
     if stare_ile < 3:
@@ -35184,7 +35191,7 @@ def _tylko_nowe_tekst(linie, stare):
         if len(run) == 1:
             wynik.extend(run)
         elif run:
-            wynik.append("… (" + str(len(run)) + " linii jak o " + stare["czas"] + ")")
+            wynik.append("… (" + str(len(run)) + " linii jak " + _temu(stare.get("t")) + ")")
         del run[:]
 
     # naglowek nad nowa linia zostaje, zeby bylo wiadomo, czego dotyczy
@@ -35208,8 +35215,8 @@ def _tylko_nowe_tekst(linie, stare):
             continue
         run.append(l)
     _zamknij()
-    return ("(pokazuję tylko to, co nowe od tego samego sprawdzenia o "
-            + stare["czas"] + ")\n" + "\n".join(wynik))
+    return ("(pokazuję tylko to, co nowe od tego samego sprawdzenia "
+            + _temu(stare.get("t")) + ")\n" + "\n".join(wynik))
 
 
 def _wynik_tylko_nowe(w, cmd):
@@ -35227,9 +35234,7 @@ def _karta_wyniku(r):
     return "\n".join([
         "═══ W TLE SKOŃCZONE: " + ("czekanie" if czekanie else "komenda")
         + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
-        + " z " + _hhmm(r["start"]) + " ═══",
-        "Skończone o " + _hhmm(r.get("koniec"), True) + ", trwało "
-        + _min_s(trwalo) + ".",
+        + " (trwało " + _min_s(trwalo) + ") ═══",
         ("Komenda po sleep: " if czekanie else "Komenda: ") + short(kom, 200),
         "Wynik:",
         _opis_wyniku_czekania(_wynik_tylko_nowe(r["wynik"], kom)),
@@ -35269,26 +35274,25 @@ def _karta_startu(r, teraz):
     czekanie = r["rodzaj"] == "czekanie"
     minelo = int(teraz - r["start"])
     if czekanie:
-        do = _hhmm(r["start"] + (r.get("sekundy") or 0))
+        do = _min_s(max(0, r["start"] + (r.get("sekundy") or 0) - teraz))
         linie = [
-            "═══ W TLE: czekanie z " + _hhmm(r["start"]) + " ═══",
+            "═══ W TLE: czekanie ═══",
             "Potem wykona: " + short(_bez_sleep(r["komenda"]), 200),
         ]
         if r.get("czeka_na"):
             linie.append(
-                "Czeka, aż skończy się to, co już leciało w tle, najdłużej "
-                + _min_s(r.get("sekundy") or 0) + " — do ok. " + do + "."
+                "Czeka, aż skończy się to, co już leciało w tle — wynik "
+                "najpóźniej za " + do + "."
             )
         else:
             linie.append(
-                "Najdłużej " + _min_s(r.get("sekundy") or 0) + " — do ok. "
-                + do + "; skończy się wcześniej, gdy proces w tle, na który "
-                "czeka, się zakończy."
+                "Wynik najpóźniej za " + do + "; wcześniej, gdy proces w tle, "
+                "na który czeka, się zakończy."
             )
     else:
         linie = [
             "═══ W TLE: komenda" + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
-            + " z " + _hhmm(r["start"]) + " ═══",
+            + " ═══",
             "Komenda: " + short(r["komenda"], 200),
             "Liczy już " + _min_s(minelo) + " — dłużej niż "
             + _min_s(_W_TLE_PO_S) + ", więc liczy dalej w tle, z tymi samymi "
@@ -35335,14 +35339,14 @@ def _czekanie_blok():
                     _klucz = str(_w.get("stdout") or "") + str(_w.get("stderr") or "")
                     if _klucz and _klucz in widziane:
                         karty.append(
-                            "═══ W TLE SKOŃCZONE: czekanie z " + _hhmm(r["start"])
-                            + " — wynik taki sam jak " + widziane[_klucz] + " ═══"
+                            "═══ W TLE SKOŃCZONE: czekanie — wynik taki sam jak "
+                            + widziane[_klucz] + " ═══"
                         )
                     else:
                         if _klucz:
                             widziane[_klucz] = (
                                 ("czekanie" if r["rodzaj"] == "czekanie" else "komenda")
-                                + " z " + _hhmm(r["start"]) + " wyżej"
+                                + " wyżej"
                             )
                         karty.append(_karta_wyniku(r))
                 _w_tle.remove(r)
@@ -35358,9 +35362,7 @@ def _czekanie_blok():
                 if r["rodzaj"] == "czekanie" and r.get("sekundy"):
                     _ile = r["start"] + float(r["sekundy"]) - teraz
                     if _ile > 5:
-                        _zostalo = (", do wyniku najdłużej ok. " + _min_s(_ile)
-                                    + " (do " + _hhmm(r["start"] + float(r["sekundy"]))
-                                    + ")")
+                        _zostalo = ", wynik najpóźniej za " + _min_s(_ile)
                 _to_samo = any(_ta_sama_komenda(r["komenda"], k)
                                for k in _ostatni_run()["komendy"])
                 # v480gb: MAIN zrobil to samo sprawdzenie wprost i ma jego
@@ -35374,9 +35376,8 @@ def _czekanie_blok():
                     _w_tle.remove(r)
                     continue
                 linie.append(
-                    "W tle dalej " + co + " z " + _hhmm(r["start"])
-                    + " (" + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 200) + ")"
-                    + ", już " + _min_s(teraz - r["start"]) + _zostalo + "."
+                    "W tle dalej " + co + " (" + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 200) + ")"
+                    + " — trwa " + _min_s(teraz - r["start"]) + _zostalo + "."
                 )
     if linie:
         karty.append("\n".join(linie) + (
