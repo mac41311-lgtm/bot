@@ -8563,6 +8563,7 @@ _CZAS_DLA_ZESPOLU = (
     "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
     "okiem. Odpowiedź wraca do Ciebie od razu."
 )
+_CZAS_DLA_ZESPOLU_KROTKO = "Czekasz na wynik — to dobry moment na ASK do zespołu."
 
 
 _PODGLAD_KOMENDY = (
@@ -35304,6 +35305,9 @@ def _ta_sama_komenda(a, b):
 
 
 _zespol_przypomniany = set()
+# v480gu: rozmowy MAIN-a (chat_session_id), ktore dostaly juz pelny
+# _CZAS_DLA_ZESPOLU — dalej idzie _CZAS_DLA_ZESPOLU_KROTKO.
+_zespol_pelny_tekst_w = set()
 
 
 def _klucze_tla():
@@ -44886,12 +44890,24 @@ def main_decide(
         # v480gt: linia o zespole raz na kazda nowa rzecz w tle, nie przy
         # kazdej wiadomosci, gdy czeka (noc 26/27.10: 65 razy na 182
         # wiadomosci — od trzeciego razu czyta sie ja jak stopke).
+        # v480gu: pelny tekst raz na rozmowe MAIN-a, przy kolejnym nowym
+        # czekaniu jedna krotka linia (uzytkownik 2026-10-27: "czy caly
+        # czas ten tekst bylby ci potrzebny").
         _nowe_tlo = _klucze_tla() - _zespol_przypomniany
         _zespol_przypomniany.update(_nowe_tlo)
+        _linia_zespolu = ""
+        if _nowe_tlo:
+            _s_main = sessions.get("MAIN")
+            _rozmowa_main = getattr(_s_main, "chat_session_id", None) or "?"
+            if _rozmowa_main in _zespol_pelny_tekst_w:
+                _linia_zespolu = _CZAS_DLA_ZESPOLU_KROTKO
+            else:
+                _zespol_pelny_tekst_w.add(_rozmowa_main)
+                _linia_zespolu = _CZAS_DLA_ZESPOLU
         _co_sie_stalo_main = (
             _co_sie_stalo_main.replace(" " + _CZAS_DLA_ZESPOLU, "")
             .replace(_CZAS_DLA_ZESPOLU, "").rstrip("\n")
-            + (("\n\n" + _CZAS_DLA_ZESPOLU) if _nowe_tlo else "") + "\n"
+            + (("\n\n" + _linia_zespolu) if _linia_zespolu else "") + "\n"
         )
 
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN

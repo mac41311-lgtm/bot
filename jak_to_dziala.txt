@@ -3199,3 +3199,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        Bartka (tylko jego sprawy), akapit "Kod." MAIN-a (tło samo, z
        postępem), lista narzędzi w grupach, prompt Sędziego (te same
        zasady, bez zdań o historii).
+
+206. Linia o zespole raz w całości (v480gu)
+     - pełny tekst "Zespół odzywa się tylko wtedy, gdy Ty go wywołasz…"
+       MAIN dostaje raz na rozmowę, przy pierwszym czekaniu; przy każdym
+       kolejnym nowym czekaniu jedną linię: "Czekasz na wynik — to dobry
+       moment na ASK do zespołu." Nowa rozmowa MAIN-a znów dostaje całość.
