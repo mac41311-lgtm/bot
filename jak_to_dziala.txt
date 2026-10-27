@@ -3359,3 +3359,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        I tak czekasz na wynik." (z postępem, jeśli to pierwsza linia),
        najwyżej raz na 10 kroków. Krok ostatniego ASK przeżywa
        przeładowanie.
+
+223. "Czemu nie pytasz zespołu?" jako osobna wiadomość, częściej (v480hl)
+     - Użytkownik: "za rzadko", "samo zdanie, bez logów". Pytanie idzie
+       teraz samo, jako osobna wiadomość: "Czemu nie pytasz zespołu?
+       I tak czekasz na wynik." — co 5 kroków bez pytania do zespołu.
+     - Także wtedy, gdy MAIN dostał pełną wiadomość, coś liczy w tle,
+       a on znów wybrał sam RUN: zaraz po jego odpowiedzi idzie samo
+       pytanie, a jego odpowiedź na nie jest decyzją w tym kroku.
+     - Bieg 18:30 (krok 210): po tym pytaniu MAIN od razu zapytał Marka.

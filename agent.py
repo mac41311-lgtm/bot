@@ -8592,6 +8592,8 @@ _glos_postep_byl = [False]
 # v480hf: ile krotkich glosow z rzedu (bez pelnej wiadomosci, czyli bez ASK)
 _glos_krotkie = [0]
 _glos_czemu_krok = [-100]
+_CZEMU_ZDANIE = "Czemu nie pytasz zespołu? I tak czekasz na wynik."
+_CZEMU_CO_KROKOW = 5
 _GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
 # ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
 _wynik_do_decyzji = [False]
@@ -45437,12 +45439,12 @@ def main_decide(
         # sie wiec, ile krokow minelo od ostatniego ASK: od 5 krokow pytanie
         # zamiast zwyklego zdania, potem nie czesciej niz co 10 krokow.
         _od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
-        _czemu = ((_glos_krotkie[0] % 15 == 3 or _od_ask >= 5)
-                  and int(step or 0) - _glos_czemu_krok[0] >= 10)
+        # v480hl: uzytkownik 2026-10-27: "za rzadko" i "samo zdanie, bez
+        # logow" — pytanie idzie samo, osobna wiadomoscia, co 5 krokow bez ASK.
+        _czemu = _od_ask >= _CZEMU_CO_KROKOW and int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
         if _czemu:
             _glos_czemu_krok[0] = int(step or 0)
-        if _czemu and _glos_postep_byl[0]:
-            return deepseek("MAIN", "Nic nowego. Czemu nie pytasz zespołu? I tak czekasz na wynik.")
+            return deepseek("MAIN", _CZEMU_ZDANIE)
         if _glos_postep_byl[0]:
             return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam; w tym czasie możesz zapytać zespół (ASK z imieniem).")
         _glos_postep_byl[0] = True
@@ -45459,8 +45461,7 @@ def main_decide(
         return deepseek("MAIN", (
             "Nic nowego od Twojego ostatniego sprawdzenia"
             + (" — " + "; ".join(_trwa_linie[:3]) if _trwa_linie else "")
-            + (". Czemu nie pytasz zespołu? I tak czekasz na wynik." if _czemu
-               else ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?")
+            + ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?"
         ))
 
     _glos_postep_byl[0] = False
@@ -45483,10 +45484,31 @@ def main_decide(
 
     prompt = "\n\n".join(_sekcje) + "\n"
 
-    return deepseek(
+    odp = deepseek(
         "MAIN",
         prompt
     )
+    # v480hl: uzytkownik 2026-10-27 ("za rzadko"): MAIN przeplatal czekanie
+    # w tle z wlasnym sprawdzaniem logu, wiec krotkich glosow prawie nie
+    # bylo, a pytanie o zespol nie padalo przez 20 krokow. Gdy cos liczy
+    # w tle, od ostatniego ASK minelo >= 5 krokow, a MAIN znowu wybral sam
+    # RUN — zaraz po jego odpowiedzi idzie osobna wiadomosc z samym
+    # pytaniem; to, co na nia odpowie, jest jego decyzja w tym kroku.
+    try:
+        _od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
+        if (not asked_followup and _od_ask >= _CZEMU_CO_KROKOW
+                and int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
+                and re.search(r'"type"\s*:\s*"RUN"', str(odp or ""))
+                and (_w_tle_zywe() or _zywe_w_tle())):
+            _glos_czemu_krok[0] = int(step or 0)
+            log("MAIN", "Od " + str(_od_ask) + " kroków bez pytania do zespołu, a coś liczy w tle — "
+                "MAIN dostaje samo pytanie, czemu nie pyta zespołu.")
+            odp2 = deepseek("MAIN", _CZEMU_ZDANIE)
+            if re.search(r'"type"\s*:\s*"[A-Z_]+"', str(odp2 or "")):
+                return odp2
+    except Exception as e:
+        log("MAIN", "Pytanie o zespół nie poszło: " + str(e))
+    return odp
 
 
 _MAIN_ASK_MAX = 5
