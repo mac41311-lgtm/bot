@@ -3266,3 +3266,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pytanie do zespołu: N kroków temu." Nie przy starcie czekania i nie,
        gdy MAIN pytał zespół w ostatnich 2 krokach; przykład ASK raz na
        rozmowę.
+
+212. Bez spamu u Bartka i resztki ramek u MAIN-a (v480ha)
+     - pętla URUCHOM/PODGLĄD: zdanie "Gdy masz już odpowiedź…" tylko w
+       pierwszej rundzie, "MAIN pytał: «…»" raz, w trzeciej; dalej sam
+       wynik. Cytat to pytanie MAIN-a (jego ostatni blok "MAIN:"), a przy
+       długim — pierwsze zdanie i samo pytanie z końca; wcześniej szła
+       końcówka wypowiedzi kolegi.
+     - wiadomość do zespołu: "Co MAIN zrobił i dlaczego:" zamiast drugiego
+       "MAIN:"; "Tomek (wcześniej, krok 337):" zamiast "Tomek:" i pod nim
+       "Tomek, wcześniej (krok 337):".
+     - MAIN: bez ramek ═══ w karcie czekania; "100% — iter 20000 z 20000"
+       gdy proces doszedł do końca liczby; odczyt przy przyroście logu
+       tylko z nowymi liniami; końcówka logu zakończonego procesu nie
+       powtarza się, gdy ta sama jest w wyniku czekania obok.

@@ -8981,8 +8981,26 @@ def _na_co_odpowiada(wiadomosc, n=350):
     """v480gt: koniec wiadomosci, na ktora rola odpowiada (tam stoi pytanie
     MAIN-a albo zlecenie), od poczatku zdania."""
     t = str(wiadomosc or "").strip()
+    # v480ha: pytanie MAIN-a to jego ostatni blok "MAIN:" — po nim moga
+    # stac glosy kolegow (bieg 2026-10-27 13:30: Bartek dostawal jako
+    # "Odpowiadasz na" koncowke wypowiedzi Marka, nie pytanie MAIN-a).
+    _bloki = list(re.finditer(r"(?m)^MAIN:\s*\n", t))
+    if _bloki:
+        _po = t[_bloki[-1].end():]
+        _kon = re.search(r"\n\s*\n\s*\n|\n[A-ZŁŚŻ][a-ząćęłńóśźż]+:\s*\n", _po)
+        t = (_po[:_kon.start()] if _kon else _po).strip() or t
     if len(t) <= n:
         return t
+    # dlugie pytanie: pierwsze zdanie (o co chodzi) i koniec (samo pytanie)
+    _zd = re.split(r"(?<=[.!?])\s+", " ".join(t.split()))
+    if len(_zd) >= 2:
+        pocz, kon = _zd[0], _zd[-1]
+        for z in reversed(_zd[1:-1]):
+            if len(kon) + len(z) + 1 > n // 2:
+                break
+            kon = z + " " + kon
+        if len(pocz) <= n // 2 and len(kon) <= n:
+            return pocz + " … " + kon
     t = t[-n:]
     m = re.search(r"(?<=[.!?:\n])\s+", t)
     return ("… " + t[m.end():]) if m and m.end() < n // 2 else "… " + t
@@ -9051,11 +9069,16 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         with _KOLEJKA_KONTA:
             # v480gt: "odpowiedz na pytanie, na które odpowiadasz" po kilku
             # rundach nic nie mowi — od trzeciej rundy samo pytanie.
+            # v480ha: uzytkownik 2026-10-27 ("caly czas spam"): Bartek w
+            # jednym pytaniu dostal 12 razy to samo przypomnienie i to samo
+            # zdanie na koncu. Zdanie raz (pierwsza runda), pytanie MAIN-a
+            # raz (trzecia runda); dalej sam wynik.
             _pyt = _pytanie_roli.get(rola) or ""
             odp = _deepseek_jedna_rozmowa(rola, (
                 "Wynik:\n\n" + "\n\n".join(wyniki)
-                + (("\n\nOdpowiadasz na: «" + _pyt + "»") if runda >= 3 and _pyt else "")
-                + "\n\nGdy masz już odpowiedź — napisz ją; możesz też zajrzeć albo uruchomić jeszcze raz."
+                + (("\n\nMAIN pytał: «" + _pyt + "»") if runda == 3 and _pyt else "")
+                + ("\n\nGdy masz już odpowiedź — napisz ją; możesz też zajrzeć albo uruchomić jeszcze raz."
+                   if runda == 1 else "")
             ))
     return odp
 
@@ -9078,6 +9101,17 @@ def _deepseek_jedna_rozmowa(name, message):
     """
 
     global _continue_action_supported
+
+    # v480ha: "Tomek:\nTomek, wcześniej (krok 337):" — imie dwa razy pod
+    # soba (bieg 2026-10-27 13:30, wiadomosc do Marka); zostaje jeden
+    # naglowek "Tomek (wcześniej, krok 337):".
+    try:
+        message = re.sub(
+            r"(?m)^([^\W\d_][\w]*):\n\1, wcześniej(?: \(krok (\d+)\))?:\n",
+            lambda m: m.group(1) + " (wcześniej" + (", krok " + m.group(2) if m.group(2) else "") + "):\n",
+            str(message))
+    except Exception:
+        pass
 
     # v278: jedno gardlo, przez ktore idzie KAZDE pytanie do roli —
     # wiec jedyne miejsce, gdzie da sie uczciwie zmierzyc, ile
@@ -35137,36 +35171,31 @@ def _bezczynnie_czekaj():
         except Exception:
             pass
     log("MAIN", "Czekanie bez pracy skończone po " + czekal + ": " + zdanie + ".")
-    tekst = (
-        "Poprzedni RUN nie wniósł nic nowego, więc program czekał " + czekal
-        + ", aż coś się wydarzy: " + zdanie + "."
-    )
+    tekst = "Program czekał " + czekal + ": " + zdanie + "."
     if powod == "przybylo" and czekania:
         try:
             odczyt = dispatch_tool("termux_run", {
                 "command": _BEZ_SLEEP_RE.sub("true", czekania[0]["komenda"])
             })
+            # v480ha: tylko to, czego MAIN jeszcze nie widzial
             tekst += (
-                "\nPostęp (świeży odczyt z czekania puszczonego "
-                + _temu(czekania[0]["start"]) + "):\n"
-                + _opis_wyniku_czekania(odczyt)
+                "\nŚwieży odczyt Twojego czekania:\n"
+                + _opis_wyniku_czekania(_wynik_tylko_nowe(odczyt, _bez_sleep(czekania[0]["komenda"])))
             )
         except Exception:
             pass
         tekst += (
             "\nNastępny taki odczyt najwcześniej za "
-            + str(_odstep_przyrostu[0] // 60) + " min — koniec procesu albo "
-            "czekania przyjdzie od razu. Czekania nie trzeba puszczać od nowa "
-            "ani na nie czekać. " + _CZAS_DLA_ZESPOLU
+            + str(_odstep_przyrostu[0] // 60) + " min; koniec procesu albo "
+            "czekania przyjdzie od razu."
         )
     elif powod in ("przybylo", "czas") and procesy:
         # v480fd: sam proces, bez czekania — stan idzie w raporcie z tla
         tekst += (
-            "\nStan procesu (czas trwania i końcówka logu) jest niżej. "
-            "Następna taka wiadomość najwcześniej za "
+            " Następna taka wiadomość najwcześniej za "
             + str(max(1, _odstep_przyrostu[0] // 60)) + " min, gdy w logu "
-            "przybędzie wyników (najpóźniej po 30 min) — koniec procesu "
-            "przyjdzie od razu. " + _CZAS_DLA_ZESPOLU
+            "przybędzie wyników (najpóźniej po 30 min); koniec procesu "
+            "przyjdzie od razu."
         )
     # v480fc: przy koncu czekania/procesu karta wyniku (W TLE SKOŃCZONE /
     # "Proces w tle ... skończył") i tak przychodzi w tej samej wiadomosci
@@ -35530,9 +35559,11 @@ def _karta_startu(r, teraz):
         do = _min_s(max(0, r["start"] + (r.get("sekundy") or 0) - teraz))
         linie = [
             "• Czekanie: " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
-            + " — wynik najpóźniej za " + do
-            + ("; czeka, aż skończy się to, co już leci w tle." if r.get("czeka_na")
-               else "; wcześniej, gdy proces się skończy.")
+            + (" — wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie."
+               if _czekanie_na_postep(r) else
+               " — wynik najpóźniej za " + do
+               + ("; czeka, aż skończy się to, co już leci w tle." if r.get("czeka_na")
+                  else "; wcześniej, gdy proces się skończy."))
         ]
     else:
         linie = [
@@ -35554,7 +35585,6 @@ def _karta_startu(r, teraz):
             "Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
             + " — mogą zależeć od wyniku, więc wyślij je, gdy przyjdzie."
         )
-    linie.append("═══")
     return "\n".join(linie)
 
 
@@ -42707,8 +42737,10 @@ def consult_team(
     #
     # Kod zwiniety do jednej linii — to, co robil, widac w wyniku
     # ponizej; tu chodzi o to, O CO prosil MAIN.
+    # v480ha: "Co MAIN zrobił i dlaczego" zamiast drugiego "MAIN:" — pytanie
+    # MAIN-a do roli stoi nizej pod "MAIN:" i ma byc jedynym takim blokiem.
     main_decision_block = (
-        "\nMAIN:\n"
+        "\nCo MAIN zrobił i dlaczego:\n"
         + _main_decision_for_team
         + (
             # v452: "Tresc zlecenia" Bartek czytal jako zlecenie dla
@@ -45118,6 +45150,17 @@ def main_decide(
     _burza = _burza_blok()
     _tlo_skonczone, _tlo_trwa = _czekanie_czesci()
     _tlo_trwa = (_stan_tla.strip() + "\n" + _tlo_trwa).strip()
+    # v480ha: koncowka logu zakonczonego procesu, ktora jest tez w wyniku
+    # czekania w tej samej wiadomosci (bieg 2026-10-27 13:25: 8 tych samych
+    # linii dwa razy pod soba) — zostaje raz, w wyniku czekania.
+    if _tlo_skonczone_procesy and _tlo_skonczone:
+        _bez = []
+        for _lp in _tlo_skonczone_procesy.split("\n• "):
+            _gl, _, _ogon = _lp.partition(", końcówka:\n")
+            if _ogon and all(l.strip() in _tlo_skonczone for l in _ogon.split("\n") if l.strip()):
+                _lp = _gl + " — końcówka logu jest niżej, w wyniku czekania."
+            _bez.append(_lp)
+        _tlo_skonczone_procesy = "\n• ".join(_bez)
     _tlo_skonczone = (_tlo_skonczone_procesy + "\n\n" + _tlo_skonczone).strip()
 
     # v480gz: linia o zespole, gdy przyszedl wynik z tla (caly albo
@@ -53820,8 +53863,8 @@ def _postep_z_logu(sciezka, linie, start=None, komenda=None, cwd=None):
             for m in _POSTEP_RAZEM_RE.finditer(glowa + "\n" + "\n".join(linie or [])):
                 if (_jednostka_postepu(m.group(1)) == "epoka") == (jedn == "epoka"):
                     razem = int(m.group(2))
-        if razem is not None and razem <= wartosc:
-            razem = None if razem < wartosc else razem
+        if razem is not None and razem < wartosc:
+            razem = None
         teraz = time.time()
         hist = _postep_historia.get(sciezka)
         if hist is None or wartosc < hist[1]:
@@ -53833,7 +53876,7 @@ def _postep_z_logu(sciezka, linie, start=None, komenda=None, cwd=None):
             tempo = wartosc / (teraz - start)
         if razem is None and komenda:
             razem = _razem_z_kodu(komenda, cwd, jedn)
-            if razem is not None and razem <= wartosc:
+            if razem is not None and razem < wartosc:
                 razem = None
         # v480gy: procent na poczatku — to pierwsze, czego MAIN szuka
         # ("58% — iter 17500 z 30000, …"); bez liczby calkowitej sam licznik.
