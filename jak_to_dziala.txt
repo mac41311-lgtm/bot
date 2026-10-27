@@ -3236,3 +3236,20 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - "jego log czytaliście w tym kroku" tylko, gdy komenda z tego RUN
        naprawdę wykonała się i czytała ten log — nie przy samym puszczeniu
        procesu ("> plik.log") ani przy czekaniu, które poszło w tło.
+
+210. Rzeczy w tle po jednej linii, z procentem (v480gy)
+     - "Dalej w tle": jedna linia na rzecz — "• mlp_bpe.py (proces 9726):
+       58% — iter 17500 z 30000, ok. 8 iter/s, do końca ok. 27 min;
+       działa 42 min." i "• Czekanie: <komenda> — wynik najpóźniej za
+       4 min." Bez ramek ═══ i bez pełnej komendy z cd/rm/zmiennymi.
+     - liczba wszystkich iteracji/epok, gdy log jej nie podaje: z
+       argumentów komendy (--iters 30000) albo ze skryptu (MAX_ITERS =
+       30000, default=30000 przy --iters) — stąd procent i czas do końca.
+     - czas w pełnych minutach: "<1 min", "5 min", "1 h 20 min".
+     - "Skończone w tle": "• Czekanie skończone po 7 min: <komenda>" i sam
+       wynik; zakończone procesy też tu, a nie w "Dalej w tle".
+     - ten sam log w kilku sprawdzeniach (tail -16 / tail -20, dodatkowe ls)
+       — tylko nowe linie: pamięć "co MAIN już widział" liczy się po
+       plikach, które komenda czyta, nie po całej komendzie.
+     - po RUN MAIN-a bez "Ostatni krok skończył się tak: RUN_TOOL_ERROR
+       (nieudany)" — każda akcja sama mówi, co padło.

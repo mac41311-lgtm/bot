@@ -34683,12 +34683,16 @@ def _bez_sleep(cmd):
 
 
 def _min_s(sek):
+    """v480gy: czas po ludzku, w pelnych minutach (uzytkownik 2026-10-27:
+    "te minuty sa zle napisane" — "4 min 46 s", "3 min 58 s" to szum dla
+    kogos, kto nie ma zegarka): "<1 min", "5 min", "1 h 20 min"."""
     sek = max(0, int(sek))
     if sek < 60:
-        return str(sek) + " s"
-    return str(sek // 60) + " min" + (
-        (" " + str(sek % 60) + " s") if sek % 60 and sek < 600 else ""
-    )
+        return "<1 min"
+    m = (sek + 30) // 60
+    if m < 60:
+        return str(m) + " min"
+    return str(m // 60) + " h" + ((" " + str(m % 60) + " min") if m % 60 else "")
 
 
 def _w_tle_zywe():
@@ -35072,7 +35076,7 @@ def _wykonaj_po_skonczonym(name, args):
             wynik["czekanie"] = (
                 "To, na co czekałeś, już się skończyło w tle, więc program od "
                 "razu wykonał resztę tej komendy bez sleep. Wyszło to samo, co "
-                "w karcie „W TLE SKOŃCZONE” na górze tej wiadomości, więc tu "
+                "w sekcji „Skończone w tle” wyżej, więc tu "
                 "tego nie powtarzam."
             )
     except Exception:
@@ -35211,6 +35215,15 @@ def _main_rozmowa_teraz():
 
 
 def _klucz_komendy_maina(cmd):
+    """v480gy: klucz to pliki, ktore komenda czyta — "tail -16 x.log" i
+    "tail -20 x.log; ls y" to dla MAIN-a to samo sprawdzenie (bieg
+    2026-10-27 11:50: ten sam log 16 linii w czterech wiadomosciach)."""
+    try:
+        pliki = _pliki_czekania(cmd, z_procesami=False)
+    except Exception:
+        pliki = set()
+    if pliki:
+        return "pliki:" + " ".join(sorted(pliki))
     return re.sub(r"\s+", " ", _bez_sleep(cmd)).strip()
 
 
@@ -35226,6 +35239,17 @@ def _tylko_nowe_dla_maina(cmd, wyj):
         _main_widzial["komendy"] = {}
     kom = _main_widzial["komendy"]
     stare = kom.pop(klucz, None)
+    # v480gy: inne sprawdzenie czytajace choc jeden z tych samych plikow
+    # tez sie liczy (tail -16 x.log vs tail -20 x.log; ls y.npz)
+    if klucz.startswith("pliki:"):
+        _moje = set(klucz[6:].split(" "))
+        for _k, _v in list(kom.items()):
+            if _k.startswith("pliki:") and _moje & set(_k[6:].split(" ")):
+                if stare is None:
+                    stare = {"linie": set(_v["linie"]), "t": _v.get("t"), "czas": _v.get("czas")}
+                else:
+                    stare = {"linie": set(stare["linie"]) | set(_v["linie"]),
+                             "t": max(stare.get("t") or 0, _v.get("t") or 0), "czas": stare.get("czas")}
     linie = str(wyj).split("\n")
     wynik_txt = _tylko_nowe_tekst(linie, stare) if stare else wyj
     # zapamietane tylko to, co MAIN naprawde zobaczyl (dlugie wyjscie
@@ -35263,10 +35287,15 @@ def _tylko_nowe_tekst(linie, stare):
         st = l.strip()
         if not st:
             continue
+        _nagl = st.startswith(("=", "#", "---")) or st.endswith(":")
         if st not in widziane:
-            if ost is not None:
+            # v480gy: nowa linia, ktora sama jest naglowkiem, nie ciagnie
+            # poprzedniego naglowka
+            if ost is not None and not _nagl:
                 naglowki.add(ost)
-        elif st.startswith(("=", "#", "---")) or st.endswith(":"):
+            if _nagl:
+                ost = None
+        elif _nagl:
             ost = i
     for i, l in enumerate(linie):
         st = l.strip()
@@ -35294,15 +35323,13 @@ def _karta_wyniku(r):
     czekanie = r["rodzaj"] == "czekanie"
     trwalo = int((r.get("koniec") or time.time()) - r["start"])
     kom = _bez_sleep(r["komenda"]) if czekanie else r["komenda"]
-    return "\n".join([
-        "═══ W TLE SKOŃCZONE: " + ("czekanie" if czekanie else "komenda")
+    # v480gy: naglowek jedna linia, potem sam wynik (bez ═══ i "Wynik:").
+    return (
+        "• " + ("Czekanie" if czekanie else "Komenda")
         + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
-        + " (trwało " + _min_s(trwalo) + ") ═══",
-        ("Komenda po sleep: " if czekanie else "Komenda: ") + short(kom, 200),
-        "Wynik:",
-        _opis_wyniku_czekania(_wynik_tylko_nowe(r["wynik"], kom)),
-        "═══",
-    ])
+        + (" skończone po " if czekanie else " skończona po ") + _min_s(trwalo) + ": " + _komenda_jedna_linia(kom, 160) + "\n"
+        + _opis_wyniku_czekania(_wynik_tylko_nowe(r["wynik"], kom))
+    )
 
 
 _wyjasnienie_tla_bylo = [False]
@@ -35358,42 +35385,29 @@ def _klucze_tla():
 def _karta_startu(r, teraz):
     czekanie = r["rodzaj"] == "czekanie"
     minelo = int(teraz - r["start"])
+    # v480gy: jedna linia na rzecz, jak procesy — co, i kiedy wynik.
     if czekanie:
         do = _min_s(max(0, r["start"] + (r.get("sekundy") or 0) - teraz))
         linie = [
-            "═══ W TLE: czekanie ═══",
-            "Potem wykona: " + short(_bez_sleep(r["komenda"]), 200),
+            "• Czekanie: " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+            + " — wynik najpóźniej za " + do
+            + ("; czeka, aż skończy się to, co już leci w tle." if r.get("czeka_na")
+               else "; wcześniej, gdy proces się skończy.")
         ]
-        if r.get("czeka_na"):
-            linie.append(
-                "Czeka, aż skończy się to, co już leciało w tle — wynik "
-                "najpóźniej za " + do + "."
-            )
-        else:
-            linie.append(
-                "Wynik najpóźniej za " + do + "; wcześniej, gdy proces w tle, "
-                "na który czeka, się zakończy."
-            )
     else:
         linie = [
-            "═══ W TLE: komenda" + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
-            + " ═══",
-            "Komenda: " + short(r["komenda"], 200),
-            "Liczy już " + _min_s(minelo) + " — dłużej niż "
-            + _min_s(_W_TLE_PO_S) + ", więc liczy dalej w tle, z tymi samymi "
-            "limitami; nic jej nie przerwał. Pliki, które zapisuje, mogą "
-            "być jeszcze niepełne.",
+            "• Komenda" + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+            + ": " + _komenda_jedna_linia(r["komenda"], 140)
+            + " — liczy dłużej niż " + _min_s(_W_TLE_PO_S) + ", więc liczy "
+            "dalej w tle; pliki, które zapisuje, mogą być jeszcze niepełne."
         ]
-    # v480ev: pelne wyjasnienie raz na uruchomienie programu; potem jedna
-    # linia (bieg 2026-10-24: ten sam akapit 23 razy w godzine).
+    # v480ev: pelne wyjasnienie raz na uruchomienie programu (v480gy:
+    # krotsze — reszte mowi naglowek sekcji).
     if not _wyjasnienie_tla_bylo[0]:
         _wyjasnienie_tla_bylo[0] = True
         linie.append(
-            "Wynik program sam poda w sekcji „Skończone w tle”, gdy się skończy "
-            "— nie trzeba puszczać drugiego czekania na to samo ani sprawdzać "
-            "w kółko. Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle "
-            "coś się wydarzy (koniec albo nowe wyniki w logach), i wtedy się "
-            "odezwie. " + _CZAS_DLA_ZESPOLU
+            "  Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle coś "
+            "się wydarzy (koniec albo nowe wyniki w logach), i wtedy się odezwie."
         )
     if r.get("pominiete"):
         linie.append(
@@ -35423,8 +35437,8 @@ def _czekanie_blok(czesci=None):
                     _klucz = str(_w.get("stdout") or "") + str(_w.get("stderr") or "")
                     if _klucz and _klucz in widziane:
                         karty.append(
-                            "═══ W TLE SKOŃCZONE: czekanie — wynik taki sam jak "
-                            + widziane[_klucz] + " ═══"
+                            "• Czekanie skończone — wynik taki sam jak "
+                            + widziane[_klucz] + "."
                         )
                     else:
                         if _klucz:
@@ -35460,8 +35474,9 @@ def _czekanie_blok(czesci=None):
                     _w_tle.remove(r)
                     continue
                 linie.append(
-                    "W tle dalej " + co + " (" + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 200) + ")"
-                    + " — trwa " + _min_s(teraz - r["start"]) + _zostalo + "."
+                    "• " + co.capitalize() + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+                    + ": " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+                    + " — " + (_zostalo.lstrip(", ") if _zostalo else "trwa " + _min_s(teraz - r["start"])) + "."
                 )
     if linie:
         trwa.append("\n".join(linie))
@@ -39957,8 +39972,11 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # 167 razy w nocy 26/27.10 — przy zwyklym sukcesie to kod statusu bez
     # informacji (wyniki sa nizej). Zostaje, gdy krok nie wyszedl albo
     # status cos znaczy (ENGINEER_CODE_MISSING, TOOL_LIMIT …).
+    # v480gy: po RUN MAIN-a nigdy — kazda akcja sama mowi, co padlo
+    # ("RUN_TOOL_ERROR (nieudany)" przy ls brakujacego pliku).
     parts = [] if (
-        _status in ("RUN_FINISHED", "TASK_EXECUTION_FINISHED", "OK") and _ok is not False
+        (_status in ("RUN_FINISHED", "TASK_EXECUTION_FINISHED", "OK") and _ok is not False)
+        or last_result.get("executed_by") == "main_run"
     ) else [
         "Ostatni krok skończył się tak: " + _status + _sufiks
     ]
@@ -44614,14 +44632,17 @@ def main_decide(
     # v480gf: stan procesow w tle idzie obok ramki "W TLE", nie na dole
     # pod wynikami (uzytkownik 2026-10-26: "nie poukładane").
     _stan_tla = ""
+    _tlo_skonczone_procesy = ""
     if _pending_team_warnings:
-        _tlo_w = [str(w) for w in _pending_team_warnings[:8]
-                  if str(w).startswith(("Proces w tle ", "Komenda puszczona w tło "))]
-        _inne_w = [str(w) for w in _pending_team_warnings[:8] if str(w) not in _tlo_w]
+        _wsz = [str(w) for w in _pending_team_warnings[:12]]
+        _tlo_w = [w for w in _wsz if w.startswith("• ") and w not in _linie_tla_skonczone]
+        _tlo_k = [w for w in _wsz if w in _linie_tla_skonczone]
+        _inne_w = [w for w in _wsz if w not in _tlo_w and w not in _tlo_k]
         if _inne_w:
             _facts += "\n" + "\n".join(_inne_w)
         if _tlo_w:
             _stan_tla = "\n".join(_tlo_w) + "\n\n"
+        _tlo_skonczone_procesy = "\n".join(_tlo_k)
         del _pending_team_warnings[:]
 
     if isinstance(last_result, dict):
@@ -44950,7 +44971,8 @@ def main_decide(
     _werdykty = _sedzia_blok()
     _burza = _burza_blok()
     _tlo_skonczone, _tlo_trwa = _czekanie_czesci()
-    _tlo_trwa = (_tlo_trwa + "\n" + _stan_tla).strip()
+    _tlo_trwa = (_stan_tla.strip() + "\n" + _tlo_trwa).strip()
+    _tlo_skonczone = (_tlo_skonczone_procesy + "\n\n" + _tlo_skonczone).strip()
 
     # v480gt/gu: linia o zespole raz na nowa rzecz w tle; pelna raz na
     # rozmowe MAIN-a, potem krotka. Z tresci sekcji znika, idzie na koniec.
@@ -50412,8 +50434,10 @@ def run_agent(goal):
         _poczta_uzytkownika(step)
 
         try:
+            _linie_tla_zmienione.clear()
             for _z in _raport_z_tla():
-                log("TERMUX", short(_z, 300))
+                if _z in _linie_tla_zmienione:
+                    log("TERMUX", short(_z, 300))
                 _pending_team_warnings.append(_z)
         except Exception as _e:
             log("TERMUX", "Nie sprawdziłem procesów w tle: " + str(_e))
@@ -53577,8 +53601,46 @@ def _jednostka_postepu(slowo):
     return "iter"
 
 
-def _postep_z_logu(sciezka, linie, start=None):
-    """v480gr: "iter 5000 z 29115 (17%), ok. 9/s, do końca ok. 44 min"
+_RAZEM_ARG_RE = re.compile(
+    r"--(?:max[_-]?|n[_-]?|num[_-]?|total[_-]?)?(iters?|iterations|steps|epochs|gens?|generations)[=\s]+(\d+)", re.I)
+_RAZEM_DOMYSLNIE_RE = re.compile(
+    r"[\"']--(?:max[_-]?|n[_-]?|num[_-]?|total[_-]?)?(iters?|iterations|steps|epochs|gens?|generations)[\"'][^\n)]*?default\s*=\s*(\d+)", re.I)
+
+
+def _razem_z_kodu(komenda, cwd=None, jedn=None):
+    """v480gy: ile iteracji/epok w calosci, gdy log tego nie mowi — z
+    argumentow komendy (--iters 30000), a potem ze skryptu (MAX_ITERS =
+    30000, default=30000 przy --iters). Bieg 2026-10-27 11:50: MAIN
+    dostawal "iter 17500" bez "z ilu" i pilnowal treningu sleep-em."""
+    try:
+        kom = str(komenda or "")
+        zgodne = lambda slowo: (_jednostka_postepu(slowo) == "epoka") == (jedn == "epoka")
+        for m in _RAZEM_ARG_RE.finditer(kom):
+            if zgodne(m.group(1)):
+                return int(m.group(2))
+        kat = cwd
+        mcd = re.search(r"\bcd\s+([^\s;&|]+)", kom)
+        if mcd:
+            kat = os.path.expanduser(mcd.group(1).replace("$HOME", str(HOME)))
+        for skrypt in re.findall(r"([\w./~-]+\.py)\b", kom):
+            pth = Path(os.path.expanduser(skrypt))
+            if not pth.is_absolute() and kat:
+                pth = Path(kat) / pth
+            try:
+                kod = pth.read_text(encoding="utf-8", errors="replace")[:200000]
+            except Exception:
+                continue
+            for wzor in (_RAZEM_DOMYSLNIE_RE, _POSTEP_RAZEM_RE):
+                for m in wzor.finditer(kod):
+                    if zgodne(m.group(1)) and int(m.group(2)) > 1:
+                        return int(m.group(2))
+    except Exception:
+        pass
+    return None
+
+
+def _postep_z_logu(sciezka, linie, start=None, komenda=None, cwd=None):
+    """v480gr/gy: "17% — iter 5000 z 29115, ok. 9 iter/s, do końca ok. 44 min"
     albo "" gdy w logu nie ma licznika."""
     try:
         wartosc = razem = jedn = None
@@ -53620,12 +53682,19 @@ def _postep_z_logu(sciezka, linie, start=None):
             tempo = (wartosc - hist[1]) / (teraz - hist[0])
         elif start and wartosc > 0 and teraz - start >= 30:
             tempo = wartosc / (teraz - start)
-        tekst = "postęp: " + (jedn + " " if jedn else "") + str(wartosc)
+        if razem is None and komenda:
+            razem = _razem_z_kodu(komenda, cwd, jedn)
+            if razem is not None and razem <= wartosc:
+                razem = None
+        # v480gy: procent na poczatku — to pierwsze, czego MAIN szuka
+        # ("58% — iter 17500 z 30000, …"); bez liczby calkowitej sam licznik.
+        tekst = (str(int(100 * wartosc / razem)) + "% — ") if razem else ""
+        tekst += (jedn + " " if jedn else "") + str(wartosc)
         if razem:
-            tekst += " z " + str(razem) + " (" + str(int(100 * wartosc / razem)) + "%)"
+            tekst += " z " + str(razem)
         if tempo:
             if tempo >= 1:
-                tekst += ", ok. " + ("%.1f" % tempo).rstrip("0").rstrip(".") + (" " + jedn if jedn else "") + "/s"
+                tekst += ", ok. " + (str(int(round(tempo))) if tempo >= 10 else ("%.1f" % tempo).rstrip("0").rstrip(".")) + (" " + jedn if jedn else "") + "/s"
             else:
                 tekst += ", ok. " + ("%.1f" % (tempo * 60)).rstrip("0").rstrip(".") + (" " + jedn if jedn else "") + "/min"
             if razem and razem > wartosc:
@@ -53653,8 +53722,7 @@ _BUDZENIE_ZDANIE = ""
 
 
 def _czas_slownie(s):
-    s = int(max(0, s))
-    return (str(s // 60) + " min " + str(s % 60) + " s") if s >= 60 else (str(s) + " s")
+    return _min_s(s)
 
 
 def _plik_z_przekierowania(komenda, cwd=None):
@@ -53693,6 +53761,41 @@ def _plik_z_przekierowania(komenda, cwd=None):
             except Exception:
                 pass
     return najlepszy
+
+
+def _nazwa_w_tle(komenda):
+    """v480gy: krotka nazwa tego, co liczy ("mlp_bpe.py"), zamiast calej
+    komendy z cd, rm, zmiennymi i przekierowaniem."""
+    m = re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", str(komenda or ""))
+    if m:
+        return os.path.basename(m[-1])
+    return _komenda_jedna_linia(str(komenda or ""), 80)
+
+
+def _linia_dziala(nazwa, pid, start, postep, log_path, rozmiar, ostatnia,
+                  juz_czytal, blad):
+    """v480gy: jedna linia o tym, co dalej liczy w tle — procent i ile
+    zostalo na poczatku; koncowka logu tylko, gdy MAIN jej nie widzial i
+    nie ma postepu."""
+    tekst = "• " + nazwa + ((" (proces " + str(pid) + ")") if pid else "") + ": "
+    trwa = ("działa " + _min_s(time.time() - start)) if start else "działa"
+    if postep:
+        tekst += postep + "; " + trwa
+    else:
+        tekst += trwa
+        if log_path and not juz_czytal:
+            tekst += "; log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B), ostatnia linia: " + short(ostatnia, 160)
+    tekst += "."
+    if blad:
+        tekst += "\n  W ostatnich liniach logu jest: " + short(blad, 200)
+    return tekst
+
+
+# v480gy: linie o tym, co sie skonczylo (a nie dalej liczy) — main_decide
+# kladzie je w "Skonczone w tle", reszte w "Dalej w tle".
+_linie_tla_skonczone = set()
+# linie, ktore zmienily sie od poprzedniego kroku (tylko je pisze log)
+_linie_tla_zmienione = set()
 
 
 def _log_juz_czytany(log_path, ostatnia):
@@ -53781,19 +53884,21 @@ def _raport_z_tla():
                     (bledy[-6:] + ["…"] + linie[-4:])
                     if bledy and len(linie) > 10 else linie[-10:]
                 )
-            zdania.append(
-                "Proces w tle " + str(pid) + " (" + komenda + ") " + jak
+            _l = (
+                "• " + _nazwa_w_tle(str(getattr(proces, "args", ""))) + " (proces " + str(pid) + ") " + jak
                 + (", trwał " + trwa if trwa else "")
                 + (". Log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B)"
                    if log_path else "")
                 + (", końcówka:\n" + "\n".join("  " + short(l, 200) for l in pokaz)
                    if pokaz else ".")
             )
+            zdania.append(_l)
+            _linie_tla_skonczone.add(_l)
+            _linie_tla_zmienione.add(_l)
         else:
             ostatnia = linie[-1] if linie else ""
             znak = (rozmiar, ostatnia)
-            if _tlo_ostatnio_widziane.get(pid) == znak:
-                continue
+            _zmiana = _tlo_ostatnio_widziane.get(pid) != znak
             _tlo_ostatnio_widziane[pid] = znak
             bledy = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
             # v480fc: tuz po starcie (pusty log) nic nowego — pid MAIN ma
@@ -53802,20 +53907,17 @@ def _raport_z_tla():
             if not linie and start and time.time() - start < 30:
                 continue
             _juz_czytal = _log_juz_czytany(log_path, ostatnia)
-            _postep = _postep_z_logu(log_path, linie, start) if log_path else ""
-            zdania.append(
-                "Proces w tle " + str(pid)
-                + ("" if _juz_czytal else " (" + komenda + ")") + " dalej działa"
-                + (", od " + trwa if trwa else "")
-                + ("; " + _postep if _postep else "")
-                + (" (jego log czytaliście w tym kroku)." if _juz_czytal and not bledy else
-                   ". Log " + _sciezka_od_domu(log_path) + ": " + str(rozmiar)
-                   + " B, ostatnia linia: " + short(ostatnia, 200)
-                   if log_path else ".")
-                + ("\n  W ostatnich liniach logu jest: " + short(bledy[-1], 200)
-                   if bledy else "")
-                + (_BUDZENIE_ZDANIE if log_path and _pilnuje_sleepem(log_path) else "")
-            )
+            _pelna = str(getattr(proces, "args", ""))
+            try:
+                _cwd_p = os.readlink("/proc/" + str(pid) + "/cwd")
+            except Exception:
+                _cwd_p = str(getattr(proces, "_ael_cwd", "") or "") or None
+            _postep = _postep_z_logu(log_path, linie, start, _pelna, _cwd_p) if log_path else ""
+            _l = _linia_dziala(_nazwa_w_tle(_pelna), pid, start, _postep, log_path,
+                               rozmiar, ostatnia, _juz_czytal, bledy[-1] if bledy else "")
+            zdania.append(_l)
+            if _zmiana:
+                _linie_tla_zmienione.add(_l)
     # Grupy puszczone w tlo zwykla komenda (`nohup ... &`): kodu wyjscia
     # nie znamy, ale wiemy, kiedy grupa zniknela.
     for grupa, (komenda, start) in list(_grupy_z_komend.items()):
@@ -53850,30 +53952,16 @@ def _raport_z_tla():
             if not _plik:
                 continue
             ostatnia = linie[-1] if linie else ""
-            if _tlo_ostatnio_widziane.get(klucz) == (rozmiar, ostatnia):
-                continue
+            _zmiana = _tlo_ostatnio_widziane.get(klucz) != (rozmiar, ostatnia)
             _tlo_ostatnio_widziane[klucz] = (rozmiar, ostatnia)
             _bl = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
-            _postep = _postep_z_logu(_plik, linie, start)
-            _sleepem = _pilnuje_sleepem(_plik)
-            if _log_juz_czytany(_plik, ostatnia) and not _bl:
-                # v480fc: MAIN wlasnie sam czytal ten log — v480gr: zostaje
-                # tylko to, czego z logu sam nie wyczyta (postep, tempo)
-                if _postep:
-                    zdania.append(
-                        "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
-                        + ") dalej działa; " + _postep + "."
-                        + (_BUDZENIE_ZDANIE if _sleepem else ""))
-                continue
-            zdania.append(
-                "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
-                + ") dalej działa, od " + _czas_slownie(time.time() - float(start or time.time()))
-                + ("; " + _postep if _postep else "")
-                + ". Log " + _sciezka_od_domu(_plik) + ": " + str(rozmiar)
-                + " B, ostatnia linia: " + short(ostatnia, 200)
-                + ("\n  W ostatnich liniach logu jest: " + short(_bl[-1], 200) if _bl else "")
-                + (_BUDZENIE_ZDANIE if _sleepem else "")
-            )
+            _postep = _postep_z_logu(_plik, linie, start, str(komenda))
+            _l = _linia_dziala(_nazwa_w_tle(komenda), None, float(start or 0) or None,
+                               _postep, _plik, rozmiar, ostatnia,
+                               _log_juz_czytany(_plik, ostatnia), _bl[-1] if _bl else "")
+            zdania.append(_l)
+            if _zmiana:
+                _linie_tla_zmienione.add(_l)
             continue
         _tlo_zgloszone_konce.add(klucz)
         _tlo_ostatnio_widziane.pop(klucz, None)
@@ -53882,9 +53970,8 @@ def _raport_z_tla():
             (bledy[-6:] + ["…"] + linie[-4:])
             if bledy and len(linie) > 10 else linie[-10:]
         )
-        zdania.append(
-            "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
-            + ") już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
+        _l = (
+            "• " + _nazwa_w_tle(komenda) + " (komenda puszczona w tło) już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
             + ". Kodu wyjścia program nie zna"
             + (
                 " — log " + _sciezka_od_domu(_plik) + " (" + str(rozmiar)
@@ -53894,6 +53981,9 @@ def _raport_z_tla():
                 " i nie widzi pliku, do którego pisała (brak przekierowania > plik)."
             )
         )
+        zdania.append(_l)
+        _linie_tla_skonczone.add(_l)
+        _linie_tla_zmienione.add(_l)
     return zdania
 
 
