@@ -3305,3 +3305,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Krótszy odczyt logu (tail -10) po dłuższym (tail -20) nie kasuje
        już z pamięci linii z dłuższego, więc kolejny tail -20 nie
        pokazuje MAIN-owi starego początku logu jako "nowego".
+
+216. Rola oddaje głos także przy komendzie, która poszła w tło (v480he)
+     - Komenda roli albo MAIN-a, która po 2 min przeszła w tło jako
+       wątek (np. URUCHOM Bartka "python3 -u m1.py > m1.log"), jest
+       teraz widoczna dla programu: postęp w procentach, budzenie
+       MAIN-a przy 25% i oddanie głosu, gdy rola od drugiej rundy tylko
+       czyta jej log (tail/ps). Bez znanego procentu rola też oddaje
+       głos — wynik przyjdzie, gdy się skończy albo pojawi się błąd.

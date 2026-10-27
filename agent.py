@@ -9068,6 +9068,11 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
                 _sl = _procesy_z_procentem()
                 _pilnuje = [st for rp, st in _sl.items()
                             if any(os.path.basename(rp) in k for k in komendy[:5])]
+                if not _pilnuje:
+                    # v480he: tez bez procentu — wystarczy, ze czyta log
+                    # czegos, co liczy w tle
+                    _pilnuje = [st for rp, st in _logi_liczace_w_tle().items()
+                                if any(os.path.basename(rp) in k for k in komendy[:5])]
                 _tylko_patrzy = all(
                     not re.search(r"(?:^|[;&|(]\s*)(?:python3?|pip|pkg|rm|mv|cp|kill|pkill|bash|sh|nohup)\b|>",
                                   re.sub(r"[12]?>\s*/dev/null|2>&1", "", k))
@@ -9075,7 +9080,8 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
                 if _pilnuje and _tylko_patrzy:
                     _st = _pilnuje[0]
                     _pr = _postep_z_logu(_st["plik"], _ogon_logu(_st["plik"])[1],
-                                         _st["start"], _st["kom"], _st["cwd"])
+                                         _st["start"], _st["kom"], _st["cwd"]) or (
+                        "działa " + _min_s(time.time() - (_st["start"] or time.time())))
                     log("PROGRAM", imie + " tylko pilnuje " + _nazwa_w_tle(_st["kom"])
                         + " — kończę jego rozmowę, wynik dostanie MAIN.")
                     _bez = "\n".join(l for l in str(odp or "").split("\n")
@@ -9083,7 +9089,8 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
                     return ((_bez + "\n\n") if _bez else "") + (
                         "[Program: " + _nazwa_w_tle(_st["kom"]) + " liczy w tle — " + _pr
                         + ". " + imie + " oddaje głos MAIN-owi; wynik przyjdzie do MAIN-a sam "
-                        "(przy kolejnych 25%, końcu albo błędzie).]")
+                        + ("(przy kolejnych 25%, końcu albo błędzie).]" if re.match(r"\d+%", _pr)
+                           else "(gdy się skończy albo pojawi się błąd).]"))
             except Exception as e:
                 log("PROGRAM", "Sprawdzenie pilnowania procesu: " + str(e))
         wyniki = list(zapis)
@@ -34760,7 +34767,7 @@ _RUN_MAX_AKCJI = int(os.environ.get("RUN_MAX_AKCJI", "12"))
 _CZEKANIE_W_TLE_OD_S = 60
 _W_TLE_PO_S = int(os.environ.get("MAIN_W_TLE_PO_S", "120"))
 _w_tle = []
-_w_tle_lock = _threading.Lock()
+_w_tle_lock = _threading.RLock()  # v480he: _procesy_z_procentem czyta _w_tle także spod tej blokady
 _w_tle_licznik = [0]
 _BEZ_SLEEP_RE = re.compile(
     r"(?<![\w-])sleep\s+\d+(?:\.\d+)?[smh]?(?=$|[\s;&|)])"
@@ -35039,7 +35046,7 @@ def _procesy_z_procentem(procesy=None):
                     _cwd = None
                 _pz = _plik_z_przekierowania(_kom, _cwd)
             else:
-                _lp, _st, _cwd = "", (_grupy_z_komend.get(_id) or (None, None))[1], None
+                _lp, _st, _cwd = "", (_grupy_z_komend.get(_id) or (None, None))[1], _cwd_z_komendy(_kom)
                 _pz = _plik_z_przekierowania(_kom)
             for _plik in [x for x in (_pz, _lp) if x]:
                 _pr = _procent_z_logu(_plik, _kom, _cwd, _st)
@@ -35051,8 +35058,80 @@ def _procesy_z_procentem(procesy=None):
                     break
         except Exception:
             pass
-
+    # v480he: komenda roli albo MAIN-a, ktora po 2 min poszla w tlo jako
+    # watek (URUCHOM Bartka: "python3 -u m1.py > m1.log") — nie ma jej
+    # w _procesy_w_tle ani w grupach, a tez liczy z procentem. Bieg
+    # 2026-10-27 14:37: Bartek pilnowal m1.log, a program go nie widzial.
+    try:
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") == "czekanie":
+                continue
+            _kom = str(r.get("komenda") or "")
+            _cwd = _cwd_rzeczy(r)
+            _pz = _plik_z_przekierowania(_kom, _cwd)
+            if not _pz or os.path.realpath(_pz) in sledzone:
+                continue
+            _pr = _procent_z_logu(_pz, _kom, _cwd, r.get("start"))
+            if _pr is not None:
+                sledzone[os.path.realpath(_pz)] = {
+                    "kom": _kom, "cwd": _cwd, "start": r.get("start"),
+                    "kamien": _pr // 25, "bledy": _bledy_w_logu(_pz), "plik": _pz}
+    except Exception:
+        pass
     return sledzone
+
+
+def _logi_liczace_w_tle():
+    """v480he: {realpath logu: stan} wszystkiego, co liczy w tle i pisze
+    do pliku (procesy, grupy, komendy-watki) — takze bez procentu."""
+    wynik = {}
+    try:
+        for (_rodz, _id), _kom in _zywe_w_tle().items():
+            _cwd = None
+            if _rodz == "p":
+                try:
+                    _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
+                except Exception:
+                    pass
+            _cwd = _cwd or _cwd_z_komendy(_kom)
+            _pz = _plik_z_przekierowania(_kom, _cwd)
+            if _pz:
+                _st = (_grupy_z_komend.get(_id) or (None, None))[1] if _rodz == "g" else None
+                wynik[os.path.realpath(_pz)] = {"kom": _kom, "cwd": _cwd, "start": _st, "plik": _pz}
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") == "czekanie":
+                continue
+            _kom = str(r.get("komenda") or "")
+            _cwd = _cwd_rzeczy(r)
+            _pz = _plik_z_przekierowania(_kom, _cwd)
+            if _pz:
+                wynik[os.path.realpath(_pz)] = {"kom": _kom, "cwd": _cwd, "start": r.get("start"), "plik": _pz}
+    except Exception:
+        pass
+    return wynik
+
+
+def _cwd_rzeczy(r):
+    try:
+        if r.get("cwd"):
+            _d = str(_resolve_home_relative_path(str(r["cwd"])))
+            if os.path.isdir(_d):
+                return _d
+    except Exception:
+        pass
+    return _cwd_z_komendy(r.get("komenda"))
+
+
+def _cwd_z_komendy(kom):
+    """Katalog z ostatniego "cd X" w komendzie (None, gdy go nie ma)."""
+    try:
+        _cd = re.findall(r"\bcd\s+[\"']?([^\s;&|\"']+)", str(kom))
+        if _cd:
+            _d = str(_resolve_home_relative_path(_cd[-1]))
+            return _d if os.path.isdir(_d) else None
+    except Exception:
+        pass
+    return None
 
 
 def _sciezka_real(x):
