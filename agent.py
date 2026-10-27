@@ -45409,11 +45409,14 @@ def main_decide(
         # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
         # przyjdzie sam i ze moze zapytac zespol.
         _glos_krotkie[0] += 1
+        # v480hf/hh: uzytkownik 2026-10-27: gdy MAIN mimo tych linii dalej
+        # nie pyta zespolu — pytanie wprost, czemu (trzeci krotki glos od
+        # ostatniego ASK, potem co 15.). Bieg 15:27-15:50: MAIN po kazdej
+        # linii sam sprawdzal log, pelna wiadomosc zerowala licznik i
+        # pytanie nie padlo ani razu — teraz zeruje go tylko ASK.
+        if _glos_krotkie[0] % 15 == 3:
+            return deepseek("MAIN", "Nic nowego. Czemu nie pytasz zespołu? I tak czekasz na wynik.")
         if _glos_postep_byl[0]:
-            # v480hf: uzytkownik 2026-10-27: gdy po tym zdaniu MAIN dalej
-            # nie pyta zespolu, raz pytanie wprost, czemu.
-            if _glos_krotkie[0] == 3:
-                return deepseek("MAIN", "Nic nowego. Czemu nie pytasz zespołu? I tak czekasz na wynik.")
             return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam; w tym czasie możesz zapytać zespół (ASK z imieniem).")
         _glos_postep_byl[0] = True
         _trwa_linie = []
@@ -45433,7 +45436,8 @@ def main_decide(
         ))
 
     _glos_postep_byl[0] = False
-    _glos_krotkie[0] = 0
+    if asked_followup:
+        _glos_krotkie[0] = 0
     _sekcja("", _restart)
     _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
     _sekcja("Poprzedni bieg", _blok_zamkniecia)

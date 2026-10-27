@@ -3330,3 +3330,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Wcześniej drużyna 1 widziała tylko różnicę commitów z GitHubem,
        więc po ręcznej aktualizacji działała na starym kodzie aż do
        zamknięcia programu.
+
+219. Pytanie "czemu nie pytasz zespołu?" naprawdę pada (v480hh)
+     - Bieg 2026-10-27 15:27-15:50: MAIN po każdej krótkiej linii sam
+       sprawdzał log, pełna wiadomość zerowała licznik i pytanie nie
+       padło ani razu. Teraz licznik zeruje tylko pytanie do zespołu
+       (ASK): trzeci krótki głos od ostatniego ASK to "Nic nowego.
+       Czemu nie pytasz zespołu? I tak czekasz na wynik.", potem co
+       15. krótki głos.
