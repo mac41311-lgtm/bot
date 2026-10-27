@@ -3397,3 +3397,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - "Czemu nie pytasz zespołu? I tak czekasz na wynik." ma na końcu
        krótko, kto jest w zespole, że każdy spojrzy ze swojej strony,
        i przykład ASK z imieniem; odpowiedź wraca od razu.
+
+227. Pytanie o zespół także bez niczego w tle (v480hp)
+     - Gdy nic nie liczy w tle (np. inny cel), a MAIN od 10 kroków nie
+       pytał zespołu i znów wybrał sam RUN, dostaje osobno: "Czemu nie
+       pytasz zespołu? Od N kroków działasz sam. Masz pod ręką …" z tym
+       samym opisem zespołu i przykładem ASK. Przy czymś w tle zostaje
+       próg 5 kroków i zdanie "I tak czekasz na wynik."

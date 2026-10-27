@@ -45517,14 +45517,20 @@ def main_decide(
     # pytaniem; to, co na nia odpowie, jest jego decyzja w tym kroku.
     try:
         _od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
-        if (not asked_followup and _od_ask >= _CZEMU_CO_KROKOW
-                and int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
-                and re.search(r'"type"\s*:\s*"RUN"', str(odp or ""))
-                and (_w_tle_zywe() or _zywe_w_tle())):
+        # v480hp: uzytkownik: "jak nic nie bedzie w tle (inny cel)?" — bez
+        # niczego w tle to samo pytanie po 10 krokach bez ASK, bez zdania
+        # o czekaniu.
+        _w_tle_cos = bool(_w_tle_zywe() or _zywe_w_tle())
+        _prog = _CZEMU_CO_KROKOW if _w_tle_cos else 2 * _CZEMU_CO_KROKOW
+        if (not asked_followup and _od_ask >= _prog
+                and int(step or 0) - _glos_czemu_krok[0] >= _prog
+                and re.search(r'"type"\s*:\s*"RUN"', str(odp or ""))):
             _glos_czemu_krok[0] = int(step or 0)
-            log("MAIN", "Od " + str(_od_ask) + " kroków bez pytania do zespołu, a coś liczy w tle — "
-                "MAIN dostaje samo pytanie, czemu nie pyta zespołu.")
-            odp2 = deepseek("MAIN", _CZEMU_ZDANIE)
+            log("MAIN", "Od " + str(_od_ask) + " kroków bez pytania do zespołu"
+                + (", a coś liczy w tle" if _w_tle_cos else "")
+                + " — MAIN dostaje samo pytanie, czemu nie pyta zespołu.")
+            odp2 = deepseek("MAIN", _CZEMU_ZDANIE if _w_tle_cos else _CZEMU_ZDANIE.replace(
+                " I tak czekasz na wynik.", " Od " + str(_od_ask) + " kroków działasz sam."))
             if re.search(r'"type"\s*:\s*"[A-Z_]+"', str(odp2 or "")):
                 return odp2
     except Exception as e:
