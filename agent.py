@@ -8558,8 +8558,8 @@ _CZAS_DLA_ZESPOLU = (
     "nie pracują. Czekanie na wynik to dobry moment, żeby to zrobić: wyślij "
     "teraz ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
     "\"Bartek\", \"ask_question\": \"...\"}. Bartek może sprawdzić albo "
-    "dopisać kod, Marek obejrzeć wyniki i znaleźć słabe punkty, Tomek ułożyć "
-    "następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
+    "dopisać kod, Piotr przejrzeć kod, Ania naprawić błąd, Marek obejrzeć "
+    "wyniki i znaleźć słabe punkty, Tomek ułożyć następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
     "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
     "okiem. Odpowiedź wraca do Ciebie od razu."
 )
@@ -8573,7 +8573,9 @@ _CZAS_DLA_ZESPOLU_KROTKO = "Czekasz na wynik — to dobry moment na ASK do zespo
 _ZESPOL_PRZY_WYNIKU = (
     "Wynik jest — zanim wybierzesz, co dalej, zespół może go ocenić: Marek "
     "znajdzie słabe punkty, Tomek zaproponuje następny krok, Bartek sprawdzi "
-    "kod."
+    "albo dopisze kod, Piotr przejrzy kod, Ania naprawi błąd, Kamil sprawdzi "
+    "fakty, Wojtek oceni praktyczny sens, Ola podsumuje, co wyszło, Ela oceni "
+    "postęp, a Igor spojrzy świeżym okiem."
 )
 _ZESPOL_PRZY_WYNIKU_ASK = (
     " Pytasz przez ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
