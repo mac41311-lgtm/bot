@@ -35488,9 +35488,16 @@ def _tylko_nowe_dla_maina(cmd, wyj):
     # zapamietane tylko to, co MAIN naprawde zobaczyl (dlugie wyjscie
     # jest dalej ucinane) plus to, co mial juz wczesniej
     widac = set(l.strip() for l in wynik_txt[:2500].split("\n") if l.strip())
-    kom[klucz] = {"linie": set(l.strip() for l in linie if l.strip() and (
-        l.strip() in widac or (stare and l.strip() in stare["linie"]))),
-        "czas": _hhmm(time.time()), "t": time.time()}
+    # v480hc: bieg 2026-10-27 14:31 — tail -20 po tail -10 tego samego
+    # logu pokazal MAIN-owi naglowek logu jako "nowy", bo pamiec trzymala
+    # tylko linie z ostatniego (krotszego) odczytu. Zostaje wszystko, co
+    # MAIN juz widzial.
+    _widzial = set(l.strip() for l in linie if l.strip() and l.strip() in widac)
+    if stare:
+        _widzial |= set(stare["linie"])
+    if len(_widzial) > 4000:
+        _widzial = set(l.strip() for l in linie if l.strip())
+    kom[klucz] = {"linie": _widzial, "czas": _hhmm(time.time()), "t": time.time()}
     while len(kom) > 60:
         kom.pop(next(iter(kom)))
     return wynik_txt

@@ -3300,3 +3300,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        następna to samo zdanie: "Nic nowego. Wynik przyjdzie sam; w tym
        czasie możesz zapytać zespół (ASK z imieniem)." Po pełnej
        wiadomości (25%, koniec, błąd) postęp znowu raz.
+
+215. Pamięć "co MAIN już widział" nie gubi starszych linii (v480hd)
+     - Krótszy odczyt logu (tail -10) po dłuższym (tail -20) nie kasuje
+       już z pamięci linii z dłuższego, więc kolejny tail -20 nie
+       pokazuje MAIN-owi starego początku logu jako "nowego".
