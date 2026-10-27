@@ -8580,6 +8580,12 @@ _ZESPOL_PRZY_WYNIKU_ASK = (
     "\"Marek\", \"ask_question\": \"...\"}; odpowiedź wraca od razu."
 )
 _ostatni_ask_krok = [0]
+# v480hb: RUN MAIN-a nie wniosl nic nowego (to samo czekanie/sprawdzenie) —
+# nastepna wiadomosc to jedna linia: postep i zespol (uzytkownik
+# 2026-10-27: "jak drugi raz wpisuje ta sama komende, sama wiadomosc o
+# druzynie"; glos co 1 min czekania).
+_run_bez_nowego = [False]
+_GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
 # ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
 _wynik_do_decyzji = [False]
 
@@ -9050,10 +9056,52 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
             except Exception as e:
                 log("PROGRAM", "Pliki z odpowiedzi " + imie + " przed podglądem: " + str(e))
         zapisane.extend(zapis)
+        # v480hb: uzytkownik 2026-10-27 ("oddajemy mu wladze, jak juz dobrze
+        # sie kompiluje"): rola, ktora od drugiej rundy juz tylko pilnuje
+        # procesu liczacego w tle (tail/ps jego logu), konczy swoja
+        # odpowiedz — wynik dostanie MAIN (25%, koniec, blad), a MAIN moze
+        # ja zapytac znowu. Pierwsze spojrzenie zostaje.
+        if runda > 1 and not zapis:
+            try:
+                _sl = _procesy_z_procentem()
+                _pilnuje = [st for rp, st in _sl.items()
+                            if any(os.path.basename(rp) in k for k in komendy[:5])]
+                _tylko_patrzy = all(
+                    not re.search(r"(?:^|[;&|(]\s*)(?:python3?|pip|pkg|rm|mv|cp|kill|pkill|bash|sh|nohup)\b|>",
+                                  re.sub(r"[12]?>\s*/dev/null|2>&1", "", k))
+                    for k in komendy[:5])
+                if _pilnuje and _tylko_patrzy:
+                    _st = _pilnuje[0]
+                    _pr = _postep_z_logu(_st["plik"], _ogon_logu(_st["plik"])[1],
+                                         _st["start"], _st["kom"], _st["cwd"])
+                    log("PROGRAM", imie + " tylko pilnuje " + _nazwa_w_tle(_st["kom"])
+                        + " — kończę jego rozmowę, wynik dostanie MAIN.")
+                    _bez = "\n".join(l for l in str(odp or "").split("\n")
+                                     if not _PODGLAD_RE.search(l)).strip()
+                    return ((_bez + "\n\n") if _bez else "") + (
+                        "[Program: " + _nazwa_w_tle(_st["kom"]) + " liczy w tle — " + _pr
+                        + ". " + imie + " oddaje głos MAIN-owi; wynik przyjdzie do MAIN-a sam "
+                        "(przy kolejnych 25%, końcu albo błędzie).]")
+            except Exception as e:
+                log("PROGRAM", "Sprawdzenie pilnowania procesu: " + str(e))
         wyniki = list(zapis)
         for k in komendy[:5]:
             log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
             wyniki.append(_uruchom_podglad(k, rola))
+        # v480hb: rola czyta log procesu, ktory liczy w tle (bieg 2026-10-27
+        # 13:55: Bartek w jednym pytaniu w kolko "tail -3 resume.log; ps aux")
+        # — dostaje jego postep i to, ze wynik przyjdzie sam.
+        try:
+            _sl = _procesy_z_procentem()
+            for _rp, _st in _sl.items():
+                if any(os.path.basename(_rp) in k for k in komendy[:5]):
+                    _pr = _postep_z_logu(_st["plik"], _ogon_logu(_st["plik"])[1],
+                                         _st["start"], _st["kom"], _st["cwd"])
+                    wyniki.append(
+                        "[Program: " + _nazwa_w_tle(_st["kom"]) + " liczy w tle — " + _pr
+                        + ". Wynik dostanie MAIN, gdy się skończy; nie trzeba go pilnować w tej rozmowie.]")
+        except Exception:
+            pass
         _teraz = (tuple(komendy[:5]), tuple(wyniki))
         if wyniki and all(w == _CZEKANIE_ROLI_ODMOWA for w in wyniki):
             # sama prosba o czekanie po odmowie — tak samo jak powtorka
@@ -35084,6 +35132,9 @@ def _bezczynnie_czekaj():
 
     t0 = time.time()
     koniec = t0 + (3600 if sledzone else 1800)
+    for r in zywe:
+        if _trzymane(r):
+            r["trzymane"] = True
     _wolne = [r for r in zywe if not _trzymane(r)]
     if _wolne:
         koniec = min(koniec, max(
@@ -35091,6 +35142,10 @@ def _bezczynnie_czekaj():
         ) + 5)
         koniec = max(koniec, t0 + 60)
     _do_przyrostu = set(p for p in pliki if _sciezka_real(p) not in sledzone)
+    # v480hb: glos co _GLOS_CO_S (uzytkownik wybral 1 min) — MAIN dostaje
+    # wtedy jedna linie (postep + zespol), nie pelny stan.
+    _koniec_pelny = koniec
+    koniec = min(koniec, t0 + _GLOS_CO_S)
     rozmiary0 = _rozmiary_plikow(_do_przyrostu)
     log("MAIN", "MAIN nic nowego nie zrobił — program czeka, aż coś się "
         "wydarzy w tle (najdłużej do " + _hhmm(koniec) + "), zamiast pytać "
@@ -35133,14 +35188,21 @@ def _bezczynnie_czekaj():
                 "skończy albo w logach przybędzie wyników.")
         time.sleep(5)
     czekal = _min_s(time.time() - t0)
+    if powod == "czas" and time.time() < _koniec_pelny - 1:
+        # minela minuta, nic sie nie wydarzylo — czekania dalej trzymane
+        log("MAIN", "Minęła " + czekal + " czekania bez zmian — MAIN dostaje głos (jedna linia).")
+        return
     if powod == "przybylo":
         _odstep_przyrostu[0] = min(_ODSTEP_PRZYROSTU_MAX_S, _odstep_przyrostu[0] * 2)
     else:
         _odstep_przyrostu[0] = _BUDZ_PO_PRZYROSCIE_S
     # v480gz: czekania MAIN-a trzymane do kamienia/konca — swiezy odczyt
     # teraz, zeby wynik byl aktualny, a nie sprzed kilkunastu minut.
-    for r in list(zywe):
-        if _trzymane(r) and not r["watek"].is_alive() and not r.get("dostarczony"):
+    with _w_tle_lock:
+        _wszystkie = list(_w_tle)
+    for r in _wszystkie:
+        if r.get("trzymane") and not r["watek"].is_alive() and not r.get("dostarczony"):
+            r["trzymane"] = False
             try:
                 r["wynik"] = dispatch_tool("termux_run", {
                     "command": _BEZ_SLEEP_RE.sub("true", r["komenda"])})
@@ -35599,6 +35661,15 @@ def _czekanie_blok(czesci=None):
         trwa.extend(_w_tle_postep)
         del _w_tle_postep[:]
         for r in list(_w_tle):
+            # v480hb: czekanie trzymane do kolejnych 25% / konca procesu —
+            # dopoki proces z procentem liczy, pokazujemy je jako trwajace
+            if r.get("wynik") is not None and r.get("trzymane"):
+                if _czekanie_na_postep(r):
+                    linie.append(
+                        "• Czekanie: " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+                        + " — wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie.")
+                    continue
+                r["trzymane"] = False
             if r.get("wynik") is not None:
                 if not r.get("dostarczony"):
                     r["dostarczony"] = True
@@ -35847,6 +35918,7 @@ def _wykonaj_akcje_maina(decision, step):
         )
         pominiete = len(akcje) - _RUN_MAX_AKCJI
 
+    _run_bez_nowego[0] = bool(_nic_nowego and wyniki)
     if _nic_nowego and wyniki:
         try:
             _bezczynnie_czekaj()
@@ -45218,6 +45290,31 @@ def main_decide(
             "miejsca, w którym przerwaliście."
         )
 
+
+    # v480hb: MAIN powtorzyl to samo (czekanie/sprawdzenie) i nic sie nie
+    # wydarzylo — jedna linia: co liczy (postep) i ze moze zapytac zespol.
+    _powtorka = _run_bez_nowego[0]
+    _run_bez_nowego[0] = False
+    if (_powtorka and not asked_followup and not _jest_wynik and not _restart
+            and not _uzytkownik_block.strip() and not _blok_zamkniecia
+            and not _werdykty and not _burza and not team_block.strip()):
+        # uzytkownik: samo pytanie, jedna wiadomosc w jednej linii; reszta
+        # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
+        _trwa_linie = []
+        try:
+            for _st in _procesy_z_procentem().values():
+                _trwa_linie.append(_nazwa_w_tle(_st["kom"]) + ": " + short(_postep_z_logu(
+                    _st["plik"], _ogon_logu(_st["plik"])[1], _st["start"], _st["kom"], _st["cwd"]), 120))
+        except Exception:
+            pass
+        if not _trwa_linie:
+            _trwa_linie = [short(l[2:].rstrip("."), 140) for l in _tlo_trwa.split("\n")
+                           if l.startswith("• ") and not l.startswith("• Czekanie")]
+        return deepseek("MAIN", (
+            "Nic nowego od Twojego ostatniego sprawdzenia"
+            + (" — " + "; ".join(_trwa_linie[:3]) if _trwa_linie else "")
+            + ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?"
+        ))
 
     _sekcja("", _restart)
     _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))

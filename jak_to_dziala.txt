@@ -3280,3 +3280,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        gdy proces doszedł do końca liczby; odczyt przy przyroście logu
        tylko z nowymi liniami; końcówka logu zakończonego procesu nie
        powtarza się, gdy ta sama jest w wyniku czekania obok.
+
+213. Głos MAIN-a co minutę i oddanie głosu przez rolę (v480hb)
+     - Gdy MAIN tylko czeka na proces w tle, program co 1 min daje mu
+       głos jedną linią, bez logów: "Nic nowego od Twojego ostatniego
+       sprawdzenia — x.py: 58% — iter a z b. Zapytasz zespół (ASK
+       z imieniem) czy czekasz dalej?". Ta sama linia, gdy MAIN drugi
+       raz puścił to samo sprawdzenie i nic nowego nie przyszło.
+       Pełna wiadomość przychodzi przy 25%, końcu albo błędzie.
+     - Czekanie trzymane do kolejnych 25% pokazuje się jako trwające,
+       a nie jako skończone ze starym odczytem.
+     - Rola (np. Bartek), która w pytaniu MAIN-a od drugiej rundy już
+       tylko pilnuje procesu liczącego w tle (tail/ps jego logu),
+       kończy odpowiedź: dostaje postęp, a wynik przyjdzie do MAIN-a
+       sam. Pierwsze spojrzenie i każde uruchamianie kodu zostają.
