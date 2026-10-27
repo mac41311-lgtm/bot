@@ -13009,6 +13009,7 @@ AKTUALIZACJA_CO_SEKUND = 15 * 60
 _REPO_TELEFONU = HOME / ".ael-repo"
 _SKRYPT_AKTUALIZACJI = HOME / "update_agent.sh"
 _nowa_wersja = {"commit": ""}
+_ostatnie_pytanie_githuba = [time.time()]
 
 
 def _git_telefonu(*argumenty, czas=60):
@@ -13023,19 +13024,32 @@ def _git_telefonu(*argumenty, czas=60):
     )
 
 
+def _commit_na_dysku():
+    try:
+        _c = _git_telefonu("rev-parse", "--short=7", "HEAD", czas=10).stdout.strip()
+        return _c or "wgrana na dysk"
+    except Exception:
+        return "wgrana na dysk"
+
+
 def _sprawdz_nowa_wersje():
     """Commit z GitHuba, gdy rozni sie od wgranego; inaczej ""."""
 
     # v480aq: druzyna 2 nie pobiera sama — robi to druzyna 1. Druzyna 2
     # przeladowuje sie, gdy agent.py na dysku jest nowszy niz ten,
     # z ktorym wystartowala.
-    if _DRUZYNA == "2":
-        try:
-            if os.path.getmtime(_SCIEZKA_PROGRAMU) > _MTIME_PROGRAMU + 1:
-                return "nowy-plik"
-        except Exception:
-            pass
+    # v480hg: tak samo drużyna 1 i zwykły program — użytkownik wgrał nową
+    # wersję ręcznie (bash ~/update_agent.sh w drugim terminalu), więc
+    # GitHub i ~/.ael-repo są już równe i porównanie commitów nic nie
+    # widziało; program działał na starym kodzie do zamknięcia.
+    try:
+        if os.path.getmtime(_SCIEZKA_PROGRAMU) > _MTIME_PROGRAMU + 1:
+            return "nowy-plik"
+    except Exception:
+        pass
+    if _DRUZYNA == "2" or time.time() - _ostatnie_pytanie_githuba[0] < AKTUALIZACJA_CO_SEKUND:
         return ""
+    _ostatnie_pytanie_githuba[0] = time.time()
 
     try:
         if not (_REPO_TELEFONU / ".git").exists():
@@ -13085,7 +13099,9 @@ def _pilnuj_aktualizacji():
         # v480ax: druzyna 2 sprawdza tylko date pliku na dysku (nic nie
         # pobiera), wiec moze co pol minuty — nowa wersje, ktora wgrala
         # druzyna 1, ma od razu, a nie do 15 min pozniej.
-        time.sleep(30 if _DRUZYNA == "2" else AKTUALIZACJA_CO_SEKUND)
+        # v480hg: co 30 s także drużyna 1 — data pliku jest tania, GitHub
+        # dalej co 15 min (_sprawdz_nowa_wersje pilnuje odstępu).
+        time.sleep(30)
 
         if _nowa_wersja["commit"]:
             continue
@@ -13097,7 +13113,7 @@ def _pilnuj_aktualizacji():
             log(
                 "AKTUALIZACJA",
                 (
-                    "Drużyna 1 pobrała nową wersję"
+                    ("Nowa wersja jest już na dysku" + (" (pobrała ją drużyna 1)" if _DRUZYNA == "2" else ""))
                     if _commit == "nowy-plik" else
                     "Na GitHubie jest nowa wersja (" + _commit[:7] + ")"
                 ) + " — wgram ją po tym kroku."
@@ -13210,8 +13226,8 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
     _nowa_wersja["commit"] = ""
 
     try:
-        if _DRUZYNA == "2":
-            # Nowy agent.py wgrala juz druzyna 1.
+        if _DRUZYNA == "2" or _commit == "nowy-plik":
+            # Nowy agent.py jest juz na dysku (druzyna 1 albo uzytkownik).
             wynik = subprocess.CompletedProcess([], 0, "")
         else:
             wynik = subprocess.run(
@@ -13270,7 +13286,7 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
     log(
         "AKTUALIZACJA",
         "Wgrana nowa wersja ("
-        + ("pobrana przez drużynę 1" if _commit == "nowy-plik" else _commit[:7])
+        + (_commit_na_dysku() if _commit == "nowy-plik" else _commit[:7])
         + ") — przeładowuję program, "
         "bieg idzie dalej od kroku " + str(int(step or 0) + 1) + "."
     )
@@ -50656,7 +50672,7 @@ def run_agent(goal):
             log(
                 "AKTUALIZACJA",
                 "Działa nowa wersja ("
-                + ("pobrana przez drużynę 1" if _c == "nowy-plik" else _c[:7])
+                + (_commit_na_dysku() if _c == "nowy-plik" else _c[:7])
                 + ") — ciągnę bieg dalej od kroku " + str(step + 1) + "."
             )
         except Exception as e:

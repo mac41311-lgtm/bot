@@ -3320,3 +3320,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pyta zespołu, następna minuta przynosi raz: "Nic nowego. Czemu
        nie pytasz zespołu? I tak czekasz na wynik." Potem znowu zwykłe
        zdanie. Pełna wiadomość (wynik, ASK) zaczyna liczenie od nowa.
+
+218. Ręczna aktualizacja w drugim terminalu działa od razu (v480hg)
+     - Program co 30 s patrzy na datę ~/agent/agent.py (wszystkie
+       drużyny). Gdy użytkownik wgrał nową wersję w drugim terminalu
+       (bash ~/update_agent.sh), program przeładowuje się po bieżącym
+       kroku, bez ponownego pobierania, i pisze "Działa nowa wersja
+       (<commit>)". GitHuba pyta dalej co 15 min.
+     - Wcześniej drużyna 1 widziała tylko różnicę commitów z GitHubem,
+       więc po ręcznej aktualizacji działała na starym kodzie aż do
+       zamknięcia programu.
