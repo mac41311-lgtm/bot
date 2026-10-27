@@ -8108,6 +8108,16 @@ def _deepseek_looks_truncated(text, status):
         return False, None
 
     stripped = (text or "").rstrip()
+    # v480gl2: ogon znacznikow narzedzi DeepSeeka ("cat x.log</parameter>")
+    # to nie urwane zdanie — bieg 2026-10-27: 13 prosb o dokonczenie po
+    # samym "</parameter>", a Bartek dopisywal te sama komende drugi raz.
+    stripped = re.sub(r"(?:\s*</[A-Za-z_][\w:.-]*\s*>)+$", "", stripped).rstrip()
+    try:
+        if _PODGLAD_RE.match(stripped.split("\n")[-1]):
+            # ostatnia linia to komenda PODGLĄD/URUCHOM — skonczona
+            return False, None
+    except Exception:
+        pass
 
     # Niedomkniety blok ``` to dowod, nie poszlaka — i dziala przy
     # KAZDEJ dlugosci. Tak wlasnie wygladaly dwa urwania z tego
@@ -8706,7 +8716,11 @@ def _podglad_siega_do_rywala(komenda):
         p = Path(os.path.expanduser(wart)) if wart.startswith(("~", "/")) else cwd / wart
         trafione = [Path(x) for x in glob.glob(str(p))] if any(z in wart for z in "*?[") else [p]
         if any(z in wart for z in "*?["):
-            trafione.append(Path(re.split(r"[*?\[]", str(p), 1)[0]).parent)
+            # v480gl2: katalog, w ktorym maska szuka — "~/MAIN_2/*.pkl" to
+            # ~/MAIN_2, a nie jego rodzic ~ (bieg 2026-10-27: "ls *.pkl" po
+            # "cd ~/MAIN_2" odrzucany jako siegniecie do rywala)
+            _przed = re.split(r"[*?\[]", str(p), 1)[0]
+            trafione.append(Path(_przed) if _przed.endswith("/") else Path(_przed).parent)
         if any(_zle(x) for x in trafione if x.exists() or x == p):
             return powod
         if poprzedni == "cd" and (p.exists() or wart in ("..", "~")):
@@ -8722,6 +8736,25 @@ def _uruchom_podglad(komenda, rola=None):
     # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
     komenda = re.split(r"</?\s*[｜|]{1,2}\s*DSML|<[｜|]", str(komenda or ""))[0]
     komenda = _komenda_z_podgladu(komenda)
+    # v480gl2: bieg 2026-10-27 00:16-00:59 — Bartek w jednej odpowiedzi dla
+    # MAIN-a puszczal "sleep 240 ; cat kn_tune3.log" raz za razem i MAIN stal
+    # 44 min w jednym pytaniu. Rola nie czeka w odpowiedzi: dluzszy sleep
+    # program pomija i od razu pokazuje stan; drugi raz w tej samej
+    # odpowiedzi — nie uruchamia, tylko prosi o odpowiedz.
+    _sek = _sekundy_sleep(komenda)
+    _uwaga = ""
+    if _sek >= _SLEEP_ROLI_MAKS_S:
+        _czekania_roli[rola] = _czekania_roli.get(rola, 0) + 1
+        if _czekania_roli[rola] > 1:
+            return _CZEKANIE_ROLI_ODMOWA
+        _bez = _bez_sleep(komenda)
+        _uwaga = ("(sleep " + _min_s(_sek) + " pominąłem — w odpowiedzi dla MAIN-a się nie "
+                  "czeka. To, co puściłeś w tle, liczy dalej samo, a MAIN może zapytać Cię "
+                  "o wynik później. Poniżej stan na teraz.)\n")
+        if _bez == komenda or not _bez.strip() or re.fullmatch(r"[\s;&|]*", _bez):
+            return "$ " + komenda + "\n" + _uwaga.rstrip()
+        komenda = _bez
+        return _uwaga + _uruchom_podglad(komenda, rola)
     rywal = ""
     if _siega_do_rywala("termux_run", {"command": komenda}):
         rywal = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
@@ -8760,6 +8793,25 @@ def _uruchom_podglad(komenda, rola=None):
         out = out[:4000] + "\n(… ucięte, całość ma " + str(len(out)) + " znaków — zawęź komendę: grep -n, sed -n 'od,dop')"
     return ("$ " + komenda + " (w " + _sciezka_od_domu(cwd) + ")\n" + (out or "(nic nie wypisało)")
             + ("" if kod in (0, None) or (kod == 1 and komenda.split()[0] == "grep") else "\nkod wyjścia: " + str(kod)))
+
+
+_SLEEP_ROLI_MAKS_S = 10
+_czekania_roli = {}
+_CZEKANIE_ROLI_ODMOWA = (
+    "(nie uruchomiłem: to drugie czekanie w tej samej odpowiedzi. Odpowiedz teraz "
+    "MAIN-owi tym, co już wiesz — proces liczy dalej sam, a o jego wynik MAIN "
+    "może zapytać Cię później.)")
+
+
+def _sekundy_sleep(komenda):
+    """v480gl2: najdluzszy sleep w komendzie, w sekundach."""
+    naj = 0.0
+    for m in re.finditer(r"(?<![\w-])sleep\s+(\d+(?:\.\d+)?)([smh]?)(?=$|[\s;&|)])", str(komenda or "")):
+        try:
+            naj = max(naj, float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)])
+        except Exception:
+            pass
+    return naj
 
 
 def _uruchom_dla_zespolu(komenda, cwd, rola=None):
@@ -8857,6 +8909,7 @@ def _podglad_dla_roli(rola, odp):
     """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
     odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
     zapisane = []
+    _czekania_roli[rola] = 0
     odp = _podglad_dla_roli_rundy(rola, odp, zapisane)
     nowe = [z for z in zapisane if z not in str(odp)]
     if nowe:
@@ -8898,6 +8951,9 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
             log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
             wyniki.append(_uruchom_podglad(k, rola))
         _teraz = (tuple(komendy[:5]), tuple(wyniki))
+        if wyniki and all(w == _CZEKANIE_ROLI_ODMOWA for w in wyniki):
+            # sama prosba o czekanie po odmowie — tak samo jak powtorka
+            _teraz = ("czekanie",)
         if _teraz == poprzednio and not zapis:
             powtorki += 1
             if powtorki >= 2:
@@ -51099,11 +51155,23 @@ def run_agent(goal):
             # tym kroku nie pisal kodu, krok przepadl.
             if write_target and not engineer_code:
 
-                _zlec_kod_bartkowi(task_text, [write_target], team, step)
+                _polozone_bartka = _zlec_kod_bartkowi(task_text, [write_target], team, step)
 
                 engineer_code = _kod_z_wypowiedzi(
                     team.get("engineer_full", ""), write_target
                 )
+
+                # v480gl2: plik program polozyl juz po drodze (Bartek dal go
+                # w rundzie URUCHOM, a koncowa odpowiedz byla bez bloku) —
+                # bieg 2026-10-27 00:13: "położone: kn_higher.py", a zaraz
+                # potem ENGINEER_CODE_MISSING dla kn_higher.py.
+                if not engineer_code and _polozone_bartka:
+                    try:
+                        _cel = Path(os.path.expanduser(str(write_target)))
+                        if any(str(y).startswith(_cel.name + " ") for y in _polozone_bartka) and _cel.is_file():
+                            engineer_code = _cel.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        pass
 
             if write_target:
 

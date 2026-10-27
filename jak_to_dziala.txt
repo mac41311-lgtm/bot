@@ -3102,3 +3102,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        przy swojej najbliższej turze;
      - ta sama komenda tej samej osoby, gdy jeszcze leci, nie startuje drugi
        raz — rola słyszy, od kiedy liczy.
+
+198. Rola nie czeka w odpowiedzi dla MAIN-a i inne poprawki z nocy 26/27.10 (v480gm)
+     - komenda roli ze sleep 10 s i dłużej (np. "sleep 240 ; cat log") idzie
+       bez sleep — rola od razu widzi stan i słyszy, że proces liczy dalej
+       sam, a MAIN może zapytać ją później; drugie czekanie w tej samej
+       odpowiedzi nie jest uruchamiane (bieg: MAIN stał 44 min w jednym
+       pytaniu do Bartka);
+     - odpowiedź kończąca się komendą URUCHOM/PODGLĄD albo ogonem
+       "</parameter>" nie jest już brana za urwaną (13 zbędnych próśb
+       o dokończenie, Bartek dopisywał tę samą komendę drugi raz);
+     - plik, który program położył już po drodze z odpowiedzi Bartka,
+       spełnia zadanie MAIN-a z write_engineer_code_to (wcześniej
+       "położone: kn_higher.py" i zaraz ENGINEER_CODE_MISSING);
+     - maska w folderze drużyny ("ls *.pkl" po "cd ~/MAIN_2") nie jest już
+       odrzucana jako sięganie do rywala.
