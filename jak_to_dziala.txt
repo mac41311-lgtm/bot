@@ -3404,3 +3404,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pytasz zespołu? Od N kroków działasz sam. Masz pod ręką …" z tym
        samym opisem zespołu i przykładem ASK. Przy czymś w tle zostaje
        próg 5 kroków i zdanie "I tak czekasz na wynik."
+
+228. Za długa rozmowa wykonawcy Gemini nie psuje kroku (v480hq)
+     - Bieg 2026-10-27 20:51: "Conversation ancestor chain exceeds maximum
+       validation depth" — rozmowa wykonawcy ciągnięta przez kolejne
+       zadania przekroczyła limit serwera i cały krok skończył się
+       GEMINI_EXECUTOR_ERROR. Teraz: przy tym błędzie pamięć wykonawcy
+       idzie od zera, a zadanie leci dalej w nowej rozmowie (to samo
+       zlecenie + co już zrobiono + ostatnie wyniki narzędzi).
+     - Zapobiegawczo rozmowa wykonawcy zaczyna się od nowa po 12
+       zadaniach.

@@ -30882,6 +30882,9 @@ GEMINI_PAMIEC_TOKENY = int(os.environ.get("GEMINI_PAMIEC_TOKENY", "80000"))
 _GEMINI_PAMIEC_GODZIN = 20
 
 
+_GEMINI_PAMIEC_ZADAN = 12
+
+
 def _pamiec_wykonawcy():
     stan = read_json(GEMINI_STATE_FILE, {})
     return stan if isinstance(stan, dict) else {}
@@ -30910,6 +30913,10 @@ def _pamiec_wykonawcy_dla(klucz, model):
 
     try:
         if time.time() - float(stan.get("czas") or 0) > _GEMINI_PAMIEC_GODZIN * 3600:
+            return None
+        if int(stan.get("zadan") or 0) >= _GEMINI_PAMIEC_ZADAN:
+            log("GEMINI", "Rozmowa wykonawcy ciągnie się od " + str(stan.get("zadan"))
+                + " zadań — zaczynam nową (serwer ma limit długości łańcucha).")
             return None
         if int(stan.get("tokeny") or 0) > GEMINI_PAMIEC_TOKENY:
             log(
@@ -30951,9 +30958,15 @@ def _zapamietaj_rozmowe_wykonawcy(task_id, klucz, model, interaction, interactio
     if not interaction_id:
         return
 
+    # v480hq: ile zadan ciagnie ta sama rozmowa — serwer ma limit
+    # glebokosci lancucha ("ancestor chain exceeds maximum validation depth")
+    _st = _pamiec_wykonawcy()
+    _zadan = (int(_st.get("zadan") or 0) + 1) if _st.get("interaction_id") else 1
+
     write_json(
         GEMINI_STATE_FILE,
         {
+            "zadan": _zadan,
             "task_id": task_id,
             "interaction_id": interaction_id,
             "cel": _odcisk_tresci(str(_current_goal_text or "")),
@@ -30966,13 +30979,47 @@ def _zapamietaj_rozmowe_wykonawcy(task_id, klucz, model, interaction, interactio
     )
 
 
+def _za_dlugi_lancuch(blad):
+    t = str(blad or "").lower()
+    return "ancestor chain" in t or "maximum validation depth" in t
+
+
+def _zapomnij_rozmowe_wykonawcy():
+    try:
+        write_json(GEMINI_STATE_FILE, {})
+    except Exception:
+        pass
+
+
+def _stan_zadania_tekstem(slad, odpowiedzi):
+    """v480hq: co juz zrobiono w tym zadaniu — gdy rozmowa idzie od nowa."""
+    linie = []
+    try:
+        for t in (slad or [])[-20:]:
+            if isinstance(t, dict):
+                linie.append("- " + str(t.get("tool") or t.get("name") or "?") + ": "
+                             + ("OK" if t.get("ok", True) else "błąd"))
+        wyn = []
+        for o in odpowiedzi or []:
+            if isinstance(o, dict):
+                _t = " ".join(str(x.get("text") or "") for x in (o.get("result") or []) if isinstance(x, dict))
+                wyn.append("- " + str(o.get("name") or "?") + ": " + short(_t, 1500))
+    except Exception:
+        wyn = []
+    return ("Ta rozmowa zaczęła się od nowa, bo poprzednia była za długa. W tym zadaniu "
+            "zrobiłeś już:\n" + ("\n".join(linie) or "- (nic)")
+            + ("\n\nOstatnie wyniki narzędzi:\n" + "\n".join(wyn) if wyn else "")
+            + "\n\nCiągnij zadanie dalej od tego miejsca.")
+
+
 def _rozmowa_wykonawcy_wygasla(blad):
     """Czy serwer nie zna juz interakcji, ktora chcielismy ciagnac."""
 
     tekst = str(blad or "").lower()
 
     return (
-        "previous_interaction" in tekst
+        _za_dlugi_lancuch(blad)
+        or "previous_interaction" in tekst
         or "not found" in tekst
         or "404" in tekst
         or "no longer" in tekst
@@ -32505,12 +32552,31 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     )
                 }
 
-            interaction = _gemini_create(client,
-                model=_model,
-                input=responses,
-                previous_interaction_id=interaction_id,
-                tools=gemini_tools(_task_haystack)
-            )
+            try:
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=responses,
+                    previous_interaction_id=interaction_id,
+                    tools=gemini_tools(_task_haystack)
+                )
+            except Exception as _e_gl:
+                # v480hq: bieg 2026-10-27 20:51 — "Conversation ancestor
+                # chain exceeds maximum validation depth": rozmowa
+                # wykonawcy (ciagnieta przez kolejne zadania) byla za
+                # dluga i krok przepadl jako GEMINI_EXECUTOR_ERROR. Pamiec
+                # wykonawcy idzie od zera, a to zadanie leci dalej w nowej
+                # rozmowie: to samo zlecenie + co juz zrobiono + ostatnie
+                # wyniki tekstem.
+                if not _za_dlugi_lancuch(_e_gl):
+                    raise
+                log("GEMINI", "Rozmowa wykonawcy za długa (" + short(str(_e_gl), 100)
+                    + ") — zaczynam nową z tym samym zadaniem i tym, co już zrobione.")
+                _zapomnij_rozmowe_wykonawcy()
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=prompt + "\n\n" + _stan_zadania_tekstem(collected_tool_trace, responses),
+                    tools=gemini_tools(_task_haystack)
+                )
 
             new_id = getattr(
                 interaction,
