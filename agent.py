@@ -35742,6 +35742,13 @@ def _bez_sleep_na_poczatku(cmd):
     return re.sub(r"^\s*(?:sleep\s+\d+|true)\s*(?:;|&&)\s*", "", str(cmd or "")).strip()
 
 
+_NAZWY_POL = {
+    "bytes": "zapisane bajty", "pid": "proces", "log_file": "log",
+    "exists": "istnieje", "size": "rozmiar", "message": "komunikat",
+    "error": "błąd", "status": "stan", "workdir": "folder",
+}
+
+
 def _wynik_dla_maina(wynik, args, limit):
     """Wynik akcji czytelnie: bez powtorzonej komendy i pol programu,
     stdout/stderr jako zwykly tekst."""
@@ -35767,7 +35774,27 @@ def _wynik_dla_maina(wynik, args, limit):
         kod_linia = _opis_kodu_wyjscia(reszta["returncode"])
     if "returncode" in reszta:
         reszta = {k: v for k, v in reszta.items() if k not in ("ok", "returncode")}
-    out = json.dumps(reszta, ensure_ascii=False, default=str) if reszta else ""
+    # v480gx: bieg 2026-10-27 11:23 — MAIN dostawal {"command": "… && true
+    # && …", "czekanie": "To, na co czekałeś…"} i {"bytes": 681}. Notka o
+    # czekaniu idzie zdaniem (bez komendy przepisanej przez program), a
+    # proste pola jako "pole: wartość", po jednym w linii.
+    _notka = ""
+    if reszta.get("czekanie"):
+        _notka = str(reszta.pop("czekanie"))
+        reszta.pop("command", None)
+    _linie_pol = []
+    if "ok" in reszta and isinstance(reszta["ok"], bool):
+        if reszta.pop("ok") is False:
+            _linie_pol.append("nie udało się")
+    for k, v in list(reszta.items()):
+        if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 2000:
+            if isinstance(v, str) and v.startswith(str(HOME)):
+                v = _sciezka_od_domu(v)
+            _linie_pol.append(_NAZWY_POL.get(k, k) + ": " + str(v))
+            reszta.pop(k)
+    out = "\n".join(
+        ([_notka] if _notka else []) + _linie_pol
+        + ([json.dumps(reszta, ensure_ascii=False, default=str)] if reszta else []))
     wyj = str(wynik.get("stdout") or "").rstrip("\n")
     bl = str(wynik.get("stderr") or "").rstrip("\n")
     zostalo = max(300, limit - len(out))
@@ -53535,6 +53562,7 @@ _POSTEP_RE = re.compile(
 _POSTEP_RAZEM_RE = re.compile(
     r"\b(n_?iters?|max_?iters?|total_?iters?|n_?steps|max_?steps|total_?steps|"
     r"num_?epochs|n_?epochs|epochs|iters|steps)\s*[=:]\s*(\d+)", re.I)
+_POSTEP_SAM_LICZNIK_RE = re.compile(r"\s*\[?\s*(\d+)\s*/\s*(\d+)\s*\]?(?=[\s:,|]|$)")
 _postep_historia = {}
 
 
@@ -53563,6 +53591,13 @@ def _postep_z_logu(sciezka, linie, start=None):
                 wartosc = int(m.group(2))
                 razem = int(m.group(3)) if m.group(3) else None
                 break
+            # v480gx: sam licznik na poczatku linii ("  12000/20000 t=114s",
+            # "[350/1000]") — bieg 2026-10-27 11:25: interpolate.py liczyl
+            # tak, a MAIN zamiast postepu pilnowal logu sleep-em.
+            m = _POSTEP_SAM_LICZNIK_RE.match(l)
+            if m and 0 < int(m.group(1)) <= int(m.group(2)):
+                jedn, wartosc, razem = "", int(m.group(1)), int(m.group(2))
+                break
         if wartosc is None:
             return ""
         if razem is None:
@@ -53585,14 +53620,14 @@ def _postep_z_logu(sciezka, linie, start=None):
             tempo = (wartosc - hist[1]) / (teraz - hist[0])
         elif start and wartosc > 0 and teraz - start >= 30:
             tempo = wartosc / (teraz - start)
-        tekst = "postęp: " + jedn + " " + str(wartosc)
+        tekst = "postęp: " + (jedn + " " if jedn else "") + str(wartosc)
         if razem:
             tekst += " z " + str(razem) + " (" + str(int(100 * wartosc / razem)) + "%)"
         if tempo:
             if tempo >= 1:
-                tekst += ", ok. " + ("%.1f" % tempo).rstrip("0").rstrip(".") + " " + jedn + "/s"
+                tekst += ", ok. " + ("%.1f" % tempo).rstrip("0").rstrip(".") + (" " + jedn if jedn else "") + "/s"
             else:
-                tekst += ", ok. " + ("%.1f" % (tempo * 60)).rstrip("0").rstrip(".") + " " + jedn + "/min"
+                tekst += ", ok. " + ("%.1f" % (tempo * 60)).rstrip("0").rstrip(".") + (" " + jedn if jedn else "") + "/min"
             if razem and razem > wartosc:
                 tekst += ", do końca ok. " + _min_s((razem - wartosc) / tempo)
         return tekst
@@ -53670,7 +53705,19 @@ def _log_juz_czytany(log_path, ostatnia):
     if not nazwa:
         return False
     wzor = re.compile(r"(?<![\w.-])" + re.escape(nazwa) + r"(?![\w-])")
-    komendy = list(_ostatni_run()["komendy"])
+    # v480gx: bieg 2026-10-27 11:22 — "Proces w tle 26956 dalej działa, od
+    # 0 s (jego log czytaliście w tym kroku)", choc RUN tylko go puscil
+    # ("> interpolate.log") i dal czekanie, ktore poszlo w tlo. Liczy sie
+    # komenda, ktora naprawde wykonala sie teraz i czytala plik — nie
+    # czekanie w tle ani przekierowanie do niego.
+    komendy = []
+    for k in list(_ostatni_run()["komendy"]):
+        try:
+            if _sekundy_sleep(k) >= _CZEKANIE_W_TLE_OD_S:
+                continue
+        except Exception:
+            pass
+        komendy.append(re.sub(r"(?:&>>?|[0-9]?>>?|\btee(?:\s+-a)?)\s*[\"']?[^\s;&|\"'<>]+", " ", str(k)))
     try:
         with _w_tle_lock:
             komendy += [str(r.get("komenda") or "") for r in _w_tle

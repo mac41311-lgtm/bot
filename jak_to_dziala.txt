@@ -3225,3 +3225,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - wyniki z tla, które się skończyły, idą przed wynikiem kroku; to,
        co dalej liczy, po nim — jedna linia na rzecz, bez "Wynik przyjdzie
        sam" przy każdej (mówi to nagłówek).
+
+209. Czytelne pola wyników i postęp z samego licznika (v480gx)
+     - wynik akcji bez JSON-u dla prostych pól: "zapisane bajty: 681",
+       "proces: 26956", "log: ~/MAIN_1/x.log", "nie udało się / błąd: …";
+       notka "To, na co czekałeś, już się skończyło…" zdaniem, bez komendy
+       przepisanej przez program ("&& true &&").
+     - postęp procesu w tle czyta też sam licznik na początku linii
+       ("12000/20000 t=114s", "[350/1000]") — ile z ilu, tempo, do końca.
+     - "jego log czytaliście w tym kroku" tylko, gdy komenda z tego RUN
+       naprawdę wykonała się i czytała ten log — nie przy samym puszczeniu
+       procesu ("> plik.log") ani przy czekaniu, które poszło w tło.
