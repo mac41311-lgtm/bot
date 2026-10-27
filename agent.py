@@ -8585,6 +8585,8 @@ _ostatni_ask_krok = [0]
 # 2026-10-27: "jak drugi raz wpisuje ta sama komende, sama wiadomosc o
 # druzynie"; glos co 1 min czekania).
 _run_bez_nowego = [False]
+# v480hc: linia postepu w krotkim glosie tylko raz; potem samo zdanie
+_glos_postep_byl = [False]
 _GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
 # ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
 _wynik_do_decyzji = [False]
@@ -45300,6 +45302,11 @@ def main_decide(
             and not _werdykty and not _burza and not team_block.strip()):
         # uzytkownik: samo pytanie, jedna wiadomosc w jednej linii; reszta
         # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
+        # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
+        # przyjdzie sam i ze moze zapytac zespol.
+        if _glos_postep_byl[0]:
+            return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam; w tym czasie możesz zapytać zespół (ASK z imieniem).")
+        _glos_postep_byl[0] = True
         _trwa_linie = []
         try:
             for _st in _procesy_z_procentem().values():
@@ -45316,6 +45323,7 @@ def main_decide(
             + ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?"
         ))
 
+    _glos_postep_byl[0] = False
     _sekcja("", _restart)
     _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
     _sekcja("Poprzedni bieg", _blok_zamkniecia)

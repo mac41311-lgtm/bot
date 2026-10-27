@@ -3294,3 +3294,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        tylko pilnuje procesu liczącego w tle (tail/ps jego logu),
        kończy odpowiedź: dostaje postęp, a wynik przyjdzie do MAIN-a
        sam. Pierwsze spojrzenie i każde uruchamianie kodu zostają.
+
+214. Postęp w głosie MAIN-a tylko raz (v480hc)
+     - Pierwsza krótka linia przy czekaniu niesie postęp procesu; każda
+       następna to samo zdanie: "Nic nowego. Wynik przyjdzie sam; w tym
+       czasie możesz zapytać zespół (ASK z imieniem)." Po pełnej
+       wiadomości (25%, koniec, błąd) postęp znowu raz.
