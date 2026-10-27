@@ -3215,3 +3215,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        a nie sam folder.
      - odmowa drugiego czekania kończy się na "przyjdzie sam na górze
        Twojej wiadomości", bez dopisku o robieniu czegoś innego.
+
+208. Wiadomość do MAIN-a w sekcjach (v480gw)
+     - każda część ma krótki nagłówek "### …" i pojawia się tylko, gdy
+       coś w niej jest, w kolejności: Od użytkownika, Poprzedni bieg,
+       Skończone w tle, Twój ostatni krok (albo Odpowiedzi zespołu po
+       ASK), Dalej w tle — wynik przyjdzie sam, Zespół, Ocena (Sędzia,
+       Ela), Nowe na dysku, Ekran; burza mózgów i linia o zespole na końcu.
+     - wyniki z tla, które się skończyły, idą przed wynikiem kroku; to,
+       co dalej liczy, po nim — jedna linia na rzecz, bez "Wynik przyjdzie
+       sam" przy każdej (mówi to nagłówek).

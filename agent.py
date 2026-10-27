@@ -34867,7 +34867,7 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
         "ok": True,
         "status": "CZEKA_W_TLE",
         "command": cmd,
-        "message": "Czekanie poszło w tle — opis jest na górze tej wiadomości.",
+        "message": "Czekanie poszło w tle — opis jest w sekcji „Dalej w tle”.",
     }
 
 
@@ -35130,7 +35130,7 @@ def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete):
         "ok": True,
         "status": "LECI_W_TLE",
         "command": cmd,
-        "message": "Komenda liczy dalej w tle — opis jest na górze tej wiadomości.",
+        "message": "Komenda liczy dalej w tle — opis jest w sekcji „Dalej w tle”.",
     }, True
 
 
@@ -35389,14 +35389,12 @@ def _karta_startu(r, teraz):
     if not _wyjasnienie_tla_bylo[0]:
         _wyjasnienie_tla_bylo[0] = True
         linie.append(
-            "Wynik program sam poda na górze Twojej wiadomości, gdy się skończy "
+            "Wynik program sam poda w sekcji „Skończone w tle”, gdy się skończy "
             "— nie trzeba puszczać drugiego czekania na to samo ani sprawdzać "
             "w kółko. Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle "
             "coś się wydarzy (koniec albo nowe wyniki w logach), i wtedy się "
             "odezwie. " + _CZAS_DLA_ZESPOLU
         )
-    else:
-        linie.append("Wynik przyjdzie sam. " + _CZAS_DLA_ZESPOLU)
     if r.get("pominiete"):
         linie.append(
             "Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
@@ -35406,14 +35404,15 @@ def _karta_startu(r, teraz):
     return "\n".join(linie)
 
 
-def _czekanie_blok():
+def _czekanie_blok(czesci=None):
     """v480ed/eh: karty tego, co leci w tle (pelna raz, potem linia), i
-    wyniki tego, co sie skonczylo (kazdy raz)."""
+    wyniki tego, co sie skonczylo (kazdy raz). v480gw: gdy podano slownik
+    `czesci`, wpisuje do niego osobno "skonczone" i "trwa"."""
     teraz = time.time()
-    karty, linie = [], []
+    karty, linie, trwa = [], [], []
     widziane = {}
     with _w_tle_lock:
-        karty.extend(_w_tle_postep)
+        trwa.extend(_w_tle_postep)
         del _w_tle_postep[:]
         for r in list(_w_tle):
             if r.get("wynik") is not None:
@@ -35438,7 +35437,7 @@ def _czekanie_blok():
             elif not r.get("pokazany"):
                 r["pokazany"] = True
 
-                karty.append(_karta_startu(r, teraz))
+                trwa.append(_karta_startu(r, teraz))
             else:
                 co = "czekanie" if r["rodzaj"] == "czekanie" else "komenda"
                 # v480fc: DeepSeek nie czuje uplywu czasu miedzy wiadomosciami
@@ -35465,11 +35464,19 @@ def _czekanie_blok():
                     + " — trwa " + _min_s(teraz - r["start"]) + _zostalo + "."
                 )
     if linie:
-        karty.append("\n".join(linie) + (
-            " Wyniki przyjdą same — na nie nie" if len(linie) > 1
-            else " Wynik przyjdzie sam — na niego nie"
-        ) + " trzeba czekać. " + _CZAS_DLA_ZESPOLU)
-    return ("\n\n".join(karty) + "\n\n") if karty else ""
+        trwa.append("\n".join(linie))
+    if isinstance(czesci, dict):
+        czesci["skonczone"] = "\n\n".join(karty)
+        czesci["trwa"] = "\n\n".join(trwa)
+    return ("\n\n".join(karty + trwa) + "\n\n") if (karty or trwa) else ""
+
+
+def _czekanie_czesci():
+    """v480gw: to samo co _czekanie_blok, ale osobno (skonczone, trwa):
+    wyniki z tla ida w wiadomosci MAIN-a przed jego krokiem, a to, co
+    dalej leci (karty startu, postep, linie "W tle dalej"), po nim."""
+    _czekanie_blok(_czesci := {})
+    return (_czesci.get("skonczone", ""), _czesci.get("trwa", ""))
 
 
 def _wykonaj_akcje_maina(decision, step):
@@ -35849,7 +35856,7 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
         # "dwa razy to samo"). Tu zostaje jedna linia.
         if isinstance(_wynik, dict) and _wynik.get("status") == "CZEKA_W_TLE":
             tekst = (str(i + 1) + ". " + str(w.get("tool"))
-                     + " — poszło w tle jako czekanie (ramka W TLE na górze).")
+                     + " — poszło w tle jako czekanie (karta w sekcji „Dalej w tle”).")
         elif isinstance(_wynik, dict) and _wynik.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
             tekst = (str(i + 1) + ". " + str(w.get("tool")) + " — "
                      + str(_wynik.get("message") or "to samo czekanie już leci w tle."))
@@ -44880,23 +44887,29 @@ def main_decide(
     # Patrz _postep_blok().
     _postep_dla_maina = _only_if_new("MAIN", "postep", _postep_blok())
 
-    # v410: "Co sie wlasnie stalo" tylko wtedy, gdy cos sie stalo.
-    # v435: po odpowiedzi na ASK bez powtorki tego, co sie stalo —
-    # MAIN dostal to na poczatku kroku.
-    _co_sie_stalo_main = (
-        "" if (_jeszcze_nic_sie_nie_stalo(last_result) or asked_followup)
-        else "Co się właśnie stało:\n" + _facts + "\n"
-    )
+    # v480gw: wiadomosc do MAIN-a ulozona w sekcje (uzytkownik 2026-10-27:
+    # "uporzadkuj w koncu te wyslanie tak, jak bys ty chcial dostawac").
+    # Kolejnosc wedlug tego, co MAIN-owi potrzebne do decyzji: slowa
+    # uzytkownika, co skonczylo sie w tle, wynik jego ostatniego kroku,
+    # co dalej leci (jedna linia na rzecz), zespol, ocena, dysk, ekran;
+    # linia o zespole na samym koncu, raz. Kazda sekcja ma krotki
+    # naglowek "### …" i pojawia sie tylko, gdy cos w niej jest.
+    # v410/v435: wynik kroku tylko, gdy cos sie stalo; po ASK — odpowiedzi.
+    _twoj_krok = ""
+    if asked_followup:
+        _twoj_krok = ask_block
+    elif not _jeszcze_nic_sie_nie_stalo(last_result):
+        _twoj_krok = _facts
+    _twoj_krok = re.sub(r"(?m)^Wyniki akcji RUN:\n", "", str(_twoj_krok or ""))
+    if _main_topic_block.strip():
+        _twoj_krok = _main_topic_block.strip() + "\n" + _twoj_krok
 
-    # v480: co poprzedni bieg zatrzymal przy zamknieciu — raz.
-    # v480ac: tylko gdy wznawiamy TEN SAM cel (rozmowa MAIN-a z
-    # poprzedniego uruchomienia). Przy nowym celu to wiadomosc o
-    # cudzej pracy — plik i tak czytamy (i kasujemy), zeby nie wrocil
-    # pozniej. Uzytkownik: "to jest uniwersalny program, a jak bedzie
-    # inny cel?".
+    # v480: co poprzedni bieg zatrzymal przy zamknieciu — raz; v480ac:
+    # tylko gdy wznawiamy TEN SAM cel.
+    _blok_zamkniecia = ""
     if int(step or 0) <= 1 and not globals().get("_zamkniecie_powiedziane"):
         globals()["_zamkniecie_powiedziane"] = True
-        _blok_zamkniecia = _zatrzymane_przy_zamknieciu_blok()
+        _bz = _zatrzymane_przy_zamknieciu_blok()
         if (
             "MAIN" in globals().get("_wznowione_sesje", set())
             or (
@@ -44904,35 +44917,21 @@ def main_decide(
                 and _load_session_state("MAIN")
             )
         ):
-            _co_sie_stalo_main = _blok_zamkniecia + _co_sie_stalo_main
+            _blok_zamkniecia = _bz
 
-    # v480aq: werdykty sedziego rywalizacji — kazdy raz, gdy zapadl.
+    # v480aq: werdykty sedziego; v480ec: burza mozgow; v480ed: tlo.
     _werdykty = _sedzia_blok()
-    if _werdykty:
-        _co_sie_stalo_main = _werdykty + _co_sie_stalo_main
-
-    # v480ec: patrz _burza_blok().
     _burza = _burza_blok()
-    if _burza:
-        _co_sie_stalo_main = _burza + _co_sie_stalo_main
+    _tlo_skonczone, _tlo_trwa = _czekanie_czesci()
+    _tlo_trwa = (_tlo_trwa + "\n" + _stan_tla).strip()
 
-    # v480ed: patrz _czekanie_blok().
-    _czek = _czekanie_blok()
-    # v480gf: kolejnosc — co leci w tle i stan procesow, potem co sie
-    # stalo, a linia o zespole raz, na koncu.
-    _jest_czas_dla_zespolu = _CZAS_DLA_ZESPOLU in (_czek + _co_sie_stalo_main)
-    if _czek or _stan_tla:
-        _co_sie_stalo_main = _czek + _stan_tla + _co_sie_stalo_main
-    if _jest_czas_dla_zespolu:
-        # v480gt: linia o zespole raz na kazda nowa rzecz w tle, nie przy
-        # kazdej wiadomosci, gdy czeka (noc 26/27.10: 65 razy na 182
-        # wiadomosci — od trzeciego razu czyta sie ja jak stopke).
-        # v480gu: pelny tekst raz na rozmowe MAIN-a, przy kolejnym nowym
-        # czekaniu jedna krotka linia (uzytkownik 2026-10-27: "czy caly
-        # czas ten tekst bylby ci potrzebny").
+    # v480gt/gu: linia o zespole raz na nowa rzecz w tle; pelna raz na
+    # rozmowe MAIN-a, potem krotka. Z tresci sekcji znika, idzie na koniec.
+    _wszystko = _tlo_skonczone + _tlo_trwa + _twoj_krok
+    _linia_zespolu = ""
+    if _CZAS_DLA_ZESPOLU in _wszystko or _tlo_trwa:
         _nowe_tlo = _klucze_tla() - _zespol_przypomniany
         _zespol_przypomniany.update(_nowe_tlo)
-        _linia_zespolu = ""
         if _nowe_tlo:
             _s_main = sessions.get("MAIN")
             _rozmowa_main = getattr(_s_main, "chat_session_id", None) or "?"
@@ -44941,22 +44940,25 @@ def main_decide(
             else:
                 _zespol_pelny_tekst_w.add(_rozmowa_main)
                 _linia_zespolu = _CZAS_DLA_ZESPOLU
-        _co_sie_stalo_main = (
-            _co_sie_stalo_main.replace(" " + _CZAS_DLA_ZESPOLU, "")
-            .replace(_CZAS_DLA_ZESPOLU, "").rstrip("\n")
-            + (("\n\n" + _linia_zespolu) if _linia_zespolu else "") + "\n"
-        )
 
-    # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
-    # czekal na wyniki RUN sprzed restartu.
-    #
-    # v480: rozmowe MAIN-a program zaklada dopiero przy wysylce tej
-    # wiadomosci (deepseek -> start_session), czyli PO zbudowaniu
-    # promtu — wiec _wznowione_sesje w kroku 1 bylo zawsze puste i to
-    # zdanie nie doszlo ani razu. Bieg 2026-10-11 11:07: MAIN dostal
-    # sam cel i napisal "Poprzedni RUN nie zwrocil wyniku - powtarzam
-    # diagnostyke". Patrzymy wiec wprost: rozmowy jeszcze nie ma w tym
-    # uruchomieniu, a na dysku jest zapisana — zostanie wznowiona.
+    def _bez_linii_zespolu(t):
+        return str(t or "").replace(" " + _CZAS_DLA_ZESPOLU, "").replace(_CZAS_DLA_ZESPOLU, "").strip()
+
+    def _bez_naglowka(t, *naglowki):
+        t = str(t or "").strip()
+        for n in naglowki:
+            if t.startswith(n):
+                return t[len(n):].strip()
+        return t
+
+    _sekcje = []
+
+    def _sekcja(tytul, tresc):
+        tresc = _bez_linii_zespolu(tresc)
+        if tresc:
+            _sekcje.append(("### " + tytul + "\n" if tytul else "") + tresc)
+
+    _restart = ""
     if (
         int(step or 0) <= 1
         and not globals().get("_restart_powiedziany")
@@ -44969,20 +44971,30 @@ def main_decide(
         )
     ):
         globals()["_restart_powiedziany"] = True
-        _co_sie_stalo_main = (
+        _restart = (
             "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
             "— jego ostatnie wyniki nie wracają; to, co się teraz "
             "wykona, dostaniesz tutaj. Kontynuujcie pracę nad celem od "
-            "miejsca, w którym przerwaliście.\n" + _co_sie_stalo_main
+            "miejsca, w którym przerwaliście."
         )
 
-    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
-{_co_sie_stalo_main}
 
-{team_block}
-{_chrome_dla_maina}{_android_dla_maina}
-{ask_block}{_format_block}
-{ask_contract_block}"""
+    _sekcja("", _restart)
+    _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
+    _sekcja("Poprzedni bieg", _blok_zamkniecia)
+    _sekcja("Skończone w tle", _tlo_skonczone)
+    _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
+    _sekcja("Dalej w tle — wynik przyjdzie sam", _tlo_trwa)
+    _sekcja("Zespół", team_block)
+    _sekcja("Ocena", (_werdykty or "") + "\n" + (_postep_dla_maina or ""))
+    _sekcja("Nowe na dysku", _bez_naglowka(_nowe_pliki, "Nowe na dysku w tym kroku:"))
+    _sekcja("Ekran", (_chrome_dla_maina or "") + "\n" + (_android_dla_maina or ""))
+    _sekcja("", _burza)
+    _sekcja("", (_format_block or "") + (ask_contract_block or ""))
+    if _linia_zespolu:
+        _sekcje.append(_linia_zespolu)
+
+    prompt = "\n\n".join(_sekcje) + "\n"
 
     return deepseek(
         "MAIN",
