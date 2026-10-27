@@ -3414,3 +3414,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zlecenie + co już zrobiono + ostatnie wyniki narzędzi).
      - Zapobiegawczo rozmowa wykonawcy zaczyna się od nowa po 12
        zadaniach.
+
+229. v480hr — mniej echa dla zespołu (bieg 2026-10-27, drużyna 1, kroki 268-279).
+     - Kto wymieni w odpowiedzi plik, którego treść już ma w swojej
+       rozmowie (sam go napisał albo już go dostał), dostaje jedną linię
+       "JEST (N B), bez zmian — tę samą treść masz już w tej rozmowie."
+       zamiast całego pliku. Bartek dostawał na początku wiadomości
+       swoje własne dwa pliki (9 kB). Zmieniony plik albo nowa rozmowa
+       tej osoby — znowu cała treść.
+     - Uwaga MAIN-a do roli (v480hm) idzie tylko wtedy, gdy zdanie coś
+       tej osobie prostuje (nie widział, myli się, już jest, warunki
+       niespełnione…). Streszczenia typu "Marek: NIE ensemble" albo
+       "Marek+Tomek+Ela zgodni" nie wracają do nich jako uwaga.

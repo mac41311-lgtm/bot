@@ -22005,6 +22005,8 @@ def _zastap_plik_autora(rola, p, kod, folder):
     sciezka = _sciezka_od_domu(str(p))
     _autor_pliku[p.name] = rola
     blad = _zapisz_poprawke_autora(p, kod)
+    if not blad:
+        _rola_poznala_plik(rola, p)
     stan = "składnia OK"
     if blad:
         w = _autor_poprawia_skladnie(p, kod, {"ok": False, "path": str(p), "compile_error": blad})
@@ -22150,6 +22152,7 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                       + "całość pokaże termux_read_file.]")
             _zapisane_teraz.append((p, not w.get("compile_error")))
             _autor_pliku[p.name] = rola
+            _rola_poznala_plik(rola, p)
             log("PROGRAM", "Nowy plik od " + imie_d + " zapisany od razu: " + sciezka + " (" + stan[:60] + ").")
             na_dysku = p.read_text(encoding="utf-8", errors="replace").strip()
             blok = None
@@ -45606,6 +45609,14 @@ def main_decide(
     return odp
 
 
+_UWAGA_PROSTUJE_RE = re.compile(
+    r"nie widzia|nie zauważy|przeoczy|nie wiedzia|nie wie\b|nie dosta|myli|pomyli|"
+    r"błędn|nieaktualn|nie ma racji|niespełnion|nieprawd|już (?:mam|mamy|jest|są|był|zrobi|działa|sprawdz|zmierz)|"
+    r"wbrew|nie zgadzam|odrzucam|nie przyjmuj|\bźle\b|nie tak\b|to nie\b",
+    re.IGNORECASE,
+)
+
+
 def _uwaga_maina_do_roli(odp):
     """v480hm: bieg 2026-10-27 19:31 — MAIN po odpowiedzi Marka napisal
     w uzasadnieniu "test JUZ MAM z KROKU 44, Marek tego nie widzial", ale
@@ -45625,8 +45636,14 @@ def _uwaga_maina_do_roli(odp):
             if not re.search(r"\b" + re.escape(mian) + r"\b|\b" + _rdzen + r"\w{0,4}\b", powod):
                 continue
             # zdania, w ktorych pada imie, a nie cale uzasadnienie
+            # v480hr: tylko zdania, ktore cos tej osobie prostuja. Biegi
+            # 2026-10-27 20:38-21:02: MAIN streszczal w uzasadnieniu, co
+            # kto radzil ("Marek: NIE ensemble…", "Marek+Tomek+Ela
+            # zgodni") i to wracalo do nich jako "uwaga" — echo ich
+            # wlasnych slow.
             zdania = [z.strip() for z in re.split(r"(?<=[.!?])\s+", powod)
-                      if re.search(r"\b" + _rdzen + r"\w{0,4}\b|\b" + re.escape(mian) + r"\b", z)]
+                      if re.search(r"\b" + _rdzen + r"\w{0,4}\b|\b" + re.escape(mian) + r"\b", z)
+                      and _UWAGA_PROSTUJE_RE.search(z)]
             if not zdania:
                 continue
             tekst = "Uwaga do Twojej ostatniej odpowiedzi: " + " ".join(zdania)[:600]
@@ -48375,6 +48392,43 @@ def _remember_team_file_questions(pary):
         _team_file_pytania.append((rola, str(t or "")))
 
 
+# v480hr: (rola, sciezka) -> skrot tresci, ktora ta osoba ma juz w
+# rozmowie (sama ja napisala albo program jej ja pokazal).
+_tresc_znana_roli = {}
+
+
+def _skrot_pliku(p):
+    try:
+        return hashlib.sha1(p.read_bytes().strip()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _rozmowa_roli(rola):
+    # nowa rozmowa tej osoby (reset czatu) nie pamieta starych plikow
+    try:
+        _s = sessions.get(str(rola))
+        return str(getattr(_s, "chat_session_id", None) or "")
+    except Exception:
+        return ""
+
+
+def _rola_poznala_plik(rola, p):
+    try:
+        if rola and p.is_file():
+            _tresc_znana_roli[(str(rola), _rozmowa_roli(rola), str(p.resolve()))] = _skrot_pliku(p)
+    except Exception:
+        pass
+
+
+def _rola_zna_plik(rola, p):
+    try:
+        h = _tresc_znana_roli.get((str(rola), _rozmowa_roli(rola), str(p.resolve())))
+        return bool(h) and h == _skrot_pliku(p)
+    except Exception:
+        return False
+
+
 def _policz_odpowiedzi_dla_zespolu(pary):
     """
     Uruchamia sondy TERAZ i sklada z nich odpowiedzi — kazda z
@@ -48454,10 +48508,24 @@ def _policz_odpowiedzi_dla_zespolu(pary):
 
         try:
             if p.exists():
+                # v480hr: bieg 2026-10-27 20:56 (druzyna 1, krok 279) —
+                # Bartek dostal na poczatku wiadomosci cale swoje dwa
+                # pliki (9 kB), ktore sam napisal krok wczesniej, tylko
+                # dlatego, ze wymienil je w odpowiedzi. Plik, ktorego
+                # tresc ta osoba juz ma w rozmowie (napisala go albo juz
+                # go dostala), idzie jedna linia; zmieniony — w calosci.
+                if p.is_file() and _rola_zna_plik(rola, p):
+                    odpowiedzi.append((
+                        rola,
+                        "- " + candidate + ": JEST (" + str(p.stat().st_size)
+                        + " B), bez zmian — tę samą treść masz już w tej rozmowie."
+                    ))
+                    continue
                 odpowiedzi.append((
                     rola,
                     "- " + candidate + ": " + _file_answer_body(p)
                 ))
+                _rola_poznala_plik(rola, p)
                 continue
         except Exception:
             continue
