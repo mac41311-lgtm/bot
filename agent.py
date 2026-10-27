@@ -13214,6 +13214,16 @@ def _przywroc_procesy_w_tle():
         except Exception:
             pass
 
+    # v480hi: licznik krotkich glosow MAIN-a przezywa przeladowanie (bieg
+    # 2026-10-27 17:56: druzyna 1 przeladowala sie w trakcie czekania,
+    # licznik spadl do zera i pytanie "czemu nie pytasz zespolu?" nie padlo)
+    try:
+        _g = _stan_przed_aktualizacja.get("glos") or {}
+        _glos_krotkie[0] = int(_g.get("krotkie") or 0)
+        _glos_postep_byl[0] = bool(_g.get("postep_byl"))
+    except Exception:
+        pass
+
 
 def _przeladuj_po_aktualizacji(step, last_result, signatures):
     """
@@ -13269,6 +13279,7 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
             if p.poll() is None
         ],
         "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
+        "glos": {"krotkie": _glos_krotkie[0], "postep_byl": _glos_postep_byl[0]},
         "grupy_z_komend": {
             str(k): list(v) for k, v in _grupy_z_komend.items()
         },

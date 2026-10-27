@@ -3338,3 +3338,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (ASK): trzeci krótki głos od ostatniego ASK to "Nic nowego.
        Czemu nie pytasz zespołu? I tak czekasz na wynik.", potem co
        15. krótki głos.
+
+220. Licznik krótkich głosów przeżywa przeładowanie (v480hi)
+     - Bieg 2026-10-27 17:56: drużyna 1 przeładowała się na nową wersję
+       w trakcie czekania, licznik krótkich linii spadł do zera i pytanie
+       "Czemu nie pytasz zespołu?" nie padło (drużyna 2 je dostała).
+       Licznik idzie teraz w stanie zapisywanym przed przeładowaniem.
