@@ -3758,25 +3758,19 @@ BROWSER_PROMPT = (
 # nowa wersja istniejacego pliku go zastepuje (z kopia).
 # v480gi: przepisany w calosci — Bartek sam uruchamia i sprawdza swoj
 # kod (URUCHOM:), poprawia, az dziala; MAIN dostaje dzialajacy kod.
+# v480gt: przepisany w calosci — tylko to, co Bartka (wspolne zasady
+# PODGLĄD/URUCHOM/pliki sa w _JAK_ROZMAWIAMY); dlugie uruchomienie samo
+# idzie w tlo, wynik dostaje autor i MAIN.
 ENGINEER_PROMPT = (
-    "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
-    "i rozwiązaniami technicznymi. Nowy plik piszesz w całości, "
-    "w osobnym bloku kodu, a tuż nad blokiem stoi jego ścieżka albo "
-    "nazwa z folderem, w którym ma leżeć. Program od razu kładzie go "
-    "na dysk, sprawdza, czy się kompiluje, i krótko go uruchamia. "
-    "Plik, który już istnieje, zmieniasz samą poprawką, tak jak zwykły "
-    "patch: który fragment i na co go zamienić — program nanosi ją na "
-    "Twój plik od razu, z kopią i sprawdzeniem. Gdy dajesz całą nową "
-    "wersję pliku, który już leży, program zastępuje go nią, a "
-    "poprzednią zostawia w kopii. Do kodu i środowiska zaglądasz linią "
-    "PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' plik, "
-    "head, ls, python3 --version, pip show pakiet), a swój kod "
-    "uruchamiasz linią URUCHOM: z komendą (np. URUCHOM: python3 "
-    "eval.py --szybko albo URUCHOM: bash run_all.sh). Program wykonuje "
-    "ją w folderze drużyny i oddaje Ci wynik albo błąd, a Ty poprawiasz "
-    "i uruchamiasz znowu, tyle razy, ile trzeba — tak oddajesz kod, "
-    "który naprawdę działa. Długie przebiegi, jak trening na godziny, "
-    "MAIN puszcza w tle."
+    "Jesteś Bartkiem. Zajmujesz się kodem, skryptami i rozwiązaniami "
+    "technicznymi — piszesz je i doprowadzasz do działania. Swój kod "
+    "uruchamiasz linią URUCHOM: (np. URUCHOM: python3 eval.py --szybko), "
+    "czytasz wynik albo błąd, poprawiasz i uruchamiasz znowu, aż działa, "
+    "więc oddajesz kod sprawdzony. Gdy dajesz całą nową wersję pliku, "
+    "który już leży, program zastępuje go nią, a poprzednią zostawia "
+    "w kopii. Gdy uruchomienie, na przykład trening, liczy dłużej niż "
+    "2 minuty, liczy dalej w tle, a wynik dostajesz Ty i MAIN, gdy się "
+    "skończy — wtedy odpowiadasz tym, co już wiesz."
 )
 
 
@@ -4804,6 +4798,30 @@ def _progress_lines_to_map(snapshot):
     return mapa
 
 
+def _roznica_spisu(stara, nowa):
+    """v480gt: przy katalogu ("JEST — to katalog, w środku: a, b, …") po
+    zmianie tylko to, co przybylo i co zniknelo — nie caly spis od nowa
+    (Tomek dostawal 40 nazw przy kazdym nowym pliku)."""
+    try:
+        if not stara or "w środku: " not in stara or "w środku: " not in nowa:
+            return nowa
+        def _spis(l):
+            t = l.split("w środku: ", 1)[1].rstrip(".")
+            t = re.sub(r" \(i \d+ więcej\)$", "", t)
+            return [x.strip() for x in t.split(", ") if x.strip()]
+        a, b = _spis(stara), _spis(nowa)
+        plus = [x for x in b if x not in a and not x.startswith("(+")]
+        minus = [x for x in a if x not in b and not x.startswith("(+")]
+        if not plus and not minus:
+            return nowa
+        glowa = nowa.split(":", 1)[0]
+        return (glowa + ": " + ("przybyło: " + ", ".join(plus[:20]) if plus else "")
+                + ("; " if plus and minus else "")
+                + ("zniknęło: " + ", ".join(minus[:20]) if minus else ""))
+    except Exception:
+        return nowa
+
+
 def _progress_for_role(role_name, snapshot):
     """
     Co z aktualnego stanu faktycznego ma isc DO TEJ ROLI.
@@ -4833,7 +4851,7 @@ def _progress_for_role(role_name, snapshot):
 
     for klucz, linia in teraz.items():
         if poprzednio.get(klucz) != linia:
-            zmiany.append(linia)
+            zmiany.append(_roznica_spisu(poprzednio.get(klucz), linia))
 
     for klucz, linia in poprzednio.items():
         if klucz not in teraz:
@@ -8489,7 +8507,7 @@ def deepseek(name, message):
     # zamiast prosic o caly plik — wynik wraca do tej samej rozmowy.
     if name in _ROLE_Z_PODGLADEM:
         try:
-            odp = _podglad_dla_roli(name, odp)
+            odp = _podglad_dla_roli(name, odp, message)
         except Exception as e:
             log("PROGRAM", "Podgląd dla " + str(name) + " nie wyszedł: " + str(e))
     return odp
@@ -8805,6 +8823,7 @@ def _uruchom_podglad(komenda, rola=None):
 
 
 _SLEEP_ROLI_MAKS_S = 10
+_pytanie_roli = {}
 _czekania_roli = {}
 _CZEKANIE_ROLI_ODMOWA = (
     "(nie uruchomiłem: to drugie czekanie w tej samej odpowiedzi. Odpowiedz teraz "
@@ -8939,11 +8958,23 @@ def _komenda_do_konca(tekst, m):
     return k
 
 
-def _podglad_dla_roli(rola, odp):
+def _na_co_odpowiada(wiadomosc, n=350):
+    """v480gt: koniec wiadomosci, na ktora rola odpowiada (tam stoi pytanie
+    MAIN-a albo zlecenie), od poczatku zdania."""
+    t = str(wiadomosc or "").strip()
+    if len(t) <= n:
+        return t
+    t = t[-n:]
+    m = re.search(r"(?<=[.!?:\n])\s+", t)
+    return ("… " + t[m.end():]) if m and m.end() < n // 2 else "… " + t
+
+
+def _podglad_dla_roli(rola, odp, wiadomosc=""):
     """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
     odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
     zapisane = []
     _czekania_roli[rola] = 0
+    _pytanie_roli[rola] = _na_co_odpowiada(wiadomosc)
     odp = _podglad_dla_roli_rundy(rola, odp, zapisane)
     nowe = [z for z in zapisane if z not in str(odp)]
     if nowe:
@@ -8958,7 +8989,9 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
     # rzedu prosi o to samo i dostaje to samo (nic sie nie zmienia).
     poprzednio = None
     powtorki = 0
+    runda = 0
     while True:
+        runda += 1
         komendy = []
         for m in _PODGLAD_RE.finditer(str(odp or "")):
             k = _komenda_z_podgladu(_komenda_do_konca(str(odp or ""), m))
@@ -8997,9 +9030,13 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
             powtorki = 0
         poprzednio = _teraz
         with _KOLEJKA_KONTA:
+            # v480gt: "odpowiedz na pytanie, na które odpowiadasz" po kilku
+            # rundach nic nie mowi — od trzeciej rundy samo pytanie.
+            _pyt = _pytanie_roli.get(rola) or ""
             odp = _deepseek_jedna_rozmowa(rola, (
                 "Wynik:\n\n" + "\n\n".join(wyniki)
-                + "\n\nTeraz odpowiedz na pytanie, na które odpowiadasz; możesz też zajrzeć albo uruchomić jeszcze raz."
+                + (("\n\nOdpowiadasz na: «" + _pyt + "»") if runda >= 3 and _pyt else "")
+                + "\n\nGdy masz już odpowiedź — napisz ją; możesz też zajrzeć albo uruchomić jeszcze raz."
             ))
     return odp
 
@@ -30106,29 +30143,29 @@ def _zapamietaj_cel(cel, stan, akcja):
 
         if jedno and sama_obserwacja:
             czym = (
-                "To samo sprawdzenie poszlo " + str(ile)
-                + " raz z rzedu"
+                "To samo sprawdzenie poszło " + str(ile)
+                + ". raz z rzędu"
             )
         elif jedno:
             czym = (
-                "Ta sama operacja poszla " + str(ile) + " raz z rzedu"
+                "Ta sama operacja poszła " + str(ile) + ". raz z rzędu"
             )
         elif sama_obserwacja:
             czym = (
-                str(ile) + " sprawdzen pod rzad ("
+                str(ile) + " sprawdzeń pod rząd ("
                 + ", ".join(nazwy[:4]) + ")"
             )
         else:
             czym = (
-                str(ile) + " roznych operacji pod rzad ("
+                str(ile) + " różnych operacji pod rząd ("
                 + ", ".join(nazwy[:4]) + ")"
             )
 
         return sygnal, (
-            czym + " wokol tego samego celu (" + str(cel) + "), a "
-            "jego stan ani drgnal. Nie przerywam Ci pracy — mowie "
-            "tylko, co widac. Sam zdecyduj, czy czekasz dalej, "
-            "zagladasz gdzie indziej, czy idziesz inna droga."
+            # v480gt: sam fakt, z polskimi znakami, bez "Nie przerywam
+            # Ci pracy… Sam zdecyduj" (brzmialo jak pouczenie).
+            czym + " wokół tego samego celu (" + str(cel) + "), a "
+            "jego stan się nie zmienił."
         )
 
     return None, None
@@ -31915,15 +31952,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         result = dict(result)
                         result["polling_guard"] = True
                         result["uwaga"] = (
-                            "To samo wywolanie z tymi samymi "
-                            "argumentami dalo ten sam wynik "
-                            + str(_identical_streak) + " raz z rzedu. "
-                            "Nie przerywam Ci pracy — mowie tylko, ze "
-                            "to jest czekanie, a nie postep, i ze "
-                            "reszta limitu narzedzi na tym kroku "
-                            "zostaje nietknieta. Sam zdecyduj, czy "
-                            "czekasz dalej, zagladasz gdzie indziej, "
-                            "czy idziesz inna droga."
+                            "To samo wywołanie z tymi samymi "
+                            "argumentami dało ten sam wynik "
+                            + str(_identical_streak) + ". raz z rzędu — "
+                            "stan się nie zmienia. Limit narzędzi na "
+                            "ten krok zostaje nietknięty."
                         )
 
                     responses.append(
@@ -35268,6 +35301,25 @@ def _ta_sama_komenda(a, b):
     if not ta or not tb:
         return False
     return len(ta & tb) / float(len(ta | tb)) >= 0.7
+
+
+_zespol_przypomniany = set()
+
+
+def _klucze_tla():
+    """v480gt: co teraz leci w tle (czekania/komendy i procesy)."""
+    k = set()
+    try:
+        for r in _w_tle_zywe():
+            k.add(("w", r.get("nr")))
+        for pid, pr in list(_procesy_w_tle.items()):
+            if pr.poll() is None or _grupa_zyje(pid):
+                k.add(("p", pid))
+        for g in list(_grupy_z_komend):
+            k.add(("g", g))
+    except Exception:
+        pass
+    return k
 
 
 def _karta_startu(r, teraz):
@@ -39834,7 +39886,13 @@ def _condense_last_result_for_team(last_result, limit=2500):
             else ""
         )
 
-    parts = [
+    # v480gt: "Ostatni krok skończył się tak: RUN_FINISHED (udany)" szlo
+    # 167 razy w nocy 26/27.10 — przy zwyklym sukcesie to kod statusu bez
+    # informacji (wyniki sa nizej). Zostaje, gdy krok nie wyszedl albo
+    # status cos znaczy (ENGINEER_CODE_MISSING, TOOL_LIMIT …).
+    parts = [] if (
+        _status in ("RUN_FINISHED", "TASK_EXECUTION_FINISHED", "OK") and _ok is not False
+    ) else [
         "Ostatni krok skończył się tak: " + _status + _sufiks
     ]
 
@@ -39985,14 +40043,13 @@ def _condense_last_result_for_team(last_result, limit=2500):
         # slowami, nie pomiar…)".
         # v460: po RUN raport pisze Python (powod MAIN-a + ile akcji),
         # nie Gemini.
-        parts.append(
-            (
-                "MAIN wykonał sam (RUN): "
-                if last_result.get("executed_by") == "main_run"
-                else "Gemini napisał:\n"
-            )
-            + short(str(report), 1200)
-        )
+        if last_result.get("executed_by") == "main_run":
+            # v480gt: powod MAIN-a zespol ma juz w bloku "MAIN:" — tu
+            # zostaje tylko, ile akcji wykonal (bylo dwa razy to samo).
+            _ile = re.search(r"wykonano \d+ z \d+ akcji.*$", str(report), re.S)
+            parts.append("MAIN wykonał sam (RUN): " + (_ile.group(0) if _ile else short(str(report), 300)))
+        else:
+            parts.append("Gemini napisał:\n" + short(str(report), 1200))
 
     tool_calls = last_result.get("tool_calls")
 
@@ -40031,6 +40088,18 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # stdout poprzedniego, udanego wywołania — po prostu nigdy nie
     # trafiał do zespołu.
     tool_trace = last_result.get("tool_trace")
+
+    # v480gt: po RUN MAIN-a zespol dostaje wyniki tak jak MAIN — komenda
+    # w jednej linii i jej wyjscie — zamiast "wywołań narzędzi: 4,
+    # nieudanych: 0 -> termux_run -> …; termux_write_file -> …".
+    if last_result.get("executed_by") == "main_run" and last_result.get("wyniki_run"):
+        _wr = [w for w in last_result.get("wyniki_run") or [] if isinstance(w, dict)]
+        _na = max(300, (limit - 400) // max(1, len(_wr)))
+        parts.append("\n\n".join(
+            str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + "\n"
+            + _wynik_dla_maina(w.get("wynik"), w.get("args"), _na)
+            for i, w in enumerate(_wr)))
+        tool_trace = None
 
     if isinstance(tool_trace, list) and tool_trace:
 
@@ -44814,10 +44883,15 @@ def main_decide(
     if _czek or _stan_tla:
         _co_sie_stalo_main = _czek + _stan_tla + _co_sie_stalo_main
     if _jest_czas_dla_zespolu:
+        # v480gt: linia o zespole raz na kazda nowa rzecz w tle, nie przy
+        # kazdej wiadomosci, gdy czeka (noc 26/27.10: 65 razy na 182
+        # wiadomosci — od trzeciego razu czyta sie ja jak stopke).
+        _nowe_tlo = _klucze_tla() - _zespol_przypomniany
+        _zespol_przypomniany.update(_nowe_tlo)
         _co_sie_stalo_main = (
             _co_sie_stalo_main.replace(" " + _CZAS_DLA_ZESPOLU, "")
             .replace(_CZAS_DLA_ZESPOLU, "").rstrip("\n")
-            + "\n\n" + _CZAS_DLA_ZESPOLU + "\n"
+            + (("\n\n" + _CZAS_DLA_ZESPOLU) if _nowe_tlo else "") + "\n"
         )
 
     # v463: nowe uruchomienie w tej samej rozmowie — bez tego MAIN
@@ -46384,6 +46458,8 @@ def _pierwsza_wiadomosc(rola=None):
 # v480fw: przepisany w calosci — PODGLĄD tez do sprawdzania srodowiska (wersje, pip show), komendy laczone ; i |.
 # v480gi: przepisany w calosci — zespol sam uruchamia kod (URUCHOM:).
 # v480gj: przepisany w calosci — zespol sam instaluje biblioteki.
+# v480gt: przepisany w calosci — pelny sklad (Ela, Piotr, Ania) i
+# aktualne zdanie o tle (od v480gl dlugie URUCHOM samo idzie w tlo).
 _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
@@ -46394,27 +46470,31 @@ _JAK_ROZMAWIAMY = (
     "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
     "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
     "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
-    "działa. Bibliotekę albo program, którego brakuje, instalujecie "
-    "tak samo (URUCHOM: pip install pakiet albo URUCHOM: pkg install -y "
-    "pakiet) — program czeka, aż instalacja się skończy, i oddaje jej "
-    "wynik. Nowy plik z kodem piszecie w całości, w osobnym bloku, ze "
-    "ścieżką tuż nad nim; program od razu kładzie go na dysk, sprawdza "
-    "i krótko uruchamia, a błąd wraca do autora. Plik należy do tego, "
-    "kto go napisał: zmiany w nim to poprawka fragmentu (który "
-    "fragment i na co go zamienić), nie cały plik od nowa. Długie "
-    "przebiegi w tle puszcza MAIN. W zespole są: "
-    "Tomek (następny krok), Kamil (fakty i informacje), Marek (słabe "
-    "punkty planów), Bartek (kod i technika), Ola (porządkuje to, co "
-    "się wydarzyło) i Wojtek (praktyczny sens). Jest też Igor — "
-    "niezależny, spoza zespołu: nie zna celu ani niczego z programu i "
-    "dostaje wyłącznie to, co ktoś sam do niego napisze, jak w nowym "
-    "czacie. Rozmowę prowadzi MAIN: pyta, kogo potrzebuje. Gdy "
-    "odpowiadacie, możecie też porozmawiać ze sobą wprost: gdy "
-    "zwrócicie się do kogoś po imieniu, dostanie to od razu i odpowie, "
-    "a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i to on "
-    "decyduje, co zespół robi dalej. Użytkownik chce, żeby program "
-    "działał sam: loguje się, daje dostęp do kont i podaje dane, "
-    "których nikt z was nie ma — resztę ustala zespół."
+    "działa. Uruchomienie dłuższe niż 2 minuty liczy dalej w tle, "
+    "a jego wynik dostaje autor i MAIN, gdy się skończy. Bibliotekę "
+    "albo program, którego brakuje, instalujecie tak samo (URUCHOM: "
+    "pip install pakiet albo URUCHOM: pkg install -y pakiet) — program "
+    "czeka, aż instalacja się skończy, i oddaje jej wynik. Nowy plik "
+    "z kodem piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
+    "nim; program od razu kładzie go na dysk, sprawdza i krótko "
+    "uruchamia, a błąd wraca do autora. Plik należy do tego, kto go "
+    "napisał: zmiany w nim to poprawka fragmentu (który fragment i na "
+    "co go zamienić), nie cały plik od nowa. W zespole są: Tomek "
+    "(następny krok), Kamil (fakty i informacje), Marek (słabe punkty "
+    "planów), Bartek (kod i technika), Ola (porządkuje to, co się "
+    "wydarzyło), Wojtek (praktyczny sens) i Ela (ocenia, ile celu jest "
+    "naprawdę zrobione). Piotr i Ania pomagają, gdy kod się wysypie: "
+    "Piotr szuka przyczyny, Ania pisze poprawkę — gdy program odda "
+    "autorowi błąd w jego kodzie, autor może ich zawołać po imieniu. "
+    "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani "
+    "niczego z programu i dostaje wyłącznie to, co ktoś sam do niego "
+    "napisze, jak w nowym czacie. Rozmowę prowadzi MAIN: pyta, kogo "
+    "potrzebuje. Gdy odpowiadacie, możecie też porozmawiać ze sobą "
+    "wprost: gdy zwrócicie się do kogoś po imieniu, dostanie to od "
+    "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą "
+    "rozmowę i to on decyduje, co zespół robi dalej. Użytkownik chce, "
+    "żeby program działał sam: loguje się, daje dostęp do kont i "
+    "podaje dane, których nikt z was nie ma — resztę ustala zespół."
 )
 
 # v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela
@@ -46442,14 +46522,24 @@ _ROLE_ZNAJACE_PROGRAM = (
 #   - sciezki kodu na dysku: v419; ekran po dzialaniu na nim: v419.
 # Tylko MAIN: v345 dalej trzyma zespol z dala od tego, kto wykonuje.
 def _lista_narzedzi_dla_maina():
-    """41 narzedzi z nazwami argumentow — raz, w pierwszej wiadomosci."""
+    """Narzedzia z nazwami argumentow, pogrupowane (v480gt) — raz,
+    w pierwszej wiadomosci."""
 
     try:
-        czesci = []
+        grupy = {}
         for t in _gemini_tools_legacy():
+            nazwa = str(t.get("name"))
             props = list((t.get("parameters") or {}).get("properties", {}).keys())
-            czesci.append(str(t.get("name")) + "(" + ", ".join(props) + ")")
-        return "; ".join(czesci)
+            przed = nazwa.split("_", 1)[0] if "_" in nazwa else ""
+            klucz = przed if przed in ("termux", "chrome", "android") else "inne"
+            grupy.setdefault(klucz, []).append(nazwa + "(" + ", ".join(props) + ")")
+        opis = {"termux": "pliki i komendy", "chrome": "przeglądarka",
+                "android": "telefon", "inne": "pozostałe"}
+        linie = []
+        for klucz in ("termux", "chrome", "android", "inne"):
+            if grupy.get(klucz):
+                linie.append("- " + opis[klucz] + ": " + "; ".join(grupy[klucz]))
+        return "\n".join(linie)
     except Exception:
         return ""
 
@@ -46505,10 +46595,11 @@ _JAK_TO_DZIALA = (
     "pamięta poprzednie zadania z tego celu (to jedna rozmowa na cały "
     "cel), więc w zadaniu wystarczy to, co nowe. RUN działa także "
     "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
-    "i Gemini): " + _lista_narzedzi_dla_maina() + ".\n\n"
+    "i Gemini):\n" + _lista_narzedzi_dla_maina() + "\n\n"
     # v480gi: akapit przepisany w calosci — zespol sam uruchamia i
     # sprawdza swoj kod (URUCHOM:), MAIN dostaje kod, ktory dziala.
     # v480gj: przepisany w calosci — doinstalowanie bibliotek.
+    # v480gt: przepisany w calosci — dlugie uruchomienie samo idzie w tlo.
     "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
     "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
     "pisze poprawkę. Zespół sam uruchamia swój kod i widzi błędy, więc "
@@ -46530,9 +46621,9 @@ _JAK_TO_DZIALA = (
     "np. [~/projekt/build.sh — 1234 znaków, na dysku], i można go po "
     "prostu uruchomić. Do kodu zaglądasz komendą do odczytu (grep -n, "
     "sed -n 'od,dop' plik, head, wc -l) zamiast czytać cały plik. "
-    "Dłuższe uruchomienie puszczasz w tle: program sam da znać, gdy w "
-    "logu przybędzie wyników albo proces się skończy, a ten czas jest "
-    "dla zespołu.\n\n"
+    "Uruchomienie dłuższe niż 2 minuty — Twoje, zespołu albo Gemini — "
+    "samo przechodzi w tło: program pokazuje, ile już trwa, postęp z "
+    "logu i ile zostało, a wynik daje, gdy się skończy.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
@@ -46831,10 +46922,13 @@ def _python_written_files_lines(already_listed):
         except Exception:
             pass
 
+        # v480gt: bez "Treść: "import os os.environ…" … (pominięto 4610
+        # znaków)" — kod splaszczony do jednej linii nikomu nic nie mowi;
+        # kto chce, zaglada do pliku. Autor z mapy autorow, nie zawsze Bartek.
+        _kto = _IMIE_AUTORA.get(_autor_pliku.get(p.name, "ENGINEER"), ("Bartek", "Bartka"))[1]
         lines.append(
-            "- " + str(p) + ": ISTNIEJE (" + str(size) + " B), "
-            "z gotowym kodem od Bartka"
-            + (". Treść: " + preview if preview else "")
+            "- " + _sciezka_od_domu(str(p)) + ": jest (" + str(size) + " B), kod "
+            + _kto
         )
 
     return lines
@@ -55393,13 +55487,16 @@ def uruchom_sedziego():
 # pomyslow; ogolnodostepne biblioteki i programy (takze zainstalowane
 # przez rywala) sa wspolne.
 # v480ds: to, co wstawil sam program, nie jest naruszeniem druzyny.
+# v480gt: przepisany w calosci — te same zasady w czasie terazniejszym,
+# bez zdan o historii ("wczesniej odjales… oddajesz", "zanim dostales
+# te zasade"), ktore nowy Sedzia mogl brac za polecenie oddawania.
 ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Mniej więcej co kwadrans dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
 
 Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd ma się wziąć. Jako zrobione liczysz to, co ma wynik potwierdzony przez program i zgadza się z treścią celu; to, co dopiero ruszyło, opisujesz jako rozpoczęte. Potwierdzony wynik mówi tylko, że komenda wypisuje tę liczbę — gdy drużyna sama ustaliła, że był przypadkowy albo nie wytrzymał powtórzenia, liczysz go tak, jak ustaliła. Porównanie z czymś spoza pracy drużyny — innym modelem, programem albo ludzką metodą — liczysz jako potwierdzone tylko wtedy, gdy komenda sprawdzająca sama uruchamia obie strony na tych samych zadaniach i żadna z nich nie była na tych zadaniach uczona; liczba drugiej strony wpisana ręcznie, wzięta z innego pomiaru albo zmierzona na zadaniach, na których drużyna się uczyła, jest tylko opisem. Wynik drugiej strony, który wygląda nieprawdopodobnie słabo jak na to, czym ona jest, traktujesz jako znak, że jej test trzeba sprawdzić, i piszesz to w ocenie. To, co drużyna pisze o sobie, waży mniej niż to, co widać w jej krokach, komendach i plikach.
 
-Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem kodu, plików z kodem albo wynikami ani pomysłów, ani zaglądać do folderu rywala. Ogólnodostępne biblioteki i programy — także te, które zainstalował rywal, na przykład wspólne środowisko z torch — są wspólne: korzystanie z nich nie jest braniem od rywala, a wynik na nich liczy się normalnie, także ten, za który wcześniej odjąłeś procent z tego powodu. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu — także wtedy, gdy wcześniej ją policzyłeś — dopóki drużyna nie zrobi jej u siebie, zgodnie z celem. Kod i pomysły, które drużyna wzięła od rywala, zanim dostałeś tę zasadę, nie liczą się jej do procentu, ale nie jest powodem do dyskwalifikacji.
+Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem kodu, plików z kodem albo wynikami ani pomysłów, ani zaglądać do folderu rywala. Ogólnodostępne biblioteki i programy — także te, które zainstalował rywal, na przykład wspólne środowisko z torch — są wspólne: korzystanie z nich nie jest braniem od rywala, a wynik na nich liczy się normalnie. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu, dopóki drużyna nie zrobi jej u siebie, zgodnie z celem.
 
-Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która od chwili, gdy dostałeś tę zasadę, weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Program sam pilnuje folderu rywala: komendy, która do niego sięga, nie wykonuje, a na liście komend widzisz ją z dopiskiem, że ją zablokował. Taka komenda nic drużynie nie dała, więc nie jest braniem od rywala ani czytaniem jego folderu; opisujesz ją w ocenie, a o dyskwalifikacji decyduje to, co drużyna od rywala naprawdę dostała. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą, a jeśli wcześniej odjąłeś za coś takiego, oddajesz to. Dotąd program sam pokazywał każdej drużynie sprawdzony wynik rywala razem z liczbą; teraz już tego nie robi, a drużyna dostaje o rywalu tylko jego procent i to, kto prowadzi. Znajomość liczby rywala z tamtego czasu nie jest więc naruszeniem i nie świadczy o zaglądaniu do jego folderu — jeśli odjąłeś za nią, oddajesz to. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
+Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Program sam pilnuje folderu rywala: komendy, która do niego sięga, nie wykonuje, a na liście komend widzisz ją z dopiskiem, że ją zablokował. Taka komenda nic drużynie nie dała, więc nie jest braniem od rywala ani czytaniem jego folderu; opisujesz ją w ocenie, a o dyskwalifikacji decyduje to, co drużyna od rywala naprawdę dostała. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą. Drużyna dostaje od programu o rywalu jego procent i to, kto prowadzi; znajomość tego nie jest naruszeniem. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
 Procent mówi, jaka część całego celu użytkownika jest już potwierdzona: 0% to nic, a 100% to cel osiągnięty w całości, tak jak go opisał użytkownik. Gdy cel ma etapy albo szczeble, każdy waży tyle, o ile przybliża do końca całego celu, więc potwierdzone wczesne etapy przy dalekim końcu to mały procent. Ilość pracy, próby i ustalenia — także uczciwe wyniki negatywne — nie dodają procentu, dopóki nie potwierdzają części celu. Każdą ocenę liczysz od stanu celu, a nie od swojej poprzedniej liczby; poprzednie oceny służą tylko temu, żeby ten sam stan oceniać tak samo. Gdy użytkownik zmieni cel, oceniasz od nowa względem nowego celu: wcześniejsze procenty dotyczyły innego celu i nie są punktem startu, a to, co drużyna zbudowała wcześniej, liczysz tylko na tyle, na ile potwierdza część nowego celu. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik. Dlatego "ocena" każdej drużyny mówi tylko o niej samej, bez wyników i liczb rywala.
 

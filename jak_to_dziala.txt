@@ -3181,3 +3181,21 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - zdanie "Nie trzeba go pilnować sleep-em…" z v480gr usunięte —
        brzmiało jak pouczenie; MAIN dostaje sam postęp z logu (ile z ilu,
        tempo, ile zostało), który odpowiada na to, po co czekał.
+
+205. Teksty oczami ról (v480gt)
+     - Tomek, Marek, Ola i Wojtek przy pytaniu MAIN-a: spis folderu tylko
+       to, co przybyło albo zniknęło; zamiast spłaszczonego kodu sama
+       nazwa, rozmiar i autor pliku; powód MAIN-a raz; wyniki RUN jak u
+       MAIN-a (komenda i wyjście), bez surowego śladu narzędzi.
+     - "Ostatni krok skończył się tak: …" tylko, gdy krok nie wyszedł.
+     - Linia o zespole w wiadomości MAIN-a raz na każdą nową rzecz w tle,
+       nie przy każdym "W tle dalej".
+     - Po kilku rundach URUCHOM/PODGLĄD autor dostaje przypomnienie, na
+       co odpowiada (pytanie MAIN-a w jednym zdaniu).
+     - Teksty o pętli i braku postępu z polskimi znakami, bez "Nie
+       przerywam… Sam zdecyduj".
+     - Przepisane w całości: wspólne zasady zespołu (pełny skład z Elą,
+       Piotrem i Anią; uruchomienie >2 min samo idzie w tło), prompt
+       Bartka (tylko jego sprawy), akapit "Kod." MAIN-a (tło samo, z
+       postępem), lista narzędzi w grupach, prompt Sędziego (te same
+       zasady, bez zdań o historii).
