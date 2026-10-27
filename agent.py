@@ -8587,6 +8587,8 @@ _ostatni_ask_krok = [0]
 _run_bez_nowego = [False]
 # v480hc: linia postepu w krotkim glosie tylko raz; potem samo zdanie
 _glos_postep_byl = [False]
+# v480hf: ile krotkich glosow z rzedu (bez pelnej wiadomosci, czyli bez ASK)
+_glos_krotkie = [0]
 _GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
 # ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
 _wynik_do_decyzji = [False]
@@ -45390,7 +45392,12 @@ def main_decide(
         # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
         # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
         # przyjdzie sam i ze moze zapytac zespol.
+        _glos_krotkie[0] += 1
         if _glos_postep_byl[0]:
+            # v480hf: uzytkownik 2026-10-27: gdy po tym zdaniu MAIN dalej
+            # nie pyta zespolu, raz pytanie wprost, czemu.
+            if _glos_krotkie[0] == 3:
+                return deepseek("MAIN", "Nic nowego. Czemu nie pytasz zespołu? I tak czekasz na wynik.")
             return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam; w tym czasie możesz zapytać zespół (ASK z imieniem).")
         _glos_postep_byl[0] = True
         _trwa_linie = []
@@ -45410,6 +45417,7 @@ def main_decide(
         ))
 
     _glos_postep_byl[0] = False
+    _glos_krotkie[0] = 0
     _sekcja("", _restart)
     _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
     _sekcja("Poprzedni bieg", _blok_zamkniecia)
