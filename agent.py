@@ -8591,6 +8591,7 @@ _run_bez_nowego = [False]
 _glos_postep_byl = [False]
 # v480hf: ile krotkich glosow z rzedu (bez pelnej wiadomosci, czyli bez ASK)
 _glos_krotkie = [0]
+_glos_czemu_krok = [-100]
 _GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
 # ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
 _wynik_do_decyzji = [False]
@@ -13223,6 +13224,8 @@ def _przywroc_procesy_w_tle():
         _g = _stan_przed_aktualizacja.get("glos") or {}
         _glos_krotkie[0] = int(_g.get("krotkie") or 0)
         _glos_postep_byl[0] = bool(_g.get("postep_byl"))
+        _ostatni_ask_krok[0] = int(_g.get("ask_krok") or _ostatni_ask_krok[0] or 0)
+        _glos_czemu_krok[0] = int(_g.get("czemu_krok") if _g.get("czemu_krok") is not None else -100)
     except Exception:
         pass
 
@@ -13281,7 +13284,8 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
             if p.poll() is None
         ],
         "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
-        "glos": {"krotkie": _glos_krotkie[0], "postep_byl": _glos_postep_byl[0]},
+        "glos": {"krotkie": _glos_krotkie[0], "postep_byl": _glos_postep_byl[0],
+                 "ask_krok": _ostatni_ask_krok[0], "czemu_krok": _glos_czemu_krok[0]},
         "grupy_z_komend": {
             str(k): list(v) for k, v in _grupy_z_komend.items()
         },
@@ -45427,7 +45431,17 @@ def main_decide(
         # ostatniego ASK, potem co 15.). Bieg 15:27-15:50: MAIN po kazdej
         # linii sam sprawdzal log, pelna wiadomosc zerowala licznik i
         # pytanie nie padlo ani razu — teraz zeruje go tylko ASK.
-        if _glos_krotkie[0] % 15 == 3:
+        # v480hk: bieg 2026-10-27 18:30-18:40 (druzyna 1): MAIN po kazdej
+        # krotkiej linii sam sprawdzal log (pelna wiadomosc), krotkie glosy
+        # byly co 3 kroki i trzeci nie przychodzil przez 20 krokow. Liczy
+        # sie wiec, ile krokow minelo od ostatniego ASK: od 5 krokow pytanie
+        # zamiast zwyklego zdania, potem nie czesciej niz co 10 krokow.
+        _od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
+        _czemu = ((_glos_krotkie[0] % 15 == 3 or _od_ask >= 5)
+                  and int(step or 0) - _glos_czemu_krok[0] >= 10)
+        if _czemu:
+            _glos_czemu_krok[0] = int(step or 0)
+        if _czemu and _glos_postep_byl[0]:
             return deepseek("MAIN", "Nic nowego. Czemu nie pytasz zespołu? I tak czekasz na wynik.")
         if _glos_postep_byl[0]:
             return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam; w tym czasie możesz zapytać zespół (ASK z imieniem).")
@@ -45445,7 +45459,8 @@ def main_decide(
         return deepseek("MAIN", (
             "Nic nowego od Twojego ostatniego sprawdzenia"
             + (" — " + "; ".join(_trwa_linie[:3]) if _trwa_linie else "")
-            + ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?"
+            + (". Czemu nie pytasz zespołu? I tak czekasz na wynik." if _czemu
+               else ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?")
         ))
 
     _glos_postep_byl[0] = False

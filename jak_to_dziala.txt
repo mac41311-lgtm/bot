@@ -3350,3 +3350,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wymieniało tylko Marka, Tomka i Bartka; teraz cały zespół z tym,
        co każdy wnosi (Piotr, Ania, Kamil, Wojtek, Ola, Ela, Igor też).
        Pełna linia przy czekaniu dostała brakujących Piotra i Anię.
+
+222. "Czemu nie pytasz zespołu?" liczone krokami od ostatniego ASK (v480hk)
+     - Drużyna 1 (18:30-18:40) przeplatała krótkie linie z własnym
+       sprawdzaniem logu, więc trzecia krótka linia nie przychodziła.
+       Teraz: gdy od ostatniego pytania do zespołu minęło 5 kroków,
+       krótka linia kończy się pytaniem "Czemu nie pytasz zespołu?
+       I tak czekasz na wynik." (z postępem, jeśli to pierwsza linia),
+       najwyżej raz na 10 kroków. Krok ostatniego ASK przeżywa
+       przeładowanie.
