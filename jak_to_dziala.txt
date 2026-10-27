@@ -3131,3 +3131,20 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        kroku); zostaje przerwanie, gdy stoi albo kręci się w kółko;
      - URUCHOM z python3 -c "…" w kilku liniach bierze całą komendę do
        domknięcia cudzysłowu, a nie samą pierwszą linię.
+
+200. Wiadomość MAIN-a bez szumu z wyników (v480go)
+     - ramka W TLE SKOŃCZONE przy zabitym procesie (kod -15/-9) mówi
+       "zatrzymane sygnałem SIGTERM (kill/pkill albo program) — to nie wyjątek
+       w kodzie", bez dodatkowego JSON-a z polami programu (limit_ciszy_s,
+       maks_czas_s…);
+     - akcja RUN to jedna linia "termux_run: komenda"; komenda w kilku
+       liniach (np. dopisanie do notatnik.md przez heredoc) pokazuje tylko
+       pierwszą linię i ile jest dalszych — MAIN nie dostaje z powrotem
+       tekstu, który sam przed chwilą napisał; długa treść w innych
+       narzędziach to "[N znaków]";
+     - {"ok": true, "returncode": 0} i "stdout:" znikają — zostaje samo
+       wyjście albo "(nic nie wypisało)"; kod wyjścia ≠ 0 to jedna linia pod
+       wyjściem;
+     - opis wyniku u Sędziego jest skrócony na końcu zdania, z "…", a nie
+       w pół słowa; "komenda nie skończyła się w 20 min" mówi, co zrobić
+       (komenda w wynik.json ma tylko przeliczyć wynik z gotowego modelu).

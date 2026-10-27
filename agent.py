@@ -35075,14 +35075,38 @@ def _opis_wyniku_czekania(w):
         czesci.append("stderr:\n" + short(err, 800))
     # v480ew: "kod wyjścia: 0" przy udanym odczycie nic nie mowi
     if "returncode" in w and w.get("returncode") not in (0, "0"):
-        czesci.append("kod wyjścia: " + str(w.get("returncode")))
+        czesci.append(_opis_kodu_wyjscia(w.get("returncode")))
     if w.get("czekanie"):
         czesci.append(str(w["czekanie"]))
-    if not czesci or not w.get("ok", True):
+    # v480go: JSON z polami programu tylko wtedy, gdy nie ma nic innego
+    # (uzytkownik 2026-10-27: "kod wyjścia: -15" i pod nim jeszcze
+    # {"ok": false, "returncode": -15, "limit_ciszy_s": …} — szum).
+    if not czesci or (not w.get("ok", True) and not (out or err or "returncode" in w)):
         reszta = {k: v for k, v in w.items()
-                  if k not in ("stdout", "stderr", "command", "czekanie")}
-        czesci.append(short(json.dumps(reszta, ensure_ascii=False, default=str), 1500))
+                  if k not in ("stdout", "stderr", "command", "czekanie")
+                  and k not in _POLA_BEZ_ZNACZENIA}
+        czesci.append(str(reszta.get("message") or reszta.get("co_sie_stalo") or reszta.get("error") or "")
+                      or short(json.dumps(reszta, ensure_ascii=False, default=str), 1500))
     return "\n".join(czesci)
+
+
+_SYGNALY = {9: "SIGKILL", 15: "SIGTERM", 2: "SIGINT", 1: "SIGHUP", 6: "SIGABRT", 11: "SIGSEGV"}
+
+
+def _opis_kodu_wyjscia(kod):
+    """v480go: ujemny kod to sygnal, nie blad programu."""
+    try:
+        k = int(kod)
+    except Exception:
+        return "kod wyjścia: " + str(kod)
+    if k < 0 or k in (128 + 9, 128 + 15):
+        nr = -k if k < 0 else k - 128
+        if nr in (9, 15, 2, 1):
+            return ("zatrzymane sygnałem " + _SYGNALY.get(nr, str(nr))
+                    + (" (kill/pkill, brak pamięci albo program)" if nr == 9
+                       else " (kill/pkill albo program)") + " — to nie wyjątek w kodzie")
+        return "przerwane sygnałem " + _SYGNALY.get(nr, str(nr))
+    return "kod wyjścia: " + str(k)
 
 
 def _hhmm(t, sek=False):
@@ -35628,10 +35652,20 @@ def _wynik_dla_maina(wynik, args, limit):
             continue
         if k in ("command", "workdir", "path") and v == args.get(k):
             continue
+        if k == "path" and args.get("path") and Path(str(v)).name == Path(str(args.get("path"))).name:
+            continue
         if k == "command" and _bez_sleep_na_poczatku(v) == _bez_sleep_na_poczatku(args.get("command")):
             continue
         reszta[k] = v
-    out = json.dumps(reszta, ensure_ascii=False, default=str)
+    # v480go: {"ok": true, "returncode": 0} nic MAIN-owi nie mowi
+    if reszta.get("ok") is True and reszta.get("returncode") in (0, None):
+        reszta = {k: v for k, v in reszta.items() if k not in ("ok", "returncode")}
+    kod_linia = ""
+    if "returncode" in reszta and reszta.get("returncode") not in (0, None):
+        kod_linia = _opis_kodu_wyjscia(reszta["returncode"])
+    if "returncode" in reszta:
+        reszta = {k: v for k, v in reszta.items() if k not in ("ok", "returncode")}
+    out = json.dumps(reszta, ensure_ascii=False, default=str) if reszta else ""
     wyj = str(wynik.get("stdout") or "").rstrip("\n")
     bl = str(wynik.get("stderr") or "").rstrip("\n")
     zostalo = max(300, limit - len(out))
@@ -35643,12 +35677,30 @@ def _wynik_dla_maina(wynik, args, limit):
         wyj = short(wyj, zostalo)
     elif bl:
         bl = short(bl, zostalo)
-    return (
+    tekst = (
         out
-        + ("\nstdout:\n" + wyj if wyj else ("\nstdout: (pusto)"
-                                            if "stdout" in wynik and not wynik.get("czekanie") else ""))
+        + ("\n" + wyj if wyj else ("\n(nic nie wypisało)"
+                                  if "stdout" in wynik and not bl and not wynik.get("czekanie") else ""))
         + ("\nstderr:\n" + bl if bl else "")
+        + ("\n" + kod_linia if kod_linia else "")
     )
+    return tekst.lstrip("\n")
+
+
+def _naglowek_akcji(tool, args):
+    """v480go: akcja jedna linia — komenda jak w terminalu; tresc, ktora MAIN
+    sam wlasnie napisal (heredoc, zapis pliku), nie wraca do niego drugi raz."""
+    args = args if isinstance(args, dict) else {}
+    kom = args.get("command")
+    if isinstance(kom, str) and kom.strip():
+        linie = kom.strip().split("\n")
+        pierwsza = linie[0]
+        if len(linie) > 1:
+            pierwsza += " … (+" + str(len(linie) - 1) + " linii)"
+        return str(tool) + ": " + short(pierwsza, 240)
+    _a = {k: (("[" + str(len(v)) + " znaków]") if isinstance(v, str) and len(v) > 200 else v)
+          for k, v in args.items()}
+    return str(tool) + " " + short(json.dumps(_a, ensure_ascii=False, default=str), 300)
 
 
 def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
@@ -35688,8 +35740,7 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
             except Exception:
                 w["_dla_maina"] = _wynik
         tekst = (
-            str(i + 1) + ". " + str(w.get("tool")) + " "
-            + short(json.dumps(w.get("args"), ensure_ascii=False, default=str), 300)
+            str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args"))
             + "\n" + _wynik_dla_maina(w["_dla_maina"], w.get("args"), na_akcje)
         )
         # v480gf: komenda czekania stala drugi raz — w ramce "W TLE" na
@@ -54714,7 +54765,7 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="wynik.json nie do odczytania: " + str(e)[:200])
         return werdykt
 
-    werdykt["opis"] = str(dane.get("opis") or "")[:300]
+    werdykt["opis"] = _utnij_po_zdaniu(str(dane.get("opis") or ""), 300)
     werdykt["lepiej"] = str(dane.get("lepiej") or "")[:20]
     komenda = str(dane.get("sprawdz") or "").strip()
     werdykt["sprawdz"] = komenda[:500]
@@ -54803,7 +54854,9 @@ def _sedzia_ocen(numer):
                 except Exception:
                     pass
                 werdykt.update(werdykt="nie wyszło", szczegol="komenda nie skończyła się w "
-                               + str(_SEDZIA_MAKS_S // 60) + " min")
+                               + str(_SEDZIA_MAKS_S // 60) + " min — komenda w wynik.json ma "
+                               "tylko przeliczyć wynik z gotowego modelu; skróćcie ją albo "
+                               "wskażcie szybszą")
                 return werdykt
             time.sleep(2)
         try:
@@ -54829,6 +54882,19 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="komenda wypisała " + str(wypisala)
                        + ", a ogłoszone było " + str(ogloszony))
     return werdykt
+
+
+def _utnij_po_zdaniu(t, n):
+    """v480go: opis skrocony na koncu zdania albo slowa, z "…" — nie w pol
+    slowa ("mc=1 + lzma zamiast mc=2 + — ogłoszony wynik")."""
+    t = str(t or "").strip()
+    if len(t) <= n:
+        return t
+    cz = t[:n]
+    k = max(cz.rfind(". "), cz.rfind("; "), cz.rfind(") "))
+    if k < n // 2:
+        k = cz.rfind(" ")
+    return cz[:k + 1].rstrip(" ,;:+-") + " …"
 
 
 def _werdykt_zdaniem(w, kto, z_opisem=True):
