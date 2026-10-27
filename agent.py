@@ -9004,6 +9004,11 @@ def _na_co_odpowiada(wiadomosc, n=350):
         _po = t[_bloki[-1].end():]
         _kon = re.search(r"\n\s*\n\s*\n|\n[A-ZŁŚŻ][a-ząćęłńóśźż]+:\s*\n", _po)
         t = (_po[:_kon.start()] if _kon else _po).strip() or t
+    # v480hn: przy zleceniu (TASK) pierwszym zdaniem byl naglowek programu
+    # "MAIN zlecił programowi poniższe zadanie." — Bartek dostawal go jako
+    # "MAIN pytał: «…»"; liczy sie tresc zlecenia pod nim
+    if t.startswith("MAIN zlecił programowi") and "\n\n" in t:
+        t = t.split("\n\n", 1)[1].strip() or t
     if len(t) <= n:
         return t
     # dlugie pytanie: pierwsze zdanie (o co chodzi) i koniec (samo pytanie)
@@ -36835,8 +36840,9 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
                    + " — każdy plik w osobnym bloku, z pełną ścieżką tuż nad nim")
     odp = deepseek(
         "ENGINEER",
-        "MAIN zlecił programowi poniższe zadanie. " + "; ".join(_co)
-        + ". Program położy na dysk to, co napiszesz, i je uruchomi.\n\n"
+        "MAIN zlecił programowi poniższe zadanie. "
+        + (("; ".join(_co)[:1].upper() + "; ".join(_co)[1:] + ". ") if _co else "")
+        + "Program położy na dysk to, co napiszesz, i je uruchomi.\n\n"
         + task_text
     )
 
@@ -40509,8 +40515,11 @@ def _condense_last_result_for_team(last_result, limit=2500):
         if last_result.get("executed_by") == "main_run":
             # v480gt: powod MAIN-a zespol ma juz w bloku "MAIN:" — tu
             # zostaje tylko, ile akcji wykonal (bylo dwa razy to samo).
-            _ile = re.search(r"wykonano \d+ z \d+ akcji.*$", str(report), re.S)
-            parts.append("MAIN wykonał sam (RUN): " + (_ile.group(0) if _ile else short(str(report), 300)))
+            _ile = re.search(r"wykonano (\d+) z (\d+) akcji.*$", str(report), re.S)
+            # v480hn: "wykonano 1 z 1 akcji" nic roli nie mowi (wyniki sa
+            # nizej); zostaje tylko, gdy czegos nie wykonano
+            if not (_ile and _ile.group(1) == _ile.group(2) and not _ile.group(0)[len("wykonano " + _ile.group(1) + " z " + _ile.group(2) + " akcji"):].strip(" .")):
+                parts.append("MAIN wykonał sam (RUN): " + (_ile.group(0) if _ile else short(str(report), 300)))
         else:
             parts.append("Gemini napisał:\n" + short(str(report), 1200))
 

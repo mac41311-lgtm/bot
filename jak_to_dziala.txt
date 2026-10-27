@@ -3381,3 +3381,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        samym sprawdzeniu 3 min temu — nic się nie zmieniło."
      - Komenda bez wyjścia z kodem 0 (np. puszczenie czegoś w tło) to
        "(skończone bez błędu, nic nie wypisało)", a nie {"returncode": 0}.
+
+225. Wiadomości ról oczami ról (v480hn)
+     - Marek/Tomek: bez linii "MAIN wykonał sam (RUN): wykonano 1 z 1
+       akcji." — wyniki są tuż niżej; zostaje tylko, gdy czegoś nie
+       wykonano.
+     - Bartek przy zleceniu (TASK): "MAIN pytał: «…»" cytuje treść
+       zlecenia (np. "KROK 41: …"), a nie nagłówek programu "MAIN zlecił
+       programowi poniższe zadanie."; nagłówek zaczyna drugie zdanie
+       wielką literą.
