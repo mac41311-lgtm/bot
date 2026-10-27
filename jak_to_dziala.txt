@@ -3253,3 +3253,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        plikach, które komenda czyta, nie po całej komendzie.
      - po RUN MAIN-a bez "Ostatni krok skończył się tak: RUN_TOOL_ERROR
        (nieudany)" — każda akcja sama mówi, co padło.
+
+211. Budzenie przy 25% i linia o zespole przy wyniku (v480gz)
+     - gdy MAIN tylko czeka na proces, którego postęp znamy w procentach,
+       program budzi go przy 25/50/75% (częściowy wynik, świeży odczyt
+       jego czekania), od razu przy końcu procesu albo błędzie w logu,
+       najpóźniej po 60 min; nie przy każdym przyroście logu i nie po
+       każdym jego `sleep 240`. Nowa robota MAIN-a dostaje odpowiedź od razu.
+     - linia o zespole przychodzi, gdy jest wynik z tła (cały albo
+       częściowy) — chwila decyzji: "Wynik jest — zanim wybierzesz, co
+       dalej, zespół może go ocenić: Marek…, Tomek…, Bartek…. Ostatnie
+       pytanie do zespołu: N kroków temu." Nie przy starcie czekania i nie,
+       gdy MAIN pytał zespół w ostatnich 2 krokach; przykład ASK raz na
+       rozmowę.

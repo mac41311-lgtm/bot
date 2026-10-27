@@ -8565,6 +8565,24 @@ _CZAS_DLA_ZESPOLU = (
 )
 _CZAS_DLA_ZESPOLU_KROTKO = "Czekasz na wynik — to dobry moment na ASK do zespołu."
 
+# v480gz: linia o zespole przy WYNIKU, nie przy starcie czekania
+# (uzytkownik 2026-10-27: MAIN przez kilkanascie krokow tylko puszczal RUN
+# i czekal; sam przyznal, ze decyzja o H=224 powinna przejsc przez Marka).
+# Decyzja zapada, gdy przychodzi wynik — wtedy jedna linia z faktem, ile
+# krokow temu pytal zespol. Nie, gdy pytal przed chwila.
+_ZESPOL_PRZY_WYNIKU = (
+    "Wynik jest — zanim wybierzesz, co dalej, zespół może go ocenić: Marek "
+    "znajdzie słabe punkty, Tomek zaproponuje następny krok, Bartek sprawdzi "
+    "kod."
+)
+_ZESPOL_PRZY_WYNIKU_ASK = (
+    " Pytasz przez ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
+    "\"Marek\", \"ask_question\": \"...\"}; odpowiedź wraca od razu."
+)
+_ostatni_ask_krok = [0]
+# ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
+_wynik_do_decyzji = [False]
+
 
 _PODGLAD_KOMENDY = (
     "grep", "sed", "head", "tail", "wc", "ls", "cat", "find", "nl", "sort",
@@ -34903,6 +34921,78 @@ _odstep_przyrostu = [_BUDZ_PO_PRZYROSCIE_S]
 _ODSTEP_PRZYROSTU_MAX_S = 1440
 
 
+def _procent_z_logu(plik, komenda=None, cwd=None, start=None):
+    """v480gz: procent postepu procesu z jego logu (None, gdy nie wiadomo)."""
+    try:
+        _, linie = _ogon_logu(plik)
+        m = re.match(r"(\d+)%", _postep_z_logu(plik, linie, start, komenda, cwd))
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _bledy_w_logu(plik):
+    try:
+        _, linie = _ogon_logu(plik)
+        return sum(1 for l in linie if _BLAD_W_LOGU_RE.search(l))
+    except Exception:
+        return 0
+
+
+def _procesy_z_procentem(procesy=None):
+    """v480gz: {realpath logu: stan} dla procesow w tle, ktorych postep
+    znamy w procentach."""
+    if procesy is None:
+        procesy = _zywe_w_tle()
+    sledzone = {}
+    for (_rodz, _id), _kom in procesy.items():
+        try:
+            if _rodz == "p":
+                _lp, _st = _log_procesu_w_tle(_id)
+                try:
+                    _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
+                except Exception:
+                    _cwd = None
+                _pz = _plik_z_przekierowania(_kom, _cwd)
+            else:
+                _lp, _st, _cwd = "", (_grupy_z_komend.get(_id) or (None, None))[1], None
+                _pz = _plik_z_przekierowania(_kom)
+            for _plik in [x for x in (_pz, _lp) if x]:
+                _pr = _procent_z_logu(_plik, _kom, _cwd, _st)
+                if _pr is not None:
+                    sledzone[os.path.realpath(_plik)] = {
+                        "kom": _kom, "cwd": _cwd, "start": _st,
+                        "kamien": _pr // 25, "bledy": _bledy_w_logu(_plik),
+                        "plik": _plik}
+                    break
+        except Exception:
+            pass
+
+    return sledzone
+
+
+def _sciezka_real(x):
+    try:
+        return os.path.realpath(os.path.expanduser(str(x).replace("$HOME", str(HOME))))
+    except Exception:
+        return str(x)
+
+
+def _czekanie_na_postep(r, sledzone=None):
+    """v480gz: czekanie MAIN-a, ktore czyta tylko logi procesow z procentem
+    — program trzyma je do kolejnych 25%, konca procesu albo bledu."""
+    if r.get("rodzaj") != "czekanie":
+        return False
+    if sledzone is None:
+        sledzone = _procesy_z_procentem()
+    if not sledzone:
+        return False
+    # wystarczy, ze czyta log takiego procesu — inne pliki (np. model,
+    # ktory proces zapisze na koncu) i tak przyjda z jego koncem
+    _pl = _pliki_czekania(r["komenda"], z_procesami=False)
+    return any(_sciezka_real(x) in sledzone for x in _pl)
+
+
 def _bezczynnie_czekaj():
     """v480eo: MAIN w calym RUN nie zrobil nic nowego (tylko czekanie na to,
     co juz leci w tle, albo to samo sprawdzenie z tym samym wynikiem), wiec
@@ -34948,21 +35038,35 @@ def _bezczynnie_czekaj():
                 pliki.add(_pz)
         except Exception:
             pass
+    # v480gz: procesy z postepem w procentach (log + "z ilu") — MAIN-a
+    # budzi ich koniec, blad w logu albo kolejne 25% (czesciowy wynik), a
+    # nie kazdy przyrost logu ani koniec jego wlasnego czekania na ten log
+    # (uzytkownik 2026-10-27: "nie mozna mu wyslac wyniku dopiero, jak sie
+    # skonczy, nawet w czesci?" — MAIN co 4 min puszczal to samo czekanie).
+    sledzone = _procesy_z_procentem(procesy)
+
+    def _trzymane(r):
+        return _czekanie_na_postep(r, sledzone)
+
     t0 = time.time()
-    koniec = t0 + 1800
-    if zywe:
+    koniec = t0 + (3600 if sledzone else 1800)
+    _wolne = [r for r in zywe if not _trzymane(r)]
+    if _wolne:
         koniec = min(koniec, max(
-            r["start"] + (r.get("sekundy") or 0) for r in zywe
+            r["start"] + (r.get("sekundy") or 0) for r in _wolne
         ) + 5)
         koniec = max(koniec, t0 + 60)
-    rozmiary0 = _rozmiary_plikow(pliki)
+    _do_przyrostu = set(p for p in pliki if _sciezka_real(p) not in sledzone)
+    rozmiary0 = _rozmiary_plikow(_do_przyrostu)
     log("MAIN", "MAIN nic nowego nie zrobił — program czeka, aż coś się "
         "wydarzy w tle (najdłużej do " + _hhmm(koniec) + "), zamiast pytać "
         "go od razu znowu.")
     powod = "czas"
+    kamien_tekst = ""
     nastepny_meldunek = t0 + 60
+    nastepny_postep = t0 + 15
     while time.time() < koniec:
-        if zywe and any(not r["watek"].is_alive() for r in zywe):
+        if zywe and any(not r["watek"].is_alive() and not _trzymane(r) for r in zywe):
             powod = "koniec_tla"
             break
         if procesy:
@@ -34970,8 +35074,22 @@ def _bezczynnie_czekaj():
             if any(k not in teraz_zywe for k in procesy):
                 powod = "koniec_procesu"
                 break
-        if pliki and time.time() - t0 >= _odstep_przyrostu[0]:
-            if _rozmiary_plikow(pliki) != rozmiary0:
+        if sledzone and time.time() >= nastepny_postep:
+            nastepny_postep += 15
+            for _rp, _s in sledzone.items():
+                _pr = _procent_z_logu(_s["plik"], _s["kom"], _s["cwd"], _s["start"])
+                if _bledy_w_logu(_s["plik"]) > _s["bledy"]:
+                    powod = "blad"
+                    kamien_tekst = _nazwa_w_tle(_s["kom"])
+                    break
+                if _pr is not None and _pr // 25 > _s["kamien"]:
+                    powod = "kamien"
+                    kamien_tekst = _nazwa_w_tle(_s["kom"]) + " doszedł do " + str(_pr) + "%"
+                    break
+            if powod in ("blad", "kamien"):
+                break
+        if _do_przyrostu and time.time() - t0 >= _odstep_przyrostu[0]:
+            if _rozmiary_plikow(_do_przyrostu) != rozmiary0:
                 powod = "przybylo"
                 break
         if time.time() >= nastepny_meldunek:
@@ -34985,7 +35103,21 @@ def _bezczynnie_czekaj():
         _odstep_przyrostu[0] = min(_ODSTEP_PRZYROSTU_MAX_S, _odstep_przyrostu[0] * 2)
     else:
         _odstep_przyrostu[0] = _BUDZ_PO_PRZYROSCIE_S
+    # v480gz: czekania MAIN-a trzymane do kamienia/konca — swiezy odczyt
+    # teraz, zeby wynik byl aktualny, a nie sprzed kilkunastu minut.
+    for r in list(zywe):
+        if _trzymane(r) and not r["watek"].is_alive() and not r.get("dostarczony"):
+            try:
+                r["wynik"] = dispatch_tool("termux_run", {
+                    "command": _BEZ_SLEEP_RE.sub("true", r["komenda"])})
+                r["koniec"] = time.time()
+            except Exception:
+                pass
+    if powod in ("kamien", "blad"):
+        _wynik_do_decyzji[0] = True
     zdanie = {
+        "kamien": "częściowy wynik — " + kamien_tekst,
+        "blad": "w logu " + kamien_tekst + " pojawił się błąd",
         "koniec_tla": "coś z tego, co leciało w tle, się skończyło",
         "koniec_procesu": "proces w tle się skończył",
         "przybylo": "proces dalej działa, ale w jego logach przybyły nowe wyniki",
@@ -35041,8 +35173,16 @@ def _bezczynnie_czekaj():
     # — osobna karta POSTĘP tylko to zapowiadala (bieg 2026-10-25 08:23).
     if powod in ("koniec_tla", "koniec_procesu"):
         return
+    if powod in ("kamien", "blad"):
+        # v480gz: stan procesu (procent, koncowka) jest w "Dalej w tle",
+        # a odczyt czekania w "Skonczone w tle" — tu tylko jedno zdanie
+        _ost = ("Następny częściowy wynik przy kolejnych 25%; koniec procesu "
+                "albo błąd w logu przyjdą od razu.") if powod == "kamien" else ""
+        with _w_tle_lock:
+            _w_tle_postep.append("• Program czekał " + czekal + ": " + zdanie + ". " + _ost)
+        return
     with _w_tle_lock:
-        _w_tle_postep.append("═══ POSTĘP W TLE ═══\n" + tekst + "\n═══")
+        _w_tle_postep.append("• " + tekst)
 
 
 def _wykonaj_po_skonczonym(name, args):
@@ -35457,7 +35597,9 @@ def _czekanie_blok(czesci=None):
                 # v480fc: DeepSeek nie czuje uplywu czasu miedzy wiadomosciami
                 # — mowimy wprost, ile jeszcze zostalo do wyniku.
                 _zostalo = ""
-                if r["rodzaj"] == "czekanie" and r.get("sekundy"):
+                if _czekanie_na_postep(r):
+                    _zostalo = ", wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie"
+                elif r["rodzaj"] == "czekanie" and r.get("sekundy"):
                     _ile = r["start"] + float(r["sekundy"]) - teraz
                     if _ile > 5:
                         _zostalo = ", wynik najpóźniej za " + _min_s(_ile)
@@ -35625,6 +35767,10 @@ def _wykonaj_akcje_maina(decision, step):
             result.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE")
             or result.get("bez_zmian")
             or (name == "termux_check_process" and result.get("running") is True)
+            # v480gz: nowe czekanie na log procesu z procentem — program i
+            # tak odda wynik przy kolejnych 25%, koncu albo bledzie
+            or (result.get("status") == "CZEKA_W_TLE" and _czekanie_na_postep(
+                {"rodzaj": "czekanie", "komenda": str((args or {}).get("command") or "")}))
         )):
             _nic_nowego = False
 
@@ -44974,21 +45120,23 @@ def main_decide(
     _tlo_trwa = (_stan_tla.strip() + "\n" + _tlo_trwa).strip()
     _tlo_skonczone = (_tlo_skonczone_procesy + "\n\n" + _tlo_skonczone).strip()
 
-    # v480gt/gu: linia o zespole raz na nowa rzecz w tle; pelna raz na
-    # rozmowe MAIN-a, potem krotka. Z tresci sekcji znika, idzie na koniec.
-    _wszystko = _tlo_skonczone + _tlo_trwa + _twoj_krok
+    # v480gz: linia o zespole, gdy przyszedl wynik z tla (caly albo
+    # czesciowy) — chwila decyzji; z faktem, ile krokow temu MAIN pytal
+    # zespol. Gdy pytal w ostatnich 2 krokach albo to odpowiedzi na ASK —
+    # bez linii. Przyklad ASK raz na rozmowe MAIN-a.
     _linia_zespolu = ""
-    if _CZAS_DLA_ZESPOLU in _wszystko or _tlo_trwa:
-        _nowe_tlo = _klucze_tla() - _zespol_przypomniany
-        _zespol_przypomniany.update(_nowe_tlo)
-        if _nowe_tlo:
-            _s_main = sessions.get("MAIN")
-            _rozmowa_main = getattr(_s_main, "chat_session_id", None) or "?"
-            if _rozmowa_main in _zespol_pelny_tekst_w:
-                _linia_zespolu = _CZAS_DLA_ZESPOLU_KROTKO
-            else:
-                _zespol_pelny_tekst_w.add(_rozmowa_main)
-                _linia_zespolu = _CZAS_DLA_ZESPOLU
+    _jest_wynik = bool(_tlo_skonczone.strip()) or _wynik_do_decyzji[0]
+    _wynik_do_decyzji[0] = False
+    _ile_od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
+    if _jest_wynik and not asked_followup and (not _ostatni_ask_krok[0] or _ile_od_ask > 2):
+        _linia_zespolu = _ZESPOL_PRZY_WYNIKU + (
+            " Ostatnie pytanie do zespołu: " + str(_ile_od_ask) + " kroków temu."
+            if _ostatni_ask_krok[0] else "")
+        _s_main = sessions.get("MAIN")
+        _rozmowa_main = getattr(_s_main, "chat_session_id", None) or "?"
+        if _rozmowa_main not in _zespol_pelny_tekst_w:
+            _zespol_pelny_tekst_w.add(_rozmowa_main)
+            _linia_zespolu += _ZESPOL_PRZY_WYNIKU_ASK
 
     def _bez_linii_zespolu(t):
         return str(t or "").replace(" " + _CZAS_DLA_ZESPOLU, "").replace(_CZAS_DLA_ZESPOLU, "").strip()
@@ -45205,6 +45353,7 @@ def _handle_main_ask(
                 + short(ask_question, 300)
             )
             _zapisz_pytanie_maina(ask_role)
+            _ostatni_ask_krok[0] = int(step or 0)
 
             _speak(
                 "MAIN",
