@@ -3148,3 +3148,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - opis wyniku u Sędziego jest skrócony na końcu zdania, z "…", a nie
        w pół słowa; "komenda nie skończyła się w 20 min" mówi, co zrobić
        (komenda w wynik.json ma tylko przeliczyć wynik z gotowego modelu).
+
+201. Skróty w jednej linii, bez "...[skrócono]..." w środku zdania (v480gp)
+     - skrócony tekst jednej linii (komenda w nawiasie, linia w logu,
+       "W tle dalej czekanie z 10:13 (…)") kończy się w tej samej linii " …";
+       znacznik "...[skrócono]..." w nowej linii zostaje tylko dla tekstu
+       w wielu liniach (wyjście, kod);
+     - "W tle dalej …" pokazuje całą komendę (do 200 znaków, bez sleep);
+       komenda w kilku liniach — pierwsza linia i ile jest dalszych.

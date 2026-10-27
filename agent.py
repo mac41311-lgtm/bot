@@ -2707,6 +2707,15 @@ def short(value, limit=1000):
         cut.rfind("\t"),
     )
 
+    # v480gp: skrot jednej linii (komenda w nawiasie, w zdaniu, w logu) konczy
+    # sie w tej samej linii " …" — "\n...[skrócono]..." rozrywal zdanie w pol
+    # nawiasu (uzytkownik 2026-10-27: "W tle dalej czekanie z 10:13 (cd …
+    # ps -p\n...[skrócono]...), już 47 s" — "Skrócono czemu to tak").
+    if "\n" not in cut:
+        if boundary >= limit - _SHORT_BOUNDARY_LOOKBACK and boundary > 0:
+            cut = cut[:boundary]
+        return cut.rstrip() + " …"
+
     if boundary >= limit - _SHORT_BOUNDARY_LOOKBACK and boundary > 0:
         # Udalo sie cofnac do granicy slowa -- nic nie jest urwane
         # w polowie, wiec zaden fragment nie udaje calosci.
@@ -35366,7 +35375,7 @@ def _czekanie_blok():
                     continue
                 linie.append(
                     "W tle dalej " + co + " z " + _hhmm(r["start"])
-                    + " (" + short(_bez_sleep(r["komenda"]), 60) + ")"
+                    + " (" + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 200) + ")"
                     + ", już " + _min_s(teraz - r["start"]) + _zostalo + "."
                 )
     if linie:
@@ -35687,17 +35696,23 @@ def _wynik_dla_maina(wynik, args, limit):
     return tekst.lstrip("\n")
 
 
+def _komenda_jedna_linia(kom, limit=240):
+    """v480gp: komenda w zdaniu — pierwsza linia, a gdy jest ich wiecej,
+    ile jeszcze; bez lamania zdania."""
+    linie = str(kom or "").strip().split("\n")
+    pierwsza = linie[0]
+    if len(linie) > 1:
+        pierwsza += " … (+" + str(len(linie) - 1) + " linii)"
+    return short(pierwsza, limit)
+
+
 def _naglowek_akcji(tool, args):
     """v480go: akcja jedna linia — komenda jak w terminalu; tresc, ktora MAIN
     sam wlasnie napisal (heredoc, zapis pliku), nie wraca do niego drugi raz."""
     args = args if isinstance(args, dict) else {}
     kom = args.get("command")
     if isinstance(kom, str) and kom.strip():
-        linie = kom.strip().split("\n")
-        pierwsza = linie[0]
-        if len(linie) > 1:
-            pierwsza += " … (+" + str(len(linie) - 1) + " linii)"
-        return str(tool) + ": " + short(pierwsza, 240)
+        return str(tool) + ": " + _komenda_jedna_linia(kom, 240)
     _a = {k: (("[" + str(len(v)) + " znaków]") if isinstance(v, str) and len(v) > 200 else v)
           for k, v in args.items()}
     return str(tool) + " " + short(json.dumps(_a, ensure_ascii=False, default=str), 300)
