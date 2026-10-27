@@ -8592,7 +8592,14 @@ _glos_postep_byl = [False]
 # v480hf: ile krotkich glosow z rzedu (bez pelnej wiadomosci, czyli bez ASK)
 _glos_krotkie = [0]
 _glos_czemu_krok = [-100]
-_CZEMU_ZDANIE = "Czemu nie pytasz zespołu? I tak czekasz na wynik."
+# v480ho: uzytkownik: na koncu krotko, ze jest ASK i kto jest w zespole
+_CZEMU_ZDANIE = (
+    "Czemu nie pytasz zespołu? I tak czekasz na wynik. Masz pod ręką "
+    "Marka, Tomka, Bartka, Piotra, Anię, Kamila, Wojtka, Olę, Elę i Igora — "
+    "każdy może spojrzeć na to, co teraz robisz, ze swojej strony. Wystarczy "
+    "ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": \"Marek\", "
+    "\"ask_question\": \"...\"}; odpowiedź wraca od razu."
+)
 _CZEMU_CO_KROKOW = 5
 _GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
 # ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
@@ -56758,7 +56765,8 @@ def _ocena_zdaniem(o, dla=None):
 # nigdy zadnych instrukcji. Logi 23/24.10: druzyna 1 3 pytania na 125
 # krokow; gdy uzytkownik poprosil o burze, MAIN zapytal 5 osob i Marek
 # wylapal zawyzony rekord.
-_BURZA_CO_S = 2 * 3600
+# v480ho: uzytkownik 2026-10-27: sztywno co 1 h, bez pomijania.
+_BURZA_CO_S = 3600
 _BURZA_PLIK_STANU = STATE_DIR / "burza_mozgow.json"
 _BURZA_BEZ = ("IGOR", "PROGRESS_ESTIMATOR")
 
@@ -56802,12 +56810,6 @@ def _burza_blok():
             and str(p[1]) not in _BURZA_BEZ
         }
         write_json(_BURZA_PLIK_STANU, st)
-        if len(pytani) >= 3:
-            log("MAIN", "Burza mózgów pominięta — MAIN w ostatnich 2 h sam "
-                "zapytał " + str(len(pytani))
-                + (" osoby" if len(pytani) % 10 in (2, 3, 4) and len(pytani) % 100 not in (12, 13, 14) else " osób")
-                + " z zespołu.")
-            return ""
         plik = (
             "~/MAIN_" + _DRUZYNA + "/BURZA_MOZGOW.md" if _DRUZYNA
             else "~/BURZA_MOZGOW.md"
@@ -56823,7 +56825,7 @@ def _burza_blok():
             "jakie macie wnioski, co z nich realizujecie teraz i do czego tym "
             "dążycie w celu."
         )
-        log("MAIN", "Burza mózgów (co 2 h): " + tekst)
+        log("MAIN", "Burza mózgów (co 1 h): " + tekst)
         return tekst + "\n\n"
     except Exception:
         return ""

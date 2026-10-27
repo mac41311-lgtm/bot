@@ -3390,3 +3390,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zlecenia (np. "KROK 41: …"), a nie nagłówek programu "MAIN zlecił
        programowi poniższe zadanie."; nagłówek zaczyna drugie zdanie
        wielką literą.
+
+226. Burza mózgów co 1 h, pytanie o zespół z krótkim opisem (v480ho)
+     - Burza mózgów przychodzi do MAIN-a sztywno co godzinę (było co 2 h
+       i była pomijana, gdy MAIN sam zapytał 3 osoby).
+     - "Czemu nie pytasz zespołu? I tak czekasz na wynik." ma na końcu
+       krótko, kto jest w zespole, że każdy spojrzy ze swojej strony,
+       i przykład ASK z imieniem; odpowiedź wraca od razu.
