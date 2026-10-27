@@ -27833,13 +27833,11 @@ def _uwaga_ten_sam_odczyt(name, args, result):
         poprzedni = _ostatni_odczyt.get(klucz)
         _ostatni_odczyt[klucz] = (tekst, teraz if not poprzedni or poprzedni[0] != tekst else poprzedni[1])
         if poprzedni and poprzedni[0] == tekst and tekst.strip():
+            # v480hm: bez godziny i bez pouczenia (zespol dostawal to jako
+            # "bez_zmian: … od 19:03 … program poda samo …")
             result["bez_zmian"] = (
-                "Ten sam wynik co przy tym samym sprawdzeniu od "
-                + datetime.fromtimestamp(poprzedni[1]).strftime("%H:%M")
-                + " — od tego czasu nic się tu nie zmieniło. To, co leci w "
-                "tle, program poda samo, gdy się skończy, a gdy w RUN nie "
-                "ma nic nowego, poczeka, aż coś się wydarzy, i wtedy się "
-                "odezwie."
+                "Ten sam wynik co przy tym samym sprawdzeniu "
+                + _temu(poprzedni[1]) + " — nic się nie zmieniło."
             )
     except Exception:
         pass
@@ -35510,8 +35508,13 @@ def _opis_wyniku_czekania(w):
         reszta = {k: v for k, v in w.items()
                   if k not in ("stdout", "stderr", "command", "czekanie")
                   and k not in _POLA_BEZ_ZNACZENIA}
-        czesci.append(str(reszta.get("message") or reszta.get("co_sie_stalo") or reszta.get("error") or "")
-                      or short(json.dumps(reszta, ensure_ascii=False, default=str), 1500))
+        # v480hm: {"returncode": 0} bez wyjscia (np. komenda konczaca sie
+        # "&", ktora tylko puscila cos w tlo) — Bartek dostawal sam JSON
+        if set(reszta) <= {"ok", "returncode"} and reszta.get("returncode") in (0, "0", None):
+            czesci.append("(skończone bez błędu, nic nie wypisało)")
+        else:
+            czesci.append(str(reszta.get("message") or reszta.get("co_sie_stalo") or reszta.get("error") or "")
+                          or short(json.dumps(reszta, ensure_ascii=False, default=str), 1500))
     return "\n".join(czesci)
 
 
@@ -36170,6 +36173,8 @@ def _wynik_dla_maina(wynik, args, limit):
     if reszta.get("czekanie"):
         _notka = str(reszta.pop("czekanie"))
         reszta.pop("command", None)
+    if reszta.get("bez_zmian"):
+        _notka = (_notka + "\n" if _notka else "") + str(reszta.pop("bez_zmian"))
     _linie_pol = []
     if "ok" in reszta and isinstance(reszta["ok"], bool):
         if reszta.pop("ok") is False:
@@ -45508,7 +45513,41 @@ def main_decide(
                 return odp2
     except Exception as e:
         log("MAIN", "Pytanie o zespół nie poszło: " + str(e))
+    if asked_followup:
+        _uwaga_maina_do_roli(odp)
     return odp
+
+
+def _uwaga_maina_do_roli(odp):
+    """v480hm: bieg 2026-10-27 19:31 — MAIN po odpowiedzi Marka napisal
+    w uzasadnieniu "test JUZ MAM z KROKU 44, Marek tego nie widzial", ale
+    Marek tego nigdy nie dostal i przy kolejnym pytaniu radzil to samo.
+    Gdy MAIN zaraz po odpowiedziach zespolu pisze w uzasadnieniu o kims
+    z nich po imieniu, to zdanie trafia do tej osoby (dostanie je przy
+    swoim nastepnym pytaniu)."""
+    try:
+        m = re.search(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"', str(odp or ""))
+        if not m:
+            return
+        powod = json.loads('"' + m.group(1) + '"')
+        for rola, (mian, dop) in _IMIE_AUTORA.items():
+            if rola in _ROLE_BEZ_CELU:
+                continue
+            _rdzen = re.escape(dop[:-1] if dop.endswith("a") else mian)
+            if not re.search(r"\b" + re.escape(mian) + r"\b|\b" + _rdzen + r"\w{0,4}\b", powod):
+                continue
+            # zdania, w ktorych pada imie, a nie cale uzasadnienie
+            zdania = [z.strip() for z in re.split(r"(?<=[.!?])\s+", powod)
+                      if re.search(r"\b" + _rdzen + r"\w{0,4}\b|\b" + re.escape(mian) + r"\b", z)]
+            if not zdania:
+                continue
+            tekst = "Uwaga do Twojej ostatniej odpowiedzi: " + " ".join(zdania)[:600]
+            if any(t == tekst for _, t in _role_inbox.get(rola, [])):
+                continue
+            _role_inbox.setdefault(rola, []).append(("MAIN", tekst))
+            log("MAIN", "Uwaga MAIN-a dotycząca " + dop + " trafi do " + dop + " przy następnym pytaniu.")
+    except Exception as e:
+        log("MAIN", "Uwaga MAIN-a do roli: " + str(e))
 
 
 _MAIN_ASK_MAX = 5

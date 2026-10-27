@@ -3368,3 +3368,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        a on znów wybrał sam RUN: zaraz po jego odpowiedzi idzie samo
        pytanie, a jego odpowiedź na nie jest decyzją w tym kroku.
      - Bieg 18:30 (krok 210): po tym pytaniu MAIN od razu zapytał Marka.
+
+224. Uwaga MAIN-a wraca do osoby z zespołu; mniej szumu u ról (v480hm)
+     - Bieg 2026-10-27 19:31: MAIN po odpowiedzi Marka napisał w
+       uzasadnieniu "test JUŻ MAM z kroku 44, Marek tego nie widział",
+       ale Marek tego nie dostał i radził to samo drugi raz. Gdy MAIN
+       zaraz po odpowiedziach zespołu pisze o kimś z nich po imieniu,
+       te zdania trafiają do tej osoby ("Uwaga do Twojej ostatniej
+       odpowiedzi: …") przy jej następnym pytaniu.
+     - Zespół dostawał "bez_zmian: Ten sam wynik … od 19:03 … program
+       poda samo …" — teraz jedno zdanie: "Ten sam wynik co przy tym
+       samym sprawdzeniu 3 min temu — nic się nie zmieniło."
+     - Komenda bez wyjścia z kodem 0 (np. puszczenie czegoś w tło) to
+       "(skończone bez błędu, nic nie wypisało)", a nie {"returncode": 0}.
