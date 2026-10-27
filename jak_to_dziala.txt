@@ -3176,3 +3176,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zdanie: program sam go obudzi, gdy proces się skończy albo w logu
        przybędzie wyników (informacja, nie zakaz);
      - działa dla każdego celu — liczy jednostki pracy z logu, nie zgaduje.
+
+204. Bez zdania o pilnowaniu sleep-em (v480gs)
+     - zdanie "Nie trzeba go pilnować sleep-em…" z v480gr usunięte —
+       brzmiało jak pouczenie; MAIN dostaje sam postęp z logu (ile z ilu,
+       tempo, ile zostało), który odpowiada na to, po co czekał.

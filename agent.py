@@ -53452,8 +53452,10 @@ def _pilnuje_sleepem(sciezka):
         return False
 
 
-_BUDZENIE_ZDANIE = (" Nie trzeba go pilnować sleep-em: program sam Cię obudzi, gdy "
-                    "proces się skończy albo w logu przybędzie wyników.")
+# v480gs: uzytkownikowi (2026-10-27) to zdanie sie nie podobalo — brzmialo
+# jak pouczenie ("nie trzeba"), a postep z logu sam odpowiada na to, po co
+# MAIN czekal sleep-em. Zostaje pusty; _pilnuje_sleepem zostaje do uzycia.
+_BUDZENIE_ZDANIE = ""
 
 
 def _czas_slownie(s):
