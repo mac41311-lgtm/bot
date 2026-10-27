@@ -8821,12 +8821,10 @@ def _uruchom_dla_zespolu(komenda, cwd, rola=None):
     dostaje autor (skrzynka, przy jego nastepnej turze) i MAIN (karta
     W TLE SKONCZONE)."""
     imie = _IMIE_AUTORA.get(rola, (None, None)) if rola else (None, None)
-    # ta sama komenda tej samej osoby jeszcze leci w tle — nie puszczamy drugiej
-    for r in _w_tle_zywe():
-        if r.get("autor") == rola and r.get("komenda") == komenda:
-            return ("$ " + komenda + "\n(ta komenda jeszcze liczy w tle od "
-                    + _hhmm(r["start"]) + " — nie puściłem drugiej. Wynik dostaniesz "
-                    "sam, gdy się skończy; teraz odpowiedz tym, co już wiesz.)")
+    # ta sama robota juz liczy w tle (od kogokolwiek) — nie puszczamy drugiej
+    _juz = _juz_liczy_w_tle(komenda)
+    if _juz:
+        return "$ " + komenda + "\n(" + _juz + " Teraz odpowiedz tym, co już wiesz.)"
     rzecz = _rzecz_w_tle("komenda", komenda, 0, [])
     rzecz["autor"] = rola
     rzecz["autor_dop"] = imie[1]
@@ -8905,6 +8903,33 @@ def _opis_dla_zespolu(komenda, cwd, wynik):
     return "$ " + komenda + " (uruchomione w " + _sciezka_od_domu(cwd) + ")\n" + (opis or "(nic nie wypisało)")
 
 
+def _cudzyslow_otwarty(k):
+    try:
+        shlex.split(k)
+        return False
+    except ValueError:
+        return True
+    except Exception:
+        return False
+
+
+def _komenda_do_konca(tekst, m):
+    """v480gn: URUCHOM: python3 -c " ... w kilku liniach — bieg 2026-10-27
+    03:48: brana byla tylko pierwsza linia i powloka zglaszala otwarty
+    cudzyslow. Gdy cudzyslow nie jest domkniety, dokladamy kolejne linie,
+    az bedzie (najwyzej 200)."""
+    k = m.group(1)
+    if not _cudzyslow_otwarty(k):
+        return k
+    reszta = tekst[m.end():].split("\n")[1:201]
+    linie = [k]
+    for l in reszta:
+        linie.append(l)
+        if not _cudzyslow_otwarty("\n".join(linie)):
+            return "\n".join(linie)
+    return k
+
+
 def _podglad_dla_roli(rola, odp):
     """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
     odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
@@ -8927,7 +8952,7 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
     while True:
         komendy = []
         for m in _PODGLAD_RE.finditer(str(odp or "")):
-            k = _komenda_z_podgladu(m.group(1))
+            k = _komenda_z_podgladu(_komenda_do_konca(str(odp or ""), m))
             if k and k not in komendy:
                 komendy.append(k)
         if not komendy:
@@ -24731,7 +24756,10 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                     )
                 )
 
-            elif teraz > sufit:
+            elif teraz > sufit and not getattr(_threading.current_thread(), "w_tle", False):
+                # v480gn: komenda, ktora juz liczy w tle, nie trzyma kroku —
+                # sufit (zeby krok nie stal caly dzien) jej nie dotyczy;
+                # bieg 2026-10-27 00:38: trening ubity po 2 h bez wyniku.
                 powod = "sufit"
                 szczegol = (
                     "pracował bez przerwy "
@@ -31704,10 +31732,29 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 else:
 
                     try:
-                        result = dispatch_tool(
-                            name,
-                            args
-                        )
+                        # v480gn: bieg 2026-10-26/27, druzyna 1 — wykonawca
+                        # TASK trzymal trening na wierzchu 28 min, 60 min i
+                        # 2 h (az do sufitu), a caly bieg stal. Dluga komenda
+                        # liczy dalej w tle tak jak RUN MAIN-a; wykonawca
+                        # konczy zadanie raportem, MAIN dostaje karte W TLE.
+                        if name == "termux_run" and str(args.get("command") or "").strip():
+                            _juz = _juz_liczy_w_tle(args.get("command"))
+                            if _juz:
+                                result = {"ok": True, "status": "JUZ_LICZY_W_TLE", "message": _juz}
+                            else:
+                                result, _w_tlo = _wykonaj_z_przejsciem_w_tlo(name, args, [])
+                                if _w_tlo:
+                                    result["message"] = (
+                                        "Komenda liczy dłużej niż " + _min_s(_W_TLE_PO_S)
+                                        + ", więc liczy dalej w tle — nic jej nie przerwał. "
+                                        "Nie czekaj na nią i nie uruchamiaj jej drugi raz: "
+                                        "wynik dostanie MAIN, gdy się skończy. Zakończ zadanie "
+                                        "raportem, co zrobione, a co jeszcze liczy w tle.")
+                        else:
+                            result = dispatch_tool(
+                                name,
+                                args
+                            )
 
                     except Exception as e:
 
@@ -34665,6 +34712,7 @@ def _uruchom_rzecz(rzecz, praca, cichy):
 def _do_listy_w_tle(rzecz):
     rzecz["w_tle"] = True
     rzecz["watek"].cichy = True
+    rzecz["watek"].w_tle = True
     _w_tle.append(rzecz)
 
 
@@ -34960,10 +35008,43 @@ def _wykonaj_po_skonczonym(name, args):
     return wynik
 
 
+def _rdzen_komendy(cmd):
+    """v480gn: komenda bez "cd X &&", "export A=B &&" i zmiennych A=B na
+    poczatku — "cd ~/MAIN_1 && OMP_NUM_THREADS=4 python3 tcn.py" i
+    "cd ~/MAIN_1 && python3 tcn.py" to ta sama robota."""
+    c = _bez_sleep(str(cmd or "")).strip()
+    for _ in range(10):
+        c2 = re.sub(r"^(?:cd\s+\S+|export(?:\s+\w+=\S*)+)\s*(?:&&|;)\s*", "", c)
+        c2 = re.sub(r"^\w+=\S*\s+", "", c2)
+        if c2 == c:
+            break
+        c = c2
+    return re.sub(r"\s+", " ", c).strip()
+
+
+def _juz_liczy_w_tle(cmd):
+    """v480gn: ta sama robota juz liczy w tle — opis dla tego, kto chce ja
+    puscic drugi raz (bieg 2026-10-26 22:44: wykonawca TASK puscil
+    tcn.py, ktory Bartek trenowal juz w tle; dwa treningi po 2 h)."""
+    rdzen = _rdzen_komendy(cmd)
+    if not rdzen:
+        return ""
+    for r in _w_tle_zywe():
+        if r.get("rodzaj") == "komenda" and _rdzen_komendy(r.get("komenda")) == rdzen:
+            kto = ("Komenda " + r["autor_dop"]) if r.get("autor_dop") else "Ta komenda"
+            return (kto + " (" + short(rdzen, 120) + ") liczy już w tle od "
+                    + _hhmm(r["start"]) + " — nie puściłem jej drugi raz, żeby dwie kopie "
+                    "nie dzieliły procesora. Wynik przyjdzie sam, gdy się skończy.")
+    return ""
+
+
 def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete):
     """v480ef: komenda MAIN-a, ktora liczy dluzej niz _W_TLE_PO_S, liczy
     dalej w tle. Zwraca (wynik, czy_poszlo_w_tlo)."""
     cmd = str(args.get("command") or "")
+    _juz = _juz_liczy_w_tle(cmd)
+    if _juz:
+        return {"ok": True, "status": "JUZ_LICZY_W_TLE", "command": cmd, "message": _juz}, False
     rzecz = _rzecz_w_tle("komenda", cmd, 0, pominiete)
     watek = _uruchom_rzecz(rzecz, lambda: dispatch_tool(name, args), False)
     watek.join(timeout=_W_TLE_PO_S)
@@ -35400,7 +35481,7 @@ def _wykonaj_akcje_maina(decision, step):
 
         # v480eo: patrz _bezczynnie_czekaj().
         if not (isinstance(result, dict) and (
-            result.get("status") == "JUZ_CZEKA_W_TLE"
+            result.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE")
             or result.get("bez_zmian")
             or (name == "termux_check_process" and result.get("running") is True)
         )):
@@ -35617,7 +35698,7 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
         if isinstance(_wynik, dict) and _wynik.get("status") == "CZEKA_W_TLE":
             tekst = (str(i + 1) + ". " + str(w.get("tool"))
                      + " — poszło w tle jako czekanie (ramka W TLE na górze).")
-        elif isinstance(_wynik, dict) and _wynik.get("status") == "JUZ_CZEKA_W_TLE":
+        elif isinstance(_wynik, dict) and _wynik.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
             tekst = (str(i + 1) + ". " + str(w.get("tool")) + " — "
                      + str(_wynik.get("message") or "to samo czekanie już leci w tle."))
         ile += len(tekst)

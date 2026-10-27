@@ -3117,3 +3117,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        "położone: kn_higher.py" i zaraz ENGINEER_CODE_MISSING);
      - maska w folderze drużyny ("ls *.pkl" po "cd ~/MAIN_2") nie jest już
        odrzucana jako sięganie do rywala.
+
+199. Wykonawca TASK też puszcza długie komendy w tło, bez dubli i bez sufitu w tle (v480gn)
+     - komenda wykonawcy TASK (Gemini), która liczy dłużej niż 2 min, liczy
+       dalej w tle jak RUN MAIN-a; wykonawca kończy zadanie raportem, a MAIN
+       dostaje kartę W TLE i wynik, gdy się skończy (bieg 26/27.10, drużyna 1:
+       trening na wierzchu 28 min, 60 min i 2 h — cała drużyna stała);
+     - ta sama robota, która już liczy w tle (bez względu na "cd X &&" i
+       zmienne typu OMP_NUM_THREADS=4 na początku), nie startuje drugi raz —
+       ani od MAIN-a, ani od wykonawcy, ani od roli; słyszą, czyja to komenda
+       i od kiedy liczy (wcześniej dwa treningi tcn.py dzieliły procesor);
+     - komendy, która już liczy w tle, nie przerywa sufit 2 h (nie trzyma
+       kroku); zostaje przerwanie, gdy stoi albo kręci się w kółko;
+     - URUCHOM z python3 -c "…" w kilku liniach bierze całą komendę do
+       domknięcia cudzysłowu, a nie samą pierwszą linię.
