@@ -53365,6 +53365,97 @@ def _ogon_logu(sciezka, ile_bajtow=6000):
         return 0, []
 
 
+# v480gr: uzytkownik 2026-10-27: MAIN nie ma zegarka — zamiast pilnowac
+# procesu sleep-em i liczyc minuty, dostaje postep w jednostkach samej
+# roboty: ktora iteracja/epoka/krok z ilu, tempo i ile zostalo. Program
+# czyta to z logu (typowe zapisy: "iter 5000", "step 120/2000",
+# "epoch 3/20", "N_iter=29115"); bez liczby calkowitej — samo tempo.
+_POSTEP_RE = re.compile(
+    r"\b(iter(?:ation)?s?|steps?|epoch|ep|krok|batch|gen(?:eration)?|pokolenie|round|runda)"
+    r"[\s_=:#\[(]*(\d+)(?:\s*(?:/|of|z)\s*(\d+))?", re.I)
+_POSTEP_RAZEM_RE = re.compile(
+    r"\b(n_?iters?|max_?iters?|total_?iters?|n_?steps|max_?steps|total_?steps|"
+    r"num_?epochs|n_?epochs|epochs|iters|steps)\s*[=:]\s*(\d+)", re.I)
+_postep_historia = {}
+
+
+def _jednostka_postepu(slowo):
+    s = str(slowo or "").lower()
+    if s.startswith("ep") or "epoch" in s:
+        return "epoka"
+    if s.startswith(("gen", "pokol")):
+        return "pokolenie"
+    if s.startswith(("round", "rund")):
+        return "runda"
+    return "iter"
+
+
+def _postep_z_logu(sciezka, linie, start=None):
+    """v480gr: "iter 5000 z 29115 (17%), ok. 9/s, do końca ok. 44 min"
+    albo "" gdy w logu nie ma licznika."""
+    try:
+        wartosc = razem = jedn = None
+        for l in reversed(list(linie or [])[-40:]):
+            # "steps=2000" w naglowku to liczba calkowita, nie postep
+            ms = [m for m in _POSTEP_RE.finditer(l) if not _POSTEP_RAZEM_RE.match(l, m.start())]
+            if ms:
+                m = ms[0]
+                jedn = _jednostka_postepu(m.group(1))
+                wartosc = int(m.group(2))
+                razem = int(m.group(3)) if m.group(3) else None
+                break
+        if wartosc is None:
+            return ""
+        if razem is None:
+            try:
+                with open(sciezka, "rb") as f:
+                    glowa = f.read(6000).decode("utf-8", "replace")
+            except Exception:
+                glowa = ""
+            for m in _POSTEP_RAZEM_RE.finditer(glowa + "\n" + "\n".join(linie or [])):
+                if (_jednostka_postepu(m.group(1)) == "epoka") == (jedn == "epoka"):
+                    razem = int(m.group(2))
+        if razem is not None and razem <= wartosc:
+            razem = None if razem < wartosc else razem
+        teraz = time.time()
+        hist = _postep_historia.get(sciezka)
+        if hist is None or wartosc < hist[1]:
+            _postep_historia[sciezka] = hist = (teraz, wartosc)
+        tempo = None
+        if wartosc > hist[1] and teraz - hist[0] >= 30:
+            tempo = (wartosc - hist[1]) / (teraz - hist[0])
+        elif start and wartosc > 0 and teraz - start >= 30:
+            tempo = wartosc / (teraz - start)
+        tekst = "postęp: " + jedn + " " + str(wartosc)
+        if razem:
+            tekst += " z " + str(razem) + " (" + str(int(100 * wartosc / razem)) + "%)"
+        if tempo:
+            if tempo >= 1:
+                tekst += ", ok. " + ("%.1f" % tempo).rstrip("0").rstrip(".") + " " + jedn + "/s"
+            else:
+                tekst += ", ok. " + ("%.1f" % (tempo * 60)).rstrip("0").rstrip(".") + " " + jedn + "/min"
+            if razem and razem > wartosc:
+                tekst += ", do końca ok. " + _min_s((razem - wartosc) / tempo)
+        return tekst
+    except Exception:
+        return ""
+
+
+def _pilnuje_sleepem(sciezka):
+    """v480gr: MAIN w ostatnim RUN czekal sleep-em i czytal ten log."""
+    try:
+        nazwa = Path(str(sciezka)).name
+        return bool(nazwa) and any(
+            _sekundy_sleep(k) >= 60 and nazwa in str(k)
+            for k in _ostatni_run()["komendy"])
+    except Exception:
+        return False
+
+
+_BUDZENIE_ZDANIE = (" Nie trzeba go pilnować sleep-em: program sam Cię obudzi, gdy "
+                    "proces się skończy albo w logu przybędzie wyników.")
+
+
 def _czas_slownie(s):
     s = int(max(0, s))
     return (str(s // 60) + " min " + str(s % 60) + " s") if s >= 60 else (str(s) + " s")
@@ -53503,16 +53594,19 @@ def _raport_z_tla():
             if not linie and start and time.time() - start < 30:
                 continue
             _juz_czytal = _log_juz_czytany(log_path, ostatnia)
+            _postep = _postep_z_logu(log_path, linie, start) if log_path else ""
             zdania.append(
                 "Proces w tle " + str(pid)
                 + ("" if _juz_czytal else " (" + komenda + ")") + " dalej działa"
                 + (", od " + trwa if trwa else "")
+                + ("; " + _postep if _postep else "")
                 + (" (jego log czytaliście w tym kroku)." if _juz_czytal and not bledy else
                    ". Log " + _sciezka_od_domu(log_path) + ": " + str(rozmiar)
                    + " B, ostatnia linia: " + short(ostatnia, 200)
                    if log_path else ".")
                 + ("\n  W ostatnich liniach logu jest: " + short(bledy[-1], 200)
                    if bledy else "")
+                + (_BUDZENIE_ZDANIE if log_path and _pilnuje_sleepem(log_path) else "")
             )
     # Grupy puszczone w tlo zwykla komenda (`nohup ... &`): kodu wyjscia
     # nie znamy, ale wiemy, kiedy grupa zniknela.
@@ -53552,15 +53646,25 @@ def _raport_z_tla():
                 continue
             _tlo_ostatnio_widziane[klucz] = (rozmiar, ostatnia)
             _bl = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            _postep = _postep_z_logu(_plik, linie, start)
+            _sleepem = _pilnuje_sleepem(_plik)
             if _log_juz_czytany(_plik, ostatnia) and not _bl:
-                # v480fc: MAIN wlasnie sam czytal ten log
+                # v480fc: MAIN wlasnie sam czytal ten log — v480gr: zostaje
+                # tylko to, czego z logu sam nie wyczyta (postep, tempo)
+                if _postep:
+                    zdania.append(
+                        "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
+                        + ") dalej działa; " + _postep + "."
+                        + (_BUDZENIE_ZDANIE if _sleepem else ""))
                 continue
             zdania.append(
                 "Komenda puszczona w tło (" + short(" ".join(str(komenda).split()), 140)
                 + ") dalej działa, od " + _czas_slownie(time.time() - float(start or time.time()))
+                + ("; " + _postep if _postep else "")
                 + ". Log " + _sciezka_od_domu(_plik) + ": " + str(rozmiar)
                 + " B, ostatnia linia: " + short(ostatnia, 200)
                 + ("\n  W ostatnich liniach logu jest: " + short(_bl[-1], 200) if _bl else "")
+                + (_BUDZENIE_ZDANIE if _sleepem else "")
             )
             continue
         _tlo_zgloszone_konce.add(klucz)

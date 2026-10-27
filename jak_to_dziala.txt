@@ -3165,3 +3165,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - "nic nowego od tego samego sprawdzenia 5 min temu", "Twoja komenda
        puszczona 6 min temu skończyła się w tle", "liczy już w tle od 4 min";
      - godziny zostają tylko w logu dla użytkownika.
+
+203. Postęp z logu zamiast pilnowania zegarkiem (v480gr)
+     - przy procesie w tle, który dalej działa, program czyta z jego logu
+       typowy licznik pracy ("iter 5000", "step 120/2000", "epoch 3/20",
+       "gen 12") i liczbę całkowitą z nagłówka ("N_iter=29115", "epochs=20")
+       i dopisuje: "postęp: iter 5000 z 29115 (17%), ok. 9 iter/s, do końca
+       ok. 44 min"; bez liczby całkowitej — samo tempo; bez licznika — nic;
+     - gdy MAIN w ostatnim RUN pilnował tego logu sleep-em, dostaje jedno
+       zdanie: program sam go obudzi, gdy proces się skończy albo w logu
+       przybędzie wyników (informacja, nie zakaz);
+     - działa dla każdego celu — liczy jednostki pracy z logu, nie zgaduje.
