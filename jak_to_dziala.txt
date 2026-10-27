@@ -3205,3 +3205,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        MAIN dostaje raz na rozmowę, przy pierwszym czekaniu; przy każdym
        kolejnym nowym czekaniu jedną linię: "Czekasz na wynik — to dobry
        moment na ASK do zespołu." Nowa rozmowa MAIN-a znów dostaje całość.
+
+207. Bez echa wyników RUN i trafniejsze "to samo czekanie" (v480gv)
+     - po v480gt wyniki RUN szły do MAIN-a dwa razy (pod "Co się właśnie
+       stało" jako JSON i w "Wyniki akcji RUN") — zostają raz.
+     - czekanie "cd ~/MAIN_1 && … cat nowy.log; ps -p NOWY" nie jest już
+       brane za to samo, co czekanie na inny log i inny proces w tym samym
+       folderze: liczą się pliki (względne nazwy po cd) i numery procesów,
+       a nie sam folder.
+     - odmowa drugiego czekania kończy się na "przyjdzie sam na górze
+       Twojej wiadomości", bez dopisku o robieniu czegoś innego.

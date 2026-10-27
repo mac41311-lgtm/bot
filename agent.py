@@ -34762,9 +34762,39 @@ def _do_listy_w_tle(rzecz):
 _PLIK_W_KOMENDZIE_RE = re.compile(r"(?:~|/data/data|\$HOME)[^\s;&|'\"<>()]+")
 
 
-def _pliki_czekania(cmd):
-    """v480ei: pliki, ktore czekanie czyta po sleep (cat/tail/head ...)."""
-    return set(_PLIK_W_KOMENDZIE_RE.findall(_bez_sleep(cmd)))
+_CZYTANIE_PLIKU_RE = re.compile(
+    r"\b(?:cat|tail|head|wc|ls|stat|du|grep)\b([^;&|<>()]*)")
+
+
+def _pliki_czekania(cmd, z_procesami=True):
+    """v480ei: pliki, ktore czekanie czyta po sleep (cat/tail/head ...).
+
+    v480gu: bieg 2026-10-27 11:08 — "cd ~/MAIN_1 && ... cat tfm_med.log;
+    ps -p 19272" dawalo tylko {~/MAIN_1} (sam folder z cd), tak samo jak
+    czekanie na stary trening (tfm.log, ps -p 6420), wiec nowe czekanie
+    MAIN-a odrzucono jako "to samo". Folder z cd nie jest plikiem;
+    wzgledne nazwy po cat/tail/... licza sie wzgledem niego, a ps -p PID
+    jako osobny proces."""
+    c = _bez_sleep(cmd)
+    wynik = set()
+    katalogi = set()
+    katalog = None
+    for m in re.finditer(r"\bcd\s+([^\s;&|]+)", c):
+        katalogi.add(m.group(1))
+        katalog = katalog or m.group(1)
+    for sc in _PLIK_W_KOMENDZIE_RE.findall(c):
+        if sc not in katalogi:
+            wynik.add(sc)
+    for m in _CZYTANIE_PLIKU_RE.finditer(c):
+        for tok in m.group(1).split():
+            if (tok.startswith(("-", "'", '"', "~", "/", "$")) or "*" in tok
+                    or not re.search(r"[./]", tok) or tok.isdigit()):
+                continue
+            wynik.add((katalog.rstrip("/") + "/" if katalog else "") + tok)
+    if z_procesami:
+        for pid in re.findall(r"\bps\s+(?:-\w+\s+)*-p\s+(\d+)", c):
+            wynik.add("pid:" + pid)
+    return wynik
 
 
 def _to_samo_czekanie_w_tle(cmd):
@@ -34801,8 +34831,7 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
                 + _temu(tamto["start"]) + " już czyta te same pliki; wynik "
                 "najpóźniej za " + _min_s(max(0, tamto["start"] + (tamto.get("sekundy") or 0) - time.time()))
                 + " (wcześniej, jeśli proces się skończy). Jego wynik przyjdzie "
-                "sam na górze Twojej wiadomości, więc nie musisz na nie czekać "
-                "— w tym czasie możesz robić coś innego."
+                "sam na górze Twojej wiadomości."
                 + ((" Akcji po nim w tym RUN (" + ", ".join(pominiete)
                     + ") nie wykonałem — mogą zależeć od wyniku; wyślij je, "
                     "gdy przyjdzie.") if pominiete else "")
@@ -34894,7 +34923,7 @@ def _bezczynnie_czekaj():
     czekania = [r for r in zywe if r["rodzaj"] == "czekanie"]
     pliki = set()
     for r in czekania:
-        pliki |= _pliki_czekania(r["komenda"])
+        pliki |= _pliki_czekania(r["komenda"], z_procesami=False)
     # v480fd: dlugi proces w tle bez czekania — budzimy tez przyrostem w
     # jego wlasnym logu (wczesniej tylko pliki czytane przez czekania, wiec
     # sam trening budzil MAIN-a dopiero po 30 min).
@@ -40099,10 +40128,16 @@ def _condense_last_result_for_team(last_result, limit=2500):
     if last_result.get("executed_by") == "main_run" and last_result.get("wyniki_run"):
         _wr = [w for w in last_result.get("wyniki_run") or [] if isinstance(w, dict)]
         _na = max(300, (limit - 400) // max(1, len(_wr)))
-        parts.append("\n\n".join(
-            str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + "\n"
-            + _wynik_dla_maina(w.get("wynik"), w.get("args"), _na)
-            for i, w in enumerate(_wr)))
+        def _jedna_akcja(i, w):
+            _wy = w.get("wynik")
+            if isinstance(_wy, dict) and _wy.get("status") == "CZEKA_W_TLE":
+                return str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — poszło w tle jako czekanie."
+            if isinstance(_wy, dict) and _wy.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
+                return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — "
+                        + str(_wy.get("message") or "to samo już leci w tle."))
+            return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + "\n"
+                    + _wynik_dla_maina(_wy, w.get("args"), _na))
+        parts.append("\n\n".join(_jedna_akcja(i, w) for i, w in enumerate(_wr)))
         tool_trace = None
 
     if isinstance(tool_trace, list) and tool_trace:
@@ -44524,7 +44559,9 @@ def main_decide(
         _facts = _condense_last_result_for_team(
             {
                 k: v for k, v in last_result.items()
-                if k not in ("tool_trace", "report", "dowody")
+                # v480gu: bez wyniki_run — _wyniki_run_blok nizej daje je
+                # MAIN-owi raz (po v480gt szly dwa razy, raz jako JSON).
+                if k not in ("tool_trace", "report", "dowody", "wyniki_run")
             },
             3000
         )
