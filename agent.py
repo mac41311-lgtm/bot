@@ -8489,6 +8489,11 @@ _STOPKA_DEEPSEEKA_RE = re.compile(
 )
 
 
+_BLOK_Z_PODPISEM_RE = re.compile(
+    r"(?m)^([ \t]*)```([A-Za-z0-9_+-]*)[ \t]*[:\t ][ \t]*([~/\w.-]*[\w-]\.[A-Za-z0-9]{1,5})[ \t]*$"
+)
+
+
 def _bez_stopki_deepseeka(text):
     """Odpowiedz bez stopki strony DeepSeek na koncu."""
 
@@ -8497,6 +8502,13 @@ def _bez_stopki_deepseeka(text):
     # Bartka ("cptThis response is AI-generated…" w check23_v2.py, linia
     # 19) i plik sie nie kompilowal. Usuwamy ja wszedzie.
     t = _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
+    # v480hu: blok podpisany w samym otwarciu ("```python:~/MAIN_2/x.py",
+    # "```python x.py"). Program znal tylko "```python", wiec taki blok w
+    # ogole nie byl kodem — bieg 2026-10-28 12:43 (druzyna 2, krok 325):
+    # cala nowa wersja pliku Bartka nie trafila na dysk. Sciezka idzie
+    # do linii nad blokiem, tak jak naglowek, ktory program juz rozumie.
+    t = _BLOK_Z_PODPISEM_RE.sub(lambda m: m.group(1) + "`" + m.group(3) + "`\n"
+                                + m.group(1) + "```" + m.group(2), t)
     return t.replace("This response is AI-generated, for reference only.", "").replace(
         "This response is AI-generated, for reference only", "")
 
@@ -8904,7 +8916,7 @@ def _uruchom_dla_zespolu(komenda, cwd, rola=None):
     rzecz["autor"] = rola
     rzecz["autor_dop"] = imie[1]
     rzecz["cwd"] = cwd
-    watek = _uruchom_rzecz(rzecz, lambda: _wynik_dla_zespolu(komenda, cwd), True)
+    watek = _uruchom_rzecz(rzecz, lambda: _wynik_dla_zespolu(komenda, cwd, rola), True)
     watek.join(timeout=_W_TLE_PO_S)
     with _w_tle_lock:
         wynik = rzecz["wynik"]
@@ -8921,13 +8933,21 @@ def _uruchom_dla_zespolu(komenda, cwd, rola=None):
     return _opis_dla_zespolu(komenda, cwd, wynik)
 
 
-def _wynik_dla_zespolu(komenda, cwd):
+# v480hu: kto z zespolu uruchamia te komende (URUCHOM) — w tym watku.
+_zespol_uruchamia = _threading.local()
+
+
+def _wynik_dla_zespolu(komenda, cwd, rola=None):
     """v480gl: sama praca komendy zespolu (watek, moze skonczyc sie w tle)."""
     try:
         os.makedirs(cwd, exist_ok=True)
     except Exception:
         pass
-    wynik = dispatch_tool("termux_run", {"command": "cd " + shlex.quote(cwd) + " && " + komenda})
+    _zespol_uruchamia.rola = rola or "zespół"
+    try:
+        wynik = dispatch_tool("termux_run", {"command": "cd " + shlex.quote(cwd) + " && " + komenda})
+    finally:
+        _zespol_uruchamia.rola = None
     # v480gj: instalacja (pip/pkg install), pobieranie czy build idzie
     # w tlo automatycznie — rola nie ma narzedzi do sledzenia procesu,
     # wiec program czeka za nia do konca i oddaje koncowke logu.
@@ -25929,7 +25949,12 @@ def termux_run(command):
         #                               autoryzowal (sed -i itp.)
         # v461: w RUN komende pisze MAIN (DeepSeek) — jego heredoc z
         # kodem to kod zespolu; zapisujemy autora i puszczamy dalej.
-        if _wykonuje_main:
+        # v480hu: komende URUCHOM napisala rola zespolu — to jej kod, jak
+        # RUN MAIN-a. Bieg 2026-10-28 12:45 (druzyna 2): Bartek trzy razy
+        # dostal "nie mam dowodu, ze ten plik zawiera autoryzowany kod"
+        # na wlasne `sed -i` w plikach druzyny.
+        _rola_uruchamia = getattr(_zespol_uruchamia, "rola", None)
+        if _wykonuje_main or _rola_uruchamia:
             _tworzy = None
             _pisze_kod = None
             try:
@@ -25939,7 +25964,8 @@ def termux_run(command):
                         _pm.suffix.lower() in _KOD_SUFIKSY
                         or str(_tresc_m or "").lstrip().startswith("#!")
                     ):
-                        _autor_pliku[_pm.name] = "MAIN"
+                        _autor_pliku[_pm.name] = (
+                            _rola_uruchamia if _rola_uruchamia in _IMIE_AUTORA else "MAIN")
             except Exception:
                 pass
         else:
@@ -25949,7 +25975,7 @@ def termux_run(command):
                 or _gemini_zmienia_cudzy_kod(command_str)
             )
 
-        if not _wykonuje_main and not _pisze_kod:
+        if not _wykonuje_main and not _rola_uruchamia and not _pisze_kod:
             _program_inline = _gemini_program_w_komendzie(command_str)
             if _program_inline:
                 _ile = len([l for l in _program_inline.splitlines() if l.strip()])
@@ -36762,8 +36788,51 @@ def _blok_tego_pliku(text, sciezka):
     b = _blok_dokladnie_dla(text, sciezka)
     if a and b and a != b:
         t = str(text or "")
-        return a if t.rfind(a.strip()[:200]) > t.rfind(b.strip()[:200]) else b
-    return a or b
+        wynik = a if t.rfind(a.strip()[:200]) > t.rfind(b.strip()[:200]) else b
+    else:
+        wynik = a or b
+    return _kod_zamiast_wyniku(text, sciezka, wynik)
+
+
+def _kod_zamiast_wyniku(text, sciezka, wybrany):
+    """v480hs2: bieg 2026-10-28 12:43 (druzyna 2, krok 325) — pod
+    naglowkiem patch_fix_literals.py Bartek dal kod, potem "URUCHOM:
+    python3 patch_fix_literals.py" i blok "Oczekiwane po patchu" (sam
+    wydruk). Program wzial ostatni blok — wydruk — za plik, plik sie nie
+    kompilowal, a Bartek trzy rundy myslal, ze to "infrastruktura
+    nadpisuje plik outputem". Dla pliku .py blok, ktory sie nie
+    kompiluje, ustepuje ostatniemu blokowi tego pliku, ktory sie
+    kompiluje."""
+    try:
+        nazwa = str(sciezka or "").split("/")[-1].strip()
+        if not wybrany or Path(nazwa).suffix.lower() != ".py":
+            return wybrany
+        try:
+            compile(str(wybrany), nazwa, "exec")
+            return wybrany
+        except SyntaxError:
+            pass
+        tekst = str(text or "")
+        lepszy = None
+        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)```", tekst, re.DOTALL):
+            kod = _wyrownaj_blok(m.group(2))
+            if not kod.strip() or kod.strip() == str(wybrany).strip():
+                continue
+            przed = tekst[:m.start()]
+            przed = przed[przed.rfind("```") + 3:] if "```" in przed else przed
+            tag = m.group(1) or ""
+            nalezy = (nazwa in tag or _podpis_w_naglowku(kod, sciezka)
+                      or _najblizsza_nazwa(przed[-400:], ".py") == nazwa)
+            if not nalezy:
+                continue
+            try:
+                compile(kod, nazwa, "exec")
+            except SyntaxError:
+                continue
+            lepszy = kod
+        return lepszy or wybrany
+    except Exception:
+        return wybrany
 
 
 def _kod_z_wypowiedzi(text, sciezka):
@@ -37253,6 +37322,15 @@ def _code_target_rejection(path, code_text):
     istnieje_z_danymi = bool(
         obecne.strip() and not _looks_like_code(obecne)
     )
+    # v480hu: plik z rozszerzeniem kodu (.py, .sh…) to plik kodu, nawet
+    # gdy przez pomylke wpadl do niego wydruk. Bieg 2026-10-28 12:43
+    # (druzyna 2): do patch_fix_literals.py trafil wydruk, a potem kazda
+    # poprawka Bartka byla odrzucana "ten plik trzyma dane" — trzy rundy.
+    if istnieje_z_danymi and Path(baza).suffix in (
+        ".py", ".sh", ".js", ".mjs", ".ts", ".c", ".h", ".cpp", ".hpp",
+        ".rs", ".go", ".java", ".kt",
+    ):
+        istnieje_z_danymi = False
 
     plik_danych = baza.endswith(_DATA_FILE_EXTENSIONS)
 

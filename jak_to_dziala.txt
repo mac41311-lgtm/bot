@@ -3454,3 +3454,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wszystkie po kolei. Mimo to log i zespół dostawały "program wykonał
        jedną (ASK), a pominął: ASK, ASK, ASK" (5 razy w biegu). Teraz
        ostrzeżenie pada tylko, gdy obok pytań była inna decyzja (np. DONE).
+
+232. v480hu — kod Bartka trafia na dysk (bieg 2026-10-28, drużyna 2, krok 325).
+     - Pod nagłówkiem pliku Bartek dał kod, potem URUCHOM i blok
+       "Oczekiwane po patchu" (sam wydruk). Program wziął ostatni blok,
+       czyli wydruk, za plik .py. Teraz dla pliku .py blok, który się
+       nie kompiluje, ustępuje ostatniemu blokowi tego pliku, który się
+       kompiluje.
+     - Gdy w pliku .py był już ten wydruk, każda poprawka była odrzucana
+       jako "ten plik trzyma dane". Plik z rozszerzeniem kodu jest
+       plikiem kodu, nawet gdy jest w nim śmieć.
+     - Blok podpisany w otwarciu ("```python:~/MAIN_2/x.py") jest
+       rozumiany jak nagłówek nad blokiem (wcześniej w ogóle nie był
+       kodem i cała nowa wersja przepadała).
+     - Komendy URUCHOM roli (np. sed -i w plikach drużyny) to kod
+       zespołu, jak RUN MAIN-a — nie dostają już "nie mam dowodu, że
+       ten plik zawiera autoryzowany kod".
