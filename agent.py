@@ -21514,6 +21514,8 @@ def _autor_poprawia_skladnie(path, content, wynik):
     imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
     sciezka = _sciezka_od_domu(str(_resolve_home_relative_path(path)))
     blad = str(wynik.get("compile_error") or "")
+    # v480hx: to, co lezy na dysku, jest jego — bez zdania "ktos zmienil"
+    _rola_poznala_plik(rola, _resolve_home_relative_path(path))
     odpowiedzi_kolegow = ""
     for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
         log("PROGRAM", sciezka + " od " + imie_d + " się nie kompiluje — błąd wraca "
@@ -34649,6 +34651,11 @@ def _task_is_simple_run(task_text, success_condition, written_path):
     if _zadanie_mowi_o_czyms_jeszcze(text, written_path):
         return None
 
+    # v480hx: zadanie mowi o flagach, ale nie da sie z niego wyczytac, z
+    # jakimi uruchomic — niech przeczyta je wykonawca, nie zgadujemy.
+    if _FLAGI_W_TEKSCIE_RE.search(str(task_text or "")) and _argumenty_z_zadania(task_text, written_path) is None:
+        return None
+
     try:
         if not written_path.exists():
             return None
@@ -36474,6 +36481,61 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
     )
 
 
+# v480hx: bieg 2026-10-28 16:23 (druzyna 2, krok 385): MAIN zlecil "Uruchom
+# --dry-run (~1 min), NIE uruchamiaj pelnego", a program uruchomil sam plik
+# bez argumentow — ruszyl pelny trening obok drugiego (swap). Argumenty
+# biore z zadania: z komendy z nazwa pliku albo z "uruchom --flaga ...".
+_FLAGI_W_TEKSCIE_RE = re.compile(r"(?<![\w-])--[A-Za-z][\w-]*")
+
+
+def _flagi_bez_wartosci(kod):
+    return set(re.findall(
+        r"add_argument\(\s*['\"](--[\w-]+)['\"][^)]*action\s*=\s*['\"]store_(?:true|false)['\"]",
+        str(kod or "")))
+
+
+def _argumenty_z_zadania(task_text, path):
+    """Lista argumentow dla pliku z tresci zadania; None — zadanie nie mowi."""
+    tekst = str(task_text or "")
+    nazwa = re.escape(Path(str(path)).name)
+    m = None
+    for m in re.finditer(r"(?:python3?|bash|sh)\s+(?:-u\s+)?\S*" + nazwa
+                         + r"((?:[ \t]+(?![|;&>]|2>)[^\s|;&>`]+)*)", tekst):
+        pass
+    if m is not None:
+        try:
+            return shlex.split(m.group(1))
+        except Exception:
+            return m.group(1).split()
+    try:
+        bez_wartosci = _flagi_bez_wartosci(Path(str(path)).read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        bez_wartosci = set()
+    wynik = None
+    for m in re.finditer(r"(?<![\w-])(?:[Uu]ruchom\w*|[Oo]dpal\w*|[Rr]un)\b[ \t]+(--[A-Za-z][^\n]*)", tekst):
+        tokeny = m.group(1).replace(",", " ").split()
+        args = []
+        i = 0
+        while i < len(tokeny):
+            t = tokeny[i]
+            if not t.startswith("--"):
+                break
+            flaga = t.split("=", 1)[0].rstrip(").;:")
+            args.append(t.rstrip(").;:") if "=" in t else flaga)
+            if "=" not in t and flaga not in bez_wartosci and i + 1 < len(tokeny):
+                nast = tokeny[i + 1]
+                if not nast.startswith(("-", "(")) and re.fullmatch(r"[\w./~:-]+", nast.rstrip(").;:")) \
+                        and (bez_wartosci or re.match(r"[\d./~]", nast)):
+                    args.append(nast.rstrip(").;:"))
+                    i += 1
+            if t.endswith((")", ".", ";", ":")):
+                break
+            i += 1
+        if args:
+            wynik = args
+    return wynik
+
+
 def _run_script_directly(path, task_text):
     """
     Uruchamia zapisany skrypt przez to samo execute_shell, ktorego
@@ -36490,6 +36552,10 @@ def _run_script_directly(path, task_text):
         command = "python " + shlex.quote(str(path))
     else:
         command = "bash " + shlex.quote(str(path))
+
+    _args = _argumenty_z_zadania(task_text, path)
+    if _args:
+        command += " " + " ".join(shlex.quote(a) for a in _args)
 
     # v294: zanim uruchomimy — sprawdzamy, czy ten program ma w ogole
     # koniec. Patrz _program_bez_konca(). Strumien nie ma i mial nie
@@ -36746,6 +36812,35 @@ def _pliki_kodu_bez_autora(task_text, team):
     ]
 
 
+def _blok_to_komenda(kod, sciezka):
+    """v480hx: blok z sama komenda powloki ("cd ~/MAIN_2 && setsid python3
+    -u k4_iteracja3.py ... &") to nie tresc pliku .py, choc ma jego nazwe.
+    Bieg 2026-10-28 16:21 (druzyna 2, krok 385): Bartek po probach dal
+    MAIN-owi komende w bloku, program wzial ja za nowa wersje
+    k4_iteracja3.py i nadpisal 17 kB kodu 112 bajtami."""
+    try:
+        if Path(str(sciezka or "").split("/")[-1]).suffix.lower() in (".sh", ".bash", "") :
+            return False
+        kod = str(kod or "").strip()
+        try:
+            compile(kod, "x.py", "exec")
+            return False
+        except SyntaxError:
+            pass
+        linie = [l.strip() for l in kod.splitlines() if l.strip() and not l.strip().startswith("#")]
+        if not linie or len(linie) > 12:
+            return False
+        return all(_LINIA_POWLOKI_RE.match(l) for l in linie)
+    except Exception:
+        return False
+
+
+_LINIA_POWLOKI_RE = re.compile(
+    r"^(?:\$\s*)?(?:[A-Z_][A-Z0-9_]*=\S*\s+)*(?:cd|python3?|bash|sh|nohup|setsid|"
+    r"timeout|time|export|env|pip3?|pkg|ls|cat|tail|head|grep|sed|wc|kill|pkill|ps|"
+    r"mkdir|cp|mv|rm|echo|curl|wget|tar|unzip|chmod|sleep|watch|nice|taskset)\b")
+
+
 def _blok_dokladnie_dla(text, sciezka):
     """
     v429: blok, ktory autor jednoznacznie przypisal temu plikowi —
@@ -36767,6 +36862,9 @@ def _blok_dokladnie_dla(text, sciezka):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        if not z_heredoca and _blok_to_komenda(kod, sciezka):
+            continue
 
         if z_heredoca:
             return _wyrownaj_blok(z_heredoca)
@@ -36804,6 +36902,9 @@ def _blok_podpisany(text, sciezka):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        if not z_heredoca and _blok_to_komenda(kod, sciezka):
+            continue
 
         if z_heredoca:
             return _wyrownaj_blok(z_heredoca)
@@ -36888,7 +36989,7 @@ def _kod_z_wypowiedzi(text, sciezka):
 
     kod = extract_code_block(text or "", sciezka)
 
-    if kod and _podpisany_innym(kod, sciezka):
+    if kod and (_podpisany_innym(kod, sciezka) or _blok_to_komenda(kod, sciezka)):
         return None
 
     # v480fo: blok wybrany po jezyku stoi pod naglowkiem INNEGO pliku
@@ -37120,6 +37221,15 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         p = _resolve_home_relative_path(sciezka)
 
         if _code_target_rejection(str(p), kod):
+            continue
+
+        # v480hx: dzialajacego pliku nie zastepuje tekst, ktory sie nie
+        # kompiluje (krok 385 druzyny 2: komenda zamiast 17 kB kodu).
+        _zly = _zepsuty_zastepuje_dzialajacy(p, kod)
+        if _zly:
+            log("MAIN", "Nie nadpisałem " + p.name + " — blok z odpowiedzi się nie "
+                "kompiluje (" + _zly + "), a plik na dysku działa, więc zostaje.")
+            polozone.append(p.name + " (" + str(p.stat().st_size) + " B)")
             continue
 
         try:

@@ -3488,3 +3488,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        każdą zmianę. Wcześniej Bartek (drużyna 2, krok 355) pamiętał
        starą wersję, napisał "patch nigdy nie wszedł", przepisał cechy w
        osobnym pliku, a Sędzia powtórzył to w ocenie.
+
+235. v480hx — komenda w bloku to nie kod; uruchomienie z argumentami z zadania
+       a) Blok, w którym stoi sama komenda powłoki (cd … && python3 plik.py
+          … &), nie jest nową wersją pliku .py, nawet gdy ma jego nazwę.
+          Działający plik nie zostaje też zastąpiony tekstem, który się nie
+          kompiluje. Wcześniej (drużyna 2, krok 385) komenda Bartka dla
+          MAIN-a nadpisała 17 kB jego kodu, a Bartek myślał, że to
+          "infrastruktura nadpisuje pliki".
+       b) Gdy program sam uruchamia plik z zadania, bierze argumenty z
+          zadania ("Uruchom --dry-run", albo komenda z nazwą pliku). Gdy
+          zadanie mówi o flagach, a nie da się ich wyczytać, plik
+          uruchamia wykonawca. Wcześniej "Uruchom --dry-run, NIE pełnego"
+          kończyło się pełnym treningiem obok drugiego.
+       c) Gdy autor dostaje błąd składni swojego pliku, program nie mówi
+          mu "ktoś zmienił ten plik" (to jego własna wersja).
