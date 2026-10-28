@@ -3512,3 +3512,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        się wykonuje, a pytania idą obok niego (na początek następnego
        kroku, jak każde pytanie obok RUN-a). Gdy MAIN odpisze inną
        decyzją (np. nowym RUN-em), ta zastępuje pierwszą, jak dotąd.
+
+237. (v480hz) Gdy rola pisze „poprawka fragmentu w x.py” (albo „podmień
+       funkcję/linie”) i daje sam kawałek kodu, program traktuje go jak
+       poprawkę fragmentu, a nie jak cały nowy plik. Wcześniej (log drużyny
+       2, krok 462) blok funkcji od Marka zapisał się jako cały plik
+       trening_aux_1_3m.py (283 B). Do tego cytat „MAIN pytał: «…»” w
+       rozmowie z rolą pomija linię o zmienionych plikach na dysku i
+       pokazuje prawdziwe pytanie MAIN-a.

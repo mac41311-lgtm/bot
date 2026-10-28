@@ -9036,6 +9036,11 @@ def _na_co_odpowiada(wiadomosc, n=350):
     """v480gt: koniec wiadomosci, na ktora rola odpowiada (tam stoi pytanie
     MAIN-a albo zlecenie), od poczatku zdania."""
     t = str(wiadomosc or "").strip()
+    # v480hz: zdanie programu "Od czasu, gdy ten plik byl..." (v480hw) stoi
+    # na poczatku wiadomosci — to nie pytanie MAIN-a (Tomek dostal je jako
+    # "MAIN pytal: «Od czasu, gdy...»", bieg 2026-10-28 20:45).
+    if t.startswith("Od czasu, gdy ") and "\n\n" in t:
+        t = t.split("\n\n", 1)[1].strip() or t
     # v480ha: pytanie MAIN-a to jego ostatni blok "MAIN:" — po nim moga
     # stac glosy kolegow (bieg 2026-10-27 13:30: Bartek dostawal jako
     # "Odpowiadasz na" koncowke wypowiedzi Marka, nie pytanie MAIN-a).
@@ -34289,7 +34294,17 @@ def _blok_poprawki(text, start):
         _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
         or _STARY_FRAGMENT_RE.search(ostatnia)
         or _NOWY_FRAGMENT_RE.search(ostatnia)
+        or _POPRAWKA_FRAGMENTU_RE.search(ostatnia)
     )
+
+
+# v480hz: "**Fix (1 min, poprawka fragmentu w `trening_aux_1_3m.py`):**" nad
+# sama funkcja — bieg 2026-10-28 19:13 (druzyna 2, krok 462): program zapisal
+# te 283 B jako caly plik trening_aux_1_3m.py.
+_POPRAWKA_FRAGMENTU_RE = re.compile(
+    r"poprawk\w*\s+(?:tego\s+)?fragment|fragment\w*\s+(?:w|do|pliku|kodu)\b|"
+    r"podmie[nń]\w*\s+(?:fragment|funkcj|lini)|zamie[nń]\w*\s+(?:fragment|funkcj|lini)",
+    re.IGNORECASE)
 
 
 def _obcy_jezyk_dla(sciezka, znacznik, kod):
