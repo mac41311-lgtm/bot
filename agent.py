@@ -45903,12 +45903,33 @@ def main_decide(
             odp2 = deepseek("MAIN", _CZEMU_ZDANIE if _w_tle_cos else _CZEMU_ZDANIE.replace(
                 " I tak czekasz na wynik.", " Od " + str(_od_ask) + " kroków działasz sam."))
             if re.search(r'"type"\s*:\s*"[A-Z_]+"', str(odp2 or "")):
+                # v480hy: bieg 2026-10-28 19:12 (druzyna 1, krok 214) — MAIN
+                # dal RUN z zapisem oracle_bytes.py i jego uruchomieniem, na
+                # pytanie o zespol odpisal ASK-ami, a ASK zastapil RUN: plik
+                # nie powstal, MAIN 5 krokow czekal na proces, ktorego nie
+                # bylo, i w koncu sam przyznal "deklarowalem falszywie". Same
+                # ASK-i ida teraz obok RUN-a (jak pytania obok RUN, v480cl),
+                # a RUN sie wykonuje.
+                if (not re.search(r'"type"\s*:\s*"(?!ASK")[A-Z_]+"', str(odp2 or ""))
+                        and _ma_akcje_run(odp)):
+                    log("MAIN", "Na pytanie o zespół MAIN odpisał pytaniami — jego RUN z tego kroku też się wykona.")
+                    _razem = str(odp) + "\n\n" + str(odp2)
+                    globals()["_ostatnia_odpowiedz_maina"] = _razem
+                    return _razem
                 return odp2
     except Exception as e:
         log("MAIN", "Pytanie o zespół nie poszło: " + str(e))
     if asked_followup:
         _uwaga_maina_do_roli(odp)
     return odp
+
+
+def _ma_akcje_run(odp):
+    try:
+        d = parse_json(str(odp or ""))
+        return isinstance(d, dict) and str(d.get("type") or "").upper() == "RUN" and bool(d.get("actions"))
+    except Exception:
+        return False
 
 
 _UWAGA_PROSTUJE_RE = re.compile(

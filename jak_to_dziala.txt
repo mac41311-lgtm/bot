@@ -3503,3 +3503,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
           kończyło się pełnym treningiem obok drugiego.
        c) Gdy autor dostaje błąd składni swojego pliku, program nie mówi
           mu "ktoś zmienił ten plik" (to jego własna wersja).
+
+236. v480hy — pytanie "czemu nie pytasz zespołu" nie kasuje RUN-a
+       Gdy MAIN wybrał RUN, a na osobne pytanie o zespół odpisał samymi
+       pytaniami (ASK), te pytania zastępowały jego RUN. W drużynie 1
+       (krok 214) przepadł zapis oracle_bytes.py i jego uruchomienie;
+       MAIN przez 5 kroków czekał na proces, którego nie było. Teraz RUN
+       się wykonuje, a pytania idą obok niego (na początek następnego
+       kroku, jak każde pytanie obok RUN-a). Gdy MAIN odpisze inną
+       decyzją (np. nowym RUN-em), ta zastępuje pierwszą, jak dotąd.
