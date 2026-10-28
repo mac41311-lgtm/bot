@@ -46354,7 +46354,11 @@ def _pominiete_decyzje(raw, wykonana):
         reszta = list(typy)
         if wyk in reszta:
             reszta.remove(wyk)
-        if wyk == "RUN":
+        # v480ht: wszystkie ASK z jednej odpowiedzi ida po kolei
+        # (_pytania_ask). Bieg 2026-10-28 (druzyna 1, kroki 4-32): 5 razy
+        # "program pominął: ASK, ASK, ASK", a wszystkie pytania poszly —
+        # falszywe ostrzezenie trafialo do zespolu.
+        if wyk in ("RUN", "ASK"):
             reszta = [t for t in reszta if t != "ASK"]
         return reszta
     except Exception:

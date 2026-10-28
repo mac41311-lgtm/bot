@@ -3448,3 +3448,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zniknęło. Pamięć "co kto już ma" przeżywa wgranie nowej wersji.
      - Log: "Zadanie tworzy nowe pliki w ~/MAIN_1/" zamiast "tworzy
        MAIN_1"; ADB bez użycia telefonu próbuje najrzadziej co 30 min.
+
+231. v480ht — bez fałszywego "pominął: ASK" (bieg 2026-10-28, drużyna 1).
+     - Gdy MAIN w jednej odpowiedzi zadaje kilka pytań, program zadaje je
+       wszystkie po kolei. Mimo to log i zespół dostawały "program wykonał
+       jedną (ASK), a pominął: ASK, ASK, ASK" (5 razy w biegu). Teraz
+       ostrzeżenie pada tylko, gdy obok pytań była inna decyzja (np. DONE).
