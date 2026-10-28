@@ -35912,6 +35912,7 @@ def _ta_sama_komenda(a, b):
 
 
 _zespol_przypomniany = set()
+_nowe_tlo_zasiane = [False]
 # v480gu: rozmowy MAIN-a (chat_session_id), ktore dostaly juz pelny
 # _CZAS_DLA_ZESPOLU — dalej idzie _CZAS_DLA_ZESPOLU_KROTKO.
 _zespol_pelny_tekst_w = set()
@@ -35931,6 +35932,32 @@ def _klucze_tla():
     except Exception:
         pass
     return k
+
+
+def _nowe_tlo_dla_maina():
+    """v480ib: klucze rzeczy, ktore od ostatniej wiadomosci MAIN-a zaczely
+    liczyc w tle (komendy po 2 min, procesy, grupy) — bez czekan z sleep.
+    Kazda rzecz liczy sie jako nowa tylko raz."""
+    k = set()
+    try:
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") != "czekanie":
+                k.add(("w", r.get("nr")))
+        for pid, pr in list(_procesy_w_tle.items()):
+            if pr.poll() is None or _grupa_zyje(pid):
+                k.add(("p", pid))
+        for g in list(_grupy_z_komend):
+            k.add(("g", g))
+    except Exception:
+        pass
+    nowe = k - _zespol_przypomniany
+    _zespol_przypomniany.update(k)
+    if not _nowe_tlo_zasiane[0]:
+        # pierwsze wywolanie (start, przeladowanie): to, co juz liczy,
+        # nie jest "wlasnie uruchomione"
+        _nowe_tlo_zasiane[0] = True
+        return set()
+    return nowe
 
 
 def _karta_startu(r, teraz):
@@ -45775,7 +45802,20 @@ def main_decide(
     _jest_wynik = bool(_tlo_skonczone.strip()) or _wynik_do_decyzji[0]
     _wynik_do_decyzji[0] = False
     _ile_od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
-    if _jest_wynik and not asked_followup and (not _ostatni_ask_krok[0] or _ile_od_ask > 2):
+    # v480ib: uzytkownik 2026-10-28 ("zeruje sie, jak w 5 krokach juz
+    # poszlo to zapytanie? zeby nie spamowac"; "czy nie dokladamy cos na
+    # cos"): kazde zdanie o zespole (przy wyniku, przy starcie tla, w
+    # krotkim glosie, pytanie "czemu") liczy sie do jednego licznika —
+    # po jednym nastepne najwczesniej po 5 krokach; ASK zeruje.
+    _nowe_tlo = False
+    try:
+        _nowe_tlo = bool(_nowe_tlo_dla_maina())
+    except Exception:
+        pass
+    _zespol_wolno = int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
+    if (_jest_wynik and not asked_followup and _zespol_wolno and not _nowe_tlo
+            and (not _ostatni_ask_krok[0] or _ile_od_ask > 2)):
+        _glos_czemu_krok[0] = int(step or 0)
         _linia_zespolu = _ZESPOL_PRZY_WYNIKU + (
             " Ostatnie pytanie do zespołu: " + str(_ile_od_ask) + " kroków temu."
             if _ostatni_ask_krok[0] else "")
@@ -45784,6 +45824,16 @@ def main_decide(
         if _rozmowa_main not in _zespol_pelny_tekst_w:
             _zespol_pelny_tekst_w.add(_rozmowa_main)
             _linia_zespolu += _ZESPOL_PRZY_WYNIKU_ASK
+
+    # v480ib: uzytkownik 2026-10-28 ("jak sie uruchamia cos w tle, to od
+    # razu mozna te wiadomosc wyslac do MAIN-a, a to chodzi w tle"): gdy
+    # cos wlasnie zaczelo liczyc w tle, ta sama wiadomosc konczy sie
+    # pytaniem o zespol — bez czekania minuty ani 5 krokow. Bieg 2026-10-28
+    # 18:30 (druzyna 1, krok 185): MAIN dostal tylko "liczy dalej w tle" i
+    # od razu odpisal "sleep 120 && ps aux | grep ...".
+    if _nowe_tlo and not asked_followup and _ile_od_ask > 0 and _zespol_wolno:
+        _linia_zespolu = _CZEMU_ZDANIE
+        _glos_czemu_krok[0] = int(step or 0)
 
     def _bez_linii_zespolu(t):
         return str(t or "").replace(" " + _CZAS_DLA_ZESPOLU, "").replace(_CZAS_DLA_ZESPOLU, "").strip()
@@ -45829,7 +45879,8 @@ def main_decide(
     _run_bez_nowego[0] = False
     if (_powtorka and not asked_followup and not _jest_wynik and not _restart
             and not _uzytkownik_block.strip() and not _blok_zamkniecia
-            and not _werdykty and not _burza and not team_block.strip()):
+            and not _werdykty and not _burza and not team_block.strip()
+            and not _linia_zespolu):
         # uzytkownik: samo pytanie, jedna wiadomosc w jednej linii; reszta
         # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
         # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
@@ -45852,8 +45903,14 @@ def main_decide(
         if _czemu:
             _glos_czemu_krok[0] = int(step or 0)
             return deepseek("MAIN", _CZEMU_ZDANIE)
+        # v480ib: wzmianka o zespole w krotkim glosie tez liczy sie do
+        # licznika zdan o zespole — w 5 krokach po innym zdaniu jej nie ma.
+        _wolno_c = int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
+        if _wolno_c:
+            _glos_czemu_krok[0] = int(step or 0)
         if _glos_postep_byl[0]:
-            return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam; w tym czasie możesz zapytać zespół (ASK z imieniem).")
+            return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam" + (
+                "; w tym czasie możesz zapytać zespół (ASK z imieniem)." if _wolno_c else "."))
         _glos_postep_byl[0] = True
         _trwa_linie = []
         try:
@@ -45868,7 +45925,7 @@ def main_decide(
         return deepseek("MAIN", (
             "Nic nowego od Twojego ostatniego sprawdzenia"
             + (" — " + "; ".join(_trwa_linie[:3]) if _trwa_linie else "")
-            + ". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?"
+            + (". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?" if _wolno_c else ".")
         ))
 
     _glos_postep_byl[0] = False
@@ -45907,7 +45964,8 @@ def main_decide(
         # niczego w tle to samo pytanie po 10 krokach bez ASK, bez zdania
         # o czekaniu.
         _w_tle_cos = bool(_w_tle_zywe() or _zywe_w_tle())
-        _prog = _CZEMU_CO_KROKOW if _w_tle_cos else 2 * _CZEMU_CO_KROKOW
+        # v480ib: uzytkownik 2026-10-28: "co 5 krokow dla zadan bez tla".
+        _prog = _CZEMU_CO_KROKOW
         if (not asked_followup and _od_ask >= _prog
                 and int(step or 0) - _glos_czemu_krok[0] >= _prog
                 and re.search(r'"type"\s*:\s*"RUN"', str(odp or ""))):
@@ -47824,6 +47882,8 @@ _JAK_TO_DZIALA = (
     # sprawdza swoj kod (URUCHOM:), MAIN dostaje kod, ktory dziala.
     # v480gj: przepisany w calosci — doinstalowanie bibliotek.
     # v480gt: przepisany w calosci — dlugie uruchomienie samo idzie w tlo.
+    # v480ib: przepisany w calosci — kiedy program sam budzi MAIN-a
+    # (koniec/blad, co 25%, przyrost logu 3-24 min, linia co minute).
     "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
     "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
     "pisze poprawkę. Zespół sam uruchamia swój kod i widzi błędy, więc "
@@ -47846,8 +47906,14 @@ _JAK_TO_DZIALA = (
     "prostu uruchomić. Do kodu zaglądasz komendą do odczytu (grep -n, "
     "sed -n 'od,dop' plik, head, wc -l) zamiast czytać cały plik. "
     "Uruchomienie dłuższe niż 2 minuty — Twoje, zespołu albo Gemini — "
-    "samo przechodzi w tło: program pokazuje, ile już trwa, postęp z "
-    "logu i ile zostało, a wynik daje, gdy się skończy.\n\n"
+    "samo przechodzi w tło i program pokazuje, ile już trwa, postęp z "
+    "logu i ile zostało. Wynik program przynosi sam, gdy proces się "
+    "skończy albo w logu pojawi się błąd. Gdy log pokazuje postęp w "
+    "procentach, dostajesz stan przy 25, 50 i 75%; gdy procentów nie ma, "
+    "dostajesz nowe linie z logu, kiedy przybędą — najpierw po 3 "
+    "minutach, potem coraz rzadziej (6, 12, 24 min). Co minutę "
+    "dostajesz jedną krótką linię o stanie. Ten czas jest Twój i "
+    "zespołu na inne rzeczy.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "

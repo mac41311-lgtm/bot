@@ -3526,3 +3526,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        program bierze to jako decyzję RUN i wykonuje jej akcje. Wcześniej
        (drużyna 1, 12 razy w jednym biegu, kroki 137–305) wykonywał „RUN” jako narzędzie,
        dostawał „Nieznane narzędzie: RUN” i ten krok przepadał.
+
+239. (v480ib) Zdania o zespole do MAIN-a, bez dokładania jednego na drugie:
+       - gdy coś właśnie zaczęło liczyć w tle (komenda po 2 min, proces),
+         ta sama wiadomość kończy się pytaniem „Czemu nie pytasz zespołu?
+         I tak czekasz na wynik.” z imionami i przykładem ASK — od razu,
+         bez czekania minuty;
+       - gdy nic nie leci w tle, to samo pytanie (z „Od N kroków działasz
+         sam”) po 5 krokach bez ASK (wcześniej po 10);
+       - wszystkie zdania o zespole (przy wyniku, przy starcie tła,
+         w krótkim głosie co minutę, pytanie „czemu”) mają jeden licznik:
+         po jednym kolejne najwcześniej po 5 krokach; ASK go zeruje.
+         W tym czasie krótki głos to samo „Nic nowego…” bez zespołu.
+       Prompt MAIN-a (akapit „Kod.”, przepisany w całości) mówi, kiedy
+       program sam przynosi wynik z tła: koniec/błąd, co 25%, nowe linie
+       logu po 3, 6, 12, 24 min, krótka linia co minutę.
