@@ -3470,3 +3470,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Komendy URUCHOM roli (np. sed -i w plikach drużyny) to kod
        zespołu, jak RUN MAIN-a — nie dostają już "nie mam dowodu, że
        ten plik zawiera autoryzowany kod".
+
+233. v480hv — uruchomienie zapisanego pliku z zadania nie blokuje biegu
+     (bieg 2026-10-28 13:45, drużyna 2, krok 355).
+     - Gdy TASK sprowadza się do uruchomienia gotowego pliku, program
+       uruchamia go sam ("Uruchamiam bezpośrednio"). Ta droga liczyła na
+       pierwszym planie: trening trwał 83 min, MAIN i zespół stali, a w
+       logu było 300 linii "Leci N min". Teraz, jak RUN MAIN-a i TASK
+       Gemini, po 2 min liczy dalej w tle — MAIN dostaje kartę w "Dalej w
+       tle" i wynik, gdy się skończy.

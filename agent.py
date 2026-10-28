@@ -36499,7 +36499,37 @@ def _run_script_directly(path, task_text):
     # mieszkaja strazniki dzwonienia, ktore od teraz czytaja takze
     # TRESC uruchamianego pliku (patrz _tresc_uruchamianego_skryptu).
     # Wczesniej ten skrot omijal je wszystkie.
-    shell_result = termux_run(command)
+    # v480hv: bieg 2026-10-28 13:45 (druzyna 2, krok 355) — trening
+    # uruchomiony ta droga liczyl 83 min na pierwszym planie: MAIN i caly
+    # zespol stali, a w logu 300 linii "Leci N min". Jak RUN MAIN-a i
+    # TASK Gemini (v480gn): po _W_TLE_PO_S liczy dalej w tle, MAIN
+    # dostaje karte W TLE i wynik, gdy sie skonczy.
+    try:
+        shell_result, _w_tle = _wykonaj_z_przejsciem_w_tlo("termux_run", {"command": command}, [])
+    except Exception as e:
+        log("MAIN", "Przejście w tło nie wyszło (" + str(e) + ") — liczę na pierwszym planie.")
+        shell_result, _w_tle = termux_run(command), False
+    if _w_tle or (isinstance(shell_result, dict)
+                  and shell_result.get("status") in ("LECI_W_TLE", "JUZ_LICZY_W_TLE")):
+        _msg = str(shell_result.get("message") or "")
+        if shell_result.get("status") == "LECI_W_TLE":
+            _msg = (path.name + " liczy dłużej niż " + _min_s(_W_TLE_PO_S)
+                    + " — liczy dalej w tle; wynik przyjdzie sam, gdy się skończy "
+                    "(sekcja „Dalej w tle”).")
+        return {
+            "ok": True,
+            "status": "COMPLETED",
+            "key": "python",
+            "executed_by": "python",
+            "tool": None,
+            "tool_result": None,
+            "shell_result": shell_result,
+            "report": _msg,
+            "tool_calls": 1,
+            "tool_trace": [{"tool": "termux_run (Python)", "ok": True, "evidence": short(_msg, 400)}],
+            "tool_warnings": [],
+            "confirmed_texts": [],
+        }
 
     ok = bool(shell_result.get("ok"))
 
