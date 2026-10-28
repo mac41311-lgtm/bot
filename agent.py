@@ -8492,7 +8492,13 @@ _STOPKA_DEEPSEEKA_RE = re.compile(
 def _bez_stopki_deepseeka(text):
     """Odpowiedz bez stopki strony DeepSeek na koncu."""
 
-    return _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
+    # v480hs: noc 27/28.10 — przy odpowiedzi urwanej i doklejonej
+    # (dalszy ciag) stopka zostawala W SRODKU tekstu, raz w srodku kodu
+    # Bartka ("cptThis response is AI-generated…" w check23_v2.py, linia
+    # 19) i plik sie nie kompilowal. Usuwamy ja wszedzie.
+    t = _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
+    return t.replace("This response is AI-generated, for reference only.", "").replace(
+        "This response is AI-generated, for reference only", "")
 
 
 # v480ay: jedna rozmowa naraz na koncie — takze gdy Sedzia odpowiada
@@ -10358,7 +10364,7 @@ def find_adb(auto_reconnect=True):
     # przerwe od razu.
     if time.time() < _adb_offline[0] and not (
         _adb_wifi_znikalo[0] and _ip_wifi_telefonu()
-    ):
+    ) and not (time.time() - _adb_uzyty_o[0] < 10):
         return None
 
     target = adb_connect_target()
@@ -10400,7 +10406,12 @@ def find_adb(auto_reconnect=True):
         _adb_offline[0], _adb_offline[1] = 0.0, 0.0
         _adb_uzywaj(device)
     else:
-        _adb_offline[1] = min(300.0, max(30.0, _adb_offline[1] * 2))
+        # v480hs: noc 27/28.10 — 87 prob `adb connect` po 5-10 s w
+        # druzynie 1, choc nikt nie uzywal telefonu. Bez uzycia narzedzi
+        # android_/chrome_ w ostatnich 30 min przerwa rosnie do 30 min;
+        # pierwsze takie narzedzie probuje od razu.
+        _sufit = 300.0 if time.time() - _adb_uzyty_o[0] < 1800 else 1800.0
+        _adb_offline[1] = min(_sufit, max(30.0, _adb_offline[1] * 2))
         _adb_offline[0] = time.time() + _adb_offline[1]
         log("ANDROID", "Telefon przez ADB nieosiągalny — następna próba za "
             + str(int(_adb_offline[1])) + " s.")
@@ -10410,6 +10421,7 @@ def find_adb(auto_reconnect=True):
 
 # (do kiedy nie probujemy, ostatnia przerwa w s)
 _adb_offline = [0.0, 0.0]
+_adb_uzyty_o = [0.0]
 
 
 # v480am: uzytkownik (2026-10-14): "bez wifi teraz jestem, a bez niego
@@ -13242,6 +13254,14 @@ def _przywroc_procesy_w_tle():
         _glos_czemu_krok[0] = int(_g.get("czemu_krok") if _g.get("czemu_krok") is not None else -100)
     except Exception:
         pass
+    try:
+        _z = _stan_przed_aktualizacja.get("znane_roli") or {}
+        for r in _z.get("pliki") or []:
+            _tresc_znana_roli[tuple(r[:3])] = r[3]
+        for r in _z.get("katalogi") or []:
+            _katalog_znany_roli[tuple(r[:3])] = list(r[3])
+    except Exception:
+        pass
 
 
 def _przeladuj_po_aktualizacji(step, last_result, signatures):
@@ -13300,6 +13320,11 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
         "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
         "glos": {"krotkie": _glos_krotkie[0], "postep_byl": _glos_postep_byl[0],
                  "ask_krok": _ostatni_ask_krok[0], "czemu_krok": _glos_czemu_krok[0]},
+        # v480hs: co kto z zespolu juz ma w swojej rozmowie (pliki, spisy)
+        "znane_roli": {
+            "pliki": [list(k) + [v] for k, v in _tresc_znana_roli.items()],
+            "katalogi": [list(k) + [v] for k, v in _katalog_znany_roli.items()],
+        },
         "grupy_z_komend": {
             str(k): list(v) for k, v in _grupy_z_komend.items()
         },
@@ -21290,6 +21315,18 @@ def termux_write_file(path, content, append=False):
     if _za_uzytk:
         log("PROGRAM", _za_uzytk)
         return {"ok": False, "error": "PLIK_UZYTKOWNIKA", "message": _za_uzytk}
+    # v480hs: sciezka pusta albo wskazujaca katalog — powiedz, co poprawic
+    # (bieg 2026-10-28 08:36: samo "[Errno 21] Is a directory").
+    try:
+        _p = _resolve_home_relative_path(str(path or "~"))
+        if not str(path or "").strip() or _p.is_dir():
+            _kat = _sciezka_od_domu(str(_p))
+            return {"ok": False, "error": "SCIEZKA_TO_KATALOG",
+                    "message": ("Nie zapisałem: ścieżka " + json.dumps(str(path or ""), ensure_ascii=False)
+                                + " wskazuje katalog " + _kat + ", a nie plik. Podaj w polu "
+                                "\"path\" pełną ścieżkę pliku, np. " + _kat.rstrip("/") + "/nazwa.md.")}
+    except Exception:
+        pass
     wynik = _termux_write_file(path, content, append)
     try:
         if isinstance(wynik, dict) and not append:
@@ -21491,6 +21528,21 @@ def _autor_poprawia_skladnie(path, content, wynik):
                     blad = b2
             elif extract_search_replace_blocks(odp):
                 blad = str(r.get("reason") or blad)
+        # v480hs: noc 27/28.10 (druzyna 1, krok 9) — Bartek poprawil plik
+        # inna droga (pelna wersja polozona przez program w trakcie jego
+        # odpowiedzi), a runda 3 wyslala mu ten sam stary blad; dwa razy
+        # udowadnial, ze plik jest czysty. Rozstrzyga stan pliku na dysku.
+        if not ok:
+            try:
+                _p_dysk = _resolve_home_relative_path(path)
+                if _p_dysk.is_file():
+                    compile(_p_dysk.read_bytes(), str(_p_dysk), "exec")
+                    ok = True
+            except SyntaxError as e_dysk:
+                blad = (str(e_dysk.msg) + " (linia " + str(e_dysk.lineno) + "): "
+                        + str(e_dysk.text or "").strip())
+            except Exception:
+                pass
         if ok:
             log("PROGRAM", imie + " poprawił " + sciezka + " — kompiluje się.")
             nowy = {k: v for k, v in wynik.items()
@@ -28372,6 +28424,10 @@ def _dispatch_tool_inner(
     name,
     args
 ):
+
+    # v480hs: patrz _adb_offline — kiedy ktos ostatnio uzyl telefonu.
+    if str(name or "").startswith(("android_", "chrome_")):
+        _adb_uzyty_o[0] = time.time()
 
     if isinstance(args, dict) and any(
         k in _FLAGI_NARZEDZI and isinstance(v, str) for k, v in args.items()
@@ -36885,10 +36941,24 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     przypisal (nazwa nad blokiem, heredoc), Python kladzie od razu.
     """
 
+    # v480hs: katalog jako cel zapisu to "nowe pliki w ~/MAIN_1/", a nie
+    # "Zadanie tworzy MAIN_1" (noc 27/28.10, 15 razy) ani pusta nazwa.
+    def _opis_celow(lista):
+        _o = []
+        for x in lista:
+            try:
+                if str(x).rstrip().endswith(("/", "\\")) or _resolve_home_relative_path(x).is_dir():
+                    _o.append("nowe pliki w " + _sciezka_od_domu(str(_resolve_home_relative_path(x))).rstrip("/") + "/")
+                    continue
+            except Exception:
+                pass
+            _o.append(Path(x).name)
+        return ", ".join(_o) or "nowe pliki"
+    _opis_zlecenia = _opis_celow(pliki)
     log(
         "MAIN",
-        "Zadanie tworzy " + ", ".join(Path(x).name for x in pliki)
-        + ", a nikt z zespołu nie napisał do nich kodu — najpierw "
+        "Zadanie tworzy " + _opis_zlecenia
+        + ", a nikt z zespołu nie napisał do tego kodu — najpierw "
         "Bartek, potem wykonanie."
     )
 
@@ -36983,8 +37053,8 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     nie = [Path(x).name for x in pliki if not any(y.startswith(Path(x).name + " ") for y in polozone)]
 
     _pending_team_warnings.append(
-        "Zadanie tworzyło " + ", ".join(Path(x).name for x in pliki)
-        + ", do których nikt nie napisał kodu; Bartek dostał to zlecenie."
+        "Zadanie tworzyło " + _opis_zlecenia
+        + ", do czego nikt nie napisał kodu; Bartek dostał to zlecenie."
         + (" Położone z jego odpowiedzi: " + ", ".join(polozone) + "." if polozone else "")
         + (" Bez kodu przypisanego do pliku: " + ", ".join(nie) + "." if nie else "")
     )
@@ -44883,6 +44953,13 @@ def _main_human_line(decision, dtype):
 # pomylka zespolu ma dostac komunikat, co poszlo nie tak.
 def _gdzie_psuje_sie_json(tekst):
     tekst = str(tekst or "")
+    # v480hs: odpowiedz w formacie DSML, ktorego program nie odczytal —
+    # powiedz to wprost i jak poprawic.
+    if "DSML" in tekst:
+        return (" — przyszła w formacie wywołań DSML (<｜DSML｜ …>), z którego "
+                "program nie odczytał decyzji; wyślij ją jako jeden obiekt JSON, "
+                "np. {\"type\": \"RUN\", \"reason\": \"...\", \"actions\": [...]} "
+                "albo {\"type\": \"ASK\", \"ask_role\": \"Marek\", \"ask_question\": \"...\"}")
     od = tekst.find("{")
     do = tekst.rfind("}")
     if od < 0:
@@ -45714,8 +45791,13 @@ def _pytania_ask(raw):
 
         if isinstance(obj, dict) and obj.get("type") == "ASK":
             pytania.append(obj)
+        elif isinstance(obj, dict):
+            pytania.extend(_ask_z_akcji(obj))
 
         i = tekst.find("{", koniec)
+
+    if not pytania and "DSML" in tekst:
+        pytania = _dsml_pytania(tekst)
 
     return pytania
 
@@ -46028,6 +46110,89 @@ def _extract_last_balanced_json_object(text):
     return None
 
 
+_NAZWY_ASK = ("ask_role", "ask", "ask_dalej")
+
+
+def _pierwszy_obiekt_json(surowe):
+    """Pierwszy pelny obiekt JSON w tekscie; nadmiarowe "}" po nim (czeste
+    w DSML) nie psuja odczytu."""
+    surowe = str(surowe or "").strip()
+    i = surowe.find("{")
+    if i < 0:
+        return None
+    try:
+        return json.JSONDecoder().raw_decode(surowe, i)[0]
+    except Exception:
+        return _extract_last_balanced_json_object(surowe)
+
+
+def _ask_z_akcji(d):
+    """v480hs: ASK wpisane jako narzedzie w RUN ({"tool": "ask_role",
+    "args": {"ask_role": "Marek", "ask_question": ...}}) — noc 27/28.10,
+    druzyna 1: 9 razy "Nieznane narzędzie: ask_role", pytanie przepadlo."""
+    wynik = []
+    if not isinstance(d, dict) or str(d.get("type") or "").upper() != "RUN":
+        return wynik
+    for a in d.get("actions") or []:
+        if not isinstance(a, dict):
+            continue
+        args = a.get("args") if isinstance(a.get("args"), dict) else a
+        if (str(a.get("tool") or "").strip().lower() in _NAZWY_ASK
+                and str(args.get("ask_role") or "").strip()
+                and str(args.get("ask_question") or "").strip()):
+            wynik.append({"type": "ASK", "ask_role": str(args["ask_role"]).strip(),
+                          "ask_question": str(args["ask_question"]).strip()})
+    return wynik
+
+
+def _bez_ask_w_run(d):
+    """v480hs: RUN, ktorego akcje to same pytania, jest pytaniem (ASK);
+    w mieszanym RUN pytania wypadaja z akcji (_pytania_ask zabierze je
+    na nastepny krok, jak inne pytania obok RUN)."""
+    pyt = _ask_z_akcji(d)
+    if not pyt:
+        return d
+    reszta = [a for a in d.get("actions") or []
+              if not (isinstance(a, dict) and str(a.get("tool") or "").strip().lower() in _NAZWY_ASK)]
+    if not reszta:
+        return dict(pyt[0])
+    d = dict(d)
+    d["actions"] = reszta
+    return d
+
+
+def _dsml_pytania(text):
+    """v480hs: pytania ASK zapisane w DSML. Noc 27/28.10 (druzyna 1):
+    145 razy "Niepoprawny JSON" — MAIN pisal ASK jako
+      <DSML parameter name="args">{"ask_role": "Marek", "ask_question": ...}
+    (bez invoke) albo invoke name="ask_role" z parametrami ask_role /
+    ask_question. Kazde takie pytanie kosztowalo dodatkowa wiadomosc
+    i budzet konta. To jest zwykle ASK."""
+    tekst = str(text or "")
+    if "DSML" not in tekst:
+        return []
+    pytania = []
+    _koniec = r'(?=<\s*/?[^<>]*DSML|$)'
+    for m in re.finditer(r'parameter\s+name="(?:args|arguments|input)"[^>]*>(.*?)' + _koniec, tekst, re.DOTALL):
+        obj = _pierwszy_obiekt_json(m.group(1))
+        if isinstance(obj, dict) and str(obj.get("ask_role") or "").strip() and str(obj.get("ask_question") or "").strip():
+            pytania.append({"type": "ASK", "ask_role": str(obj["ask_role"]).strip(),
+                            "ask_question": str(obj["ask_question"]).strip()})
+    # parametry ask_role / ask_question jako osobne znaczniki (takze z
+    # zepsutym zamknieciem, ktore od razu otwiera nastepny parametr)
+    kto = None
+    for m in re.finditer(r'parameter\s+name="(ask_role|ask_question)"[^>]*>(.*?)' + _koniec, tekst, re.DOTALL):
+        w = m.group(2).strip()
+        if m.group(1) == "ask_role":
+            kto = w
+        elif kto and w:
+            p = {"type": "ASK", "ask_role": kto, "ask_question": w}
+            if p not in pytania:
+                pytania.append(p)
+            kto = None
+    return pytania
+
+
 def _dsml_na_run(text):
     """
     v467: DeepSeek potrafi odpowiedziec swoim natywnym formatem
@@ -46039,14 +46204,19 @@ def _dsml_na_run(text):
     UNKNOWN_DECISION, choc kazdy byl gotowa lista akcji. To jest RUN.
     """
     tekst = str(text or "")
-    if "DSML" not in tekst or "invoke" not in tekst:
+    if "DSML" not in tekst:
+        return None
+    _pyt = _dsml_pytania(tekst)
+    if "invoke" not in tekst and "parameter" not in tekst:
         return None
     akcje = []
     for m in re.finditer(
-        r'invoke\s+name="([A-Za-z0-9_]+)"\s*>(.*?)</[^>]*invoke\s*>',
+        r'invoke\s+name="([A-Za-z0-9_]+)"[^>]*>(.*?)</[^>]*invoke\s*>',
         tekst, re.DOTALL
     ):
         nazwa = m.group(1).strip()
+        if nazwa.lower() in _NAZWY_ASK and _pyt:
+            continue
         cialo = m.group(2)
         # v480bu: cala decyzja (type, reason, actions...) wlozona jako
         # parametry jednego invoke o zmyslonej nazwie. Bieg 2026-10-16
@@ -46087,7 +46257,7 @@ def _dsml_na_run(text):
             try:
                 args = json.loads(surowe)
             except Exception:
-                obj = _extract_last_balanced_json_object(surowe)
+                obj = _pierwszy_obiekt_json(surowe)
                 args = obj if isinstance(obj, dict) else {}
         else:
             for pm2 in re.finditer(
@@ -46103,11 +46273,45 @@ def _dsml_na_run(text):
                     except Exception:
                         pass
                 args[pm2.group(1)] = _w2
+            # v480hs: bieg 2026-10-28 08:36 (druzyna 2, krok 285) —
+            # parametry jako zwykle znaczniki <path>…</path>
+            # <content>…</content>. Program ich nie widzial, zapis
+            # poszedl bez sciezki ("Is a directory: home").
+            if not args:
+                for pm4 in re.finditer(r"<([A-Za-z_][A-Za-z0-9_]*)>(.*?)</\1\s*>", cialo, re.DOTALL):
+                    _w4 = pm4.group(2)
+                    _w4 = _w4 if pm4.group(1) == "content" else _w4.strip()
+                    if _w4 in ("true", "false"):
+                        _w4 = (_w4 == "true")
+                    args[pm4.group(1)] = _w4
+        if nazwa and _pyt and isinstance(args, dict) and args.get("ask_role") and args.get("ask_question"):
+            continue
         if nazwa:
             akcje.append({"tool": nazwa, "args": args if isinstance(args, dict) else {}})
+    # v480hs: same parametry "args" bez invoke (noc 27/28.10, druzyna 1:
+    # 140 odpowiedzi <DSML parameter name="args">{"command": ...}). Nazwe
+    # narzedzia widac po polach: command -> termux_run, path+content ->
+    # termux_write_file, samo path -> termux_read_file.
+    if not akcje and not re.search(r'invoke\s+name=', tekst):
+        for m in re.finditer(r'parameter\s+name="args"[^>]*>(.*?)(?=<\s*/?[^<>]*DSML|$)', tekst, re.DOTALL):
+            a = _pierwszy_obiekt_json(m.group(1))
+            if not isinstance(a, dict) or (a.get("ask_role") and a.get("ask_question")):
+                continue
+            if isinstance(a.get("tool"), str) and isinstance(a.get("args"), dict):
+                akcje.append({"tool": a["tool"], "args": a["args"]})
+            elif str(a.get("command") or "").strip():
+                akcje.append({"tool": "termux_run", "args": a})
+            elif str(a.get("path") or "").strip() and "content" in a:
+                akcje.append({"tool": "termux_write_file", "args": a})
+            elif str(a.get("path") or "").strip():
+                akcje.append({"tool": "termux_read_file", "args": a})
+    if _pyt and not akcje:
+        _d = dict(_pyt[0])
+        _d["_z_dsml"] = True
+        return _d
     if not akcje:
         return None
-    przed = re.split(r"<[^>]*DSML", tekst, 1)[0].strip()
+    przed = re.split(r"<[^>]*DSML", tekst, maxsplit=1)[0].strip()
     return {
         "type": "RUN",
         "reason": short(przed, 600) if przed else "(wywołania narzędzi w formacie DSML)",
@@ -46212,11 +46416,40 @@ def _oznacz_uciete_akcje(obj, text):
 
 
 def parse_json(text):
+    d = _parse_json_surowe(text)
+    try:
+        return _bez_ask_w_run(d) if isinstance(d, dict) else d
+    except Exception:
+        return d
+
+
+def _parse_json_surowe(text):
 
     if not text:
         return None
     _d = _dsml_na_run(text)
     if _d:
+        # v480hs: ta sama odpowiedz ma po DSML pelna decyzje w JSON-ie
+        # (urwana odpowiedz + dalszy ciag, bieg 2026-10-28 08:36: DSML
+        # z jednym zapisem, potem JSON z trzema akcjami). Pelna decyzja
+        # JSON po ostatnim DSML jest ta wlasciwa.
+        try:
+            _kawalki = re.split(r"<[^>]*DSML[^>]*calls\s*>", str(text))
+            _po = _kawalki[-1]
+            if len(_kawalki) > 1 and "{" in _po:
+                _j = None
+                _mj = re.search(r"```(?:json)?\s*(\{.*\})\s*```", _po, re.DOTALL)
+                if _mj:
+                    try:
+                        _j = json.loads(_mj.group(1))
+                    except Exception:
+                        _j = None
+                if _j is None:
+                    _j = _extract_last_balanced_json_object(_po)
+                if _tylko_decyzja(_j):
+                    return _j
+        except Exception:
+            pass
         return _d
 
     text = str(
@@ -48429,6 +48662,45 @@ def _rola_zna_plik(rola, p):
         return False
 
 
+def _spis_katalogu(p):
+    try:
+        return sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir()
+                      if not _KOPIA_W_SPISIE_RE.search(x.name + ("/" if x.is_dir() else "")))
+    except Exception:
+        return None
+
+
+def _katalog_od_ostatniego(rola, p):
+    """v480hs: None = pokaz pelny spis (pierwszy raz w tej rozmowie);
+    inaczej jedno zdanie o tym, co sie zmienilo od ostatniego spisu."""
+    try:
+        if not p.is_dir() or (_DRUZYNA and _sciezka_rywala(str(p))):
+            return None
+        teraz = _spis_katalogu(p)
+        if teraz is None:
+            return None
+        klucz = (str(rola), _rozmowa_roli(rola), str(p.resolve()))
+        bylo = _katalog_znany_roli.get(klucz)
+        _katalog_znany_roli[klucz] = teraz
+        if bylo is None:
+            return None
+        nowe = [n for n in teraz if n not in set(bylo)]
+        znikly = [n for n in bylo if n not in set(teraz)]
+        if not nowe and not znikly:
+            return "JEST — katalog, bez zmian od spisu, który już masz w tej rozmowie."
+        czesci = []
+        if nowe:
+            czesci.append("przybyło: " + ", ".join(nowe[:30]) + (" (i " + str(len(nowe) - 30) + " więcej)" if len(nowe) > 30 else ""))
+        if znikly:
+            czesci.append("zniknęło: " + ", ".join(znikly[:30]) + (" (i " + str(len(znikly) - 30) + " więcej)" if len(znikly) > 30 else ""))
+        return "JEST — katalog; od spisu, który już masz: " + "; ".join(czesci) + "."
+    except Exception:
+        return None
+
+
+_katalog_znany_roli = {}
+
+
 def _policz_odpowiedzi_dla_zespolu(pary):
     """
     Uruchamia sondy TERAZ i sklada z nich odpowiedzi — kazda z
@@ -48514,6 +48786,14 @@ def _policz_odpowiedzi_dla_zespolu(pary):
                 # dlatego, ze wymienil je w odpowiedzi. Plik, ktorego
                 # tresc ta osoba juz ma w rozmowie (napisala go albo juz
                 # go dostala), idzie jedna linia; zmieniony — w calosci.
+                # v480hs: katalog — ta sama osoba dostaje spis raz,
+                # potem tylko to, co przybylo/ubylo (druzyna 2, noc
+                # 27/28.10: Bartek dostawal pelny spis ~/MAIN_2 przy
+                # kazdym "cd ~/MAIN_2" w swojej odpowiedzi).
+                _zmiana_kat = _katalog_od_ostatniego(rola, p)
+                if _zmiana_kat is not None:
+                    odpowiedzi.append((rola, "- " + candidate + ": " + _zmiana_kat))
+                    continue
                 if p.is_file() and _rola_zna_plik(rola, p):
                     odpowiedzi.append((
                         rola,
@@ -52855,7 +53135,7 @@ def run_agent(goal):
             # z tej samej odpowiedzi ida teraz na poczatek nastepnego
             # kroku, razem z wynikami RUN — jak przy limicie ASK (v458).
             _pytania_obok = (
-                _pytania_ask(_odp_maina) if '"RUN"' in _odp_maina else []
+                _pytania_ask(_odp_maina) if ('"RUN"' in _odp_maina or "DSML" in _odp_maina) else []
             )
             if _pytania_obok and isinstance(last_result, dict):
                 _ask_przeniesione[:] = _pytania_obok

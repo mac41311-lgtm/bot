@@ -3426,3 +3426,25 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        tej osobie prostuje (nie widział, myli się, już jest, warunki
        niespełnione…). Streszczenia typu "Marek: NIE ensemble" albo
        "Marek+Tomek+Ela zgodni" nie wracają do nich jako uwaga.
+
+230. v480hs — noc 27/28.10, obie drużyny.
+     - MAIN drużyny 1 pisał 145 razy w formacie DSML bez nazwy narzędzia
+       (<DSML parameter name="args">{"command": ...}) albo ASK jako
+       invoke "ask_role". Każda taka odpowiedź kończyła się "Niepoprawny
+       JSON", dodatkową wiadomością i zjadała budżet konta (79 razy
+       "wyczerpany budżet"). Teraz program czyta to sam: command ->
+       termux_run, path+content -> termux_write_file, ask_role+ask_question
+       -> ASK; nadmiarowe "}" na końcu nie przeszkadza. ASK wpisane jako
+       narzędzie w RUN ({"tool": "ask_role"}) też jest pytaniem.
+     - DSML z parametrami jako <path>…</path> (drużyna 2) jest odczytany;
+       gdy po DSML stoi pełna decyzja JSON (dalszy ciąg urwanej
+       odpowiedzi), wygrywa JSON. Zapis do katalogu mówi, co poprawić.
+       Prośba o poprawkę po złym DSML mówi wprost, w jakim formacie wysłać.
+     - Stopka DeepSeeka ("This response is AI-generated…") usuwana też w
+       środku tekstu — przy doklejonym dalszym ciągu wpadła w kod Bartka.
+     - Poprawka składni u autora: o kolejnej rundzie decyduje plik na
+       dysku (Bartek dostawał stary błąd pliku, który już był czysty).
+     - Spis katalogu dla tej samej osoby raz, potem tylko co przybyło /
+       zniknęło. Pamięć "co kto już ma" przeżywa wgranie nowej wersji.
+     - Log: "Zadanie tworzy nowe pliki w ~/MAIN_1/" zamiast "tworzy
+       MAIN_1"; ADB bez użycia telefonu próbuje najrzadziej co 30 min.
