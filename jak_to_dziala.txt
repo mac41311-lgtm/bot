@@ -3479,3 +3479,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        logu było 300 linii "Leci N min". Teraz, jak RUN MAIN-a i TASK
        Gemini, po 2 min liczy dalej w tle — MAIN dostaje kartę w "Dalej w
        tle" i wynik, gdy się skończy.
+
+234. v480hw — osoba wie, gdy ktoś zmienił plik, który zna
+       Program pamięta, jaką wersję pliku każda osoba ma w swojej
+       rozmowie. Gdy ktoś inny (MAIN, inna rola) zmieni ten plik na
+       dysku, przy następnej wiadomości do tej osoby idzie jedno zdanie:
+       który plik się zmienił i że aktualną treść pokaże PODGLĄD. Raz na
+       każdą zmianę. Wcześniej Bartek (drużyna 2, krok 355) pamiętał
+       starą wersję, napisał "patch nigdy nie wszedł", przepisał cechy w
+       osobnym pliku, a Sędzia powtórzył to w ocenie.

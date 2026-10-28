@@ -8519,6 +8519,13 @@ _KOLEJKA_KONTA = _threading.RLock()
 
 
 def deepseek(name, message):
+    if name in _ROLE_Z_PODGLADEM:
+        try:
+            _st = _znane_pliki_zmienione(name, message)
+            if _st:
+                message = _st + "\n\n" + str(message)
+        except Exception:
+            pass
     with _KOLEJKA_KONTA:
         odp = _deepseek_jedna_rozmowa(name, message)
     # v480ft: zespol zaglada do kodu sam (PODGLĄD: grep/sed -n/head...),
@@ -48772,6 +48779,45 @@ def _rola_zna_plik(rola, p):
         return bool(h) and h == _skrot_pliku(p)
     except Exception:
         return False
+
+
+# v480hw: bieg 2026-10-28 (druzyna 2, krok 355): MAIN poprawil sed-em
+# literaly w k3_loop_lite.py i k4_autonomiczny.py, a Bartek, ktory mial w
+# rozmowie stara wersje tych plikow, napisal "patch nigdy nie wszedl" i
+# przepisal ceche od nowa w osobnym pliku; Sedzia powtorzyl to w ocenie,
+# MAIN stracil dwa kroki na sprawdzanie. Osoba nie wie, ze plik, ktory
+# zna, zmienil ktos inny — program wie (skrot tresci z jej rozmowy). Jedno
+# zdanie raz na kazda zmiane.
+_zmiana_zgloszona = {}
+
+
+def _znane_pliki_zmienione(rola, tresc=""):
+    rozm = _rozmowa_roli(rola)
+    nazwy = []
+    for (r, c, sciezka), h in list(_tresc_znana_roli.items()):
+        if r != str(rola) or c != rozm or not h:
+            continue
+        p = Path(sciezka)
+        if not p.is_file():
+            continue
+        teraz = _skrot_pliku(p)
+        if not teraz or teraz == h or _zmiana_zgloszona.get((r, c, sciezka)) == teraz:
+            continue
+        _zmiana_zgloszona[(r, c, sciezka)] = teraz
+        try:
+            poczatek = p.read_text(encoding="utf-8", errors="replace").strip()[:300]
+        except Exception:
+            poczatek = ""
+        if poczatek and poczatek in str(tresc or ""):
+            continue  # ta wiadomosc i tak niesie nowa tresc
+        nazwy.append(_sciezka_od_domu(str(p)))
+    if not nazwy:
+        return ""
+    return ("Od czasu, gdy " + ("ten plik był" if len(nazwy) == 1 else "te pliki były")
+            + " w tej rozmowie, ktoś zmienił na dysku: " + ", ".join(nazwy[:10])
+            + (" (i " + str(len(nazwy) - 10) + " więcej)" if len(nazwy) > 10 else "")
+            + ". Wersja, którą pamiętasz, jest starsza — aktualną treść pokaże "
+            "PODGLĄD: grep -n albo sed -n na tym pliku.")
 
 
 def _spis_katalogu(p):
