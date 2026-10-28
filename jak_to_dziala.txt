@@ -3520,3 +3520,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        trening_aux_1_3m.py (283 B). Do tego cytat „MAIN pytał: «…»” w
        rozmowie z rolą pomija linię o zmienionych plikach na dysku i
        pokazuje prawdziwe pytanie MAIN-a.
+
+238. (v480ia) Gdy MAIN odpisze w formacie DSML z typem decyzji jako
+       nazwą wywołania (invoke name="RUN" z polami reason i actions),
+       program bierze to jako decyzję RUN i wykonuje jej akcje. Wcześniej
+       (drużyna 1, kroki 286, 293, 305) wykonywał „RUN” jako narzędzie,
+       dostawał „Nieznane narzędzie: RUN” i sprawdzenie wyniku przepadało.

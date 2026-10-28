@@ -46496,6 +46496,13 @@ def _dsml_na_run(text):
                 except Exception:
                     pass
             _param[pm3.group(1)] = _w
+        # v480ia: typ decyzji jako nazwa invoke (bieg 2026-10-28 21:40,
+        # druzyna 1, krok 305): invoke name="RUN" z parametrami reason i
+        # actions. Program wykonal "RUN" jako narzedzie ("Nieznane
+        # narzedzie: RUN") i zgubil sprawdzenie wyniku — trzy razy w biegu.
+        if (not _param.get("type") and nazwa.upper() in _TYPY_DECYZJI
+                and any(k in _param for k in ("actions", "reason", "ask_question", "task"))):
+            _param["type"] = nazwa.upper()
         if (str(_param.get("type", "")).strip().upper()
                 in ("RUN", "ASK", "TASK", "DONE", "FAILED", "NEED_USER_LOGIN")
                 and any(k in _param for k in ("actions", "reason", "ask_question", "task"))):
