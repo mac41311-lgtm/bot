@@ -3588,3 +3588,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        Tomka zastąpiła k4_autoloop_v3.py. Do tego zapis przez wykonanie
        (Gemini) nie podmienia działającego pliku .py pamiętanym blokiem,
        który się nie kompiluje.
+
+245. (v480ih) Cztery poprawki z logu drużyny 1 (29.10, 19:10–20:40):
+       • Procesy, w których Sędzia liczy komendę „sprawdz”, są chronione:
+         kill/pkill w nie dostaje odmowę z wyjaśnieniem, że to Sędzia, nie
+         duplikat, i kiedy skończy. Krok 83: Tomek zobaczył trzy takie same
+         eval_tfm, zabił „młodsze” i jednym z nich było sprawdzanie Sędziego.
+       • Sędzia nie czeka na proces, który już się skończył (zombie po
+         przeładowaniu programu). Wcześniej czekał 20 min i ogłaszał
+         „komenda nie skończyła się w 20 min”, choć skończyła się dawno.
+       • Koniec komendy w tle: log zapisany względną ścieżką po „cd X” jest
+         szukany w X. Wcześniej MAIN dostawał „nie widzi pliku, do którego
+         pisała (brak przekierowania > plik)”, choć przekierowanie było.
+       • Ten sam agent.py zapisany jeszcze raz (np. przez drugą drużynę) nie
+         przeładowuje programu. Drużyna 1 przeładowała się na tę samą
+         wersję trzy razy.

@@ -114,6 +114,18 @@ try:
 except Exception:
     _MTIME_PROGRAMU = 0.0
 
+
+def _odcisk_programu():
+    try:
+        import hashlib as _hl
+        with open(_SCIEZKA_PROGRAMU, "rb") as _f:
+            return _hl.md5(_f.read()).hexdigest()
+    except Exception:
+        return ""
+
+
+_ODCISK_PROGRAMU = _odcisk_programu() if _SCIEZKA_PROGRAMU else ""
+
 # ============================================================
 # CO POSZLO DO AGENTOW (v313)
 # ============================================================
@@ -13104,8 +13116,17 @@ def _sprawdz_nowa_wersje():
     # GitHub i ~/.ael-repo są już równe i porównanie commitów nic nie
     # widziało; program działał na starym kodzie do zamknięcia.
     try:
-        if os.path.getmtime(_SCIEZKA_PROGRAMU) > _MTIME_PROGRAMU + 1:
-            return "nowy-plik"
+        _mt = os.path.getmtime(_SCIEZKA_PROGRAMU)
+        if _mt > _MTIME_PROGRAMU + 1:
+            # v480ih: ten sam kod zapisany jeszcze raz (druga druzyna albo
+            # reczne update_agent.sh na tej samej wersji) to nie nowa
+            # wersja. Bieg 2026-10-29: druzyna 1 przeladowala sie na
+            # c52aa46 trzy razy (19:28, 19:43, 19:51).
+            _o = _odcisk_programu()
+            if _o and _o == _ODCISK_PROGRAMU:
+                globals()["_MTIME_PROGRAMU"] = _mt
+            else:
+                return "nowy-plik"
     except Exception:
         pass
     if _DRUZYNA == "2" or time.time() - _ostatnie_pytanie_githuba[0] < AKTUALIZACJA_CO_SEKUND:
@@ -24453,6 +24474,31 @@ def _zabilaby_rywala(command):
         procesy = _procesy_rywala()
         if not procesy:
             return ""
+        trafione = _trafione_procesy(tekst, procesy)
+        if not trafione:
+            return ""
+        opis = [
+            short(cmd or comm, 60) + " (pid " + str(pid) + ")"
+            for pid, _g, cmd, comm in procesy if pid in trafione
+        ]
+        my = _DRUZYNA
+        return (
+            "Nie uruchomiłem tej komendy — zatrzymałaby proces drużyny "
+            + _rywal() + " (pracuje w jej folderze): " + "; ".join(opis[:3])
+            + ". Procesy rywala zostają nietknięte. Żeby zatrzymać tylko "
+            "swoje, podaj pid własnego procesu (np. z termux_start albo "
+            "`pgrep -f nazwa` sprawdzonego przez `readlink /proc/PID/cwd` "
+            "— Wasze mają ~/MAIN_" + my + ") albo zawęź wzorzec pkill -f "
+            "do ścieżki w ~/MAIN_" + my + "."
+        )
+    except Exception:
+        return ""
+
+
+def _trafione_procesy(tekst, procesy):
+    """Pidy z listy procesy [(pid, pgid, cmd, comm)], w ktore trafilby
+    kill/pkill/killall z tekstu komendy."""
+    try:
         pidy = {p[0] for p in procesy}
         grupy = {p[1] for p in procesy if p[1]}
         trafione = set()
@@ -24472,21 +24518,77 @@ def _zabilaby_rywala(command):
                     trafione.add(n)
                 elif n == -1 or (n < 0 and -n in grupy):
                     trafione.update(p[0] for p in procesy if n == -1 or p[1] == -n)
+        return trafione
+    except Exception:
+        return set()
+
+
+def _procesy_sedziego():
+    """v480ih: [(pid, pgid, cmd, comm)] procesow, w ktorych Sedzia liczy
+    teraz komende "sprawdz" ktorejs druzyny (grupa procesow sprawdzania)."""
+    wynik = []
+    try:
+        grupy = {}
+        for n in ("1", "2"):
+            st = read_json(_RYWALIZACJA_DIR / ("sprawdzanie_" + n + ".json"), {})
+            if isinstance(st, dict) and _zyje(st.get("pid")):
+                grupy[int(st["pid"])] = float(st.get("start") or time.time())
+        if not grupy:
+            return []
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            pid = int(d)
+            try:
+                pg = os.getpgid(pid)
+            except Exception:
+                continue
+            if pg not in grupy or not _zyje(pid):
+                continue
+            try:
+                with open("/proc/" + d + "/cmdline", "rb") as f:
+                    cmd = " ".join(a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a)
+                with open("/proc/" + d + "/comm", encoding="utf-8") as f:
+                    comm = f.read().strip()
+            except Exception:
+                continue
+            wynik.append((pid, pg, cmd, comm, grupy[pg]))
+    except Exception:
+        return []
+    return wynik
+
+
+def _zabilaby_sedziego(command):
+    """
+    v480ih: zdanie do wyniku, gdy kill/pkill w komendzie trafilby w
+    sprawdzanie Sedziego — inaczej "". Bieg 2026-10-29 19:37 (druzyna 1,
+    krok 83): Tomek zobaczyl trzy "eval_tfm.py best/tfm_ckpt.npz test",
+    uznal dwa mlodsze za duplikaty i zabil kill -9 — jeden z nich byl
+    sprawdzaniem Sedziego, ktory potem oglosil "nie wyszlo".
+    """
+    try:
+        if not _DRUZYNA:
+            return ""
+        tekst = str(command or "")
+        tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
+        if not _ZABIJAJACE_RE.search(tekst):
+            return ""
+        procesy = _procesy_sedziego()
+        if not procesy:
+            return ""
+        trafione = _trafione_procesy(tekst, [p[:4] for p in procesy])
         if not trafione:
             return ""
-        opis = [
-            short(cmd or comm, 60) + " (pid " + str(pid) + ")"
-            for pid, _g, cmd, comm in procesy if pid in trafione
-        ]
-        my = _DRUZYNA
+        opis = [short(cmd or comm, 70) + " (pid " + str(pid) + ")"
+                for pid, _g, cmd, comm, _s in procesy if pid in trafione]
+        start = min(p[4] for p in procesy if p[0] in trafione)
+        zostalo = max(0, _SEDZIA_MAKS_S - (time.time() - start))
         return (
-            "Nie uruchomiłem tej komendy — zatrzymałaby proces drużyny "
-            + _rywal() + " (pracuje w jej folderze): " + "; ".join(opis[:3])
-            + ". Procesy rywala zostają nietknięte. Żeby zatrzymać tylko "
-            "swoje, podaj pid własnego procesu (np. z termux_start albo "
-            "`pgrep -f nazwa` sprawdzonego przez `readlink /proc/PID/cwd` "
-            "— Wasze mają ~/MAIN_" + my + ") albo zawęź wzorzec pkill -f "
-            "do ścieżki w ~/MAIN_" + my + "."
+            "Nie uruchomiłem tej komendy — zatrzymałaby sprawdzanie Sędziego: "
+            + "; ".join(opis[:3]) + ". To Sędzia liczy teraz komendę \"sprawdz\" "
+            "z wynik.json — to nie jest duplikat Waszej pracy. Skończy się samo "
+            "(najpóźniej za " + _min_s(zostalo) + "), a wynik przyjdzie z oceną. "
+            "Żeby zwolnić procesor, zatrzymaj tylko własny proces (jego pid)."
         )
     except Exception:
         return ""
@@ -26040,8 +26142,8 @@ def termux_run(command):
                 "duration_s": 0.0
             }
 
-        # v480dv: patrz _zabilaby_rywala().
-        _rywala = _zabilaby_rywala(command_str)
+        # v480dv: patrz _zabilaby_rywala(); v480ih: _zabilaby_sedziego().
+        _rywala = _zabilaby_rywala(command_str) or _zabilaby_sedziego(command_str)
         if _rywala:
             log("RYWALIZACJA", _rywala + " Komenda: " + short(command_str, 200))
             return {
@@ -26830,7 +26932,7 @@ def termux_run_background(
             }
 
         # v480dv: patrz _zabilaby_rywala().
-        _rywala = _zabilaby_rywala(command)
+        _rywala = _zabilaby_rywala(command) or _zabilaby_sedziego(command)
         if _rywala:
             globals()["log"]("RYWALIZACJA", _rywala + " Komenda: " + short(command, 200))
             return {
@@ -55375,9 +55477,18 @@ def _raport_z_tla():
         )
         _cele = [c for c in _cele if not c.startswith("/dev/")]
         _plik = ""
+        # v480ih: wzgledna sciezka po "cd X" lezy w X, nie w ~. Bieg
+        # 2026-10-29 20:20 (druzyna 1): "cd ~/MAIN_1 && setsid python3 …
+        # > eval_tfm_verne.log" — MAIN dostal "nie widzi pliku, do ktorego
+        # pisala (brak przekierowania > plik)".
+        _kat_cd = _cwd_z_komendy(komenda)
         for _c in reversed(_cele):
             try:
                 _pc = _resolve_home_relative_path(_c)
+                if _kat_cd and not os.path.isabs(os.path.expanduser(_c)) and not _c.startswith("$"):
+                    _pk = Path(_kat_cd) / _c
+                    if _pk.is_file():
+                        _pc = _pk
                 if _pc.is_file():
                     _plik = str(_pc)
                     break
@@ -56692,6 +56803,13 @@ def _sedzia_ocen(numer):
                     kod = proces.returncode
                     break
             elif not _zyje(pid):
+                # v480ih: zombie po przeladowaniu — odbieramy kod wyjscia
+                try:
+                    _p, _st = os.waitpid(pid, os.WNOHANG)
+                    if _p == pid and os.WIFEXITED(_st):
+                        kod = os.WEXITSTATUS(_st)
+                except Exception:
+                    pass
                 break
             if time.time() - start > _SEDZIA_MAKS_S:
                 try:
@@ -56850,10 +56968,21 @@ def _sedzia_petla():
 
 
 def _zyje(pid):
+    # v480ih: proces, ktory sie skonczyl, a byl dzieckiem programu sprzed
+    # przeladowania (os.execv — ten sam pid programu), zostaje zombie:
+    # os.kill(pid, 0) dalej sie udaje. Bieg 2026-10-29 19:23-19:43
+    # (druzyna 1): sprawdzenie Sedziego skonczylo sie, a Sedzia czekal na
+    # zombie 20 min i oglosil "komenda nie skonczyla sie w 20 min".
     try:
         pid = int(pid)
         if pid <= 0:
             return False
+        try:
+            with open("/proc/" + str(pid) + "/stat", encoding="utf-8", errors="replace") as _f:
+                if _f.read().rsplit(")", 1)[-1].split()[0] in ("Z", "X"):
+                    return False
+        except Exception:
+            pass
         os.kill(pid, 0)
         return True
     except PermissionError:
