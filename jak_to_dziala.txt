@@ -3611,3 +3611,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        Tomek pisał „Gdy MAIN zapyta o wynik — jedna komenda: URUCHOM: …”,
        program ją od razu uruchamiał i rozmowa ciągnęła się dalej, a MAIN
        czekał.
+
+247. (v480ij) Rola, która w jednej rozmowie z MAIN-em drugi raz z rzędu
+       uruchamia tę samą komendę tylko do patrzenia (tail/ps/grep, bez
+       zmian w plikach), kończy rozmowę — odpowiedź idzie do MAIN-a, proces
+       liczy dalej sam. Działa też dla procesów, które uruchomił skrypt
+       zespołu, a nie program. Drużyna 1 (29.10, 21:11): Tomek co minutę
+       „tail evo/g0_i0_*.log; ps aux”, log rósł, więc program nie widział
+       powtórki, a MAIN czekał.

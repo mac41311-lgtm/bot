@@ -9105,6 +9105,7 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
     powtorki = 0
     runda = 0
     _po_odmowie_czekania = False
+    _poprzednie_patrzenie = None
     while True:
         runda += 1
         komendy = []
@@ -9144,6 +9145,27 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         # procesu liczacego w tle (tail/ps jego logu), konczy swoja
         # odpowiedz — wynik dostanie MAIN (25%, koniec, blad), a MAIN moze
         # ja zapytac znowu. Pierwsze spojrzenie zostaje.
+        # v480ij: ta sama komenda tylko do patrzenia (tail/ps/grep) runda po
+        # rundzie to pilnowanie procesu, nawet gdy program nie wie, ze ten
+        # proces liczy w tle (uruchomil go skrypt zespolu). Bieg 2026-10-29
+        # 21:11 (druzyna 1): Tomek co minute "tail evo/g0_i0_*.log; ps aux"
+        # w jednym pytaniu MAIN-a — log rosl, wiec nie bylo "powtorki".
+        try:
+            _same_patrzenie = all(
+                not re.search(r"(?:^|[;&|(]\s*)(?:python3?|pip|pkg|rm|mv|cp|kill|pkill|bash|sh|nohup|setsid|sed\s+-i)\b|>",
+                              re.sub(r"[12]?>\s*/dev/null|2>&1", "", k))
+                for k in komendy[:5])
+        except Exception:
+            _same_patrzenie = False
+        if (runda > 1 and not zapis and _same_patrzenie
+                and tuple(_bez_sleep(k) for k in komendy[:5]) == _poprzednie_patrzenie):
+            log("PROGRAM", imie + " sprawdza w kółko ten sam stan — kończę jego rozmowę, odpowiedź idzie do MAIN-a.")
+            _bez = "\n".join(l for l in str(odp or "").split("\n")
+                             if not _PODGLAD_RE.search(l)).strip()
+            return ((_bez + "\n\n") if _bez else "") + (
+                "[Program: " + imie + " drugi raz z rzędu sprawdzał ten sam stan — oddaje głos "
+                "MAIN-owi. Proces liczy dalej sam; MAIN może o niego znowu zapytać.]")
+        _poprzednie_patrzenie = tuple(_bez_sleep(k) for k in komendy[:5])
         if runda > 1 and not zapis:
             try:
                 _sl = _procesy_z_procentem()
