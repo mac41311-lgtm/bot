@@ -3571,3 +3571,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        odpowie bez kodu i bez poprawki (oddaje głos MAIN-owi). Rozmowa
        autora z kolegą po imieniu nie kończy poprawiania. Wcześniej były
        najwyżej 3 rundy, potem błąd szedł do MAIN-a.
+
+243. (v480if) Krótka linia co minutę („Nic nowego…”) nie wspomina już
+       o zespole. Wcześniej jej dopisek „Zapytasz zespół…?” zajmował
+       wspólny licznik zdań o zespole (punkt 239), więc mocne pytanie
+       przy starcie tła nie przychodziło przez 5 kroków — drużyna 1,
+       kroki 62–64 (29.10 18:44): komenda poszła w tło, a MAIN trzy razy
+       sam sprawdzał eval_tfm. Teraz o zespole mówią tylko: pytanie przy
+       starcie tła, linia przy wyniku i „Czemu nie pytasz zespołu?” co
+       5 kroków bez ASK.

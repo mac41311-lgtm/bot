@@ -45988,11 +45988,13 @@ def main_decide(
         if _czemu:
             _glos_czemu_krok[0] = int(step or 0)
             return deepseek("MAIN", _CZEMU_ZDANIE)
-        # v480ib: wzmianka o zespole w krotkim glosie tez liczy sie do
-        # licznika zdan o zespole — w 5 krokach po innym zdaniu jej nie ma.
-        _wolno_c = int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
-        if _wolno_c:
-            _glos_czemu_krok[0] = int(step or 0)
+        # v480if: krotki glos nie wspomina juz o zespole. Bieg 2026-10-29
+        # 18:44 (druzyna 1, kroki 62-64): wzmianka "Zapytasz zespol...?"
+        # w krotkim glosie zajmowala wspolny licznik (v480ib), wiec zdanie
+        # o zespole przy starcie tla nie przychodzilo, a MAIN trzy razy sam
+        # sprawdzal eval_tfm. O zespole mowi teraz tylko zdanie przy starcie
+        # tla, przy wyniku i pytanie "Czemu..." wyzej.
+        _wolno_c = False
         if _glos_postep_byl[0]:
             return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam" + (
                 "; w tym czasie możesz zapytać zespół (ASK z imieniem)." if _wolno_c else "."))
