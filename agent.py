@@ -9104,6 +9104,7 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
     poprzednio = None
     powtorki = 0
     runda = 0
+    _po_odmowie_czekania = False
     while True:
         runda += 1
         komendy = []
@@ -9113,6 +9114,17 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
                 komendy.append(k)
         if not komendy:
             return odp
+        # v480ii: po "Odpowiedz teraz MAIN-owi" (_CZEKANIE_ROLI_ODMOWA)
+        # nastepna odpowiedz roli JEST odpowiedzia dla MAIN-a. Bieg
+        # 2026-10-29 21:00 (druzyna 1): Tomek pisal "Gdy MAIN zapyta o
+        # wynik — jedna komenda: URUCHOM: …", program ja od razu
+        # uruchamial i rozmowa szla dalej (pilnowanie ewolucji), a MAIN
+        # czekal. Komendy zostaja w tekscie jako propozycja dla MAIN-a.
+        if _po_odmowie_czekania:
+            log("PROGRAM", imie + " dostał prośbę o odpowiedź dla MAIN-a — jego komendy "
+                "idą do MAIN-a jako propozycja, nie uruchamiam ich.")
+            return re.sub(r"(?im)^([ \t>*_`-]*)(?:URUCHOM|PODGL[AĄ]D)[*_]*\s*:",
+                          r"\1Komenda do uruchomienia później:", str(odp or ""))
         # v480gg/gh: bieg 2026-10-26 18:56 — Bartek dal 5 plikow i w tej
         # samej odpowiedzi PODGLĄD (ls, czy leza). Pliki program kladl
         # dopiero z OSTATNIEJ odpowiedzi, wiec ls pokazal pusty folder i
@@ -9181,6 +9193,7 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         except Exception:
             pass
         _teraz = (tuple(komendy[:5]), tuple(wyniki))
+        _po_odmowie_czekania = any(w == _CZEKANIE_ROLI_ODMOWA for w in wyniki)
         if wyniki and all(w == _CZEKANIE_ROLI_ODMOWA for w in wyniki):
             # sama prosba o czekanie po odmowie — tak samo jak powtorka
             _teraz = ("czekanie",)

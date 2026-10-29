@@ -3603,3 +3603,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        • Ten sam agent.py zapisany jeszcze raz (np. przez drugą drużynę) nie
          przeładowuje programu. Drużyna 1 przeładowała się na tę samą
          wersję trzy razy.
+
+246. (v480ii) Gdy program powie roli „to drugie czekanie… Odpowiedz teraz
+       MAIN-owi”, jej następna odpowiedź idzie już do MAIN-a. Komendy
+       URUCHOM/PODGLĄD z tej odpowiedzi nie są uruchamiane — zostają w tekście
+       jako „Komenda do uruchomienia później:”. Drużyna 1 (29.10, 21:00):
+       Tomek pisał „Gdy MAIN zapyta o wynik — jedna komenda: URUCHOM: …”,
+       program ją od razu uruchamiał i rozmowa ciągnęła się dalej, a MAIN
+       czekał.
