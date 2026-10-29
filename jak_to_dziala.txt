@@ -3619,3 +3619,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zespołu, a nie program. Drużyna 1 (29.10, 21:11): Tomek co minutę
        „tail evo/g0_i0_*.log; ps aux”, log rósł, więc program nie widział
        powtórki, a MAIN czekał.
+
+248. (v480ik) Komenda zaczynająca się od „cd X && …” startuje od razu w
+       folderze X. Wcześniej startowała w ~, a gdy w środku było „&” (np.
+       „cd ~/MAIN_1 && nohup python3 x.py > x.log & disown; sleep 5; tail
+       x.log”), cała lista z „cd” szła w tło, a „tail” działał w ~ i pisał
+       „No such file”. Drużyna 1 (29.10, 21:37): Tomek trzy razy z rzędu nie
+       widział swojego evo_attention.log, choć proces działał i pisał log
+       w ~/MAIN_1.

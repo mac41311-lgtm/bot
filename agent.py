@@ -25160,7 +25160,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             ),
             stdout=wy,
             stderr=bl,
-            cwd=str(HOME),
+            cwd=_katalog_startu_komendy(command),
             stdin=subprocess.DEVNULL,
             # v293: wlasna grupa procesow. Dwa powody, oba realne:
             # umiemy dzieki temu policzyc CPU CALEJ roboty (wnuki
@@ -26146,6 +26146,26 @@ def _gemini_program_w_komendzie(command_str):
                 continue
             return kod
     return None
+
+
+def _katalog_startu_komendy(command):
+    """
+    v480ik: katalog, w ktorym powloka startuje komende — katalog z
+    pierwszego "cd X" na jej poczatku (inaczej ~). Komenda
+    "cd ~/MAIN_1 && nohup python3 x.py > x.log 2>&1 & disown; sleep 5;
+    tail x.log": "&" puszcza w tlo cala liste z "cd", wiec "tail" szedl
+    w ~ i dostawal "No such file". Bieg 2026-10-29 21:37 (druzyna 1):
+    Tomek trzy razy z rzedu nie widzial swojego evo_attention.log.
+    """
+    try:
+        m = re.match(r"\s*cd\s+([\"']?)([^\s;&|\"']+)\1\s*(?:&&|;)", str(command or ""))
+        if m:
+            d = str(_resolve_home_relative_path(m.group(2)))
+            if os.path.isdir(d):
+                return d
+    except Exception:
+        pass
+    return str(HOME)
 
 
 def termux_run(command):
