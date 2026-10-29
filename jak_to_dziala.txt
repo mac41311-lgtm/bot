@@ -3561,3 +3561,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        restore_tfm_from_backup.py, a program kładł go znowu z każdej
        jego odpowiedzi i 3 razy odsyłał mu zamierzony komunikat jako
        błąd — Tomek sam nazwał to błędnym kołem.
+
+242. (v480ie) Autor poprawia swój plik bez stałej liczby rund — tak jak
+       przy URUCHOM. Dotyczy błędu składni, poprawki, która nie weszła,
+       i błędu przy próbie uruchomienia, dla każdej roli. Autor dostaje
+       błąd, poprawia, program od razu sprawdza znowu, i tak dalej, dopóki
+       jest postęp. Koniec, gdy ta sama odpowiedź autora daje ten sam
+       błąd co poprzednio (nic się już nie zmienia) albo gdy autor
+       odpowie bez kodu i bez poprawki (oddaje głos MAIN-owi). Rozmowa
+       autora z kolegą po imieniu nie kończy poprawiania. Wcześniej były
+       najwyżej 3 rundy, potem błąd szedł do MAIN-a.

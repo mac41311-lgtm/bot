@@ -21376,7 +21376,28 @@ def termux_write_file(path, content, append=False):
 # sie, blad idzie od razu do autora; jego poprawke program naklada i
 # sprawdza znowu. MAIN dostaje wynik: kto poprawil i ze sie kompiluje,
 # albo — po kilku probach — ostatni blad.
-_RUND_POPRAWEK_AUTORA = 3
+_RUND_POPRAWEK_AUTORA = 3  # v480ie: juz nie limit — patrz _bez_postepu()
+
+
+def _bez_postepu(historia, blad, odp):
+    """
+    v480ie: uzytkownik 2026-10-29 ("nie mialo byc 3 rundy, mialo miec
+    swobode"): autor poprawia swoj plik tak dlugo, jak jest postep —
+    jak przy URUCHOM (v480gi), bez stalej liczby rund. Koniec, gdy ta
+    sama odpowiedz autora dala ten sam blad co w poprzedniej rundzie
+    (nic sie juz nie zmienia). Odpowiedz bez kodu i bez poprawki to
+    autor oddajacy glos — tez koniec.
+    """
+    tekst = str(odp or "")
+    if "```" not in tekst and not extract_search_replace_blocks(tekst) \
+            and not re.search(r"(?im)^\s*(?:<{3,}|>{3,}|={3,}|ZNAJD|SEARCH|ZAMIE|REPLACE)", tekst):
+        return True
+    klucz = (re.sub(r"\s+", " ", str(blad or "")).strip()[-400:],
+             _klucz_tresci("\n".join(re.findall(r"```[^\n]*\n(.*?)```", tekst, re.DOTALL)) or tekst))
+    if historia and historia[-1] == klucz:
+        return True
+    historia.append(klucz)
+    return False
 
 
 # v480id: tresci (sha1 bez bialych znakow na koncach linii), ktore
@@ -21551,7 +21572,10 @@ def _autor_poprawia_skladnie(path, content, wynik):
     # v480hx: to, co lezy na dysku, jest jego — bez zdania "ktos zmienil"
     _rola_poznala_plik(rola, _resolve_home_relative_path(path))
     odpowiedzi_kolegow = ""
-    for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
+    _historia = []
+    runda = 0
+    while True:
+        runda += 1
         log("PROGRAM", sciezka + " od " + imie_d + " się nie kompiluje — błąd wraca "
             "do autora (runda " + str(runda) + ").")
         odp = str(deepseek(rola, (
@@ -21573,6 +21597,7 @@ def _autor_poprawia_skladnie(path, content, wynik):
                 globals()["_kod_bartka_teraz"] = odp
         except Exception:
             pass
+        _blad_przed = blad
         odpowiedzi_kolegow = _koledzy_odpowiadaja_autorowi(rola, odp, sciezka)
         r = apply_engineer_patch_to_project_file(path, odp)
         if r.get("applied"):
@@ -21617,10 +21642,13 @@ def _autor_poprawia_skladnie(path, content, wynik):
                 + ("raz" if runda == 1 else "razy") + "). Teraz się kompiluje."
             )
             return nowy
+        if not odpowiedzi_kolegow and _bez_postepu(_historia, _blad_przed, odp):
+            break
     wynik["poprawki_autora"] = (
-        imie + " dostał błąd od razu i poprawiał " + str(_RUND_POPRAWEK_AUTORA)
-        + " razy, ale plik nadal się nie kompiluje. Ostatni błąd jest w "
-        "compile_error."
+        imie + " dostał błąd od razu i poprawiał " + str(runda)
+        + (" raz" if runda == 1 else " razy") + ", ale plik nadal się nie kompiluje "
+        "(ostatnia poprawka nic już nie zmieniła albo " + imie + " oddał głos). "
+        "Ostatni błąd jest w compile_error."
     )
     wynik["compile_error"] = short(blad, 1500)
     return wynik
@@ -21853,12 +21881,15 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                     + "kopia: .kopie/" + Path(w["backup"]).name + "). Plik jest gotowy do uruchomienia"
                     + (": " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
         powod = powod or str(w.get("reason") or "")
-    # Poprawka nie weszla — wraca do autora (do trzech razy), zanim
+    # Poprawka nie weszla — wraca do autora (v480ie: dopoki jest postep), zanim
     # cokolwiek dostanie MAIN; autor moze zajrzec do pliku PODGLĄDEM.
+    runda = 0
     if kandydaci and powod and not _siega_do_rywala("termux_write_file", {"path": str(kandydaci[0])}):
         p = kandydaci[0]
         sciezka = _sciezka_od_domu(str(p))
-        for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
+        _historia = []
+        while True:
+            runda += 1
             log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + " nie weszła — wraca do autora (runda "
                 + str(runda) + ").")
             odp2 = str(deepseek(rola, (
@@ -21876,10 +21907,13 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                         + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
                         + "za " + str(runda + 1) + ". razem, kopia: .kopie/" + Path(w["backup"]).name + ")"
                         + (". Uruchomienie: " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
+            _powod_przed = powod
             powod = str(w.get("reason") or powod)
+            if _bez_postepu(_historia, _powod_przed, odp2):
+                break
     if kandydaci and powod:
         return ["[Poprawki " + imie_d + " nie dało się nanieść na " + _sciezka_od_domu(str(kandydaci[0]))
-                + " (autor próbował " + str(_RUND_POPRAWEK_AUTORA + 1) + " razy): " + short(powod, 300)
+                + " (autor próbował " + str(runda + 1) + " razy): " + short(powod, 300)
                 + " Plik jest bez zmian.]"]
     return []
 
@@ -21978,7 +22012,10 @@ def _autor_poprawia_uruchomienie(rola, p):
     imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
     sciezka = _sciezka_od_domu(str(p))
     odpowiedzi_kolegow = ""
-    for runda in range(1, _RUND_POPRAWEK_AUTORA + 1):
+    _historia = []
+    runda = 0
+    while True:
+        runda += 1
         brak = re.search(r"ModuleNotFoundError: No module named '([\w.]+)'", wyj)
         if brak and not _pliki_w_folderze(p.parent, brak.group(1).split(".")[0] + ".py"):
             return ("próba uruchomienia (" + komenda + "): brakuje biblioteki "
@@ -22003,6 +22040,8 @@ def _autor_poprawia_uruchomienie(rola, p):
         except Exception:
             pass
         odpowiedzi_kolegow = _koledzy_odpowiadaja_autorowi(rola, odp, sciezka)
+        if not odpowiedzi_kolegow and _bez_postepu(_historia, wyj, odp):
+            break
         r = apply_engineer_patch_to_project_file(str(p), odp)
         if not r.get("applied"):
             kod = _kod_z_wypowiedzi(odp, p.name)
@@ -22020,7 +22059,8 @@ def _autor_poprawia_uruchomienie(rola, p):
             return ("próba uruchomienia (" + komenda + ") OK po poprawce " + imie_d
                     + " (" + str(runda) + " " + ("raz" if runda == 1 else "razy") + ")")
     return ("próba uruchomienia (" + komenda + ") nadal kończy się błędem po "
-            + str(_RUND_POPRAWEK_AUTORA) + " poprawkach " + imie_d + ": "
+            + str(runda) + " " + ("poprawce" if runda == 1 else "poprawkach") + " " + imie_d
+            + " (ostatnia nic już nie zmieniła albo autor oddał głos): "
             + short(wyj.strip().splitlines()[-1] if wyj.strip() else wyj, 300))
 
 
