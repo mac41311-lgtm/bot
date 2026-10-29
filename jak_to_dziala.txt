@@ -3541,3 +3541,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        Prompt MAIN-a (akapit „Kod.”, przepisany w całości) mówi, kiedy
        program sam przynosi wynik z tła: koniec/błąd, co 25%, nowe linie
        logu po 3, 6, 12, 24 min, krótka linia co minutę.
+
+240. (v480ic) Odpowiedź Igora i Eli na pytanie MAIN-a (i odpowiedzi
+       z rozmów po imieniu oraz poprawek kodu u autora) jest w terminalu
+       i w pliku przebiegu pokazana raz. Wcześniej deepseek() pokazywał
+       ją sam, a potem drugi raz miejsce, które pytało — ta sama ramka
+       dwa razy (w biegu 28.10 Igor 17 razy, Ela 42 razy).

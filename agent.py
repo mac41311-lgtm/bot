@@ -21499,7 +21499,6 @@ def _koledzy_odpowiadaja_autorowi(rola, odp, sciezka):
         o = str(deepseek(adresat, wiad) or "")
         if not o.strip():
             continue
-        _speak(adresat, o)
         _zapamietaj_kod_autora(adresat, o)
         # rozmowa juz sie odbyla — list nie czeka w skrzynce na nastepny krok
         try:
@@ -21533,7 +21532,6 @@ def _autor_poprawia_skladnie(path, content, wynik):
             "naniesie ją i od razu sprawdzi znowu. Możesz też zwrócić się do kogoś "
             "z zespołu po imieniu — odpowie Ci od razu."
         )) or "")
-        _speak(rola, odp)
         # tak samo jak _popraw_skladnie_u_autora (droga TASK): odpowiedz
         # jest zwykla wypowiedzia autora — zespol i MAIN ja widza
         _zapamietaj_kod_autora(rola, odp)
@@ -21838,7 +21836,6 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                 + " albo PODGLĄD: sed -n 'od,dop' " + sciezka + ") i podaj poprawkę z fragmentem "
                 "skopiowanym 1:1 z pliku. Program naniesie ją od razu."
             )) or "")
-            _speak(rola, odp2)
             _zapamietaj_kod_autora(rola, odp2)
             w = apply_engineer_patch_to_project_file(str(p), odp2)
             if w.get("applied"):
@@ -21952,7 +21949,6 @@ def _autor_poprawia_uruchomienie(rola, p):
             "zamienić) albo cały plik od nowa. Program naniesie ją i od razu uruchomi "
             "znowu. Możesz też zwrócić się do kogoś z zespołu po imieniu — odpowie Ci od razu."
         )) or "")
-        _speak(rola, odp)
         _zapamietaj_kod_autora(rola, odp)
         try:
             _role_response_cache[rola] = odp
@@ -41563,7 +41559,6 @@ def _collect_role_messages(speaker_role, text):
             )
             _odp_igora = str(deepseek(adresat, tresc) or "").strip()
             if _odp_igora:
-                _speak(adresat, _odp_igora)
                 _role_inbox.setdefault(speaker_role, []).append(
                     (_ROLE_DISPLAY_NAME.get(adresat, adresat), _odp_igora)
                 )
@@ -46223,8 +46218,9 @@ def _handle_main_ask(
 
                 # v480cf: Igor dostaje samo pytanie MAIN-a — bez celu,
                 # bez skrzynki i bez kontekstu zespolu.
+                # v480ic: deepseek() sam pokazuje odpowiedz (_speak) —
+                # drugi raz byl ta sama ramka dwa razy w terminalu.
                 answer = str(deepseek(ask_role, ask_question) or "")
-                _speak(ask_role, answer)
 
             elif ask_role == "PROGRESS_ESTIMATOR":
 
@@ -46232,7 +46228,6 @@ def _handle_main_ask(
                 # (consult_team) — pytanie MAIN-a idzie wprost do jej
                 # rozmowy, ktora zna cel.
                 answer = str(deepseek(ask_role, "MAIN pyta:\n" + ask_question) or "")
-                _speak(ask_role, answer)
 
             else:
 
