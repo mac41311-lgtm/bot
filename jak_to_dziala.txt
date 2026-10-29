@@ -3573,10 +3573,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        najwyżej 3 rundy, potem błąd szedł do MAIN-a.
 
 243. (v480if) Krótka linia co minutę („Nic nowego…”) nie wspomina już
-       o zespole. Wcześniej jej dopisek „Zapytasz zespół…?” zajmował
-       wspólny licznik zdań o zespole (punkt 239), więc mocne pytanie
-       przy starcie tła nie przychodziło przez 5 kroków — drużyna 1,
-       kroki 62–64 (29.10 18:44): komenda poszła w tło, a MAIN trzy razy
-       sam sprawdzał eval_tfm. Teraz o zespole mówią tylko: pytanie przy
-       starcie tła, linia przy wyniku i „Czemu nie pytasz zespołu?” co
-       5 kroków bez ASK.
+       o zespole i nie zajmuje wspólnego licznika zdań o zespole (punkt
+       239). Sprostowanie: w drużynie 1 (29.10, kroki 61–64) pytanie przy
+       starcie tła przyszło w kroku 61 i MAIN zapytał 5 osób; w krokach
+       62–64 nie było go, bo działa zasada „najwyżej raz na 5 kroków”.
+       Ta zmiana jest więc tylko ciszą w krótkiej linii, nie naprawą.
+
+244. (v480ig) Blok, który jest komendą, nie staje się treścią pliku .py,
+       nawet gdy wymienia jego nazwę: „PODGLĄD: cd …; grep … plik.py”,
+       „URUCHOM: …” i „cd ~/MAIN_n && python3 -c "<skrypt>"” (pierwsza
+       linia jest komendą, całość nie jest Pythonem). Drużyna 1 (29.10,
+       krok 56): blok PODGLĄD Tomka zastąpił trener evolved/tfm_bpe_med.py
+       i zaczęła się pętla poprawiania. Drużyna 2 (krok 33): komenda-patch
+       Tomka zastąpiła k4_autoloop_v3.py. Do tego zapis przez wykonanie
+       (Gemini) nie podmienia działającego pliku .py pamiętanym blokiem,
+       który się nie kompiluje.

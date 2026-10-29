@@ -22157,7 +22157,7 @@ def _zastap_plik_autora(rola, p, kod, folder):
     dalej nie, wraca poprzednia wersja. Zwraca zdanie dla MAIN-a albo "".
     """
     p = Path(p)
-    if folder is None or not kod or _code_target_rejection(str(p), kod):
+    if folder is None or not kod or _code_target_rejection(str(p), kod) or _blok_to_komenda(kod, str(p)):
         return ""
     try:
         if not p.resolve().is_relative_to(Path(folder).resolve()) or not p.is_file():
@@ -22290,6 +22290,10 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             # v480gk: ostatni blok przypisany temu plikowi (nazwa nad nim
             # albo podpis w nim) — wersja koncowa, nie szkic wyzej.
             kod = _z_naglowka.get(s) or _blok_tego_pliku(odp, p.name)
+            # v480ig: blok-komenda (cd … && python3 -c "…", PODGLĄD:) nie
+            # jest trescia pliku, nawet gdy wymienia jego nazwe.
+            if kod and _blok_to_komenda(kod, str(p)):
+                kod = None
             if p.exists():
                 # v480fw: autor dal nowa pelna wersje pliku, ktory juz lezy
                 # — bieg 2026-10-25 23:39: "eval_bpb.py — nowa wersja
@@ -22474,6 +22478,17 @@ def _termux_write_file(path, content, append=False):
             # kodu — jesli kod jest w jego zadaniu, to jest CZYJAS
             # kopia, i nie ma powodu przedkladac kopii nad oryginal.
             _kod, _z_pamieci = _tresc_napisana_dla(p)
+
+            # v480ig: pamietany blok z sama komenda (PODGLĄD/URUCHOM,
+            # cd/grep) nie jest trescia pliku; a dzialajacego pliku .py
+            # nie zastepuje tresc, ktora sie nie kompiluje.
+            if _kod and _blok_to_komenda(_kod, str(p)):
+                _kod = None
+            _zly_zast = _zepsuty_zastepuje_dzialajacy(p, _kod) if _kod else None
+            if _zly_zast:
+                log("GEMINI", "Nie podmieniam " + p.name + " pamiętanym blokiem — "
+                    "on się nie kompiluje (" + _zly_zast + "), a plik na dysku działa.")
+                _kod = None
 
             _blokada = (
                 _code_target_rejection(str(p), _kod) if _kod else None
@@ -36955,15 +36970,36 @@ def _blok_to_komenda(kod, sciezka):
         except SyntaxError:
             pass
         linie = [l.strip() for l in kod.splitlines() if l.strip() and not l.strip().startswith("#")]
-        if not linie or len(linie) > 12:
+        if not linie:
+            return False
+        # v480ig: komenda z wpisanym w nia skryptem (python3 -c "...",
+        # heredoc) ma wiele linii, ktore nie sa komendami. Bieg 2026-10-29
+        # 16:03 (druzyna 2, krok 33): Tomek dal "cd ~/MAIN_2 && python3 -c
+        # \"<60 linii patcha>\"", a program zapisal to jako k4_autoloop_v3.py
+        # w miejsce dzialajacej petli. Pierwsza linia jest komenda, calosc
+        # nie jest Pythonem — to komenda.
+        pierwsza = linie[0]
+        if (
+            _LINIA_POWLOKI_RE.match(pierwsza)
+            and not re.match(r"^[\w.]+\s*(?:=|\(|\[|\.|:)", pierwsza)
+            and (re.search(r"(?:python3?\s+-c\s+[\"']|<<-?\s*['\"]?\w+)", pierwsza)
+                 or "&&" in pierwsza or "|" in pierwsza or ";" in pierwsza)
+        ):
+            return True
+        if len(linie) > 12:
             return False
         return all(_LINIA_POWLOKI_RE.match(l) for l in linie)
     except Exception:
         return False
 
 
+# v480ig: linia moze zaczynac sie od "PODGLĄD:" / "URUCHOM:" — to tez
+# komenda, nie kod pliku. Bieg 2026-10-29 16:53 (druzyna 1, krok 56):
+# Tomek dal w bloku "PODGLĄD: cd ~/MAIN_1; grep ... evolved/tfm_bpe_med.py",
+# a zapis tfm_bpe_med.py wzial ten blok jako "kod Tomka" i nadpisal trener.
 _LINIA_POWLOKI_RE = re.compile(
-    r"^(?:\$\s*)?(?:[A-Z_][A-Z0-9_]*=\S*\s+)*(?:cd|python3?|bash|sh|nohup|setsid|"
+    r"^(?:\*\*)?(?:(?:PODGL[AĄ]D|URUCHOM)\s*:\s*(?:\*\*)?\s*`?)?"
+    r"(?:\$\s*)?(?:[A-Z_][A-Z0-9_]*=\S*\s+)*(?:cd|python3?|bash|sh|nohup|setsid|"
     r"timeout|time|export|env|pip3?|pkg|ls|cat|tail|head|grep|sed|wc|kill|pkill|ps|"
     r"mkdir|cp|mv|rm|echo|curl|wget|tar|unzip|chmod|sleep|watch|nice|taskset)\b")
 
