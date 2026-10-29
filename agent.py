@@ -21379,6 +21379,35 @@ def termux_write_file(path, content, append=False):
 _RUND_POPRAWEK_AUTORA = 3
 
 
+# v480id: tresci (sha1 bez bialych znakow na koncach linii), ktore
+# program juz polozyl pod dana sciezka. Plik, ktory zespol potem usunal,
+# nie wraca z bloku o tej samej tresci — to cytat starej wersji, nie
+# nowy plik (bieg 2026-10-29 17:05: Tomek usunal
+# restore_tfm_from_backup.py, a jego stara wersja wrocala z kazdej
+# kolejnej odpowiedzi).
+_tresc_juz_zapisana = {}
+
+
+def _klucz_tresci(kod):
+    return hashlib.sha1("\n".join(l.rstrip() for l in str(kod or "").strip().splitlines())
+                        .encode("utf-8", "replace")).hexdigest()
+
+
+def _zapamietaj_zapis(p, kod):
+    try:
+        _tresc_juz_zapisana.setdefault(os.path.realpath(str(p)), set()).add(_klucz_tresci(kod))
+    except Exception:
+        pass
+
+
+def _usuniety_ta_sama_tresc(p, kod):
+    try:
+        return (not Path(p).exists()
+                and _klucz_tresci(kod) in _tresc_juz_zapisana.get(os.path.realpath(str(p)), ()))
+    except Exception:
+        return False
+
+
 def _zapisz_poprawke_autora(path, kod):
     """v480ft: cala poprawiona wersja od autora prosto na dysk (z kopia
     w .kopie/); zwraca blad py_compile albo ""."""
@@ -21392,6 +21421,7 @@ def _zapisz_poprawke_autora(path, kod):
         pass
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(str(kod).rstrip("\n") + "\n", encoding="utf-8")
+    _zapamietaj_zapis(p, kod)
     try:
         _track_project_path(p)
         _record_python_written_file(str(p))
@@ -21711,6 +21741,7 @@ def _poloz_pliki_w_katalogu(katalog, team):
             w = termux_write_file(str(p), kod)
             if not isinstance(w, dict) or not p.exists():
                 continue
+            _zapamietaj_zapis(p, kod)
             _autor_pliku[nazwa] = rola
             if w.get("compile_error"):
                 stan = "nie kompiluje się: " + short(str(w["compile_error"]), 200)
@@ -21912,6 +21943,14 @@ def _proba_uruchomienia(p):
     out = str(out or "")
     if pr.returncode == 0:
         return "ok", komenda, out[-800:]
+    # v480id: kod wyjscia bez wyjatku Pythona to zakonczenie zamierzone
+    # przez sam skrypt (sys.exit z komunikatem, np. "brak kopii — sprawdz
+    # recznie"), nie blad w kodzie. Bieg 2026-10-29 17:05 (druzyna 1):
+    # skrypt Tomka konczyl sie "Sprawdz recznie: ls ...", program trzy
+    # razy odsylal to Tomkowi jako blad i za kazdym razem kladl jego blok
+    # znowu jako plik — Tomek: "to bledne kolo".
+    if pr.returncode > 0 and "Traceback (most recent call last)" not in out:
+        return "wyjscie", komenda, "kod wyjścia " + str(pr.returncode) + "\n" + out[-800:]
     return "blad", komenda, "kod wyjścia " + str(pr.returncode) + "\n" + out[-2500:]
 
 
@@ -21931,6 +21970,11 @@ def _autor_poprawia_uruchomienie(rola, p):
     if stan == "czas":
         return ("próba uruchomienia (" + komenda + ") działała ponad "
                 + str(_PROBA_URUCHOMIENIA_S) + " s bez błędu — przerwałem ją")
+    if stan == "wyjscie":
+        _ost = [l for l in str(wyj).strip().splitlines()[1:] if l.strip()]
+        return ("próba uruchomienia (" + komenda + ") skończyła się bez wyjątku, "
+                "skrypt sam zakończył pracę (" + str(wyj).split("\n", 1)[0]
+                + (", ostatnia linia: " + short(_ost[-1], 200) if _ost else "") + ")")
     imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
     sciezka = _sciezka_od_domu(str(p))
     odpowiedzi_kolegow = ""
@@ -21971,7 +22015,7 @@ def _autor_poprawia_uruchomienie(rola, p):
                 wyj = str(r.get("reason") or "Nie było poprawki do naniesienia.") + "\n\nPoprzedni błąd:\n" + short(wyj, 1500)
                 continue
         stan, komenda, wyj = _proba_uruchomienia(p)
-        if stan in ("ok", "czas", None):
+        if stan in ("ok", "czas", "wyjscie", None):
             log("PROGRAM", imie + " poprawił " + sciezka + " — próba uruchomienia przechodzi.")
             return ("próba uruchomienia (" + komenda + ") OK po poprawce " + imie_d
                     + " (" + str(runda) + " " + ("raz" if runda == 1 else "razy") + ")")
@@ -22219,7 +22263,12 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                 kod = _kod_z_wypowiedzi(odp, p.name)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
                 continue
+            if _usuniety_ta_sama_tresc(p, kod):
+                log("PROGRAM", _sciezka_od_domu(str(p)) + " od " + imie_d + ": tę samą treść "
+                    "program już kładł, a potem plik usunięto — nie kładę go znowu.")
+                continue
             w = termux_write_file(str(p), kod)
+            _zapamietaj_zapis(p, kod)
             if not isinstance(w, dict) or not p.exists():
                 continue
             sciezka = _sciezka_od_domu(str(p))
@@ -37273,6 +37322,7 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(kod, encoding="utf-8")
+            _zapamietaj_zapis(p, kod)
         except Exception as e:
             log("MAIN", "Nie położyłem " + p.name + ": " + str(e))
             continue

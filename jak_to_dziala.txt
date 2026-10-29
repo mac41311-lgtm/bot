@@ -3547,3 +3547,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        i w pliku przebiegu pokazana raz. Wcześniej deepseek() pokazywał
        ją sam, a potem drugi raz miejsce, które pytało — ta sama ramka
        dwa razy (w biegu 28.10 Igor 17 razy, Ela 42 razy).
+
+241. (v480id) Dwie poprawki dla wszystkich ról, które piszą kod:
+       - próba uruchomienia nowego pliku, która kończy się kodem błędu
+         BEZ wyjątku Pythona (skrypt sam kończy z komunikatem, np. „brak
+         kopii — sprawdź ręcznie”), nie jest już błędem w kodzie: nie
+         wraca do autora na 3 rundy, MAIN dostaje fakt „skrypt sam
+         zakończył pracę” z ostatnią linią;
+       - plik, który zespół usunął, nie wraca na dysk z bloku o tej
+         samej treści, którą program już kiedyś pod tą ścieżką położył
+         (to cytat starej wersji, nie nowy plik).
+       Bieg 29.10 17:05 (drużyna 1): Tomek usunął swój
+       restore_tfm_from_backup.py, a program kładł go znowu z każdej
+       jego odpowiedzi i 3 razy odsyłał mu zamierzony komunikat jako
+       błąd — Tomek sam nazwał to błędnym kołem.
