@@ -8887,7 +8887,10 @@ def _uruchom_podglad(komenda, rola=None):
         os.makedirs(cwd, exist_ok=True)
         r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
                            errors="replace", timeout=60, stdin=subprocess.DEVNULL)
-        out = (r.stdout or "") + (("\n" + r.stderr) if (r.stderr or "").strip() else "")
+        # v480il: podglad (ps/top bez uruchamiania) tez nie pokazuje nazw
+        # procesow rywala — tylko jego zuzycie, jak termux_run.
+        _uk = _ukryj_rywala_w_wyniku({"stdout": r.stdout or "", "stderr": r.stderr or ""})
+        out = (_uk.get("stdout") or "") + (("\n" + _uk.get("stderr")) if (_uk.get("stderr") or "").strip() else "")
         kod = r.returncode
     except subprocess.TimeoutExpired:
         return "$ " + komenda + "\n(przerwane po 60 s — zawęź komendę, np. do jednego pliku)"
@@ -28608,6 +28611,42 @@ def _podglada_proces_rywala(cmd):
     return ", ".join(str(t) for t in trafione[:5])
 
 
+def _zuzycie_procesow(procesy, kto):
+    """v480il: jedna linia o tym, ile telefonu zajmuja te procesy — bez nazw."""
+    try:
+        tik = os.sysconf("SC_CLK_TCK") or 100
+        strona = os.sysconf("SC_PAGE_SIZE") or 4096
+        with open("/proc/uptime") as f:
+            uptime = float(f.read().split()[0])
+        cpu = rss = 0.0
+        najdl = 0.0
+        n = 0
+        for p in procesy:
+            pid = p[0]
+            try:
+                with open("/proc/" + str(pid) + "/stat") as f:
+                    pola = f.read().rsplit(")", 1)[-1].split()
+                if pola[0] in ("Z", "X"):
+                    continue
+                czas_cpu = (int(pola[11]) + int(pola[12])) / tik
+                zyje = max(1.0, uptime - int(pola[19]) / tik)
+                with open("/proc/" + str(pid) + "/statm") as f:
+                    rss += int(f.read().split()[1]) * strona
+                cpu += 100.0 * czas_cpu / zyje
+                najdl = max(najdl, zyje)
+                n += 1
+            except Exception:
+                continue
+        if not n:
+            return ""
+        ram = (str(round(rss / 2**30, 1)).replace(".", ",") + " GB") if rss >= 2**30 else (str(int(rss / 2**20)) + " MB")
+        return ("[" + kto + ": " + str(n) + (" proces" if n == 1 else " procesy" if n < 5 else " procesów")
+                + ", CPU " + str(int(round(cpu))) + "%, RAM " + ram
+                + ", najdłuższy działa " + _min_s(najdl) + " — nazwy ukryte, nic z nimi nie zrobicie]")
+    except Exception:
+        return ""
+
+
 def _ukryj_rywala_w_wyniku(result):
     """
     v480eq: w wyniku komendy linie o procesach i plikach drugiej druzyny
@@ -28624,6 +28663,15 @@ def _ukryj_rywala_w_wyniku(result):
         procesy = None
         po_ukosniku, _slowo = _rzeczy_rywala_re()
         notka = "[proces albo plik drużyny " + _rywal() + " — ukryty; to nie Wasze, nie trzeba tego sprawdzać]"
+        # v480il: uzytkownik 2026-10-30 — druzyna widzi, ile telefonu zajmuje
+        # rywal (liczba procesow, CPU, RAM, czas), bez nazw i argumentow;
+        # tylko w wyniku wlasnej komendy (ps/top), jedna linia zamiast notki.
+        _podsum = None
+        _sedzia = {}
+        try:
+            _sedzia = {str(p[0]): p for p in _procesy_sedziego()}
+        except Exception:
+            _sedzia = {}
         for k in pola:
             linie = result[k].split("\n")
             zmiana = False
@@ -28631,22 +28679,37 @@ def _ukryj_rywala_w_wyniku(result):
                 if not l.strip():
                     continue
                 ukryj = bool(po_ukosniku.search(l))
-                if not ukryj:
-                    if procesy is None:
-                        procesy = _procesy_rywala()
-                        pidy = {str(p[0]) for p in procesy}
-                        cmdy = [p[2].strip() for p in procesy if len(p[2].strip()) >= 8]
-                    if procesy:
-                        pierwsze = l.split(None, 1)[0] if l.split() else ""
-                        ukryj = pierwsze in pidy or any(c in l for c in cmdy)
+                _proc = False
+                if procesy is None:
+                    procesy = _procesy_rywala()
+                    pidy = {str(p[0]) for p in procesy}
+                    cmdy = [p[2].strip() for p in procesy if len(p[2].strip()) >= 8]
+                pierwsze = l.split(None, 1)[0] if l.split() else ""
+                if procesy and (pierwsze in pidy or any(c in l for c in cmdy)):
+                    ukryj = _proc = True
+                elif procesy and ukryj and (l.split()[1:2] and l.split()[1] in pidy):
+                    _proc = True  # ps aux: pid w drugiej kolumnie
                 if ukryj:
-                    linie[i] = notka
+                    if _proc:
+                        if _podsum is None:
+                            _podsum = _zuzycie_procesow(procesy, "drużyna " + _rywal())
+                        linie[i] = _podsum or notka
+                    else:
+                        linie[i] = notka
                     zmiana = True
+                elif _sedzia:
+                    _pid = pierwsze if pierwsze in _sedzia else (
+                        l.split()[1] if len(l.split()) > 1 and l.split()[1] in _sedzia else "")
+                    if _pid and "Sędzia" not in l:
+                        linie[i] = l + "   ← to sprawdzanie Sędziego (liczy Wasz \"sprawdz\")"
+                        zmiana = True
             if zmiana:
                 # kolejne identyczne notki jako jedna linia
                 wynik = []
                 for l in linie:
-                    if l == notka and wynik and wynik[-1].startswith(notka):
+                    if (l == notka or (_podsum and l == _podsum)) and wynik and wynik[-1] == l:
+                        continue
+                    if _podsum and l == _podsum and _podsum in wynik:
                         continue
                     wynik.append(l)
                 result[k] = "\n".join(wynik)
