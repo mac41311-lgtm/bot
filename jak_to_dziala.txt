@@ -3695,3 +3695,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        dwa razy dał _diag_plc.py ze ścieżką nad blokiem, a jego URUCHOM
        pisał „No such file” — program pomijał pliki ról spoza zwykłej
        rozmowy zespołu. Piotr w końcu zrobił wszystko jednym python3 -c.
+
+256. (v480is) Strażnik pamięci telefonu, gdy zatrzyma skrypt, który pisał
+       nie do pliku, tylko prosto do programu (np. pętla „for i in 1 2 3;
+       do python3 x.py; done” jako komenda MAIN-a), zostawia uwagę dla
+       MAIN-a tej drużyny, której był ten skrypt. MAIN dostaje ją raz, w
+       następnej wiadomości, w sekcji „Pamięć telefonu”: który proces, ile
+       zajmował, ile zostało wolnej pamięci i że może ruszyć ponownie, gdy
+       będzie potrzebował mniej naraz. Skrypt piszący do pliku dostaje tę
+       uwagę jak dotąd na końcu swojego logu. Drużyna 1 (30.10, 19:37):
+       eval_mix.py zajął 2,2 GB i został zatrzymany, a zespół nie widział
+       dlaczego.

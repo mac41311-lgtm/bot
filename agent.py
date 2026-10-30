@@ -13793,7 +13793,33 @@ def _zatrzymaj_przy_braku_pamieci(wolna):
                 f.write("\n[program] " + tekst + "\n")
         except Exception:
             pass
+    else:
+        # v480is: bieg 2026-10-30 19:37 (druzyna 1, krok 1014): eval_mix.py
+        # z petli "for i in 1 2 3" pisal do rury, nie do pliku — zespol nie
+        # dowiadywal sie, czemu proces zniknal (i petla puszczala go znowu).
+        # Wtedy uwaga trafia do MAIN-a druzyny, ktorej to byl skrypt.
+        try:
+            with open(_plik_uwag_pamieci(_druzyna_procesu(pid)), "a", encoding="utf-8") as f:
+                f.write(tekst + "\n")
+        except Exception:
+            pass
     log("PAMIĘĆ", tekst)
+
+
+def _plik_uwag_pamieci(druzyna):
+    return HOME / (".ael_pamiec_uwagi_" + (str(druzyna or "").strip() or "1") + ".txt")
+
+
+def _uwagi_pamieci_dla_maina():
+    """v480is: zatrzymania przez straznika pamieci skryptow tej druzyny,
+    ktore nie pisaly do pliku — raz, potem plik znika."""
+    p = _plik_uwag_pamieci(_DRUZYNA or "1")
+    try:
+        tekst = p.read_text(encoding="utf-8").strip()
+        p.unlink()
+    except Exception:
+        return ""
+    return tekst
 
 
 def zacznij_straznika_pamieci():
@@ -46203,6 +46229,11 @@ def main_decide(
                 return t[len(n):].strip()
         return t
 
+    try:
+        _uwagi_pamieci = _uwagi_pamieci_dla_maina()
+    except Exception:
+        _uwagi_pamieci = ""
+
     _sekcje = []
 
     def _sekcja(tytul, tresc):
@@ -46238,7 +46269,7 @@ def main_decide(
     if (_powtorka and not asked_followup and not _jest_wynik and not _restart
             and not _uzytkownik_block.strip() and not _blok_zamkniecia
             and not _werdykty and not _burza and not team_block.strip()
-            and not _linia_zespolu):
+            and not _linia_zespolu and not _uwagi_pamieci):
         # uzytkownik: samo pytanie, jedna wiadomosc w jednej linii; reszta
         # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
         # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
@@ -46295,6 +46326,7 @@ def main_decide(
     _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
     _sekcja("Poprzedni bieg", _blok_zamkniecia)
     _sekcja("Skończone w tle", _tlo_skonczone)
+    _sekcja("Pamięć telefonu", _uwagi_pamieci)
     _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
     _sekcja("Dalej w tle — wynik przyjdzie sam", _tlo_trwa)
     _sekcja("Zespół", team_block)
