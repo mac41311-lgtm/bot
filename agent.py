@@ -8594,8 +8594,8 @@ _CZAS_DLA_ZESPOLU = (
     "Zespół odzywa się tylko wtedy, gdy Ty go wywołasz — sami między sobą "
     "nie pracują. Czekanie na wynik to dobry moment, żeby to zrobić: wyślij "
     "teraz ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
-    "\"Bartek\", \"ask_question\": \"...\"}. Bartek może sprawdzić albo "
-    "dopisać kod, Piotr przejrzeć kod, Ania naprawić błąd, Marek obejrzeć "
+    "\"<imię>\", \"ask_question\": \"...\"}. Bartek może sprawdzić albo "
+    "dopisać kod, Marek obejrzeć "
     "wyniki i znaleźć słabe punkty, Tomek ułożyć następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
     "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
     "okiem. Odpowiedź wraca do Ciebie od razu."
@@ -8610,13 +8610,13 @@ _CZAS_DLA_ZESPOLU_KROTKO = "Czekasz na wynik — to dobry moment na ASK do zespo
 _ZESPOL_PRZY_WYNIKU = (
     "Wynik jest — zanim wybierzesz, co dalej, zespół może go ocenić: Marek "
     "znajdzie słabe punkty, Tomek zaproponuje następny krok, Bartek sprawdzi "
-    "albo dopisze kod, Piotr przejrzy kod, Ania naprawi błąd, Kamil sprawdzi "
+    "albo dopisze kod, Kamil sprawdzi "
     "fakty, Wojtek oceni praktyczny sens, Ola podsumuje, co wyszło, Ela oceni "
     "postęp, a Igor spojrzy świeżym okiem."
 )
 _ZESPOL_PRZY_WYNIKU_ASK = (
     " Pytasz przez ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
-    "\"Marek\", \"ask_question\": \"...\"}; odpowiedź wraca od razu."
+    "\"<imię>\", \"ask_question\": \"...\"}; odpowiedź wraca od razu."
 )
 _ostatni_ask_krok = [0]
 # v480hb: RUN MAIN-a nie wniosl nic nowego (to samo czekanie/sprawdzenie) —
@@ -8632,9 +8632,9 @@ _glos_czemu_krok = [-100]
 # v480ho: uzytkownik: na koncu krotko, ze jest ASK i kto jest w zespole
 _CZEMU_ZDANIE = (
     "Czemu nie pytasz zespołu? I tak czekasz na wynik. Masz pod ręką "
-    "Marka, Tomka, Bartka, Piotra, Anię, Kamila, Wojtka, Olę, Elę i Igora — "
+    "Tomka, Kamila, Marka, Bartka, Olę, Wojtka, Elę i Igora — "
     "każdy może spojrzeć na to, co teraz robisz, ze swojej strony. Wystarczy "
-    "ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": \"Marek\", "
+    "ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": \"<imię>\", "
     "\"ask_question\": \"...\"}; odpowiedź wraca od razu."
 )
 _CZEMU_CO_KROKOW = 5
@@ -45567,7 +45567,7 @@ def _gdzie_psuje_sie_json(tekst):
         return (" — przyszła w formacie wywołań DSML (<｜DSML｜ …>), z którego "
                 "program nie odczytał decyzji; wyślij ją jako jeden obiekt JSON, "
                 "np. {\"type\": \"RUN\", \"reason\": \"...\", \"actions\": [...]} "
-                "albo {\"type\": \"ASK\", \"ask_role\": \"Marek\", \"ask_question\": \"...\"}")
+                "albo {\"type\": \"ASK\", \"ask_role\": \"<imię>\", \"ask_question\": \"...\"}")
     od = tekst.find("{")
     do = tekst.rfind("}")
     if od < 0:

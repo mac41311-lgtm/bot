@@ -3649,3 +3649,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        odpowiedzi program czyta teraz 221; reszta to naprawdę zepsuty JSON
        albo sam tekst bez decyzji. Przy okazji: „Czekam 0 min” przy limicie
        konta pisze się teraz „Czekam <1 min”.
+
+251. (v480in) W przykładach ASK, które dostaje MAIN (pytanie „Czemu nie
+       pytasz zespołu?”, linia przy wyniku, czas na zespół, podpowiedź przy
+       złym formacie), zamiast konkretnego imienia stoi teraz „<imię>”.
+       Użytkownik (2026-10-30): MAIN najczęściej pytał Marka, bo to on był w
+       przykładzie. Przy okazji z tych zaproszeń zniknęli Piotr i Ania — MAIN
+       nie może ich pytać przez ASK (pomagają autorowi przy błędzie w kodzie),
+       a tekst ich wymieniał, więc w obu drużynach ASK do Piotra wracał jako
+       odrzucony. Gdyby MAIN wpisał dosłownie „<imię>”, program odpowiada mu,
+       jakie imiona może wpisać.
