@@ -3669,3 +3669,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        opisie zespołu. Użytkownik (2026-10-30): „wszystkich może pytać,
        Anię i Piotra też nie blokuj”. Wcześniej ASK do Piotra był odrzucany
        (po razie w obu drużynach).
+
+253. (v480ip) Gdy komenda „sprawdz” potwierdzi wynik, program patrzy, czy
+       wypisana liczba (co najmniej 4 cyfry) stoi wprost w treści samej
+       komendy albo uruchamianego przez nią skryptu (.sh/.py). Jeśli tak,
+       do werdyktu dochodzi jedno zdanie faktu z tą linią, np. „liczba
+       2.338994 stoi też wprost w ./sprawdz_attention_fast.sh (linia 12):
+       CACHED_BPC=2.338994; komenda mogła ją wypisać bez liczenia od nowa”.
+       Nic nie jest blokowane — może to być też komentarz albo porównanie
+       z poprzednim wynikiem; Sędzia ocenia to razem z całą resztą (kroki,
+       rozmowy, pliki). Działa dla każdego celu. Drużyna 1 (30.10): skrypt
+       przy zgodnej sumie kontrolnej modelu wypisywał zapisaną liczbę.

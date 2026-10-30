@@ -56887,6 +56887,54 @@ def _ostatnia_liczba(tekst):
         return None
 
 
+def _liczba_wpisana(komenda, folder, wyjscie):
+    """v480ip: czy liczba, ktora wypisala komenda "sprawdz", stoi wprost w
+    tresci samej komendy albo uruchamianego przez nia skryptu. Bieg
+    2026-10-30 (druzyna 1): sprawdz_attention_fast.sh mial CACHED_BPC=
+    2.338994 i przy zgodnej sumie kontrolnej wypisywal te liczbe bez
+    liczenia — Sedzia widzial "potwierdzone". Uniwersalnie: zwraca jedno
+    zdanie faktu z linia, w ktorej liczba stoi (moze to byc tez komentarz
+    albo porownanie z poprzednim wynikiem — ocenia Sedzia), albo "".
+    Nic nie blokuje."""
+    linie = [l for l in str(wyjscie or "").splitlines() if l.strip()]
+    if not linie:
+        return ""
+    liczby = re.findall(r"\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", linie[-1])
+    if not liczby:
+        return ""
+    surowa = liczby[-1]
+    if len(re.sub(r"\D", "", surowa.split("e")[0].split("E")[0])) < 4:
+        return ""  # 0, 1, 42 — za krotkie, zeby cos znaczylo
+    wzor = re.compile(r"(?<![\d.,])" + re.escape(surowa) + r"(?![\d])")
+    komenda = str(komenda or "")
+    zrodla = [("w samej komendzie", komenda)]
+    # komenda Sedziego startuje w folderze druzyny (Popen cwd=folder),
+    # chyba ze sama zaczyna sie od "cd X"
+    cwd = Path(folder)
+    if re.match(r"\s*cd\s", komenda):
+        try:
+            cwd = Path(_katalog_startu_komendy(komenda))
+        except Exception:
+            pass
+    for tok in re.findall(r"[\w./~-]+\.(?:sh|py|bash)\b", komenda):
+        sciezka = Path(os.path.expanduser(tok))
+        if not sciezka.is_absolute():
+            sciezka = cwd / sciezka
+        try:
+            if sciezka.is_file() and sciezka.stat().st_size <= 500_000:
+                zrodla.append(("w " + tok, sciezka.read_text(encoding="utf-8", errors="replace")))
+        except Exception:
+            continue
+    for gdzie, tekst in zrodla:
+        for nr, linia in enumerate(tekst.splitlines(), 1):
+            if wzor.search(linia):
+                return (" — liczba " + surowa + " stoi też wprost " + gdzie
+                        + ("" if gdzie == "w samej komendzie" else " (linia " + str(nr) + ")")
+                        + ": " + short(linia.strip(), 160)
+                        + "; komenda mogła ją wypisać bez liczenia od nowa")
+    return ""
+
+
 def _sedzia_ocen(numer):
     """Sprawdza wynik.json druzyny i zapisuje werdykt na tablicy."""
 
@@ -57020,7 +57068,8 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
                        + str(kod if kod is not None else "?") + "): " + short(str(wyjscie or "").strip(), 200))
     elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):
-        werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala))
+        werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala)
+                       + _liczba_wpisana(komenda, folder, wyjscie))
     else:
         werdykt.update(werdykt="nie wyszło", szczegol="komenda wypisała " + str(wypisala)
                        + ", a ogłoszone było " + str(ogloszony))
