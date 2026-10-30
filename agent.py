@@ -22267,7 +22267,12 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
     # v480fp-fr: uzytkownik (2026-10-25): MAIN nie dostaje calego kodu od
     # nikogo z zespolu — "jest napisane, ze kod jest w pliku", mozna go
     # uruchomic, a blad skladni wraca do autora (do 3 rund, jak u Bartka).
-    if rola not in _ROLE_DO_ROZMOWY and rola != "PROGRESS_ESTIMATOR":
+    # v480ir: Piotr i Ania odpowiadaja MAIN-owi przez ASK (v480io) — ich
+    # nowy plik tez idzie na dysk. Bieg 2026-10-30 17:16 (druzyna 1): Piotr
+    # dwa razy dal _diag_plc.py ze sciezka nad blokiem, a URUCHOM pisal
+    # "No such file" — program pomijal pliki rol spoza _ROLE_DO_ROZMOWY.
+    if rola not in _ROLE_DO_ROZMOWY and rola not in (
+            "PROGRESS_ESTIMATOR", "CODE_REVIEWER", "CODE_FIXER"):
         return odp
     if "```" not in odp:
         _pop = _naniesc_poprawke_autora(rola, odp, [f for f in (

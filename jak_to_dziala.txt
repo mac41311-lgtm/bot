@@ -3687,3 +3687,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        powiadomienia). Użytkownik (2026-10-30): dostał powiadomienie
        „Drużyna 2: wiadomość… PEŁNY RAPORT UCZCIWYCH WYNIKÓW”, a w menedżerze
        plików raportu nie widział — plik leżał, ale Android go nie pokazywał.
+
+255. (v480ir) Nowy plik z kodem od Piotra albo Ani (ścieżka tuż nad blokiem)
+       program kładzie na dysk tak samo jak od reszty zespołu: z próbą
+       uruchomienia, błędem wracającym do autora i jedną linią dla MAIN-a.
+       Drużyna 1 (30.10, 17:16): MAIN zapytał Piotra (nowe od v480io), Piotr
+       dwa razy dał _diag_plc.py ze ścieżką nad blokiem, a jego URUCHOM
+       pisał „No such file” — program pomijał pliki ról spoza zwykłej
+       rozmowy zespołu. Piotr w końcu zrobił wszystko jednym python3 -c.
