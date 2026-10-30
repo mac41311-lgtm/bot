@@ -13958,6 +13958,12 @@ def _na_telefon(plik):
         if PRZEBIEG_NA_TELEFONIE.parent.exists():
             PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
             shutil.copy2(plik, PRZEBIEG_NA_TELEFONIE / Path(plik).name)
+            try:  # v480iq: widoczny od razu w menedzerze plikow
+                subprocess.Popen(["termux-media-scan", str(PRZEBIEG_NA_TELEFONIE / Path(plik).name)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 stdin=subprocess.DEVNULL)
+            except Exception:
+                pass
             return str(PRZEBIEG_NA_TELEFONIE / Path(plik).name)
     except Exception:
         pass
@@ -55745,6 +55751,17 @@ def _na_telefon_dla_uzytkownika(plik):
         PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
         cel = PRZEBIEG_NA_TELEFONIE / plik.name
         shutil.copy2(plik, cel)
+        # v480iq: uzytkownik (2026-10-30) dostal powiadomienie o raporcie,
+        # a w menedzerze plikow go nie widzial — Android pokazuje nowy plik
+        # dopiero po zgloszeniu go do indeksu (MediaStore). termux-media-scan
+        # z Termux:API (tego samego, co termux-notification); bez niego
+        # kopia i tak lezy na miejscu.
+        try:
+            subprocess.Popen(["termux-media-scan", str(cel)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL)
+        except Exception:
+            pass
         return "AEL-MINI/" + (
             ("druzyna_" + _DRUZYNA + "/") if _DRUZYNA else ""
         ) + plik.name

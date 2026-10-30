@@ -3680,3 +3680,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        z poprzednim wynikiem; Sędzia ocenia to razem z całą resztą (kroki,
        rozmowy, pliki). Działa dla każdego celu. Drużyna 1 (30.10): skrypt
        przy zgodnej sumie kontrolnej modelu wypisywał zapisaną liczbę.
+
+254. (v480iq) Po każdej kopii pliku do AEL-MINI (raporty *DLA_UZYTKOWNIKA*
+       drużyn i inne kopie na telefon) program zgłasza plik do indeksu
+       Androida (termux-media-scan z Termux:API, tego samego, co
+       powiadomienia). Użytkownik (2026-10-30): dostał powiadomienie
+       „Drużyna 2: wiadomość… PEŁNY RAPORT UCZCIWYCH WYNIKÓW”, a w menedżerze
+       plików raportu nie widział — plik leżał, ale Android go nie pokazywał.
