@@ -3659,3 +3659,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        a tekst ich wymieniał, więc w obu drużynach ASK do Piotra wracał jako
        odrzucony. Gdyby MAIN wpisał dosłownie „<imię>”, program odpowiada mu,
        jakie imiona może wpisać.
+
+252. (v480io) MAIN może pytać przez ASK także Piotra i Anię, jak każdego z
+       zespołu. Pytanie idzie wprost do ich rozmowy (cel raz na rozmowę,
+       słowa użytkownika, ich własny log), mogą sprawdzać pliki przez
+       PODGLĄD/URUCHOM, a odpowiedź wraca do MAIN-a w tym samym kroku.
+       Program rozumie „Piotr/Piotra/Piotrze”, „Ania/Ani/Anię”. Piotr i Ania
+       wrócili na listy w zaproszeniach do zespołu, w prompcie MAIN-a i w
+       opisie zespołu. Użytkownik (2026-10-30): „wszystkich może pytać,
+       Anię i Piotra też nie blokuj”. Wcześniej ASK do Piotra był odrzucany
+       (po razie w obu drużynach).

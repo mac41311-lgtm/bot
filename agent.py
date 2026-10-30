@@ -3631,7 +3631,7 @@ def init_deepseek():
 # przepisany w calosci. Ksztalty JSON bez zmian poza wartoscia ask_role.
 # Bez obowiazkowej konsultacji (uzytkownik: "tego nie chcemy") — MAIN
 # decyduje, prompt tylko opisuje, co daje mu kazda osoba.
-MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W zespole są: Tomek (następny krok), Kamil (fakty i informacje z sieci), Marek (słabe punkty i ryzyko planu), Bartek (kod i technika), Ola (co wyszło z wykonania, po ludzku), Wojtek (praktyczny sens), Ela (ile celu jest naprawdę zrobione) i Igor (świeże oko z zewnątrz — nie zna celu, dostaje tylko Twoje pytanie). Każda z tych osób widzi to, czego sam nie zobaczysz: Bartek wie, jak napisać kod, Marek — co w planie może zawieść, Kamil — jakie są fakty. ASK to pytanie do jednej z nich; w ask_role wpisujesz jej imię, a odpowiedź wraca do Ciebie w tym samym kroku. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "Tomek|Kamil|Marek|Bartek|Ola|Wojtek|Ela|Igor",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
+MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W zespole są: Tomek (następny krok), Kamil (fakty i informacje z sieci), Marek (słabe punkty i ryzyko planu), Bartek (kod i technika), Piotr (przegląd kodu i przyczyna błędu), Ania (poprawka błędu w kodzie), Ola (co wyszło z wykonania, po ludzku), Wojtek (praktyczny sens), Ela (ile celu jest naprawdę zrobione) i Igor (świeże oko z zewnątrz — nie zna celu, dostaje tylko Twoje pytanie). Każda z tych osób widzi to, czego sam nie zobaczysz: Bartek wie, jak napisać kod, Marek — co w planie może zawieść, Kamil — jakie są fakty. ASK to pytanie do jednej z nich; w ask_role wpisujesz jej imię, a odpowiedź wraca do Ciebie w tym samym kroku. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "Tomek|Kamil|Marek|Bartek|Piotr|Ania|Ola|Wojtek|Ela|Igor",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -8595,7 +8595,7 @@ _CZAS_DLA_ZESPOLU = (
     "nie pracują. Czekanie na wynik to dobry moment, żeby to zrobić: wyślij "
     "teraz ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
     "\"<imię>\", \"ask_question\": \"...\"}. Bartek może sprawdzić albo "
-    "dopisać kod, Marek obejrzeć "
+    "dopisać kod, Piotr przejrzeć kod, Ania naprawić błąd, Marek obejrzeć "
     "wyniki i znaleźć słabe punkty, Tomek ułożyć następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
     "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
     "okiem. Odpowiedź wraca do Ciebie od razu."
@@ -8610,7 +8610,7 @@ _CZAS_DLA_ZESPOLU_KROTKO = "Czekasz na wynik — to dobry moment na ASK do zespo
 _ZESPOL_PRZY_WYNIKU = (
     "Wynik jest — zanim wybierzesz, co dalej, zespół może go ocenić: Marek "
     "znajdzie słabe punkty, Tomek zaproponuje następny krok, Bartek sprawdzi "
-    "albo dopisze kod, Kamil sprawdzi "
+    "albo dopisze kod, Piotr przejrzy kod, Ania naprawi błąd, Kamil sprawdzi "
     "fakty, Wojtek oceni praktyczny sens, Ola podsumuje, co wyszło, Ela oceni "
     "postęp, a Igor spojrzy świeżym okiem."
 )
@@ -8632,7 +8632,7 @@ _glos_czemu_krok = [-100]
 # v480ho: uzytkownik: na koncu krotko, ze jest ASK i kto jest w zespole
 _CZEMU_ZDANIE = (
     "Czemu nie pytasz zespołu? I tak czekasz na wynik. Masz pod ręką "
-    "Tomka, Kamila, Marka, Bartka, Olę, Wojtka, Elę i Igora — "
+    "Tomka, Kamila, Marka, Bartka, Piotra, Anię, Olę, Wojtka, Elę i Igora — "
     "każdy może spojrzeć na to, co teraz robisz, ze swojej strony. Wystarczy "
     "ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": \"<imię>\", "
     "\"ask_question\": \"...\"}; odpowiedź wraca od razu."
@@ -45482,7 +45482,7 @@ def consult_team(
 
 _MAIN_ASK_ALLOWED_ROLES = (
     "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
-    "IGOR", "PROGRESS_ESTIMATOR"
+    "IGOR", "PROGRESS_ESTIMATOR", "CODE_REVIEWER", "CODE_FIXER"
 )
 # v480ec: uzytkownik (2026-10-24 13:05) — Ela moze brac udzial w burzy
 # mozgow jak kazdy z zespolu, wiec MAIN moze ja zapytac (ask_role ELA).
@@ -45501,6 +45501,12 @@ _IMIE_NA_ROLE_ASK = {
     "ELA": "PROGRESS_ESTIMATOR", "ELI": "PROGRESS_ESTIMATOR", "ELU": "PROGRESS_ESTIMATOR",
     "ELE": "PROGRESS_ESTIMATOR", "ELĘ": "PROGRESS_ESTIMATOR",
     "IGOR": "IGOR", "IGORA": "IGOR", "IGORZE": "IGOR",
+    # v480io: uzytkownik (2026-10-30): "wszystkich moze pytac, Anie i
+    # Piotra tez nie blokuj".
+    "PIOTR": "CODE_REVIEWER", "PIOTRA": "CODE_REVIEWER", "PIOTRZE": "CODE_REVIEWER",
+    "PIOTROWI": "CODE_REVIEWER",
+    "ANIA": "CODE_FIXER", "ANI": "CODE_FIXER", "ANIU": "CODE_FIXER",
+    "ANIĘ": "CODE_FIXER", "ANIE": "CODE_FIXER",
 }
 
 
@@ -46534,9 +46540,8 @@ def _handle_main_ask(
                          if not ask_question else
                          "Nie wysłałem pytania do '" + str(pytanie.get("ask_role") or "")
                          + "' — nie ma takiej osoby do pytania. ")
-                        + "W ask_role wpisz imię: Tomek, Kamil, Marek, Bartek, Ola, "
-                        "Wojtek, Ela albo Igor (Piotr i Ania pomagają autorowi przy "
-                        "błędzie w kodzie — odezwą się, gdy autor napisze do nich po imieniu)."
+                        + "W ask_role wpisz imię: Tomek, Kamil, Marek, Bartek, Piotr, "
+                        "Ania, Ola, Wojtek, Ela albo Igor."
                     ),
                 })
                 continue
@@ -46576,6 +46581,22 @@ def _handle_main_ask(
                 # (consult_team) — pytanie MAIN-a idzie wprost do jej
                 # rozmowy, ktora zna cel.
                 answer = str(deepseek(ask_role, "MAIN pyta:\n" + ask_question) or "")
+
+            elif ask_role in ("CODE_REVIEWER", "CODE_FIXER"):
+
+                # v480io: Piotr i Ania nie maja tury w naradzie zespolu
+                # (consult_team) — pytanie MAIN-a idzie wprost do ich
+                # rozmowy, z tym, co ma kazdy wolany (_wspolne_dla_wolanego:
+                # slowa uzytkownika, ich wlasny log) i celem raz na rozmowe.
+                # Moga sprawdzac pliki (PODGLĄD/URUCHOM) jak reszta.
+                _wiad = (
+                    _only_if_new(ask_role, "cel_ask", "Cel użytkownika:\n" + str(goal or "").strip() + "\n\n")
+                    + _wspolne_dla_wolanego(ask_role)
+                    + "MAIN:\n" + ask_question
+                )
+                answer = str(deepseek(ask_role, _wiad) or "")
+                if answer.strip():
+                    answer = str(_podglad_dla_roli(ask_role, answer, _wiad) or "")
 
             else:
 
@@ -48139,9 +48160,10 @@ _JAK_ROZMAWIAMY = (
     "(następny krok), Kamil (fakty i informacje), Marek (słabe punkty "
     "planów), Bartek (kod i technika), Ola (porządkuje to, co się "
     "wydarzyło), Wojtek (praktyczny sens) i Ela (ocenia, ile celu jest "
-    "naprawdę zrobione). Piotr i Ania pomagają, gdy kod się wysypie: "
-    "Piotr szuka przyczyny, Ania pisze poprawkę — gdy program odda "
-    "autorowi błąd w jego kodzie, autor może ich zawołać po imieniu. "
+    "naprawdę zrobione). Piotr przegląda kod i szuka przyczyny błędu, "
+    "Ania pisze poprawkę — MAIN może ich zapytać jak każdego, a gdy "
+    "program odda autorowi błąd w jego kodzie, autor może ich zawołać "
+    "po imieniu. "
     "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani "
     "niczego z programu i dostaje wyłącznie to, co ktoś sam do niego "
     "napisze, jak w nowym czacie. Rozmowę prowadzi MAIN: pyta, kogo "
