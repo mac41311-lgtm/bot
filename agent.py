@@ -6897,7 +6897,7 @@ def _czekaj_na_budzet(account):
                 + " wiadomości, w tym "
                 + str(DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
                 + " zostawione dla Ciebie). Czekam "
-                + str(int(zostalo // 60)) + " min, aż zwolni się "
+                + _min_s(zostalo) + ", aż zwolni się "
                 "miejsce — to lepsze niż ściana na koncie."
             )
 
@@ -46974,6 +46974,37 @@ def _dsml_na_run(text):
                 akcje.append({"tool": "termux_write_file", "args": a})
             elif str(a.get("path") or "").strip():
                 akcje.append({"tool": "termux_read_file", "args": a})
+    # v480im: cala decyzja jako parametry bez invoke — "parameter
+    # name=reason", "parameter name=actions" zamkniete golym "</DSML>".
+    # Bieg 2026-10-29/30 (druzyna 2, kroki 400-574): prawie co krok
+    # "Niepoprawny JSON. Naprawiam." — 238 razy, kazdy kosztowal drugie
+    # zapytanie do DeepSeeka.
+    if not akcje:
+        _par = {}
+        for pm5 in re.finditer(
+            r'parameter\s+name="([A-Za-z0-9_]+)"([^>]*)>(.*?)(?=(?:</?)?\s*[｜|]{1,2}\s*DSML|$)',
+            tekst, re.DOTALL
+        ):
+            _w5 = pm5.group(3).strip()
+            if pm5.group(1) in ("actions", "args") or 'string="false"' in pm5.group(2):
+                try:
+                    _w5 = json.loads(_w5)
+                except Exception:
+                    # poczatek wartosci to JSON, a za nim smieci zamkniecia
+                    try:
+                        _w5 = json.JSONDecoder().raw_decode(_w5.lstrip())[0]
+                    except Exception:
+                        pass
+            _par.setdefault(pm5.group(1), _w5)
+        if isinstance(_par.get("actions"), list) and _par["actions"]:
+            _typ = str(_par.get("type") or "RUN").strip().upper()
+            if _typ not in _TYPY_DECYZJI:
+                _typ = "RUN"
+            _d = dict(_par)
+            _d["type"] = _typ
+            _d["reason"] = str(_par.get("reason") or "").rstrip("\\").strip() or "(decyzja w formacie DSML)"
+            _d["_z_dsml"] = True
+            return _d
     if _pyt and not akcje:
         _d = dict(_pyt[0])
         _d["_z_dsml"] = True

@@ -3638,3 +3638,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        własnej komendy, raz. Użytkownik (2026-10-30): drużyny nie wiedziały,
        czemu ich procesy zwalniają. Do tej pory podgląd (ps bez URUCHOM)
        pokazywał nazwy procesów rywala — teraz już nie.
+
+250. (v480im) Decyzja MAIN-a w natywnym formacie DeepSeeka (DSML) z samymi
+       parametrami (type / reason / actions jako osobne „parameter name=…”,
+       także bez domkniętego „invoke” albo z ucięciem na końcu) jest teraz
+       czytana jako zwykła decyzja. Wcześniej program pisał „Niepoprawny
+       JSON” i prosił o poprawkę — to dodatkowa wiadomość do DeepSeeka za
+       każdym razem. Drużyna 2 (29/30.10, kroki 249–783): 238 takich odmów,
+       konto 2 pięćdziesiąt razy trafiło w limit godzinowy. Z tych 238
+       odpowiedzi program czyta teraz 221; reszta to naprawdę zepsuty JSON
+       albo sam tekst bez decyzji. Przy okazji: „Czekam 0 min” przy limicie
+       konta pisze się teraz „Czekam <1 min”.
