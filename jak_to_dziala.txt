@@ -3999,3 +3999,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pozycje w „Dalej w tle” / „Skończone w tle” mają dopisek „(na
        telefonie)” albo „(na laptopie)”, a uwaga strażnika mówi „Zatrzymałem
        na telefonie proces … (…, uruchomiony przez selfloop.py)”.
+
+283. (v480jt) Bieg 1.11 00:30 (drużyna 1): w „Dalej w tle” linia „Na
+       laptopie liczy (Wasze): mixer2.py — 2 min, eval_mix_old.py — 2 min”
+       pokazywała eval_mix_old jeszcze po jego końcu (00:29:47), z czasami
+       sprzed minuty. Lista z laptopa jest teraz pobierana na świeżo po
+       każdej komendzie LAPTOP: i gdy coś w tle właśnie się skończyło.

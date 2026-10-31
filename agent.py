@@ -27518,6 +27518,8 @@ def termux_run(command):
         return _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False)
     _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
+    # v480jt: komenda na laptopie mogła coś uruchomić lub zakończyć
+    _laptop_moje_cache["t"] = 0.0
     # v480jg: usuwanie na laptopie oceniamy po komendzie roli, nie po
     # komendzie ssh. Bieg 2026-10-31 22:45 (druzyna 1): "rm -f .selfloop.lock"
     # w folderze druzyny dalo pytanie w terminalu z nieczytelnym cytatem ssh.
@@ -27544,6 +27546,7 @@ def termux_run(command):
         wynik = _termux_run_lokalnie(lap)
     finally:
         _laptop_tl.usuwanie_ok = False
+        _laptop_moje_cache["t"] = 0.0
     # v480jr: polaczenie zerwane w trakcie — proces na laptopie liczy dalej
     # (v480ji), a program podlacza sie znowu, gdy laptop wroci, i oddaje
     # pelny wynik
@@ -57301,6 +57304,7 @@ def _log_juz_czytany(log_path, ostatnia):
 
 def _raport_z_tla():
     zdania = []
+    _skonczone_przed = len(_linie_tla_skonczone)
     for pid, proces in list(_procesy_w_tle.items()):
         try:
             kod = proces.poll()
@@ -57475,6 +57479,11 @@ def _raport_z_tla():
     # v480jo: procesy drużyny na laptopie, także te puszczone tam w tło
     # (setsid/nohup … &), których program nie śledzi jako komendy
     try:
+        # v480jt: coś się właśnie skończyło -> lista z laptopa na świeżo
+        # (bieg 2026-11-01 00:30: eval_mix_old.py skończony o 00:29:47,
+        # a krok 130 dalej pokazywał go jako liczący z pamięci sprzed minuty)
+        if len(_linie_tla_skonczone) != _skonczone_przed:
+            _laptop_moje_cache["t"] = 0.0
         _lp = _laptop_moje_procesy()
         if _lp:
             zdania.append("• Na laptopie liczy (Wasze): " + ", ".join(
