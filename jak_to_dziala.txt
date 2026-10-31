@@ -3730,3 +3730,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pokazuję”. Zamknięcie 31.10 11:23 (LOW_MEMORY): proces programu
        drużyny 1 urósł w minutę z 51 do 749 MB, bo czytał takie pliki w
        całości (jako tekst Pythona kilka razy więcej niż na dysku).
+
+259. (v480iv) Podmiana fragmentu rozumie zwykłe etykiety. Para dwóch bloków
+       kodu z napisami „Fragment do zamiany” / „Zamień:” / „Było:” /
+       „Zamiast:” / „Old:” nad pierwszym i „Na:” / „Na to:” / „Ma być:” /
+       „Będzie:” / „New:” nad drugim jest poprawką fragmentu, tak jak
+       „Stary fragment / Nowy fragment”, dla każdej roli. Blok, który jest
+       tylko kawałkiem istniejącego pliku, nigdy nie zastępuje całego pliku:
+       plik zostaje bez zmian, a autor dostaje wyjaśnienie, jak podać
+       podmianę. Bieg 31.10 ok. 18:33 (drużyna 1): Bartek dał „Fragment do
+       zamiany … Na:”, program nie widział pary i wpisał jedną linię jako
+       cały eval/benchmark_matmul.py, więc Bartek uznał, że podmiana nie
+       działa, i zaczął pisać całe pliki.

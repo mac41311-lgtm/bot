@@ -21600,10 +21600,44 @@ def _usuniety_ta_sama_tresc(p, kod):
         return False
 
 
+def _blok_to_fragment_pliku(p, kod):
+    """
+    v480iv: blok, ktory jest tylko kawalkiem istniejacego pliku, nie
+    jest jego cala nowa wersja. Bieg 2026-10-31 18:33 (druzyna 1):
+    Bartek dal poprawke "Fragment do zamiany ... Na:", program nie
+    rozpoznal pary i wpisal jedna linie (stary fragment) jako caly
+    eval/benchmark_matmul.py. Bartek uznal, ze podmiana nie dziala, i
+    zaczal pisac cale pliki. Zwraca wyjasnienie dla autora albo "".
+    """
+    try:
+        if not p.is_file() or p.stat().st_size > _PLIK_CALY_DO_B:
+            return ""
+        obecny = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    linie_kodu = [l.strip() for l in str(kod or "").splitlines() if l.strip()]
+    linie_pliku = [l.strip() for l in obecny.splitlines() if l.strip()]
+    if not linie_kodu or len(linie_pliku) < 2 * len(linie_kodu):
+        return ""
+    w_pliku = "\n".join(linie_kodu) in "\n".join(linie_pliku)
+    krotki = len(linie_kodu) <= 3 and len(linie_pliku) >= 30
+    if not (w_pliku or krotki):
+        return ""
+    return ("Twój blok ma " + str(len(linie_kodu)) + " lin. a plik " + str(len(linie_pliku))
+            + " — to fragment, nie cały plik, więc program go nie zapisał (plik bez zmian). "
+            "Żeby podmienić fragment, daj dwa bloki kodu jeden po drugim: nad pierwszym "
+            "\"Stary fragment:\" (skopiowany 1:1 z pliku), nad drugim \"Nowy fragment:\" — "
+            "program podmieni sam. Albo podaj cały plik.")
+
+
 def _zapisz_poprawke_autora(path, kod):
     """v480ft: cala poprawiona wersja od autora prosto na dysk (z kopia
     w .kopie/); zwraca blad py_compile albo ""."""
     p = _resolve_home_relative_path(path)
+    _fragment = _blok_to_fragment_pliku(p, kod)
+    if _fragment:
+        log("PROGRAM", "Nie zapisałem bloku jako całego " + _sciezka_od_domu(str(p)) + ": " + _fragment)
+        return _fragment
     try:
         if p.is_file():
             k = p.parent / ".kopie" / (p.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -21753,7 +21787,8 @@ def _autor_poprawia_skladnie(path, content, wynik):
             odpowiedzi_kolegow
             + "Twój kod zapisany w " + sciezka + " nie kompiluje się. py_compile:\n"
             + short(blad, 1500) + "\n\nPopraw to miejsce: podaj poprawkę fragmentu "
-            "(który fragment i na co go zamienić) albo cały plik od nowa. Program "
+            "(dwa bloki kodu: nad pierwszym „Stary fragment:” — skopiowany 1:1 z pliku, "
+            "nad drugim „Nowy fragment:”) albo cały plik od nowa. Program "
             "naniesie ją i od razu sprawdzi znowu. Możesz też zwrócić się do kogoś "
             "z zespołu po imieniu — odpowie Ci od razu."
         )) or "")
@@ -21797,8 +21832,11 @@ def _autor_poprawia_skladnie(path, content, wynik):
                     compile(_p_dysk.read_bytes(), str(_p_dysk), "exec")
                     ok = True
             except SyntaxError as e_dysk:
-                blad = (str(e_dysk.msg) + " (linia " + str(e_dysk.lineno) + "): "
-                        + str(e_dysk.text or "").strip())
+                _na_dysku = (str(e_dysk.msg) + " (linia " + str(e_dysk.lineno) + "): "
+                             + str(e_dysk.text or "").strip())
+                # v480iv: wyjasnienie "to fragment, nie caly plik" zostaje
+                blad = (blad + "\nW pliku nadal: " + _na_dysku
+                        if str(blad).startswith("Twój blok ma ") else _na_dysku)
             except Exception:
                 pass
         if ok:
@@ -22197,8 +22235,9 @@ def _autor_poprawia_uruchomienie(rola, p):
             odpowiedzi_kolegow
             + "Twój plik " + sciezka + " kompiluje się, ale krótka próba uruchomienia ("
             + komenda + ") kończy się błędem:\n" + short(wyj, 2000)
-            + "\n\nPopraw to miejsce: podaj poprawkę fragmentu (który fragment i na co go "
-            "zamienić) albo cały plik od nowa. Program naniesie ją i od razu uruchomi "
+            + "\n\nPopraw to miejsce: podaj poprawkę fragmentu (dwa bloki kodu: nad "
+            "pierwszym „Stary fragment:” — skopiowany 1:1 z pliku, nad drugim „Nowy "
+            "fragment:”) albo cały plik od nowa. Program naniesie ją i od razu uruchomi "
             "znowu. Możesz też zwrócić się do kogoś z zespołu po imieniu — odpowie Ci od razu."
         )) or "")
         _zapamietaj_kod_autora(rola, odp)
@@ -22219,7 +22258,7 @@ def _autor_poprawia_uruchomienie(rola, p):
             if kod and kod.strip() and not extract_search_replace_blocks(odp):
                 b2 = _zapisz_poprawke_autora(str(p), kod)
                 if b2:
-                    wyj = "błąd składni po poprawce: " + b2
+                    wyj = (b2 if b2.startswith("Twój blok ma ") else "błąd składni po poprawce: " + b2)
                     continue
             else:
                 wyj = str(r.get("reason") or "Nie było poprawki do naniesienia.") + "\n\nPoprzedni błąd:\n" + short(wyj, 1500)
@@ -22342,6 +22381,8 @@ def _zastap_plik_autora(rola, p, kod, folder):
     sciezka = _sciezka_od_domu(str(p))
     _autor_pliku[p.name] = rola
     blad = _zapisz_poprawke_autora(p, kod)
+    if str(blad).startswith("Twój blok ma "):
+        return ""
     if not blad:
         _rola_poznala_plik(rola, p)
     stan = "składnia OK"
@@ -39181,15 +39222,27 @@ _SEARCH_REPLACE_RE = re.compile(
 _STARY_FRAGMENT_RE = re.compile(
     r"(?:star[aeyąą]|obecn|dotychczasow|poprzedni|przed\s+zmian)\w*"
     r"\s+(?:fragment|kod|wersj|blok|linij|linie)"
-    r"|SZUKAJ(?:\s*\([^)]*\))?\s*\**\s*:",
-    re.IGNORECASE
+    r"|SZUKAJ(?:\s*\([^)]*\))?\s*\**\s*:"
+    # v480iv: "**Fragment do zamiany** (w `x.py`):", "Zamień:", "Było:",
+    # "Zamiast:", "Old:"/"Before:"/"Find:". Bieg 2026-10-31 18:33
+    # (druzyna 1): Bartek dal "Fragment do zamiany" + "Na:", program
+    # nie widzial pary i wpisal jedna linie jako caly plik.
+    r"|fragment\w*\s+(?:do\s+zamian|do\s+podmian|do\s+poprawy|kt[óo]ry\s+zamie)"
+    r"|(?:^|[\s*_>#])(?:do\s+zamiany|do\s+podmiany|zamie[ńn]\w*|podmie[ńn]\w*|zamiast|by[łl]o"
+    r"|przed|old|before|find|search|replace)\b(?!\s+(?:na|with)\b)[^\n]{0,120}:\s*\**\s*$",
+    re.IGNORECASE | re.MULTILINE
 )
 
 _NOWY_FRAGMENT_RE = re.compile(
     r"(?:now[aey]|poprawion|zmienion|docelow|po\s+zmianie)\w*"
     r"\s+(?:fragment|kod|wersj|blok|linij|linie)"
-    r"|ZAMIE[ŃN](?:\s+NA)?(?:\s*\([^)]*\))?\s*\**\s*:",
-    re.IGNORECASE
+    r"|ZAMIE[ŃN](?:\s+NA)?(?:\s*\([^)]*\))?\s*\**\s*:"
+    # v480iv: sama etykieta w ostatniej linii przed blokiem: "**Na:**",
+    # "Na to:", "Zamień na:", "Ma być:", "Będzie:", "New:", "After:".
+    r"|^[\s*_>#]*(?:na|na\s+to|na\s+ten|zamie[ńn]\w*\s+na|podmie[ńn]\w*\s+na|ma\s+by[ćc]"
+    r"|b[ęe]dzie|jest|po\s+zmianie|po\s+poprawce|new|after|with|replace\s+with)\b"
+    r"[^\n]{0,120}:\s*\**\s*$",
+    re.IGNORECASE | re.MULTILINE
 )
 
 
