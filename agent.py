@@ -55,6 +55,11 @@ import re
 import select
 import shlex
 import shutil
+import warnings
+# v480jw: compile() programu na tekstach zespolu (sprawdzanie, czy blok to
+# Python) wypisywal w terminalu "x.py:1: SyntaxWarning: invalid escape
+# sequence" — to nie blad ani programu, ani zespolu (bieg 2026-11-01 00:49)
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 import signal
 import hashlib
 import difflib
@@ -8832,7 +8837,7 @@ def _podglad_siega_do_rywala(komenda):
             # v480gl2: katalog, w ktorym maska szuka — "~/MAIN_2/*.pkl" to
             # ~/MAIN_2, a nie jego rodzic ~ (bieg 2026-10-27: "ls *.pkl" po
             # "cd ~/MAIN_2" odrzucany jako siegniecie do rywala)
-            _przed = re.split(r"[*?\[]", str(p), 1)[0]
+            _przed = re.split(r"[*?\[]", str(p), maxsplit=1)[0]
             trafione.append(Path(_przed) if _przed.endswith("/") else Path(_przed).parent)
         if any(_zle(x) for x in trafione if x.exists() or x == p):
             return powod
@@ -15623,7 +15628,7 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
             # v467: `rm -f ~/ocr2docx/out/multi.*` — maska wewnatrz
             # wlasnego katalogu; liczy sie czesc przed pierwsza maska.
             if any(z in arg for z in "*?"):
-                arg = re.split(r"[*?]", arg, 1)[0]
+                arg = re.split(r"[*?]", arg, maxsplit=1)[0]
                 if "/" in arg:
                     arg = arg.rsplit("/", 1)[0] or "/"
                 else:

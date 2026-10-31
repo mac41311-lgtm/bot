@@ -4023,3 +4023,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        laptopie skończył się x.py (liczył ok. N min)” z logiem, do którego
        pisał (program czyta go z /proc na laptopie), i jego końcówką.
        Procesy pod komendą programu mają swój wynik jak dotąd.
+
+286. (v480jw) Bieg 1.11 00:49: w terminalu pojawiały się linie
+       „x.py:1: SyntaxWarning: "\s" is an invalid escape sequence” (program
+       sprawdzał, czy komenda Tomka z grep "MUTS\s*=" to kod Python) oraz
+       „DeprecationWarning: 'maxsplit' is passed as positional argument”
+       z agent.py. Oba to tylko ostrzeżenia Pythona, nie błędy. Pierwsze
+       jest wyciszone w samym programie (komendy zespołu ostrzeżenia
+       widzą normalnie), drugie poprawione w kodzie.
