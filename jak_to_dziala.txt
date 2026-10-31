@@ -3819,3 +3819,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        laptopie folder drużyny to ~/MAIN_n ($HOME/MAIN_n albo ścieżka
        względna). Bieg 31.10 22:17 (drużyna 1, krok 54): sed zamieniający
        ścieżkę telefonu na $HOME/MAIN_1 w sprawdz_mix.sh dostał odmowę.
+
+267. (v480jd) Na laptopie widać to samo co na telefonie. Komenda
+       LAPTOP: zakończona „&” (też nohup … &, & disown) nie odrywa się już
+       od programu: ssh trwa do końca procesu, po 2 min program sam
+       przenosi ją w tło, jak na telefonie — jest na liście „Dalej w tle”,
+       a koniec, kod wyjścia i wynik przychodzą same. Procesy z LAPTOP:
+       mają w środowisku AEL_DRUZYNA=<n>; w rywalizacji ps/top/pgrep na
+       laptopie pokazują zamiast procesów drugiej drużyny jedną linię z ich
+       liczbą (obie drużyny są na jednym koncie laptopa).

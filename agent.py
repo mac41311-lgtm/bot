@@ -26609,16 +26609,71 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
     odm = _laptop_odmowa(polecenie, druzyna)
     if odm:
         return _odmowa("LAPTOP_ODMOWA", odm)
+    # v480jd: "… &" / "nohup … & disown" na laptopie odrywalo proces od
+    # programu — nikt nie wiedzial, kiedy sie skonczyl. Bez "&" ssh trwa,
+    # az proces sie skonczy: po 2 min program sam przenosi to w tlo, jak
+    # na telefonie (lista "Dalej w tle", wynik i kod wyjscia na koniec).
+    _bez_tla = re.sub(r"\s*&\s*(?:disown(?:\s+-h)?\s*)?;?\s*$", "", polecenie)
+    if _bez_tla != polecenie and _bez_tla.strip() and not _bez_tla.rstrip().endswith(("&", "|")):
+        polecenie = _bez_tla.strip()
     k = str(_laptop_watki(druzyna))
     _f = _laptop_folder(druzyna)
+    _d_eksport = _DRUZYNA if druzyna is None else str(druzyna or "")
     zdalnie = ("mkdir -p ~/" + _f + " && cd ~/" + _f
                + " && export OMP_NUM_THREADS=" + k + " OPENBLAS_NUM_THREADS=" + k
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
+               + (" AEL_DRUZYNA=" + _d_eksport if _d_eksport else "")
                + " && exec nice -n 5 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
     return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
+
+
+_LAPTOP_PROCESY_RE = re.compile(r"\b(?:ps|top|htop|pgrep|pstree|pidof|lsof|fuser)\b|/proc/")
+
+
+def _ukryj_rywala_na_laptopie(command_str, wynik):
+    """
+    v480jd: w rywalizacji obie druzyny pracuja na laptopie na jednym
+    koncie, wiec ps/top pokazywaly nazwy i argumenty procesow rywala.
+    Procesy uruchomione przez LAPTOP: maja AEL_DRUZYNA=<n> w srodowisku;
+    linie z procesami drugiej druzyny zastepuje jedna linia z ich liczba
+    (tak jak na telefonie od v480il).
+    """
+    if not _DRUZYNA or not _LAPTOP_PROCESY_RE.search(command_str):
+        return
+    rywal = _rywal()
+    try:
+        r = subprocess.run(
+            _LAPTOP_SSH.split() + [_LAPTOP_HOST,
+                                   "for p in /proc/[0-9]*; do grep -qz '^AEL_DRUZYNA=" + rywal
+                                   + "$' $p/environ 2>/dev/null && echo \"${p#/proc/} $(tr '\\0' ' ' "
+                                   "< $p/cmdline 2>/dev/null)\"; done; true"],
+            capture_output=True, text=True, timeout=20, errors="replace")
+        procesy = [l.split(" ", 1) for l in (r.stdout or "").splitlines() if l.strip()]
+    except Exception:
+        return
+    if not procesy:
+        return
+    pidy = {p[0] for p in procesy}
+    cmdy = [p[1].strip() for p in procesy if len(p) > 1 and len(p[1].strip()) >= 8]
+    linia = ("[" + str(len(procesy)) + " " + ("proces" if len(procesy) == 1 else "procesy" if len(procesy) < 5 else "procesów")
+             + " drużyny " + rywal + " na laptopie — ukryte; to nie Wasze]")
+    for k in ("stdout", "stderr"):
+        t = wynik.get(k)
+        if not isinstance(t, str) or not t:
+            continue
+        out, byla = [], False
+        for l in t.split("\n"):
+            sl = l.split()
+            if sl and (sl[0] in pidy or (len(sl) > 1 and sl[1] in pidy) or any(c in l for c in cmdy)):
+                if not byla:
+                    out.append(linia)
+                    byla = True
+                continue
+            out.append(l)
+        wynik[k] = "\n".join(out)
 
 
 def termux_run(command):
@@ -26641,6 +26696,7 @@ def termux_run(command):
     wynik = _termux_run_lokalnie(lap)
     if isinstance(wynik, dict):
         wynik["command"] = command_str
+        _ukryj_rywala_na_laptopie(command_str, wynik)
         wynik["na_laptopie"] = "~/" + _laptop_folder() + " na laptopie"
         # v480jc: sciezka telefonu w komendzie albo w skrypcie na laptopie
         _tel_dom = "/data/data/com.termux/files/home"
