@@ -3800,3 +3800,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wzorem tym samym co we wspólnym tekście („Stary fragment:” +
        blok, „Nowy fragment:” + blok) i zdaniem, że gdy plik ma już
        zmianę, wystarczy to napisać. Bieg 31.10 21:54 (drużyna 1).
+
+265. (v480jb) Sędzia rozumie LAPTOP: w komendzie „sprawdz” z wynik.json,
+       tak samo jak zespół: liczy na laptopie, w folderze tej drużyny,
+       z jej połową rdzeni, z tym samym limitem czasu (na laptopie
+       timeout) i tymi samymi blokadami folderu rywala. Brak połączenia
+       z laptopem to „nie wyszło: laptop był niedostępny”, nie zły wynik.
+       Bez LAPTOP: wszystko jak dawniej, na telefonie. Akapit o Sędzim
+       w zasadach rywalizacji przepisany w całości (wspomina LAPTOP:, gdy
+       laptop jest podłączony). Uniwersalne — nic o celu.

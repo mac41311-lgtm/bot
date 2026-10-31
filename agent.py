@@ -26408,13 +26408,15 @@ def _laptop_skonfigurowany():
                           cfg, re.MULTILINE | re.IGNORECASE))
 
 
-def _laptop_folder():
-    return ("MAIN_" + _DRUZYNA) if _DRUZYNA else "AEL"
+def _laptop_folder(druzyna=None):
+    d = _DRUZYNA if druzyna is None else str(druzyna or "")
+    return ("MAIN_" + d) if d else "AEL"
 
 
-def _laptop_watki():
+def _laptop_watki(druzyna=None):
+    d = _DRUZYNA if druzyna is None else str(druzyna or "")
     r = int(_laptop.get("rdzenie") or 0) or 4
-    return max(1, r // 2) if _DRUZYNA else r
+    return max(1, r // 2) if d else r
 
 
 def _laptop_sprawdz():
@@ -26536,14 +26538,15 @@ def zacznij_pilnowanie_laptopa():
     _threading.Thread(target=_petla, daemon=True, name="laptop").start()
 
 
-def _laptop_odmowa(polecenie):
+def _laptop_odmowa(polecenie, druzyna=None):
     """Powod odmowy dla komendy na laptopie albo ""."""
+    _d = _DRUZYNA if druzyna is None else str(druzyna or "")
     if _LAPTOP_WYLACZA_RE.search(polecenie):
         return ("Nie wykonałem — ta komenda wyłączyłaby laptopa albo zakończyła wszystko na "
                 "jego koncie, a laptop wyłącza tylko użytkownik. Swój proces zatrzymacie "
                 "po pid albo nazwie skryptu, np. LAPTOP: pkill -f mój_skrypt.py.")
-    if _DRUZYNA:
-        wlasny = "MAIN_" + _DRUZYNA
+    if _d:
+        wlasny = "MAIN_" + _d
         m = (re.search(r"(?<![\w/.])~(?!/" + wlasny + r"(?:/|\b))", polecenie)
              or re.search(r"\$HOME\b|\$\{HOME\}|/home/|(?<![\w.])\.\.(?:/|\b)", polecenie))
         if m:
@@ -26568,10 +26571,12 @@ def _scp_laptopa_odmowa(command_str):
     return ""
 
 
-def _na_laptopa(command_str):
+def _na_laptopa(command_str, druzyna=None, limit_s=None):
     """
     "LAPTOP: komenda" (tez po "cd X && ") -> komenda ssh; dict z odmowa;
-    None, gdy to nie jest komenda na laptopa.
+    None, gdy to nie jest komenda na laptopa. v480jb: `druzyna` — dla
+    Sedziego, ktory sprawdza obie druzyny z jednego procesu; `limit_s` —
+    komenda konczy sie sama na laptopie po tym czasie (timeout).
     """
     m = _LAPTOP_RE.match(str(command_str or ""))
     if not m:
@@ -26593,15 +26598,18 @@ def _na_laptopa(command_str):
             "Nie wykonałem — laptop jest teraz niedostępny (" + str(_laptop.get("blad") or "")
             + "). Uruchomcie to na telefonie, bez przedrostka LAPTOP:, albo spróbujcie za "
             "minutę — program sprawdza laptopa co minutę i powie MAIN-owi, gdy wróci."))
-    odm = _laptop_odmowa(polecenie)
+    odm = _laptop_odmowa(polecenie, druzyna)
     if odm:
         return _odmowa("LAPTOP_ODMOWA", odm)
-    k = str(_laptop_watki())
-    zdalnie = ("mkdir -p ~/" + _laptop_folder() + " && cd ~/" + _laptop_folder()
+    k = str(_laptop_watki(druzyna))
+    _f = _laptop_folder(druzyna)
+    zdalnie = ("mkdir -p ~/" + _f + " && cd ~/" + _f
                + " && export OMP_NUM_THREADS=" + k + " OPENBLAS_NUM_THREADS=" + k
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
-               + " && exec nice -n 5 bash -lc " + shlex.quote(polecenie))
+               + " && exec nice -n 5 "
+               + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
+               + "bash -lc " + shlex.quote(polecenie))
     return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
 
 
@@ -56767,7 +56775,11 @@ def _rywalizacja_tekst():
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
         "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
         "liczbę\"}. Program uruchomi tę komendę w bashu, w waszym "
-        "folderze (może trwać do " + str(_SEDZIA_MAKS_S // 60) + " minut), i "
+        "folderze"
+        # v480jb: akapit o Sedzim przepisany w calosci — sprawdz z LAPTOP:
+        + (" na telefonie — albo na laptopie, w Waszym folderze tam, gdy "
+           "komenda zaczyna się od LAPTOP:" if _laptop_skonfigurowany() else "")
+        + " (może trwać do " + str(_SEDZIA_MAKS_S // 60) + " minut), i "
         "porówna liczbę. Mniej więcej co kwadrans Sędzia ocenia obie "
         "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
         + " tylko jej procent i to, kto prowadzi. Jej wyników, liczb ani "
@@ -57757,9 +57769,23 @@ def _sedzia_ocen(numer):
                     os.killpg(int(stan["pid"]), signal.SIGKILL)  # stare zgloszenie
                 except Exception:
                     pass
+            # v480jb: "LAPTOP: …" w sprawdz — Sedzia liczy na laptopie, w
+            # folderze tej druzyny, z jej polowa rdzeni i tym samym limitem
+            # (uzytkownik 2026-10-31: "sedzia ma byc dla kazdego zadania
+            # uniwersalny" — nic o celu, ta sama zasada co LAPTOP: zespolu).
+            _komenda_sedziego = komenda
+            _lap = _na_laptopa(komenda, druzyna=str(numer), limit_s=_SEDZIA_MAKS_S)
+            if isinstance(_lap, dict):
+                werdykt.update(werdykt="nie wyszło", szczegol=(
+                    "komenda z LAPTOP: nie ruszyła — " + str(_lap.get("message") or "")))
+                return werdykt
+            if _lap:
+                _komenda_sedziego = _lap
+                log("RYWALIZACJA", "Sędzia sprawdza drużynę " + str(numer) + " na laptopie (~/"
+                    + _laptop_folder(str(numer)) + ").")
             with open(wyj_plik, "w", encoding="utf-8") as _fh:
                 proces = subprocess.Popen(
-                    ["bash", "-c", komenda],
+                    ["bash", "-c", _komenda_sedziego],
                     cwd=str(folder), stdin=subprocess.DEVNULL,
                     stdout=_fh, stderr=subprocess.STDOUT,
                     start_new_session=True,
@@ -57812,6 +57838,14 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="komenda nie ruszyła: " + str(e)[:200])
         return werdykt
 
+    # v480jb: brak polaczenia z laptopem to nie zly wynik
+    if (kod == 255 and _LAPTOP_RE.match(komenda)
+            and _LAPTOP_SSH_BLAD_RE.search(str(wyjscie or ""))):
+        werdykt.update(werdykt="nie wyszło", szczegol=(
+            "laptop był niedostępny przy sprawdzaniu (" + short(str(wyjscie).strip().splitlines()[-1], 160)
+            + ") — sędzia sprawdzi ponownie przy następnej ocenie; komenda bez LAPTOP: "
+            "liczy na telefonie"))
+        return werdykt
     wypisala = _ostatnia_liczba(wyjscie)
     werdykt["wypisala"] = wypisala
     if wypisala is None:
