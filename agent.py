@@ -3,54 +3,45 @@ import xml.etree.ElementTree as ET
 # -*- coding: utf-8 -*-
 
 """
-AEL-MINI AUTONOMOUS AGENT v450
+AEL-MINI AUTONOMOUS AGENT v480
 
-ARCHITEKTURA:
+ARCHITEKTURA (stan na v480 — patrz jak_to_dziala.txt):
 
-                    USER
-                     |
-                     v
-                 DEEPSEEK
-                     |
-        +------------+------------+
-        |            |            |
-      MAIN        PLANNER     RESEARCHER
-        |            |            |
-        +------- CRITIC ----------+
-                     |
-                  BROWSER
-                     |
-                     v
-                 TASK QUEUE
-                     |
-                     v
-              GEMINI WORKER
-                     |
-          +----------+----------+
-          |          |          |
-       CHROME     ANDROID     SHELL
-          |          |          |
-          +----------+----------+
-                     |
-                     v
-                  RESULT
-                     |
-                     v
-                   MAIN
+                    UZYTKOWNIK
+                        |  cel; potem odpowiedzi, gdy program zapyta
+                        v
+        MAIN + ZESPOL (DeepSeek, chat.deepseek.com przez token
+        przegladarkowy — opendeep; kazda rola we wlasnej rozmowie)
+           MAIN decyduje: RUN / TASK / ASK / NEED_USER_LOGIN / DONE / FAILED
+           RUN = MAIN wykonuje sam, Python jest rekami (v459)
+           Tomek plan, Kamil fakty (szukanie w sieci), Marek krytyka,
+           Bartek KOD, Ola relacja, Wojtek uzytkownik, Ela postep,
+           Piotr przeglad kodu, Ania poprawka
+                        |  mysla i pisza — niczego nie wykonuja
+                        v
+        PYTHON (ten plik)                         <-- RECE I OCZY
+           kladzie na dysk kod napisany przez zespol (1:1, z autorem),
+           proste "uruchom ten plik" robi sam, pilnuje limitow i
+           autorstwa, pokazuje ekran/strone, opowiada MAIN-owi fakty
+                        |
+                        v
+        GEMINI (wykonawca, darmowe API, Interactions API)  <-- PALEC
+           jedna rozmowa na caly cel (v452), 41 narzedzi, do 25 wywolan;
+           NIE pisze kodu — termux_write_file/termux_run z kodem
+           odmawiaja i kladzie go Python z wypowiedzi autora
+                        |
+           +------------+-------------+
+           |            |             |
+        TERMUX       ANDROID        CHROME (CDP, tylko istniejace karty)
 
 Gemini:
-    Interactions API
-    previous_interaction_id
-    prawidłowe function_result/call_id
-
-Chrome:
-    tylko istniejące karty
-    BRAK /json/new
+    Interactions API, previous_interaction_id,
+    function_result z call_id kazdego FunctionCallStep,
+    drabinka modeli i odstawianie par klucz+model (v449)
 
 DeepSeek:
-    5 ról utrzymywanych w jednym procesie
-    pamięć zapisywana na dysku
-
+    10 rol w jednym procesie, sesje zapisane na dysku (wznawiane),
+    sekwencyjnie, z limitem tempa na konto
 """
 
 import ast
@@ -77,6 +68,63 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from urllib.parse import urlparse
+
+# v480k: program przeladowal sie sam po wgraniu nowej wersji (patrz
+# _przeladuj_po_aktualizacji). Wtedy start idzie bez pytan, a bieg
+# ciagnie sie dalej: ten sam krok, te same rozmowy, ten sam log.
+_PO_AKTUALIZACJI = os.environ.pop("AEL_PO_AKTUALIZACJI", "") == "1"
+_SCIEZKA_PROGRAMU = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+
+# v480aq: rywalizacja dwoch druzyn (wybor 2 na starcie, patrz
+# _wybierz_tryb). "" = zwykly program, "1" = druzyna 1 (ten terminal,
+# konto 1, dotychczasowe dane), "2" = druzyna 2 (proces w tle, konto 2,
+# wlasny katalog ~/agent_druzyna2). Zmienna przechodzi przez cicha
+# aktualizacje (execv), wiec tryb trwa do zamkniecia programu.
+_DRUZYNA = os.environ.get("AEL_DRUZYNA", "").strip()
+if _DRUZYNA not in ("1", "2"):
+    _DRUZYNA = ""
+
+# v480du: uczciwy podzial procesora w rywalizacji (uzytkownik 2026-10-23
+# 19:03, "Zrob A"). Bieg 2026-10-23 19:01: druzyna 2 (torch, duzo
+# watkow) brala 384%, druzyna 1 223% — trening druzyny 1 zwolnil z 1,15
+# do 2,4 s na krok i druzyna przerwala go jako "zbyt wolny", nie wiedzac,
+# ze dzieli procesor. Kazda druzyna dostaje polowe watkow telefonu:
+# biblioteki liczace (torch, numpy, BLAS) czytaja te zmienne, a wszystko,
+# co druzyna uruchamia, dziedziczy je po programie (do Debiana przez
+# proot-distro wnosi je _podstaw_proot_distro). Bez zabijania i limitow.
+_WATKI_DRUZYNY = max(1, (os.cpu_count() or 2) // 2)
+_ZMIENNE_WATKOW = (
+    "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "NUMEXPR_MAX_THREADS", "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS", "RAYON_NUM_THREADS",
+)
+if _DRUZYNA:
+    for _zm in _ZMIENNE_WATKOW:
+        os.environ[_zm] = str(_WATKI_DRUZYNY)
+
+# Start bez pytan: po cichej aktualizacji i w druzynie 2 (ona nie ma
+# terminala — pracuje w tle, odpowiedzi na pytania nikt by nie dal).
+# v480cc: druzyna 1 zamknela bieg jako FAILED i rusza od nowa sama
+# (patrz _nowy_bieg_po_poddaniu) — tez bez pytan, z tym samym celem.
+_PO_PODDANIU = os.environ.pop("AEL_PO_PODDANIU", "") == "1"
+_BEZ_PYTAN = _PO_AKTUALIZACJI or _PO_PODDANIU or _DRUZYNA == "2"
+
+try:
+    _MTIME_PROGRAMU = os.path.getmtime(_SCIEZKA_PROGRAMU) if _SCIEZKA_PROGRAMU else 0.0
+except Exception:
+    _MTIME_PROGRAMU = 0.0
+
+
+def _odcisk_programu():
+    try:
+        import hashlib as _hl
+        with open(_SCIEZKA_PROGRAMU, "rb") as _f:
+            return _hl.md5(_f.read()).hexdigest()
+    except Exception:
+        return ""
+
+
+_ODCISK_PROGRAMU = _odcisk_programu() if _SCIEZKA_PROGRAMU else ""
 
 # ============================================================
 # CO POSZLO DO AGENTOW (v313)
@@ -109,6 +157,8 @@ _IMIONA_ROL = {
     "PROGRESS_ESTIMATOR": "Ela",
     "CODE_REVIEWER": "Piotr",
     "CODE_FIXER": "Ania",
+    "ARBITER": "Sędzia",
+    "IGOR": "Igor",
 }
 
 
@@ -324,8 +374,29 @@ if len(sys.argv) > 2 and sys.argv[1] == "--wykonane":
     raise SystemExit(0)
 
 
-from web_search import web_search
-from datetime import datetime, timedelta
+# v451: web_search.py lezy obok agent.py na telefonie, ale nie ma go w
+# repozytorium. Twardy import konczyl program na starcie (ImportError,
+# zanim padlo jedno slowo) na kazdej maszynie bez tego pliku — takze
+# po czystym `git clone`. Kamil ma od v187 natywne szukanie DeepSeeka,
+# a "WEB_SEARCH:" to droga zapasowa: brak modulu to brak jednej drogi,
+# nie brak programu. Gdy Kamil o nia poprosi, dostaje fakt, ze jej nie ma.
+try:
+    from web_search import web_search
+except ImportError:
+
+    def web_search(query, max_results=5):
+        return {
+            "ok": False,
+            "query": str(query),
+            "results": [],
+            "count": 0,
+            "error": (
+                "modul web_search.py nie jest zainstalowany obok "
+                "agent.py — WEB_SEARCH niedostepne na tej maszynie"
+            ),
+        }
+
+from datetime import datetime, timedelta, timezone
 
 # Opcjonalna, czysto-pythonowa biblioteka (żadnych skompilowanych
 # zależności — bezpieczna na Termux, w odróżnieniu od np. pydantic,
@@ -356,10 +427,15 @@ except ImportError:
 try:
     from rich.console import Console as _RichConsole
     from rich.panel import Panel as _RichPanel
+    # v480fc: tresc w ramce jako zwykly tekst — rich bral "[seed 42]",
+    # "[first ep 5/10]" itp. za znaczniki stylu i wycinal je z ekranu
+    # (do DeepSeek szly cale, znikaly tylko w terminalu).
+    from rich.text import Text as _RichText
     _rich_console = _RichConsole()
 except Exception:
     _RichConsole = None
     _RichPanel = None
+    _RichText = None
     _rich_console = None
 
 
@@ -414,6 +490,7 @@ def agent_wake_lock():
 
         if result.returncode == 0:
             _WAKE_LOCK_ACTIVE = True
+            _podstaw_unlock_zespolu()
 
             log(
                 "ANDROID",
@@ -441,6 +518,396 @@ def agent_wake_lock():
         }
 
 
+# v480j: blokade usypiania trzyma program przez caly bieg.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 14:02). Program
+# wlaczyl wake-lock na starcie, ale MAIN w kroku 3 puscil
+# `termux-wake-unlock`, a skrypty zespolu (meta_learn.py) wolaly go
+# same na koncu run(). Blokada w Termuxie jest jedna na wszystkich —
+# po pierwszym takim wywolaniu telefon przy wygaszonym ekranie
+# zasypial, a z nim treningi i sam program.
+#
+# Nie zmieniamy tresci komend. Komendom i skryptom zespolu
+# podstawiamy w PATH wlasne `termux-wake-unlock`, ktore blokady nie
+# zdejmuje i mowi dlaczego. Prawdziwe zdejmuje ja dopiero program
+# przy zamknieciu (agent_wake_unlock).
+_PRAWDZIWY_WAKE_UNLOCK = None
+
+
+def _podstaw_unlock_zespolu():
+
+    global _PRAWDZIWY_WAKE_UNLOCK
+
+    try:
+        import shutil
+
+        katalog = AGENT_DIR / "bin_programu"
+
+        if _PRAWDZIWY_WAKE_UNLOCK is None:
+            # Po cichej aktualizacji PATH ma juz nasza atrape —
+            # prawdziwego szukamy z pominieciem jej katalogu.
+            _PRAWDZIWY_WAKE_UNLOCK = shutil.which(
+                "termux-wake-unlock",
+                path=os.pathsep.join(
+                    k for k in os.environ.get("PATH", "").split(os.pathsep)
+                    if k and k != str(katalog)
+                )
+            )
+        katalog.mkdir(parents=True, exist_ok=True)
+        atrapa = katalog / "termux-wake-unlock"
+        atrapa.write_text(
+            "#!" + (shutil.which("sh") or "/system/bin/sh") + "\n"
+            "echo 'termux-wake-unlock: blokade usypiania trzyma program "
+            "agenta przez caly bieg (zeby praca szla przy wygaszonym "
+            "ekranie) — zostaje wlaczona, zdejmie ja program przy "
+            "zamknieciu.'\n"
+            "exit 0\n",
+            encoding="utf-8"
+        )
+        atrapa.chmod(0o755)
+
+        sciezka = os.environ.get("PATH", "")
+        if str(katalog) not in sciezka.split(os.pathsep):
+            os.environ["PATH"] = str(katalog) + os.pathsep + sciezka
+
+    except Exception as e:
+        log("ANDROID", "Nie podstawiłem termux-wake-unlock: " + str(e))
+
+
+def _podstaw_proot_distro():
+    """
+    v480du: proot-distro login/run czysci zmienne srodowiska, wiec
+    limit watkow z _ZMIENNE_WATKOW nie dochodzilby do Pythona w Debianie.
+    Atrapa w bin_programu dokleja je jako --env i wola prawdziwy
+    proot-distro; wszystko inne idzie bez zmian. Tylko w rywalizacji.
+    """
+    if not _DRUZYNA:
+        return
+    try:
+        import shutil
+
+        katalog = AGENT_DIR / "bin_programu"
+        prawdziwy = shutil.which(
+            "proot-distro",
+            path=os.pathsep.join(
+                k for k in os.environ.get("PATH", "").split(os.pathsep)
+                if k and k != str(katalog)
+            )
+        )
+        if not prawdziwy:
+            return
+        dodatki = " ".join(
+            "--env " + zm + "=" + str(_WATKI_DRUZYNY)
+            for zm in _ZMIENNE_WATKOW
+        )
+        katalog.mkdir(parents=True, exist_ok=True)
+        atrapa = katalog / "proot-distro"
+        atrapa.write_text(
+            "#!" + (shutil.which("sh") or "/system/bin/sh") + "\n"
+            "case \"$1\" in\n"
+            "  login|run) _k=\"$1\"; shift; exec " + prawdziwy
+            + " \"$_k\" " + dodatki + " \"$@\" ;;\n"
+            "esac\n"
+            "exec " + prawdziwy + " \"$@\"\n",
+            encoding="utf-8"
+        )
+        atrapa.chmod(0o755)
+        sciezka = os.environ.get("PATH", "")
+        if str(katalog) not in sciezka.split(os.pathsep):
+            os.environ["PATH"] = str(katalog) + os.pathsep + sciezka
+    except Exception as e:
+        log("TERMUX", "Nie podstawiłem proot-distro: " + str(e))
+
+
+# v480du: druzyna sama ustawia wiecej watkow, niz ma — mowimy jej to raz.
+_WATKI_RE = re.compile(
+    r"set_num_threads\(\s*(\d+|os\.cpu_count\(\)|multiprocessing\.cpu_count\(\))"
+    r"|\b(?:OMP|MKL|OPENBLAS|NUMEXPR)_NUM_THREADS['\"]?\s*[\]]?\s*=\s*['\"]?(\d+)"
+    r"|--env\s+(?:OMP|MKL|OPENBLAS)_NUM_THREADS=(\d+)"
+)
+_powiedziane_o_watkach = set()
+
+
+def _za_duzo_watkow(name, args):
+    """v480du: zdanie dla druzyny, gdy komenda/plik ustawia > polowy watkow."""
+    if not _DRUZYNA or not isinstance(args, dict):
+        return ""
+    tekst = "\n".join(
+        str(args.get(k) or "") for k in ("command", "content", "code", "script")
+    )
+    for m in _WATKI_RE.finditer(tekst):
+        surowe = next((g for g in m.groups() if g), "")
+        n = (os.cpu_count() or 2) if not surowe.isdigit() else int(surowe)
+        if n <= _WATKI_DRUZYNY:
+            continue
+        klucz = m.group(0)
+        if klucz in _powiedziane_o_watkach:
+            return ""
+        _powiedziane_o_watkach.add(klucz)
+        return (
+            "Program: \"" + short(klucz, 60) + "\" (w " + str(name)
+            + ") ustawia " + str(n) + " wątków, a każda drużyna ma połowę "
+            "telefonu: " + str(_WATKI_DRUZYNY) + " z "
+            + str(os.cpu_count() or 2) + ". Więcej wątków nie przyspieszy "
+            "tej roboty, tylko zabierze procesor drugiej drużynie i obie "
+            "będą liczyć wolniej. Program ustawia już OMP_NUM_THREADS="
+            + str(_WATKI_DRUZYNY) + " itp. dla wszystkiego, co uruchamiacie; "
+            "wystarczy usunąć to ustawienie albo wpisać "
+            + str(_WATKI_DRUZYNY) + "."
+        )
+    return ""
+
+
+_cpu_grup_druzyny = {}
+
+
+def _sprawdz_procesor_druzyny():
+    """
+    v480du: raz na krok. Proces druzyny w tle, ktory od poprzedniego
+    sprawdzenia bral wyraznie wiecej niz polowe telefonu, dostaje jedno
+    zdanie (raz na proces). Bez zabijania.
+    """
+    if not _DRUZYNA:
+        return ""
+    teraz = time.time()
+    grupy = {}
+    for pid, proces in list(_procesy_w_tle.items()):
+        grupy[pid] = str(getattr(proces, "args", ""))
+    for grupa, (komenda, _s) in list(_grupy_z_komend.items()):
+        grupy.setdefault(grupa, komenda)
+    for pid, opis in grupy.items():
+        try:
+            cpu = _czas_cpu_grupy(pid)
+        except Exception:
+            continue
+        stare = _cpu_grup_druzyny.get(pid)
+        _cpu_grup_druzyny[pid] = (cpu, teraz, stare[2] if stare else False)
+        if not stare or stare[2]:
+            continue
+        dt = teraz - stare[1]
+        if dt < 60:
+            _cpu_grup_druzyny[pid] = stare
+            continue
+        rdzenie = (cpu - stare[0]) / dt
+        if rdzenie > _WATKI_DRUZYNY * 1.25:
+            _cpu_grup_druzyny[pid] = (cpu, teraz, True)
+            return (
+                "Program: proces w tle (" + short(opis, 80) + ") przez "
+                "ostatnie " + str(int(dt // 60)) + " min brał średnio "
+                + str(round(rdzenie, 1)) + " rdzenia, a każda drużyna ma "
+                "połowę telefonu: " + str(_WATKI_DRUZYNY) + " z "
+                + str(os.cpu_count() or 2) + ". Ponad tę połowę zabiera "
+                "procesor drugiej drużynie, więc obie liczą wolniej. "
+                "Zwykle to własne ustawienie wątków w skrypcie (np. "
+                "torch.set_num_threads, OMP_NUM_THREADS, kilka procesów "
+                "naraz) — przy następnym uruchomieniu wystarczy go nie "
+                "ustawiać albo wpisać " + str(_WATKI_DRUZYNY) + "."
+            )
+    for pid in list(_cpu_grup_druzyny):
+        if pid not in grupy:
+            _cpu_grup_druzyny.pop(pid, None)
+    return ""
+
+
+# v480t: `sleep` w komendach zespolu, ktore program moze skonczyc
+# wczesniej — patrz _czekanie_na_proces_w_tle().
+#
+# Dziala jak zwykly sleep. Gdy program wysle mu SIGUSR1, konczy sie
+# z kodem 0, wiec reszta komendy (`; cat log`, `&& tail log`) idzie
+# dalej normalnie.
+def _podstaw_sleep_zespolu():
+
+    try:
+        import shutil
+
+        katalog = AGENT_DIR / "bin_programu"
+        prawdziwy = shutil.which(
+            "sleep",
+            path=os.pathsep.join(
+                k for k in os.environ.get("PATH", "").split(os.pathsep)
+                if k and k != str(katalog)
+            )
+        )
+        if not prawdziwy:
+            return
+
+        katalog.mkdir(parents=True, exist_ok=True)
+        atrapa = katalog / "sleep"
+        atrapa.write_text(
+            "#!" + (shutil.which("sh") or "/system/bin/sh") + "\n"
+            "trap 'kill $! 2>/dev/null; exit 0' USR1\n"
+            + prawdziwy + " \"$@\" &\n"
+            "wait $!\n",
+            encoding="utf-8"
+        )
+        atrapa.chmod(0o755)
+
+        sciezka = os.environ.get("PATH", "")
+        if str(katalog) not in sciezka.split(os.pathsep):
+            os.environ["PATH"] = str(katalog) + os.pathsep + sciezka
+
+    except Exception as e:
+        log("TERMUX", "Nie podstawiłem sleep: " + str(e))
+
+
+def _pid_sleepow_programu(pgid):
+    """v480t: pid-y naszego `sleep` (atrapy) w grupie procesow pgid."""
+    znalezione = []
+    atrapa = str(AGENT_DIR / "bin_programu" / "sleep")
+    try:
+        katalogi = os.listdir("/proc")
+    except Exception:
+        return znalezione
+    for nazwa in katalogi:
+        if not nazwa.isdigit():
+            continue
+        try:
+            with open("/proc/" + nazwa + "/stat", encoding="utf-8",
+                      errors="replace") as f:
+                pola = f.read().rsplit(")", 1)[1].split()
+            if int(pola[2]) != int(pgid):
+                continue
+            with open("/proc/" + nazwa + "/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")
+            if any(a.decode("utf-8", "replace") == atrapa for a in argv[:2]):
+                znalezione.append(int(nazwa))
+        except Exception:
+            continue
+    return znalezione
+
+
+def _grupa_zyje(pgid):
+    """
+    v480dl: czy w grupie procesow (start_new_session -> pgid == pid)
+    zostal jeszcze ktos zywy. Bieg 2026-10-21 23:3x (druzyna 1):
+    `proot-distro login debian -- pip install torch` w tle — powloka
+    skonczyla sie od razu, a pip w kontenerze sciagal dalej. Program
+    mowil "COMPLETED" i "proces w tle sie zakonczyl", a to nieprawda.
+    """
+    try:
+        os.killpg(int(pgid), 0)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return False
+    # killpg widzi tez zombie — liczymy tylko procesy, ktore naprawde
+    # cos robia (stan inny niz Z/X w /proc/<pid>/stat).
+    try:
+        pgid = int(pgid)
+        for nazwa in os.listdir("/proc"):
+            if not nazwa.isdigit():
+                continue
+            try:
+                with open("/proc/" + nazwa + "/stat", "rb") as f:
+                    dane = f.read().decode("utf-8", "replace")
+                pola = dane[dane.rfind(")") + 2:].split()
+                if int(pola[2]) == pgid and pola[0] not in ("Z", "X"):
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return True
+
+
+def _zywe_w_tle():
+    """
+    v480t: {klucz: opis} procesow w tle, ktore teraz zyja — i tych z
+    termux_run_background, i grup, ktore zostaly po zwyklej komendzie.
+    """
+    zywe = {}
+    for pid, proces in list(_procesy_w_tle.items()):
+        try:
+            if proces.poll() is None or _grupa_zyje(pid):
+                zywe[("p", pid)] = str(getattr(proces, "args", ""))
+        except Exception:
+            pass
+    for grupa, (komenda, _start) in list(_grupy_z_komend.items()):
+        # v480dt: pozostale samo czekanie (`sleep N; tail ...`) to nie
+        # robota w tle — jego koniec nie moze skracac nowego czekania.
+        # Bieg 2026-10-23 (druzyna 2, krok 6, 16:44): stary `sleep 900;
+        # ...` z kroku 4 przerwal `sleep 1800`, choc trening dalej szedl.
+        if _tylko_czeka(komenda):
+            continue
+        try:
+            os.killpg(grupa, 0)
+            zywe[("g", grupa)] = komenda
+        except Exception:
+            pass
+    return zywe
+
+
+# v480v: komenda, ktora sama puszcza cos w tlo albo cos zabija, nie
+# jest czekaniem na cudzy proces — patrz _tylko_czeka().
+_PUSZCZA_W_TLO_RE = re.compile(r"(?<![&>|])&(?![&>])")
+_ZABIJA_RE = re.compile(r"\b(?:pkill|kill|killall)\b")
+
+
+def _tylko_czeka(command):
+    """
+    v480v: czy `sleep` w tej komendzie to czekanie na proces, ktory juz
+    idzie w tle (tylko wtedy _czekanie_na_proces_w_tle moze je skrocic).
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 22:05, krok 139).
+    Komenda sama ubila stary trening (`pkill -f ...`), puscila nowy
+    (`nohup ... &`) i dala mu chwile na start (`sleep 3`, `sleep 8`).
+    Program zobaczyl, ze stary proces zniknal, i skrocil `sleep` — tyle
+    ze ten sleep czekal na NOWY proces, a starego zabila ta sama
+    komenda. Do wyniku trafilo mylace zdanie "proces w tle sie
+    zakonczyl".
+    """
+    c = str(command or "")
+    return bool(
+        _sekundy_spania(c)
+        and not _PUSZCZA_W_TLO_RE.search(c)
+        and not _ZABIJA_RE.search(c)
+    )
+
+
+def _czekanie_na_proces_w_tle(przed, pgid):
+    """
+    v480t: jesli ktorys z procesow `przed` (z _zywe_w_tle() sprzed
+    komendy) juz nie zyje, konczy `sleep` tej komendy i zwraca zdanie
+    do jej wyniku. Inaczej zwraca "".
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 20:32). Trening
+    szedl w tle, a MAIN wyslal `sleep 1500; cat
+    rsi_core_min_v6_seed42.log` — 25 minut czekania, niezaleznie od
+    tego, kiedy trening sie skonczy. Uzytkownik: zespol ma sie
+    dowiedziec, ze czekanie skonczylo sie wczesniej, ale tylko wtedy,
+    gdy tak sie stanie — jednym zdaniem w wyniku tej komendy.
+    """
+    if not przed or not pgid:
+        return ""
+    teraz = _zywe_w_tle()
+    skonczone = [k for k in przed if k not in teraz]
+    if not skonczone:
+        return ""
+    sleepy = _pid_sleepow_programu(pgid)
+    if not sleepy:
+        return ""
+    for pid in sleepy:
+        try:
+            os.kill(pid, signal.SIGUSR1)
+        except Exception:
+            pass
+
+    klucz = skonczone[0]
+    opis = short(przed[klucz], 80)
+    jak = "się zakończył"
+    if klucz[0] == "p":
+        proces = _procesy_w_tle.get(klucz[1])
+        kod = getattr(proces, "returncode", None)
+        if kod not in (None, 0):
+            jak = _jak_skonczyl_proces(kod)
+        elif kod == 0:
+            jak = "się zakończył (kod 0)"
+    return (
+        "Czekanie (sleep) skończone wcześniej, bo proces w tle ("
+        + opis + ") " + jak + "."
+    )
+
+
 def agent_wake_unlock():
     """
     Zwolnienie wake-lock po zakończeniu agenta.
@@ -458,7 +925,7 @@ def agent_wake_unlock():
         import shutil
         import subprocess
 
-        cmd = shutil.which("termux-wake-unlock")
+        cmd = _PRAWDZIWY_WAKE_UNLOCK or shutil.which("termux-wake-unlock")
 
         if not cmd:
             _WAKE_LOCK_ACTIVE = False
@@ -612,6 +1079,39 @@ except Exception as e:
 HOME = Path.home()
 AGENT_DIR = HOME / "agent"
 
+# v480aq: kazda druzyna trzyma stan, rozmowy i logi osobno. Klucze
+# Gemini i adres ADB sa wspolne — to ten sam telefon i te same klucze.
+#
+# v480ar: druzyna 1 tez ma swoj katalog. Uzytkownik: po powrocie do "1"
+# MAIN nie moze miec w rozmowie rywalizacji, bo przy innych celach
+# wszystko by sie pomieszalo. Rozmowy zwyklego programu (~/agent)
+# zostaja nietkniete, a rywalizacja zaczyna obie druzyny od czystej
+# rozmowy z tym samym celem — pliki pracy na telefonie sa wspolne.
+_AGENT_DIR_WSPOLNY = AGENT_DIR
+_DRUZYNA1_DIR = HOME / "agent_druzyna1"
+_DRUZYNA2_DIR = HOME / "agent_druzyna2"
+if _DRUZYNA == "1":
+    AGENT_DIR = _DRUZYNA1_DIR
+elif _DRUZYNA == "2":
+    AGENT_DIR = _DRUZYNA2_DIR
+
+# v480k: stan biegu zapisany tuz przed przeladowaniem na nowa wersje
+# (patrz _przeladuj_po_aktualizacji). Czytany raz i kasowany.
+_PLIK_STANU_AKTUALIZACJI = AGENT_DIR / "stan_przed_aktualizacja.json"
+_stan_przed_aktualizacja = {}
+
+if _PO_AKTUALIZACJI:
+    try:
+        _stan_przed_aktualizacja = json.loads(
+            _PLIK_STANU_AKTUALIZACJI.read_text(encoding="utf-8")
+        ) or {}
+    except Exception:
+        _stan_przed_aktualizacja = {}
+    try:
+        _PLIK_STANU_AKTUALIZACJI.unlink()
+    except Exception:
+        pass
+
 TOKEN_FILE = HOME / "api_token.txt"
 
 # Opcjonalne DRUGIE konto DeepSeek — jeśli plik istnieje i zawiera
@@ -621,8 +1121,8 @@ TOKEN_FILE = HOME / "api_token.txt"
 # pusty, WSZYSTKO działa dokładnie tak jak wcześniej — jedno konto.
 TOKEN_FILE_2 = HOME / "api_token_2.txt"
 
-GEMINI_KEY_FILE = AGENT_DIR / "gemini_api_key.txt"
-GEMINI_KEYS_DIR = AGENT_DIR / "gemini_keys"
+GEMINI_KEY_FILE = _AGENT_DIR_WSPOLNY / "gemini_api_key.txt"
+GEMINI_KEYS_DIR = _AGENT_DIR_WSPOLNY / "gemini_keys"
 
 STATE_DIR = AGENT_DIR / "state"
 QUEUE_DIR = AGENT_DIR / "queue"
@@ -649,6 +1149,8 @@ PRZEBIEG_DIR = MEMORY_DIR / "przebieg"
 # `termux-setup-storage`; gdy uzytkownik go nie zrobil, po prostu
 # nie ma czego kopiowac i nic sie nie dzieje.
 PRZEBIEG_NA_TELEFONIE = HOME / "storage" / "shared" / "AEL-MINI"
+if _DRUZYNA:
+    PRZEBIEG_NA_TELEFONIE = PRZEBIEG_NA_TELEFONIE / ("druzyna_" + _DRUZYNA)
 
 # Ustawiane raz przy starcie biegu — patrz zacznij_zapis_biegu().
 _plik_przebiegu = None
@@ -667,12 +1169,12 @@ BROWSER_STATE = STATE_DIR / "browser.json"
 
 GEMINI_STATE_FILE = STATE_DIR / "gemini.json"
 
-# Stan KLUCZY Gemini — osobno od stanu zadania. Patrz
-# mark_quota(): wczesniej jedno i drugie mieszkalo w
-# gemini.json, a kazda interakcja nadpisywala plik w calosci.
-GEMINI_KEYS_FILE = STATE_DIR / "gemini_keys.json"
+# v451: stan kluczy Gemini (gemini_keys.json, v277) juz nie istnieje —
+# od v449 odstawia sie PARE klucz+model, w state/gemini_modele.json.
 
 LAST_RESULT_FILE = AGENT_DIR / "last_result.json"
+# v480cr: DONE nie zamyka programu — kazde potwierdzone DONE trafia tutaj.
+_PLIK_RAPORTOW_DONE = AGENT_DIR / "raporty_done.json"
 
 
 for d in [
@@ -703,11 +1205,13 @@ GEMINI_MODEL = os.environ.get(
     "gemini-3.5-flash-lite"
 )
 
-MAX_STEPS = int(
-    os.environ.get(
-        "AGENT_MAX_STEPS",
-        "40"
-    )
+# v464: bez limitu krokow — program chodzi, az MAIN powie DONE albo
+# FAILED (decyzja uzytkownika 2026-09-28: "nie robimy limitow"). Kto
+# chce limit, ustawia AGENT_MAX_STEPS; None = bez konca.
+MAX_STEPS = (
+    int(os.environ["AGENT_MAX_STEPS"])
+    if str(os.environ.get("AGENT_MAX_STEPS") or "").strip().isdigit()
+    else None
 )
 
 # Ile razy Gemini moze dostac DOKLADNIE ten sam wynik z tego samego
@@ -1040,7 +1544,7 @@ GOAL_FILE = AGENT_DIR / "current_goal.txt"
 # zapisywany przez prompt_adb_target() przy starcie programu i
 # odczytywany automatycznie przez find_adb(), gdy `adb devices`
 # nic nie zwróci.
-ADB_CONNECT_FILE = AGENT_DIR / "adb_connect.txt"
+ADB_CONNECT_FILE = _AGENT_DIR_WSPOLNY / "adb_connect.txt"
 
 # Lista top-level katalogów/plików pod $HOME, w których Gemini
 # faktycznie coś zapisał (termux_mkdir/termux_write_file/
@@ -1220,12 +1724,6 @@ gemini_clients = {}
 
 gemini_disabled = False
 
-# trwała interakcja wykonawcy
-gemini_interaction_id = None
-
-# blokada Gemini
-gemini_lock = None
-
 
 # ============================================================
 # POMOCNICZE
@@ -1249,6 +1747,15 @@ def zacznij_zapis_biegu(cel=""):
         PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
 
         stempel = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # v480k: po cichej aktualizacji piszemy dalej do tych samych
+        # plikow — to wciaz ten sam bieg.
+        _dalej = _stan_przed_aktualizacja.get("pliki_biegu") or []
+
+        if len(_dalej) == 2 and all(os.path.exists(x) for x in _dalej):
+            _plik_przebiegu = Path(_dalej[0])
+            _plik_zdarzen = Path(_dalej[1])
+            return
 
         _plik_przebiegu = PRZEBIEG_DIR / (stempel + ".log")
         _plik_zdarzen = PRZEBIEG_DIR / (stempel + ".jsonl")
@@ -1377,6 +1884,28 @@ def skopiuj_przebieg_na_telefon():
             cel.write_bytes(plik.read_bytes())
 
             skopiowane.append(cel)
+
+        # v480av: w rywalizacji obok przebiegu ida tez: wyjscie terminala
+        # druzyny 2 (dziala w tle, wiec bledy sprzed startu przebiegu sa
+        # tylko tam; ostatnie 2 MB) i werdykty sedziego (~/RYWALIZACJA).
+        if _DRUZYNA == "2":
+            try:
+                _term = _DRUZYNA2_DIR / "terminal.log"
+                if _term.exists():
+                    with open(_term, "rb") as f:
+                        f.seek(max(0, _term.stat().st_size - 2_000_000))
+                        (PRZEBIEG_NA_TELEFONIE / "terminal.log").write_bytes(f.read())
+            except Exception:
+                pass
+        if _DRUZYNA:
+            try:
+                _ryw = HOME / "RYWALIZACJA"
+                for _w in list(_ryw.glob("*.json")) + list(_ryw.glob("oceny/*.json")):
+                    _cel_w = PRZEBIEG_NA_TELEFONIE.parent / "rywalizacja"
+                    _cel_w.mkdir(parents=True, exist_ok=True)
+                    (_cel_w / _w.name).write_bytes(_w.read_bytes())
+            except Exception:
+                pass
 
         if not skopiowane:
             return ""
@@ -1618,6 +2147,7 @@ def policz_bieg(sciezka=None):
 
     narzedzia_w_kroku = {}
     kroki = set()
+    kroki_z_decyzja = set()
 
     for z in zdarzenia:
 
@@ -1649,6 +2179,10 @@ def policz_bieg(sciezka=None):
         elif typ == "blok_powtorka":
             wynik["oszczedzone"] += znaki
 
+        elif typ == "odpowiedz" and rola == "MAIN":
+            # v470: krok, w ktorym MAIN juz odpowiedzial — patrz nizej.
+            kroki_z_decyzja.add(krok)
+
         elif typ == "narzedzie":
             wynik["narzedzia"] += 1
             narzedzia_w_kroku[krok] = (
@@ -1661,8 +2195,13 @@ def policz_bieg(sciezka=None):
 
     wynik["kroki"] = len(kroki)
 
+    # v470: bieg 2026-10-03 — co piec krokow podsumowanie mowilo
+    # "Kroki bez ani jednego narzędzia: 5, 11", "5, 16", "5, 21"...
+    # Liczyl sie krok, ktory sie dopiero zaczal (podsumowanie leci na
+    # jego poczatku). Krok bez decyzji MAIN-a jeszcze trwa.
     wynik["kroki_bez_narzedzia"] = sorted(
-        k for k in kroki if not narzedzia_w_kroku.get(k)
+        k for k in kroki
+        if not narzedzia_w_kroku.get(k) and k in kroki_z_decyzja
     )
 
     return wynik
@@ -1862,6 +2401,7 @@ _ROLE_SPEAKERS = {
     "CRITIC": (_IMIONA_ROL["CRITIC"], "yellow", "ocena"),
     "BROWSER": (_IMIONA_ROL["BROWSER"], "magenta", "tłumaczenie"),
     "WOJTEK": (_IMIONA_ROL["WOJTEK"], "bright_magenta", "pomysły"),
+    "IGOR": (_IMIONA_ROL["IGOR"], "bright_cyan", "z zewnątrz"),
     "MAIN": (_IMIONA_ROL["MAIN"], "bold white", "decyzja"),
     "PROGRESS_ESTIMATOR": (
         _IMIONA_ROL["PROGRESS_ESTIMATOR"], "bright_blue", "postęp"
@@ -1872,6 +2412,7 @@ _ROLE_SPEAKERS = {
     "CODE_FIXER": (
         _IMIONA_ROL["CODE_FIXER"], "bright_green", "poprawka"
     ),
+    "ARBITER": (_IMIONA_ROL["ARBITER"], "bright_red", "ocena rywalizacji"),
 }
 
 
@@ -1927,7 +2468,7 @@ def _speak(role, text, preview_chars=400):
         title = speaker + (" — " + topic if topic else "")
         _rich_console.print(
             _RichPanel(
-                body or "(brak treści)",
+                _RichText(body or "(brak treści)"),
                 title=title,
                 title_align="left",
                 border_style=color,
@@ -1990,6 +2531,10 @@ def _znane_dodaj(tekst):
         if not t.strip():
             return
 
+        # v480iu: jeden ogromny tekst zostawal w pamieci na zawsze (petla
+        # nizej zostawia zawsze ostatni element).
+        if len(t) > _ZNANE_TEKSTY_MAX:
+            t = t[:_ZNANE_TEKSTY_MAX // 2] + t[-_ZNANE_TEKSTY_MAX // 2:]
         _ZNANE_TEKSTY.append(t)
 
         razem = sum(len(x) for x in _ZNANE_TEKSTY)
@@ -2122,7 +2667,7 @@ def _wyslano(role, text):
     try:
         _rich_console.print(
             _RichPanel(
-                body or "(pusta wiadomość)",
+                _RichText(body or "(pusta wiadomość)"),
                 title="→ WYSŁANE DO: " + speaker
                 + " (" + str(role) + ")",
                 title_align="left",
@@ -2177,6 +2722,15 @@ def short(value, limit=1000):
         cut.rfind("\n"),
         cut.rfind("\t"),
     )
+
+    # v480gp: skrot jednej linii (komenda w nawiasie, w zdaniu, w logu) konczy
+    # sie w tej samej linii " …" — "\n...[skrócono]..." rozrywal zdanie w pol
+    # nawiasu (uzytkownik 2026-10-27: "W tle dalej czekanie z 10:13 (cd …
+    # ps -p\n...[skrócono]...), już 47 s" — "Skrócono czemu to tak").
+    if "\n" not in cut:
+        if boundary >= limit - _SHORT_BOUNDARY_LOOKBACK and boundary > 0:
+            cut = cut[:boundary]
+        return cut.rstrip() + " …"
 
     if boundary >= limit - _SHORT_BOUNDARY_LOOKBACK and boundary > 0:
         # Udalo sie cofnac do granicy slowa -- nic nie jest urwane
@@ -2791,7 +3345,7 @@ def banner():
 
     print()
     print("=" * 72)
-    print("             AEL-MINI AUTONOMOUS AGENT v450")
+    print("             AEL-MINI AUTONOMOUS AGENT v480")
     print("=" * 72)
     print(" DeepSeek/OpenDeep : GŁÓWNY MÓZG")
     print(" DeepSeek roles    : MAIN / PLANNER / RESEARCHER / CRITIC / BROWSER")
@@ -2830,19 +3384,39 @@ def banner():
 # drugie z ~1.0 — podział tylko z nazwy, nie z realnego obciążenia.
 # Poniższy podział rozdziela też "co krok" role między oba konta,
 # żeby faktycznie wyrównać ruch (~2.6 vs ~2.4 wagi):
+#
+# v469: wagi wyzej sa sprzed RUN. Bieg 2026-09-30 (78 krokow, ~1,6 h):
+# MAIN 87 wiadomosci, Ela 15, Tomek 5, Kamil 3, Marek 2, Wojtek 1. Konto
+# 1 (MAIN, Marek, Kamil, Ela, Wojtek) mialo 75 z 90 w ostatniej
+# godzinie, konto 2 — jedna. MAIN sam robi ~55 na godzine, wiec ma
+# konto 1 tylko dla siebie, a reszta zespolu idzie przez konto 2.
 _ROLE_ACCOUNT = {
     "MAIN": 1,
-    "CRITIC": 1,
-    "RESEARCHER": 1,
-    "PROGRESS_ESTIMATOR": 1,
-    "WOJTEK": 1,
 
+    "CRITIC": 2,
+    "RESEARCHER": 2,
+    "PROGRESS_ESTIMATOR": 2,
+    "WOJTEK": 2,
     "PLANNER": 2,
     "ENGINEER": 2,
     "BROWSER": 2,
     "CODE_REVIEWER": 2,
     "CODE_FIXER": 2,
+    "ARBITER": 1,
+    "IGOR": 2,
 }
+
+# v480aq: podzial zwyklego programu — potrzebny, zeby rozpoznac, na
+# ktorym koncie powstala zapisana rozmowa sprzed rywalizacji.
+_ROLE_ACCOUNT_DOMYSLNE = dict(_ROLE_ACCOUNT)
+
+
+def _ustaw_konta_druzyny():
+    """W rywalizacji cala druzyna jest na swoim koncie: 1 albo 2."""
+    if _DRUZYNA:
+        for _rola in _ROLE_ACCOUNT:
+            _ROLE_ACCOUNT[_rola] = int(_DRUZYNA)
+
 
 # {1: token_konta_1, 2: token_konta_2_lub_1_jesli_brak_drugiego}
 _account_tokens = {}
@@ -2871,6 +3445,116 @@ def _activate_account_for_role(name):
 
     if token:
         opendeep.configure(api_key=token)
+
+
+# ============================================================
+# STYK Z BIBLIOTEKA OPENDEEP (v453)
+# ============================================================
+#
+# opendeep to cienka warstwa nad strona chat.deepseek.com: tworzy
+# rozmowe (/chat_session/create), rozwiazuje proof-of-work
+# (/chat/create_pow_challenge, WebAssembly przez wasmtime+numpy) i
+# czyta strumien SSE z /chat/completion. Token to userToken z
+# localStorage przegladarki. Program nie uzywa jej send_message()
+# — ma wlasna kopie czytnika strumienia (_deepseek_raw_post_with_action),
+# bo biblioteka wyrzuca status odpowiedzi, myslenie i pole
+# search_enabled, na ktorych opiera sie polowa obslugi rozmow
+# (v189-v440). Naglowki i sesje HTTP bierze z biblioteki, wiec jej
+# aktualizacja przechodzi na program bez zmian w kodzie.
+#
+# Trzy rzeczy, ktorych brakowalo na tym styku:
+#   1. LIMIT CZASU. Zadne zadanie HTTP biblioteki ani nasza kopia nie
+#      mialy timeoutu: zerwane WiFi w trakcie strumienia wieszalo caly
+#      program w nieskonczonosc, bez jednej linii w logu. Teraz kazde
+#      zadanie ma limit (_DEEPSEEK_HTTP_TIMEOUT), takze tworzenie
+#      rozmowy w bibliotece — patrz _zaloz_limit_czasu_http().
+#   2. TRESC BLEDU. raise_for_status() i "Unexpected Content-Type"
+#      gubily cialo odpowiedzi — a to w nim serwer mowi "invalid
+#      message id" albo "Messages too frequent", po ktorych program
+#      rozpoznaje zerwana rozmowe i przeciazenie. Cialo idzie do tekstu
+#      wyjatku, jak w bibliotece.
+#   3. BEZ PODWOJNEJ WYSYLKI. Awaryjny powrot do send_message()
+#      biblioteki wysylal te sama wiadomosc drugi raz po KAZDYM bledzie
+#      naszej sciezki (takze po HTTP 4xx/5xx) — dwie wiadomosci w
+#      rozmowie, jedna odpowiedz. Powrot zostaje tylko dla zmiany
+#      ksztaltu biblioteki (brak metody/pola), nie dla bledu serwera.
+#
+# Fakty, ktore program mowi na starcie: czym rozmawia (curl_cffi
+# udajacy Chrome — tego biblioteka chce przy Cloudflare — albo zwykle
+# requests) i czy umie rozwiazac proof-of-work. Bez POW serwer moze
+# odrzucac wiadomosci; dotad ta proba byla polykana po cichu.
+
+# (polaczenie, czytanie miedzy porcjami strumienia) — myslenie i
+# szukanie w sieci potrafia milczec dlugo, ale nie w nieskonczonosc.
+_DEEPSEEK_HTTP_TIMEOUT = (
+    float(os.environ.get("DEEPSEEK_CONNECT_TIMEOUT", "20")),
+    float(os.environ.get("DEEPSEEK_READ_TIMEOUT", "300")),
+)
+
+
+def _limit_dla_sesji(sesja_http):
+    """requests bierze pare (polaczenie, czytanie); inne — jedna liczbe."""
+
+    modul = str(type(sesja_http).__module__ or "")
+
+    if modul.startswith("requests"):
+        return _DEEPSEEK_HTTP_TIMEOUT
+
+    return max(_DEEPSEEK_HTTP_TIMEOUT)
+
+
+def _zaloz_limit_czasu_http(model):
+    """
+    Kazde zadanie sesji HTTP biblioteki dostaje limit czasu, o ile
+    wywolujacy nie podal wlasnego. Obejmuje to tworzenie rozmowy
+    (/chat_session/create), ktore biblioteka robi bez limitu.
+    """
+
+    sesja = getattr(model, "session", None)
+    oryginal = getattr(sesja, "request", None)
+
+    if sesja is None or not callable(oryginal):
+        return
+
+    limit = _limit_dla_sesji(sesja)
+
+    def _z_limitem(*args, **kwargs):
+        kwargs.setdefault("timeout", limit)
+        return oryginal(*args, **kwargs)
+
+    try:
+        sesja.request = _z_limitem
+    except Exception:
+        pass
+
+
+def _pow_dostepny():
+    try:
+        import wasmtime  # noqa: F401
+        import numpy  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _fakty_o_transporcie_deepseek():
+    """Czym program rozmawia ze strona i czy umie rozwiazac POW."""
+
+    try:
+        import opendeep.models as _om
+        curl = bool(getattr(_om, "HAS_CURL_CFFI", False))
+    except Exception:
+        curl = False
+
+    return (
+        ("transport: curl_cffi (jak Chrome)" if curl
+         else "transport: requests (bez curl_cffi — przy blokadzie "
+              "Cloudflare: pip install curl_cffi)")
+        + " | proof-of-work: "
+        + ("jest" if _pow_dostepny()
+           else "BRAK (pip install wasmtime numpy) — serwer może "
+                "odrzucać wiadomości")
+    )
 
 
 def init_deepseek():
@@ -2916,10 +3600,12 @@ def init_deepseek():
             )
         )
 
+        _zaloz_limit_czasu_http(deepseek_model)
+
         log(
             "DEEPSEEK",
-            "OpenDeep OK — "
-            + DEEPSEEK_MODEL
+            "OpenDeep OK — " + DEEPSEEK_MODEL + " | "
+            + _fakty_o_transporcie_deepseek()
         )
 
         return True
@@ -2942,7 +3628,14 @@ def init_deepseek():
 # ponizej zostaja co do znaku. To z nich MAIN wie, w czym ma
 # oddac decyzje; bez nich kazdy krok konczylby sie
 # MAIN_JSON_ERROR (w Twoich logach padal 13 razy).
-MAIN_PROMPT = """Jesteś MAIN-em. Pomagasz zespołowi zdecydować, co najlepiej zrobić dalej.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "PLANNER|ENGINEER|RESEARCHER|CRITIC|BROWSER",\n  "ask_question": ""\n}"""
+# v480cf: doszedl Igor (IGOR w ask_role). v480ch: zdanie o nim stoi w
+# liscie zespolu w _JAK_TO_DZIALA (prosba uzytkownika), nie tu — raz.
+# v480fx: uzytkownik (2026-10-25, "popraw prompt maina"): imiona zamiast
+# nazw rol w ask_role, zespol na samej gorze,
+# przepisany w calosci. Ksztalty JSON bez zmian poza wartoscia ask_role.
+# Bez obowiazkowej konsultacji (uzytkownik: "tego nie chcemy") — MAIN
+# decyduje, prompt tylko opisuje, co daje mu kazda osoba.
+MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W zespole są: Tomek (następny krok), Kamil (fakty i informacje z sieci), Marek (słabe punkty i ryzyko planu), Bartek (kod i technika), Piotr (przegląd kodu i przyczyna błędu), Ania (poprawka błędu w kodzie), Ola (co wyszło z wykonania, po ludzku), Wojtek (praktyczny sens), Ela (ile celu jest naprawdę zrobione) i Igor (świeże oko z zewnątrz — nie zna celu, dostaje tylko Twoje pytanie). Każda z tych osób widzi to, czego sam nie zobaczysz: Bartek wie, jak napisać kod, Marek — co w planie może zawieść, Kamil — jakie są fakty. ASK to pytanie do jednej z nich; w ask_role wpisujesz jej imię, a odpowiedź wraca do Ciebie w tym samym kroku. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "Tomek|Kamil|Marek|Bartek|Piotr|Ania|Ola|Wojtek|Ela|Igor",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -2987,9 +3680,21 @@ PLANNER_PROMPT = (
 # zrobic w sytuacji, ktora jeszcze nie nastapila — czyli dokladnie
 # ten szablon, ktorego pozbywamy sie od v191. Zostaje imie i
 # robota.
+# v480fp: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
+# Kamil nie dostaje _JAK_ROZMAWIAMY, a tez moze rozmawiac z zespolem.
+# v480fw: na prosbe uzytkownika (2026-10-25: "prompty dopisane do kazdej
+# roli") przepisany w calosci — PODGLĄD i jak program kladzie kod.
 RESEARCHER_PROMPT = (
     "Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych "
-    "informacji."
+    "informacji. Pracujesz w zespole z Tomkiem, Markiem, Bartkiem, "
+    "Olą i Wojtkiem; gdy zwrócisz się do kogoś z nich po imieniu, "
+    "dostanie to od razu i odpowie. Jest też Igor — niezależny, nie "
+    "zna celu i dostaje tylko to, co sam do niego napiszesz. Do plików "
+    "drużyny i tego, co jest zainstalowane, zaglądasz linią PODGLĄD: "
+    "z komendą do odczytu (np. grep -n, head, ls, pip show) — program "
+    "oddaje Ci wynik. Kod, który napiszesz w osobnym bloku ze ścieżką "
+    "tuż nad nim, program od razu kładzie na dysk i sprawdza. Decyzje "
+    "podejmuje MAIN."
 )
 
 
@@ -3000,9 +3705,20 @@ CRITIC_PROMPT = (
 
 
 
+# v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
+# Piotr sam zaglada do kodu komendami.
+# v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
+# v480gi: przepisany w calosci — Piotr sam uruchamia kod (URUCHOM:).
 CODE_REVIEWER_PROMPT = (
     "Jesteś Piotrem. Analizujesz błędy i szukasz ich "
-    "rzeczywistej przyczyny, a poprawia je Ania."
+    "rzeczywistej przyczyny, a poprawia je Ania. Do kodu i środowiska "
+    "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
+    "sed -n 'od,dop' plik, head, ls, python3 --version, pip show "
+    "pakiet; kilka komend łączysz przez ; albo |), a błąd odtwarzasz "
+    "linią URUCHOM: z komendą, która uruchamia kod (np. URUCHOM: "
+    "python3 skrypt.py --test). Program wykonuje ją w folderze drużyny "
+    "i oddaje Ci wynik razem z błędem, więc sprawdzasz dokładnie to "
+    "miejsce, którego dotyczy błąd, i widzisz, czy po poprawce znika."
 )
 
 
@@ -3022,8 +3738,20 @@ CODE_REVIEWER_PROMPT = (
 # extract_search_replace_blocks() rozumie trzy ksztalty: nasze stare
 # znaczniki, zwykly unified diff i dwa bloki opisane slowami.
 # Zostaje imie i robota.
+# v480ce: na prosbe uzytkownika (2026-10-17) przepisany w calosci,
+# jak prompt Bartka: zmiana w istniejacym pliku to sama zmiana.
+# v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci.
+# v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
+# v480gi: przepisany w calosci — Ania sama sprawdza poprawke (URUCHOM:).
 CODE_FIXER_PROMPT = (
-    "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa."
+    "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa. "
+    "Poprawkę w pliku, który już istnieje, piszesz jako samą zmianę, "
+    "tak jak zwykły patch: który fragment i na co go zamienić. "
+    "Fragment bierzesz z pliku, nie z pamięci: zaglądasz do niego "
+    "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
+    "plik), a to, czy poprawka działa, sprawdzasz linią URUCHOM: z "
+    "komendą, która uruchamia kod — program wykonuje ją w folderze "
+    "drużyny i oddaje Ci wynik albo błąd."
 )
 
 
@@ -3033,21 +3761,75 @@ BROWSER_PROMPT = (
 )
 
 
+# v480ce: na prosbe uzytkownika (2026-10-17) przepisany w calosci.
+# Rola mowi teraz, jak zmienia istniejacy plik; Python od v203/v330
+# naklada sama zmiane (nasze znaczniki, unified diff albo
+# dwa bloki opisane slowami) z backupem i sprawdzeniem skladni.
+# v480fi: na prosbe uzytkownika (2026-10-25) przepisany w calosci: kod
+# pisze ten, kto ma zadanie, i poprawia go po bledzie skladni/uruchomienia.
+# v480ft: na prosbe uzytkownika (2026-10-25: pliki uporzadkowane, poprawki
+# bez przepisywania calosci, proba uruchomienia z bledem do autora,
+# zagladanie do kodu komendami) przepisany w calosci.
+# v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko, cala
+# nowa wersja istniejacego pliku go zastepuje (z kopia).
+# v480gi: przepisany w calosci — Bartek sam uruchamia i sprawdza swoj
+# kod (URUCHOM:), poprawia, az dziala; MAIN dostaje dzialajacy kod.
+# v480gt: przepisany w calosci — tylko to, co Bartka (wspolne zasady
+# PODGLĄD/URUCHOM/pliki sa w _JAK_ROZMAWIAMY); dlugie uruchomienie samo
+# idzie w tlo, wynik dostaje autor i MAIN.
 ENGINEER_PROMPT = (
-    "Jesteś Bartkiem. Zajmujesz się kodem, skryptami "
-    "i rozwiązaniami technicznymi."
+    "Jesteś Bartkiem. Zajmujesz się kodem, skryptami i rozwiązaniami "
+    "technicznymi — piszesz je i doprowadzasz do działania. Swój kod "
+    "uruchamiasz linią URUCHOM: (np. URUCHOM: python3 eval.py --szybko), "
+    "czytasz wynik albo błąd, poprawiasz i uruchamiasz znowu, aż działa, "
+    "więc oddajesz kod sprawdzony. Gdy dajesz całą nową wersję pliku, "
+    "który już leży, program zastępuje go nią, a poprzednią zostawia "
+    "w kopii. Gdy uruchomienie, na przykład trening, liczy dłużej niż "
+    "2 minuty, liczy dalej w tle, a wynik dostajesz Ty i MAIN, gdy się "
+    "skończy — wtedy odpowiadasz tym, co już wiesz."
 )
 
 
 # v352: tak samo jak u MAIN-a — kontrakt zostaje, tozsamosc
 # staje przed nim.
-PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, ile celu zostało rzeczywiście wykonane.\n\n{\n  "percent": 0,\n  "summary": ""\n}"""
+# v478: bieg 2026-10-11 08:45 — Ela dawala "99% celu" za jeden
+# rozstrzygniety eksperyment (perceptron, FAZA 19), gdy cel to cala
+# MISJA RSI, a Marek oceniał ja na 5%. Na prosbe uzytkownika
+# przepisany w calosci: co Ela robi i co wpisuje.
+# v480r: na prosbe uzytkownika (bieg 2026-10-11 19:20, "dwa kamienie
+# milowe" za test, ktory zespol sam opisal jako niesprawdzajacy
+# kompozycji) przepisany w calosci: wynik liczy sie razem z
+# ograniczeniem, ktore zespol przy nim zapisal, a to, co dopiero
+# ruszylo (19:52: "kamien milowy" za samo puszczenie treningu), jako
+# rozpoczete.
+PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego celu użytkownika jest już rzeczywiście zrobiona — całego, od pierwszego do ostatniego punktu, tak jak go napisał. Bieżący etap to jedna z tych części. Każdy wynik bierzesz razem z tym, co zespół sam o nim zapisał: jeśli przy wyniku stoi uwaga, że sprawdza on mniej, niż sugeruje jego nazwa, liczysz go w tej mniejszej mierze. Część celu liczysz jako zrobioną, gdy jest już jej sprawdzony wynik; to, co dopiero ruszyło, opisujesz jako rozpoczęte. W "percent" wpisujesz ten udział jako liczbę od 0 do 100. W "summary" piszesz krótko, które części celu są zrobione, na jakiej podstawie i z jakimi zapisanymi ograniczeniami, a które jeszcze zostały.\n\n{\n  \"percent\": 0,\n  \"summary\": \"\"\n}"""
 
 
+# v480fp: na prosbe uzytkownika (2026-10-25) przepisany w calosci —
+# jak u Kamila: Wojtek tez moze rozmawiac z zespolem wprost.
+# v480fw: na prosbe uzytkownika ("prompty dopisane do kazdej roli")
+# przepisany w calosci — moze sam zajrzec, co zespol zrobil.
 WOJTEK_PROMPT = (
     "Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik "
-    "i zwracasz uwagę na praktyczny sens."
+    "i zwracasz uwagę na praktyczny sens. Pracujesz w zespole "
+    "z Tomkiem, Kamilem, Markiem, Bartkiem i Olą; gdy zwrócisz się "
+    "do kogoś z nich po imieniu, dostanie to od razu i odpowie. Jest "
+    "też Igor — niezależny, nie zna celu i dostaje tylko to, co sam "
+    "do niego napiszesz. To, co zespół naprawdę zrobił, możesz "
+    "zobaczyć sam, linią PODGLĄD: z komendą do odczytu (np. ls, head, "
+    "cat wynik.json) — program oddaje Ci wynik. Decyzje podejmuje MAIN."
 )
+
+
+# v480cf: uzytkownik (2026-10-17) — "niezalezny ziomeczek": bez
+# promptu, bez celu, bez niczego z programu. Jego rozmowa to czysty
+# czat DeepSeeka, do ktorego pisze wylacznie MAIN (ASK do IGOR), tak
+# jak czlowiek pisze w nowym czacie. Decyduje dalej MAIN.
+IGOR_PROMPT = ""
+
+# Role, ktore nie dostaja ani celu, ani opisu rywalizacji, ani
+# kontekstu zespolu — tylko pytanie MAIN-a.
+_ROLE_BEZ_CELU = ("IGOR",)
 
 
 # ============================================================
@@ -3304,6 +4086,7 @@ _IMIE_AUTORA = {
     "WOJTEK": ("Wojtek", "Wojtka"),
     "BROWSER": ("Ola", "Oli"),
     "PROGRESS_ESTIMATOR": ("Ela", "Eli"),
+    "IGOR": ("Igor", "Igora"),
 }
 
 
@@ -3321,6 +4104,13 @@ def _czyj_kod_to(rola):
 # Tresc zadania, ktore Gemini wlasnie wykonuje. MAIN bardzo czesto
 # wkleja w nia kod Bartka — patrz termux_write_file().
 _tresc_zadania_teraz = ""
+
+# v461: czy narzedzie wola teraz Python na polecenie MAIN-a (RUN), a
+# nie Gemini. MAIN jest osoba z DeepSeeka — kod, ktory sam napisze w
+# RUN, jest kodem zespolu. Bieg 2026-09-28 16:53: MAIN poprawil
+# sms_reader.py heredokiem i dostal "KOD_POLOZYL_PYTHON" — odmowe
+# pisana dla Gemini.
+_wykonuje_main = False
 
 # Czy MAIN w POPRZEDNIM kroku prosil o kod Bartka. To jedyny powod,
 # dla ktorego Bartek odzywa sie, choc nikt nie zawolal go po imieniu
@@ -4024,6 +4814,30 @@ def _progress_lines_to_map(snapshot):
     return mapa
 
 
+def _roznica_spisu(stara, nowa):
+    """v480gt: przy katalogu ("JEST — to katalog, w środku: a, b, …") po
+    zmianie tylko to, co przybylo i co zniknelo — nie caly spis od nowa
+    (Tomek dostawal 40 nazw przy kazdym nowym pliku)."""
+    try:
+        if not stara or "w środku: " not in stara or "w środku: " not in nowa:
+            return nowa
+        def _spis(l):
+            t = l.split("w środku: ", 1)[1].rstrip(".")
+            t = re.sub(r" \(i \d+ więcej\)$", "", t)
+            return [x.strip() for x in t.split(", ") if x.strip()]
+        a, b = _spis(stara), _spis(nowa)
+        plus = [x for x in b if x not in a and not x.startswith("(+")]
+        minus = [x for x in a if x not in b and not x.startswith("(+")]
+        if not plus and not minus:
+            return nowa
+        glowa = nowa.split(":", 1)[0]
+        return (glowa + ": " + ("przybyło: " + ", ".join(plus[:20]) if plus else "")
+                + ("; " if plus and minus else "")
+                + ("zniknęło: " + ", ".join(minus[:20]) if minus else ""))
+    except Exception:
+        return nowa
+
+
 def _progress_for_role(role_name, snapshot):
     """
     Co z aktualnego stanu faktycznego ma isc DO TEJ ROLI.
@@ -4053,7 +4867,7 @@ def _progress_for_role(role_name, snapshot):
 
     for klucz, linia in teraz.items():
         if poprzednio.get(klucz) != linia:
-            zmiany.append(linia)
+            zmiany.append(_roznica_spisu(poprzednio.get(klucz), linia))
 
     for klucz, linia in poprzednio.items():
         if klucz not in teraz:
@@ -4080,10 +4894,67 @@ def _reset_progress_memory():
 _powody_zakonczenia = []
 
 
+def _mowi_cel_zrobiony(tekst):
+    """
+    v476: czy odpowiedz potwierdza "CEL ZROBIONY" — a nie tylko cytuje
+    te slowa. Bieg 2026-10-11 00:13, krok 36: Tomek napisal "CEL NIE
+    JEST ZROBIONY (...) z cala pewnoscia nie jest to „CEL ZROBIONY”",
+    Marek "DONE jest falszywe" — a v474 szukal samego napisu i bieg
+    sie zakonczyl.
+    """
+    # v480cr: bieg 2026-10-19 05:01, krok 89 (druzyna 1). Tomek: "nie CEL
+    # ZROBIONY w pelnym sensie", a nizej przyklad: Zamiast „CEL ZROBIONY”
+    # napisz wprost: > CEL ZROBIONY w zakresie mierzalnym…". Marek: "CEL
+    # NIEZROBIONY w calosci" i „dobra robota z rozdzieleniem »CEL ZROBIONY«
+    # od »DONE«". Obaj "potwierdzili" cel, bo liczyl sie kazdy napis.
+    # Teraz: zaprzeczenie gdziekolwiek wygrywa, a cytaty (w cudzyslowie,
+    # linie od ">", "zamiast …") i "cel zrobiony czesciowo / w zakresie"
+    # nie sa potwierdzeniem. Niejasne = cel trwa.
+    linie = [
+        l for l in str(tekst or "").splitlines()
+        if not l.strip().lstrip("*_ ").startswith(">")
+    ]
+    t = " ".join(" ".join(linie).lower().split())
+    if re.search(
+        r"\bcel\W+(?:\w+\W+){0,2}nie\W*(?:jest\W+)?zrobiony"
+        r"|\bnie\W+(?:\w+\W+){0,1}cel\W{0,3}zrobiony"
+        r"|cel\W{0,3}zrobiony\W+(?:\w+\W+){0,3}?(?:cz[eę][sś]ciowo|w\W+zakresie"
+        r"|w\W+cz[eę][sś]ci|nie\W+w\W+ca[lł]o[sś]ci|nie\W+ca[lł]kiem)",
+        t
+    ):
+        return False
+    t = re.sub(r"[„“”\"«»][^„“”\"«»]{0,400}[„“”\"«»]", " ", t)
+    for m in re.finditer(r"cel\W{0,3}zrobiony", t):
+        przed = t[max(0, m.start() - 40):m.start()]
+        if re.search(r"\bnie\b|\bani\b|\bnigdy\b|\bzanim\b|\bjeśli\b|\bjesli\b|\bgdy\b|\bzamiast\b", przed):
+            continue
+        return True
+    return False
+
+
+def _mowi_tylko_uzytkownik(tekst):
+    """
+    v480: czy odpowiedz mowi wprost, ze to moze zrobic TYLKO
+    uzytkownik — a nie cytuje albo zaprzecza ("to nie jest cos, co
+    tylko uzytkownik moze zrobic"). Ta sama ostroznosc co
+    _mowi_cel_zrobiony().
+    """
+    t = " ".join(str(tekst or "").lower().split())
+    for m in re.finditer(r"tylko\W{0,3}u[żz]ytkownik", t):
+        przed = t[max(0, m.start() - 40):m.start()]
+        if re.search(r"\bnie\b|\bani\b|\bnigdy\b|\bzanim\b|\bjeśli\b|\bjesli\b|\bgdy\b", przed):
+            continue
+        return True
+    return False
+
+
 def _reset_powody_zakonczenia():
     """Nowy cel = wnioski o niewykonalnosci poprzedniego nie licza sie."""
 
     del _powody_zakonczenia[:]
+    globals()["_failed_z_droga"] = 0
+    globals()["_zespol_bez_drogi"] = False
+    globals()["_done_odrzucone"] = 0
 
 
 def _zespol_slyszal_juz_ten_powod(reason, ile_prob=2):
@@ -4283,7 +5154,10 @@ def _wspolne_dla_wolanego(rola):
 
     kawalki = []
 
-    uzytkownik = _co_powiedzial_uzytkownik()
+    uzytkownik = (
+        "" if rola in _ROLE_TYLKO_PYTANIE
+        else _co_powiedzial_uzytkownik(rola)
+    )
 
     if uzytkownik:
         kawalki.append(
@@ -4304,7 +5178,7 @@ def _wspolne_dla_wolanego(rola):
     return "".join(k for k in kawalki if k)
 
 
-def _co_powiedzial_uzytkownik():
+def _co_powiedzial_uzytkownik(rola=None):
     """
     Zdania, ktore uzytkownik napisal w tym celu — do przekazania
     zespolowi (v341).
@@ -4342,10 +5216,93 @@ def _co_powiedzial_uzytkownik():
         if l.strip() and not l.startswith(_CEL_ZDAN_PREFIX)
     ]
 
+    # v480et: to samo zdanie wpisane dwa razy idzie raz (bieg 2026-10-24:
+    # "Pomysl, nie polecenie: w programie nie ma limitu..." dwa razy
+    # pod rzad u kazdej roli).
+    zdania = list(dict.fromkeys(zdania))
+
+    if rola:
+        zdania = _jeszcze_niewyslane_zdania(rola, zdania)
+
     if not zdania:
         return ""
 
     return "\n\n".join(zdania)
+
+
+# v480: ktore zdania uzytkownika ktora rola juz dostala — w ktorej
+# rozmowie. Patrz _jeszcze_niewyslane_zdania().
+_ZDANIA_WYSLANE_FILE = STATE_DIR / "zdania_uzytkownika_wyslane.json"
+
+_URUCHOMIENIE_ID = (
+    os.environ.pop("AEL_URUCHOMIENIE_ID", "") or str(int(time.time()))
+)
+
+# v480n: ktora rozmowa roli dostala ktory cel — patrz _goal_briefing_for().
+_CEL_WYSLANY_FILE = STATE_DIR / "cel_wyslany.json"
+
+
+def _jeszcze_niewyslane_zdania(rola, zdania):
+    """
+    v480: kazde zdanie uzytkownika idzie do roli raz.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 11:07, krok 21).
+    Blok "Uzytkownik:" niosl WSZYSTKIE zdania z tego celu i wracal w
+    calosci, gdy tylko doszlo nowe — a po restarcie programu znowu,
+    bo pamiec "juz widziala" zyla tylko w jednym uruchomieniu, choc
+    rozmowa z DeepSeekiem trwa dalej. Teraz pamietamy to na dysku,
+    przy identyfikatorze rozmowy: nowa rozmowa (reset, czysta Ela)
+    dostaje zdania od nowa, wznowiona tylko te, ktorych jeszcze nie
+    miala. Nigdy nie rzuca.
+    """
+
+    try:
+        if rola == "PROGRESS_ESTIMATOR":
+            # Ela zaczyna czysta rozmowe w kazdym uruchomieniu (v480).
+            rozmowa = "uruchomienie-" + _URUCHOMIENIE_ID
+        else:
+            _s = sessions.get(rola)
+            rozmowa = (
+                getattr(_s, "chat_session_id", None)
+                if _s is not None
+                else (_load_session_state(rola) or {}).get(
+                    "chat_session_id"
+                )
+            )
+
+        wszystko = read_json(_ZDANIA_WYSLANE_FILE, {})
+        if not isinstance(wszystko, dict):
+            wszystko = {}
+
+        wpis = wszystko.get(rola) or {}
+        poprzednia = wpis.get("rozmowa")
+
+        if poprzednia and rozmowa and poprzednia != rozmowa:
+            wpis = {}
+
+        wyslane = set(wpis.get("zdania") or [])
+
+        def _odcisk(z):
+            return hashlib.sha1(z.encode("utf-8")).hexdigest()[:16]
+
+        nowe = [z for z in zdania if _odcisk(z) not in wyslane]
+
+        if nowe:
+            wyslane.update(_odcisk(z) for z in nowe)
+            wszystko[rola] = {
+                "rozmowa": rozmowa or poprzednia,
+                "zdania": sorted(wyslane),
+            }
+            _ZDANIA_WYSLANE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _ZDANIA_WYSLANE_FILE.write_text(
+                json.dumps(wszystko, ensure_ascii=False),
+                encoding="utf-8"
+            )
+
+        return nowe
+
+    except Exception:
+        return zdania
 
 
 def _przypnij_zdania_uzytkownika_do_celu(goal):
@@ -4444,6 +5401,11 @@ def _set_current_goal(goal):
     _main_override_for_critic = None
 
 
+# v480: role, ktore dostaja tylko swoja tozsamosc i pytanie do siebie —
+# bez celu i bez zdan uzytkownika. Patrz _goal_briefing_for().
+_ROLE_TYLKO_PYTANIE = {"RESEARCHER"}
+
+
 def _goal_briefing_for(name):
     """
     Blok CEL doklejany WYŁĄCZNIE do pierwszej wiadomości do danej
@@ -4456,15 +5418,113 @@ def _goal_briefing_for(name):
     if not _current_goal_text:
         return ""
 
+    if name in _ROLE_BEZ_CELU:
+        return ""
+
     if name in _goal_briefed:
+        return ""
+
+    # v480: Kamil szuka w sieci tego, o co go pytaja. Calego celu
+    # (12 kB misji) nie potrzebuje — dostaje swoja role i pytanie.
+    # Bieg 2026-10-11 12:34: na jedno pytanie MAIN-a o grokking
+    # poszlo do niego ~25 kB, w tym cel i dwa razy slowa uzytkownika.
+    if name in _ROLE_TYLKO_PYTANIE:
         return ""
 
     _goal_briefed.add(name)
 
+    # v480aq: w rywalizacji do celu dochodzi raz opis rywalizacji —
+    # takze rozmowie, ktora sam cel dostala juz wczesniej.
+    _rywal = "" if name == "ARBITER" else _rywalizacja_tekst()
+    _odcisk_rywal = (
+        hashlib.sha1(_rywal.encode("utf-8")).hexdigest()[:16] if _rywal else ""
+    )
+    _poprzednia_ocena = ""
+
+    # v480n: wznowiona rozmowa, ktora ten cel juz dostala, nie dostaje
+    # go drugi raz.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 16:58). Po cichej
+    # aktualizacji o 17:16 rozmowa MAIN-a zostala wznowiona ("Sesja
+    # MAIN: OK (wznowiona...)"), a i tak poszlo do niej 17 kB — caly
+    # cel od nowa. Tak samo przy kazdym zwyklym restarcie programu:
+    # pierwsza wiadomosc roli w uruchomieniu skreslala ja z
+    # _goal_briefed, bo kiedys (v191) restart znaczyl pusta historie.
+    # Od wznawiania rozmow to juz nieprawda. Pamietamy wiec na dysku,
+    # ktora rozmowa (chat_session_id) dostala ktory cel.
+    try:
+        _s = sessions.get(name)
+        _rozmowa = getattr(_s, "chat_session_id", None) if _s is not None else None
+        _odcisk_celu = hashlib.sha1(
+            _current_goal_text.encode("utf-8")
+        ).hexdigest()[:16]
+        _wyslane = read_json(_CEL_WYSLANY_FILE, {})
+        if not isinstance(_wyslane, dict):
+            _wyslane = {}
+        _wpis = _wyslane.get(name) or {}
+
+        if (
+            _rozmowa
+            and _wpis.get("rozmowa") == _rozmowa
+            and _wpis.get("cel") == _odcisk_celu
+        ):
+            if _rywal and _wpis.get("rywalizacja") != _odcisk_rywal:
+                _znala_stare = bool(_wpis.get("rywalizacja"))
+                _wpis["rywalizacja"] = _odcisk_rywal
+                _wyslane[name] = _wpis
+                write_json(_CEL_WYSLANY_FILE, _wyslane)
+                # v480dq: rozmowa znala juz poprzednie zasady — mowimy
+                # wprost, ze to zmiana i od kiedy obowiazuje.
+                _zmiana = (
+                    "Zasady rywalizacji się zmieniły — od teraz obowiązują "
+                    "te poniżej (zastępują poprzednie):\n\n"
+                    if _znala_stare else ""
+                )
+                return _zmiana + _rywal + "\n\n"
+            return ""
+
+        # v480cs: bieg 2026-10-19 14:52 — rozmowa Sedziego dobila do
+        # limitu dlugosci, nowa rozmowa nie znala jego skali i oceny
+        # spadly z 48%/53% na 7%/9% przy tym samym stanie prac. Nowa
+        # rozmowa Sedziego przy tym samym celu dostaje raz jego ostatnia
+        # ocene.
+        if (
+            name == "ARBITER" and _rozmowa
+            and _wpis.get("cel") == _odcisk_celu
+            and _wpis.get("rozmowa") and _wpis.get("rozmowa") != _rozmowa
+        ):
+            _o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+            # v480dv: tylko ocena do tego samego celu (bieg 2026-10-23/24:
+            # po zmianie celu na v4 Sedzia ciagnal 70% z v3 do 85%).
+            if (
+                isinstance(_o, dict) and _o.get("druzyna_1")
+                and _o.get("cel") == _odcisk_celu
+            ):
+                _poprzednia_ocena = (
+                    "Poprzednia rozmowa z Tobą się skończyła (na przykład "
+                    "zapełniła się). Twoja ostatnia ocena w niej, z "
+                    + str(_o.get("czas", "")) + ":\n"
+                    + json.dumps({
+                        k: _o.get(k) for k in
+                        ("druzyna_1", "druzyna_2", "prowadzi", "uzasadnienie")
+                    }, ensure_ascii=False, indent=1)
+                    + "\n\n"
+                )
+
+        if _rozmowa:
+            _wyslane[name] = {"rozmowa": _rozmowa, "cel": _odcisk_celu,
+                              "rywalizacja": _odcisk_rywal}
+            write_json(_CEL_WYSLANY_FILE, _wyslane)
+    except Exception:
+        pass
+
     # v335: sam cel, jego slowami. "CEL, nad ktorym pracujemy:" i
     # "(Mowie to raz, na poczatku...)" to byly nasze zdania o naszej
     # rozmowie — czyli dokladnie ten szablon, ktorego nie chcemy.
-    return _current_goal_text + "\n\n"
+    return (
+        _current_goal_text + "\n\n" + (_rywal + "\n\n" if _rywal else "")
+        + _poprzednia_ocena
+    )
 
 
 def _load_session_state(name):
@@ -4478,6 +5538,19 @@ def _load_session_state(name):
         isinstance(data, dict)
         and data.get("chat_session_id")
     ):
+        # v480aq: rozmowa z innego konta nie da sie wznowic tym
+        # tokenem (przejscie miedzy zwyklym programem a rywalizacja
+        # przenosi role na inne konto) — wtedy zaczyna sie nowa.
+        try:
+            _konto = int(data.get("konto") or _ROLE_ACCOUNT_DOMYSLNE.get(name, 1))
+            if (
+                _account_tokens
+                and _account_tokens.get(_konto)
+                != _account_tokens.get(_account_of(name))
+            ):
+                return None
+        except Exception:
+            pass
         return data
 
     return None
@@ -4494,7 +5567,8 @@ def _save_session_state(name, session, prompt_hash=None, prompt_text=None,
 
     data = {
         "chat_session_id": session.chat_session_id,
-        "parent_message_id": session.parent_message_id
+        "parent_message_id": session.parent_message_id,
+        "konto": _account_of(name),
     }
 
     # v342: jakie fakty o maszynie ta sesja juz slyszala — zeby przy
@@ -4595,6 +5669,24 @@ def _clear_session_state(name):
         pass
 
 
+# v453: role, ktore rozmawiaja BEZ myslenia (tryb szybki strony).
+#
+# ZMIERZONE (zdarzenia biegu 2026-09-26 14:04): Ela oddala 228 znakow
+# JSON-a po 49 s i 1322 po 22 s; Ola streszcza cudzy tekst. Zadna z
+# nich nie rozumuje nad celem — czeka sie na myslenie, z ktorego nic
+# nie wchodzi do odpowiedzi. MAIN, Tomek, Marek, Bartek, Piotr, Ania
+# i Wojtek mysla jak dotad; Kamil — patrz _szukanie_bez_myslenia().
+# DEEPSEEK_BEZ_MYSLENIA="BROWSER,PROGRESS_ESTIMATOR" zmienia liste;
+# pusta wartosc = wszyscy z mysleniem.
+_ROLE_BEZ_MYSLENIA = tuple(
+    r.strip().upper()
+    for r in os.environ.get(
+        "DEEPSEEK_BEZ_MYSLENIA", "BROWSER,PROGRESS_ESTIMATOR"
+    ).split(",")
+    if r.strip()
+)
+
+
 def start_session(name, system_prompt):
 
     try:
@@ -4604,6 +5696,14 @@ def start_session(name, system_prompt):
         session = (
             deepseek_model.start_chat()
         )
+
+        # v453: Ola (streszcza) i Ela (procent) bez myslenia — patrz
+        # _ROLE_BEZ_MYSLENIA.
+        if name in _ROLE_BEZ_MYSLENIA:
+            try:
+                session.thinking_enabled = False
+            except Exception:
+                pass
 
         # v187 (na wyraźną prośbę użytkownika, 2026-08-30): Kamil
         # (RESEARCHER) dostaje NATYWNĄ zdolność szukania w sieci
@@ -4672,6 +5772,26 @@ def start_session(name, system_prompt):
                 "DEEPSEEK",
                 name + ": poprzednia rozmowa zaczynala sie inaczej "
                 "niz ta — zaczynam nowa."
+            )
+            saved = None
+
+        # v480: Ela ocenia od nowa przy kazdym uruchomieniu.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 09:20).
+        # Po v478 Ela dostala nowy promt jako aktualizacje w starej
+        # rozmowie — i dalej pisala "percent": 99, choc w tym samym
+        # "summary" wyliczala kilkanascie rzeczy NIE ZROBIONYCH.
+        # Jej historia to dziesiatki wlasnych "99%", a model trzyma
+        # sie tego, co sam wczesniej napisal. Ela nie prowadzi
+        # rozmowy z zespolem — cel dostaje na poczatku kazdego
+        # uruchomienia, a stan co krok — wiec nic nie traci, gdy
+        # zaczyna czysta rozmowa. Reszta zespolu wznawia swoje
+        # rozmowy jak dotad.
+        if saved and name == "PROGRESS_ESTIMATOR" and not _PO_AKTUALIZACJI:
+            log(
+                "DEEPSEEK",
+                name + ": ocena postępu zaczyna się od czystej "
+                "rozmowy w każdym uruchomieniu."
             )
             saved = None
 
@@ -4785,6 +5905,10 @@ def start_session(name, system_prompt):
                     "uruchomienia)"
                 )
 
+            # v463: rozmowa trwa, ale program to nowe uruchomienie —
+            # MAIN w kroku 1 pisal "Nie widzę wyników poprzedniego RUN".
+            globals().setdefault("_wznowione_sesje", set()).add(name)
+
         else:
 
             # v342: pierwsza wiadomosc to fakty o tej maszynie,
@@ -4831,6 +5955,14 @@ def start_session(name, system_prompt):
                 f"Sesja {name}: OK"
             )
 
+            # v480n: nowa rozmowa nie widziala niczego. Bez tego po
+            # zerwanej rozmowie albo limicie na stronie rola dostawala
+            # cel, ale bloki stanu (postep, pliki, wyniki, co mowili
+            # koledzy) byly juz "widziane" w poprzednim czacie i
+            # _only_if_new je pomijal. Teraz dostaje je od nowa, raz.
+            for _slot in [k for k in _role_seen_blocks if k[0] == name]:
+                _role_seen_blocks.pop(_slot, None)
+
         sessions[name] = session
 
         return session
@@ -4838,6 +5970,11 @@ def start_session(name, system_prompt):
     except Exception as e:
 
         error_text = str(e)
+
+        # v480cd: bez internetu nie ma o czym meldowac — czekamy na
+        # siec i zakladamy (albo wznawiamy) te sama rozmowe jeszcze raz.
+        if _czekaj_na_internet(name, e):
+            return start_session(name, system_prompt)
 
         # Zaobserwowany realny przypadek: token konta (userToken z
         # localStorage chat.deepseek.com) po prostu WYGASŁ po
@@ -5000,17 +6137,258 @@ def _pozostaly_cooldown_konta(name):
         return 0.0
 
 
+# v480bi: bieg 2026-10-15 02:00-05:51 — konto 1 przez prawie 4 h na
+# kazda wiadomosc dostawalo od serwera "Server busy" / "Server is
+# temporarily unavailable" (pusta odpowiedz), a program pukal co ~2 min
+# (okolo 270 wiadomosci). Decyzja uzytkownika: po 3 takich odpowiedziach
+# z rzedu konto stoi 2 h, potem jedna proba; dalej blad — kolejne 2 h.
+# Przerwa jest w pliku, wiec widzi ja tez druga druzyna i nowy start.
+_PRZERWA_KONTA_S = 2 * 3600
+_BLEDY_SERWERA_PROG = 3
+_bledy_serwera = {}
+
+
+def _plik_przerwy_konta(account):
+    return HOME / (".ael_przerwa_konta_" + str(account) + ".txt")
+
+
+def _przerwa_konta_do(account):
+    """Do kiedy (time.time()) konto ma przerwe za bledy serwera; 0 = brak."""
+    try:
+        return float(_plik_przerwy_konta(account).read_text().strip() or 0)
+    except Exception:
+        return 0.0
+
+
+# ------------------------------------------------------------
+# v480cd: BRAK INTERNETU TO NIE AWARIA KONTA
+# ------------------------------------------------------------
+# Uzytkownik (2026-10-17): "jak jest brak internetu zrob stop,
+# odroznij to od braku na koncie, zeby sie nie otwieraly nowe
+# sesje". Dotad zerwane polaczenie szlo ta sama droga co awaria
+# rozmowy albo konta: restart sesji, czat testowy, nowa rozmowa,
+# a po serii — 2 h przerwy konta. Bez sieci zadna z tych prob nie
+# ma szans i kazda tylko psuje stan roli.
+#
+# Teraz: blad, ktory wyglada na polaczenie, sprawdzamy jednym
+# pytaniem — czy telefon w ogole widzi internet (kilka niezaleznych
+# adresow, nie tylko DeepSeek). Nie widzi — program staje i czeka,
+# az siec wroci, a potem ponawia TO SAMO w TEJ SAMEJ rozmowie. Widzi
+# — to problem po stronie DeepSeeka albo konta i dziala dawna droga.
+
+_BLAD_SIECI_RE = re.compile(
+    r"Failed to resolve|NameResolution|getaddrinfo|Name or service not known"
+    r"|No address associated|Temporary failure in name resolution"
+    r"|Network is unreachable|No route to host|Connection refused"
+    r"|Connection reset|Connection aborted|ConnectionError|ConnectTimeout"
+    r"|ReadTimeout|timed out|Max retries exceeded|RemoteDisconnected"
+    r"|ChunkedEncodingError|ProtocolError|IncompleteRead|Broken pipe"
+    r"|SSLEOFError|EOF occurred|Software caused connection abort"
+    r"|Errno 101|Errno 104|Errno 110|Errno 111|Errno 113|Errno 7\b"
+    r"|Errno -2|Errno -3"
+    # v480cg: opendeep idzie przez curl_cffi, a curl mowi inaczej niz
+    # requests — bieg 2026-10-17 10:44: "curl: (6) Could not resolve host".
+    r"|Could not resolve|Failed to connect|Couldn't connect"
+    r"|Recv failure|Send failure|Empty reply from server"
+    r"|curl: \((?:6|7|28|35|52|55|56)\)",
+    re.IGNORECASE
+)
+
+_ADRESY_SPRAWDZENIA_SIECI = (
+    ("1.1.1.1", 443),
+    ("8.8.8.8", 53),
+    ("chat.deepseek.com", 443),
+    ("www.google.com", 443),
+)
+
+_CO_ILE_SPRAWDZAM_SIEC_S = 15
+_brak_sieci_lock = _threading.Lock()
+_brak_sieci_od = [0.0]
+
+
+def _wyglada_na_blad_sieci(blad):
+    tekst = type(blad).__name__ + ": " + str(blad or "") if isinstance(
+        blad, BaseException) else str(blad or "")
+    return bool(_BLAD_SIECI_RE.search(tekst))
+
+
+def _internet_jest(timeout=5):
+    """Czy telefon dosiega KTOREGOKOLWIEK z kilku niezaleznych adresow."""
+    import socket
+    for host, port in _ADRESY_SPRAWDZENIA_SIECI:
+        try:
+            socket.create_connection((host, port), timeout=timeout).close()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _czekaj_na_internet(name, blad):
+    """
+    Gdy to brak internetu: czekamy (bez limitu), az wroci, i zwracamy
+    True — wolajacy ponawia to samo w tej samej rozmowie. Gdy internet
+    jest: False, nic nie robimy.
+    """
+    if not _wyglada_na_blad_sieci(blad) or _internet_jest():
+        return False
+    with _brak_sieci_lock:
+        pierwszy = not _brak_sieci_od[0]
+        if pierwszy:
+            _brak_sieci_od[0] = time.time()
+    if pierwszy:
+        log(
+            "SIEĆ",
+            "Brak internetu (" + str(name) + ": " + short(str(blad), 160)
+            + "). To nie jest problem konta ani DeepSeeka — wstrzymuję "
+            "pracę i czekam, aż sieć wróci. Nie zakładam nowych rozmów."
+        )
+    ostatni_log = time.time()
+    while not _internet_jest():
+        time.sleep(_CO_ILE_SPRAWDZAM_SIEC_S)
+        if time.time() - ostatni_log >= 600:
+            ostatni_log = time.time()
+            log(
+                "SIEĆ",
+                "Nadal brak internetu — czekam już "
+                + str(int((time.time() - (_brak_sieci_od[0] or time.time())) / 60))
+                + " min."
+            )
+    with _brak_sieci_lock:
+        od = _brak_sieci_od[0]
+        _brak_sieci_od[0] = 0.0
+    if od:
+        log(
+            "SIEĆ",
+            "Internet wrócił po " + str(max(1, int((time.time() - od) / 60)))
+            + " min — wracam do tych samych rozmów."
+        )
+    # Siec dopiero wstala: chwila oddechu, zeby DNS i polaczenia sie
+    # ulozyly, zanim pojdzie prawdziwe zapytanie.
+    time.sleep(5)
+    return True
+
+
+class _ProbyDeepSeek:
+    """range(n), w ktorym jedna proba moze pojsc jeszcze raz (po sieci)."""
+
+    def __init__(self, n):
+        self.n = n
+        self._powtorz = False
+
+    def powtorz(self):
+        self._powtorz = True
+
+    def __iter__(self):
+        i = 0
+        while i < self.n:
+            yield i
+            if self._powtorz:
+                self._powtorz = False
+                continue
+            i += 1
+
+
+def _blad_serwera_w_strumieniu(poczatek):
+    t = str(poczatek or "")
+    return '"type":"error"' in t and (
+        "Server busy" in t or "temporarily unavailable" in t
+        or "backend_err" in t
+    )
+
+
+def _czat_testowy_odpowiada(name):
+    """Osobny, pusty czat na koncie tej roli i jedna krotka wiadomosc."""
+    try:
+        _activate_account_for_role(name)
+        probny = deepseek_model.start_chat()
+        try:
+            probny.thinking_enabled = False
+        except Exception:
+            pass
+        _deepseek_pace(name)
+        tekst, _ = _deepseek_send_experimental(
+            name, probny, "Odpowiedz jednym słowem: ok"
+        )
+        return bool(str(tekst or "").strip())
+    except Exception as e:
+        # v480cd: brak sieci to nie "konto nie odpowiada" — bez tego
+        # konto dostawalo 2 h przerwy za to, ze telefon stracil zasieg.
+        if _czekaj_na_internet(name, e):
+            return _czat_testowy_odpowiada(name)
+        log("DEEPSEEK", "Czat testowy nie odpowiedział: " + short(str(e), 200))
+        return False
+
+
+def _zanotuj_odpowiedz_serwera(name, text):
+    """Po kazdej odpowiedzi: 3 bledy serwera z rzedu = 2 h przerwy konta."""
+    account = _account_of(name)
+    if str(text or "").strip() or not _blad_serwera_w_strumieniu(_poczatek_strumienia):
+        if str(text or "").strip():
+            _bledy_serwera[account] = 0
+        return
+    _bledy_serwera[account] = _bledy_serwera.get(account, 0) + 1
+    if _bledy_serwera[account] < _BLEDY_SERWERA_PROG:
+        return
+    # v480bj: najpierw osobny, pusty czat testowy. Odpowiada — zablokowala
+    # sie tylko rozmowa tej roli: dostaje nowy czat (z celem i stanem,
+    # jak kazda nowa rozmowa), konto pracuje dalej. Nie odpowiada — stoi
+    # serwer albo konto: dopiero wtedy 2 h przerwy.
+    if _czat_testowy_odpowiada(name):
+        _bledy_serwera[account] = 0
+        _clear_session_state(name)
+        sessions.pop(name, None)
+        _goal_briefed.discard(name)
+        log(
+            "DEEPSEEK",
+            "Konto " + str(account) + ": czat testowy odpowiada — "
+            "zablokowała się tylko rozmowa " + str(name) + ". Ta rola "
+            "dostaje nowy czat z celem i stanem, konto pracuje dalej."
+        )
+        return
+    do = time.time() + _PRZERWA_KONTA_S
+    try:
+        _plik_przerwy_konta(account).write_text(str(int(do)))
+    except Exception:
+        pass
+    _get_health(account)["cooldown_until"] = do
+    log(
+        "DEEPSEEK",
+        "Konto " + str(account) + ": serwer DeepSeek " + str(_bledy_serwera[account])
+        + " razy z rzędu odpowiedział błędem (Server busy / temporarily "
+        "unavailable). Wstrzymuję to konto na 2 h — do "
+        + datetime.fromtimestamp(do).strftime("%H:%M")
+        + " — potem jedna próba."
+    )
+
+
 def _deepseek_circuit_wait(name):
 
     account = _account_of(name)
     health = _get_health(account)
+
+    health["cooldown_until"] = max(
+        health["cooldown_until"], _przerwa_konta_do(account)
+    )
 
     remaining = (
         health["cooldown_until"]
         - time.time()
     )
 
-    if remaining > 0:
+    if remaining > 0 and _przerwa_konta_do(account) >= health["cooldown_until"]:
+
+        log(
+            "DEEPSEEK",
+            "Konto " + str(account) + " ma przerwę za błędy serwera "
+            "DeepSeek — czekam do "
+            + datetime.fromtimestamp(health["cooldown_until"]).strftime("%H:%M")
+            + " i wtedy próbuję jedną wiadomością."
+        )
+
+        time.sleep(remaining)
+
+    elif remaining > 0:
 
         log(
             "DEEPSEEK",
@@ -5075,7 +6453,10 @@ _PRZECIAZENIE_RE = re.compile(
 #                           i to TERAZ, nie przy nastepnym starcie.
 _ZERWANA_ROZMOWA_RE = re.compile(
     r"invalid\s+message\s+id|biz_code\"?\s*:\s*26|"
-    r"session\s+not\s+found|chat\s+session.*not\s+exist",
+    r"session\s+not\s+found|chat\s+session.*not\s+exist|"
+    # v480w: rozmowa dobila do limitu dlugosci na stronie — patrz
+    # _deepseek_raw_post_with_action().
+    r"context_length_exceeded|length\s+limit\s+reached",
     re.IGNORECASE
 )
 
@@ -5156,6 +6537,8 @@ def _przyspiesz_po_sukcesie(name):
 
     account = _account_of(name)
 
+    _odbuduj_budzet_po_sukcesie(account)
+
     with _deepseek_pacing_lock:
 
         biezacy = _biezacy_odstep(account)
@@ -5228,9 +6611,60 @@ _OKNO_BUDZETU = 3600.0
 # Znaczniki czasu wyslanych wiadomosci, osobno na konto.
 _deepseek_wyslane = {}
 
+# v480cg: licznik i sciety budzet przezywaja przeladowanie programu.
+#
+# Bieg 2026-10-17 (druzyna 1): o 09:45 strona powiedziala "za szybko",
+# program zszedl do 38 wiadomosci na godzine i odczekal. O 10:29 cicha
+# aktualizacja przeladowala program — licznik wyslanych wrocil do zera,
+# a budzet do 90 — i o 11:04 ta sama sciana i drugie pol godziny
+# czekania. Wyslane wiadomosci to fakt o koncie, nie o procesie, wiec
+# trzymamy je w pliku przy koncie. Sciety budzet wraca, gdy strona
+# scinala go w ostatniej godzinie (to ta sama sytuacja na koncie).
+_budzet_wczytany = set()
+
+
+def _plik_budzetu_konta(account):
+    return HOME / (".ael_budzet_konta_" + str(account) + ".json")
+
+
+def _wczytaj_budzet_konta(account):
+    if account in _budzet_wczytany:
+        return
+    _budzet_wczytany.add(account)
+    try:
+        d = json.loads(_plik_budzetu_konta(account).read_text())
+    except Exception:
+        return
+    if not isinstance(d, dict):
+        return
+    teraz = time.time()
+    _deepseek_wyslane[account] = sorted(
+        float(t) for t in (d.get("wyslane") or [])
+        if isinstance(t, (int, float)) and teraz - _OKNO_BUDZETU < t <= teraz
+    )
+    try:
+        if d.get("obciety") and teraz - float(d.get("kiedy") or 0) < _OKNO_BUDZETU:
+            _budzet_obciety[account] = int(d["obciety"])
+            _budzet_obciety_kiedy[account] = float(d["kiedy"])
+    except Exception:
+        pass
+
+
+def _zapisz_budzet_konta(account):
+    try:
+        _plik_budzetu_konta(account).write_text(json.dumps({
+            "wyslane": _deepseek_wyslane.get(account, []),
+            "obciety": _budzet_obciety.get(account),
+            "kiedy": _budzet_obciety_kiedy.get(account, 0),
+        }))
+    except Exception:
+        pass
+
 
 def _posprzataj_okno(account, teraz):
     """Wyrzuca z licznika wiadomosci starsze niz godzina."""
+
+    _wczytaj_budzet_konta(account)
 
     znaczniki = _deepseek_wyslane.setdefault(account, [])
     granica = teraz - _OKNO_BUDZETU
@@ -5271,8 +6705,14 @@ def _ile_czekac_na_budzet(account, teraz):
 
     znaczniki = _posprzataj_okno(account, teraz)
 
+    # v480cp: twarda sciana godzinowa liczy sie od budzetu bazowego.
+    # Sciety budzet zwalnia tempo (_odstep_z_budzetu), ale nie
+    # zamyka konta. Bieg 2026-10-18 19:27: po scieciu z 90 na 38 w
+    # oknie stalo juz ponad 28 wiadomosci, wiec program uznal godzine
+    # za wyczerpana i druzyna 1 stala 33 minuty, a druzyna 2 czekala
+    # 22 minuty na Sedziego.
     wolne = (
-        _budzet_konta_teraz(account)
+        DEEPSEEK_NA_GODZINE
         - DEEPSEEK_REZERWA_DLA_CZLOWIEKA
         - len(znaczniki)
     )
@@ -5286,6 +6726,7 @@ def _ile_czekac_na_budzet(account, teraz):
 # Budzet obciety po tym, jak strona powiedziala "za szybko" —
 # osobno na konto, trzymany do konca uruchomienia.
 _budzet_obciety = {}
+_budzet_obciety_kiedy = {}
 
 # v302: najnizszy budzet, do ktorego schodzimy po kolejnych "za
 # szybko". Musi zostawiac NAM 20 miejsc ponad rezerwa dla czlowieka,
@@ -5298,6 +6739,8 @@ _BUDZET_MINIMALNY = DEEPSEEK_REZERWA_DLA_CZLOWIEKA + 20
 
 def _budzet_konta_teraz(account):
     """Ile wiadomosci na godzine wolno na tym koncie w tej chwili."""
+
+    _wczytaj_budzet_konta(account)
 
     return _budzet_obciety.get(account, DEEPSEEK_NA_GODZINE)
 
@@ -5314,11 +6757,23 @@ def _obetnij_budzet(account):
 
     biezacy = _budzet_konta_teraz(account)
 
+    # v480cp: jeden limit strony to jedno sciecie. Kolejne "za
+    # szybko" w ciagu kilku minut to wciaz ten sam limit (ponowienia
+    # tej samej prosby), a nie dowod, ze budzet trzeba ciac dalej —
+    # 2026-10-18 19:26-19:27 konto 1 zeszlo tak z 90 na 59 i na 38 w
+    # 90 sekund.
+    if time.time() - _budzet_obciety_kiedy.get(account, 0) < _JEDEN_LIMIT_S:
+        return
+
     nowy = max(_BUDZET_MINIMALNY, int(biezacy * 0.66))
+
+    _udane_od_zmiany[account] = 0
 
     if nowy < biezacy:
 
         _budzet_obciety[account] = nowy
+        _budzet_obciety_kiedy[account] = time.time()
+        _zapisz_budzet_konta(account)
 
         log(
             "DEEPSEEK",
@@ -5330,8 +6785,44 @@ def _obetnij_budzet(account):
                   - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)))
             + " s na " + str(int(_OKNO_BUDZETU / max(1, nowy
                   - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)))
-            + " s między wiadomościami. I już przy tym zostaję."
+            + " s między wiadomościami. Gdy wiadomości będą "
+            "przechodzić, wrócę do zwykłego tempa stopniowo."
         )
+
+
+# v480cp: sciety budzet wraca do bazowego po trochu. Po kazdych
+# _UDANE_NA_KROK udanych wiadomosciach (i nie wczesniej niz
+# _JEDEN_LIMIT_S po scieciu) dokladamy _KROK_ODBUDOWY. Kolejne "za
+# szybko" znowu tnie i zeruje licznik.
+_JEDEN_LIMIT_S = 600
+_UDANE_NA_KROK = 10
+_KROK_ODBUDOWY = 10
+_udane_od_zmiany = {}
+
+
+def _odbuduj_budzet_po_sukcesie(account):
+    if account not in _budzet_obciety:
+        return
+    _udane_od_zmiany[account] = _udane_od_zmiany.get(account, 0) + 1
+    if (
+        _udane_od_zmiany[account] < _UDANE_NA_KROK
+        or time.time() - _budzet_obciety_kiedy.get(account, 0) < _JEDEN_LIMIT_S
+    ):
+        return
+    _udane_od_zmiany[account] = 0
+    stary = _budzet_obciety[account]
+    nowy = min(DEEPSEEK_NA_GODZINE, stary + _KROK_ODBUDOWY)
+    if nowy >= DEEPSEEK_NA_GODZINE:
+        _budzet_obciety.pop(account, None)
+    else:
+        _budzet_obciety[account] = nowy
+    _zapisz_budzet_konta(account)
+    log(
+        "DEEPSEEK",
+        "Konto " + str(account) + ": wiadomości przechodzą — podnoszę "
+        "budżet z " + str(stary) + " do " + str(nowy)
+        + " wiadomości na godzinę."
+    )
 
 
 def _odstep_z_budzetu(account):
@@ -5410,7 +6901,7 @@ def _czekaj_na_budzet(account):
                 + " wiadomości, w tym "
                 + str(DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
                 + " zostawione dla Ciebie). Czekam "
-                + str(int(zostalo // 60)) + " min, aż zwolni się "
+                + _min_s(zostalo) + ", aż zwolni się "
                 "miejsce — to lepsze niż ściana na koncie."
             )
 
@@ -5449,6 +6940,7 @@ def _deepseek_pace(name):
         _teraz = time.time()
         _deepseek_last_send[account] = _teraz
         _posprzataj_okno(account, _teraz).append(_teraz)
+        _zapisz_budzet_konta(account)
 
 
 # ------------------------------------------------------------
@@ -5525,7 +7017,30 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
     model = session.model
 
-    payload = {
+    # v480l: "Kontynuuj" ze strony DeepSeeka to osobny adres, nie pole
+    # "action" w /chat/completion (stad 422 przy kazdej probie od v75).
+    # Strona wysyla POST /api/v0/chat/continue z id uciętej odpowiedzi
+    # (response_message_id, u nas session.parent_message_id po
+    # strumieniu) i fallback_to_resume. Strumien wraca w tym samym
+    # formacie, wiec reszta tej funkcji czyta go bez zmian. Zrodlo:
+    # ds2api (CJackHwang/ds2api, internal/deepseek/client/
+    # client_continue.go) — wznawia tak, gdy status to INCOMPLETE.
+    kontynuacja = (action == "continue")
+    sciezka = "/chat/continue" if kontynuacja else "/chat/completion"
+
+    # v480q: patrz koniec funkcji — pusta odpowiedz nie przesuwa rozmowy.
+    _rodzic_przed = getattr(session, "parent_message_id", None)
+
+    if kontynuacja:
+        payload = {
+            "chat_session_id": session.chat_session_id,
+            "message_id": session.parent_message_id,
+            "fallback_to_resume": True,
+        }
+    else:
+        payload = None
+
+    payload = payload or {
         "chat_session_id": session.chat_session_id,
         "parent_message_id": session.parent_message_id,
         "prompt": prompt,
@@ -5549,7 +7064,8 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         pow_resp = model.session.post(
             _ods_config.base_url + "/chat/create_pow_challenge",
             headers=headers,
-            json={"target_path": "/api/v0/chat/completion"},
+            json={"target_path": "/api/v0" + sciezka},
+            timeout=_limit_dla_sesji(model.session),
         )
 
         if pow_resp.ok:
@@ -5567,12 +7083,46 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         pass
 
     response = model.session.post(
-        _ods_config.base_url + "/chat/completion",
+        _ods_config.base_url + sciezka,
         headers=headers,
         json=payload,
         stream=True,
+        timeout=_limit_dla_sesji(model.session),
     )
-    response.raise_for_status()
+
+    # v453: cialo odpowiedzi idzie do wyjatku — to w nim serwer mowi
+    # "invalid message id" / "Messages too frequent" (patrz
+    # _ZERWANA_ROZMOWA_RE, _PRZECIAZENIE_RE).
+    def _cialo():
+        # v480p: przy stream=True .text bywa pusty, choc serwer cos
+        # przyslal — bieg 2026-10-11 18:21-18:31: siedem razy
+        # "Unexpected Content-Type: application/json | " bez slowa,
+        # dlaczego DeepSeek odmowil. Dociagamy cialo z samego strumienia.
+        _t = ""
+        try:
+            _t = str(response.text or "")
+        except Exception:
+            _t = ""
+        if not _t.strip():
+            try:
+                _t = b"".join(
+                    c for c in response.iter_content(chunk_size=1024) if c
+                ).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+        if not _t.strip():
+            _t = "(serwer nie przyslal tresci; HTTP " + str(
+                getattr(response, "status_code", "?")
+            ) + ")"
+        return short(_t, 600)
+
+    try:
+        response.raise_for_status()
+    except Exception as e:
+        raise RuntimeError(
+            "HTTP " + str(getattr(response, "status_code", "?"))
+            + ": " + str(e) + " | " + _cialo()
+        ) from None
 
     if "text/event-stream" not in response.headers.get(
         "Content-Type", ""
@@ -5580,6 +7130,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         raise RuntimeError(
             "Unexpected Content-Type: "
             + response.headers.get("Content-Type", "")
+            + " | " + _cialo()
         )
 
     full_text = ""
@@ -5673,6 +7224,8 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # od jednego do dwoch znakow. To sa dwie rozne sciezki w tym
     # czytniku i trzeba zobaczyc, ktora.
     poczatek_strumienia = []
+    _limit_rozmowy = [""]
+    _za_szybko = [""]
 
     # Pierwszy kawalek tresci, ktory realnie doszedl do odpowiedzi.
     pierwsza_tresc = [""]
@@ -5710,6 +7263,39 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
             data = json.loads(raw_data)
             content = ""
+
+            # v480w: patrz koniec funkcji.
+            if (
+                isinstance(data, dict)
+                and (
+                    data.get("finish_reason") == "context_length_exceeded"
+                    or (
+                        data.get("type") == "error"
+                        and "length limit" in str(data.get("content", "")).lower()
+                    )
+                )
+            ):
+                _limit_rozmowy[0] = str(
+                    data.get("content") or "context_length_exceeded"
+                )
+
+            # v480bj: "Messages too frequent" przychodzi w strumieniu, nie
+            # jako blad HTTP — bieg 2026-10-11, 23 razy: program bral to za
+            # pusta odpowiedz i ponawial po 1 s, wiec ponowienie tez padalo
+            # i odpowiedz roli ginela.
+            if (
+                isinstance(data, dict)
+                and (
+                    data.get("finish_reason") == "rate_limit_reached"
+                    or (
+                        data.get("type") == "error"
+                        and "too frequent" in str(data.get("content", "")).lower()
+                    )
+                )
+            ):
+                _za_szybko[0] = str(
+                    data.get("content") or "rate_limit_reached"
+                )
 
             if "response_message_id" in data:
                 session.parent_message_id = (
@@ -6041,6 +7627,49 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             + pierwszy_blad[0]
         )
 
+    # v480q: pusta odpowiedz (bez tresci i bez myslenia) nie przesuwa
+    # rozmowy dalej.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 16:58). O 18:28
+    # Tomek dostal pusta odpowiedz; strumien zdazyl podac jej id, wiec
+    # kolejna wiadomosc szla "w odpowiedzi" na wiadomosc, ktorej serwer
+    # nie zapisal. Ponowienie i nastepna wiadomosc o 19:00: biz_code 26
+    # "invalid message id" — i program zakladal NOWA rozmowe, gubiac
+    # cala historie Tomka. To samo z Markiem o 19:03. Wracamy wiec do
+    # ostatniej prawdziwej wiadomosci w rozmowie, tak jak strona po
+    # nieudanej odpowiedzi.
+    if (
+        not kontynuacja
+        and not full_text.strip()
+        and not znakow_myslenia[0]
+        and getattr(session, "parent_message_id", None) != _rodzic_przed
+    ):
+        session.parent_message_id = _rodzic_przed
+
+    # v480w: rozmowa doszla do limitu dlugosci na stronie.
+    #
+    # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 16:58, od 02:17
+    # 12.10). Strumien MAIN-a niosl tylko:
+    #   {"type":"error","content":"Length limit reached. Please start
+    #    a new chat.","finish_reason":"context_length_exceeded"}
+    # Program bral to za pusta odpowiedz, ponawial w tej samej
+    # rozmowie i tak przez 282 kroki (3,5 godziny), spalajac budzet
+    # konta 1 — nikt nic nie robil. Ta rozmowa juz nigdy nie
+    # odpowie, wiec traktujemy ja jak zerwana: deepseek() zaklada
+    # nowa (patrz _rozmowa_zerwana), a rola dostaje w niej cel i
+    # pelny stan, jak przy kazdej nowej rozmowie.
+    if _limit_rozmowy[0] and not full_text.strip():
+        raise RuntimeError(
+            "DeepSeek: context_length_exceeded — " + _limit_rozmowy[0]
+        )
+
+    # v480bj: "za szybko" idzie sciezka przeciazenia w deepseek() —
+    # zwolnij tempo konta i sprobuj w tej samej rozmowie.
+    if _za_szybko[0] and not full_text.strip():
+        raise RuntimeError(
+            "DeepSeek: rate_limit_reached — " + _za_szybko[0]
+        )
+
     if not full_text.strip() and znakow_myslenia[0]:
         # Nie wracamy z samym "pusto" — mowimy, co naprawde przyszlo.
         globals()["_ostatnie_samo_myslenie"] = znakow_myslenia[0]
@@ -6053,7 +7682,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
 
 # Role, ktore oddaja goly JSON, nie ludzka proze (v315).
-_ROLE_ODDAJE_JSON = {"MAIN", "PROGRESS_ESTIMATOR"}
+_ROLE_ODDAJE_JSON = {"MAIN", "PROGRESS_ESTIMATOR", "ARBITER"}
 
 
 # Ile znakow SAMEGO myslenia przyszlo w ostatniej odpowiedzi, ktora
@@ -6090,6 +7719,86 @@ _szukanie_serwera = None
 # serwer go nie wlaczyl — zeby nie powtarzac tego co krok.
 _powiedziane_o_szukaniu = set()
 
+
+# ============================================================
+# SZUKANIE W SIECI DZIALA BEZ MYSLENIA (v451)
+# ============================================================
+#
+# Od v328 wiadomo z samego strumienia, ze serwer odpowiadal Kamilowi
+# z "search_enabled": false, choc prosilismy o szukanie. Biblioteka
+# opendeep (0.9) mowi to samo wprost: na chat.deepseek.com szukanie w
+# sieci jest tylko w trybie bez myslenia (V4 Flash / "Instant");
+# tryb z mysleniem (V4 Pro) je ignoruje. My zakladalismy Kamilowi
+# rozmowe z mysleniem — wiec jego "natywne szukanie" nie dzialalo,
+# a zespol dostawal co bieg to samo zdanie o braku wyszukiwarki.
+#
+# Nie zgadujemy — mierzymy, tak jak w v328. Gdy serwer pierwszy raz
+# powie "search_enabled": false, wylaczamy tej roli myslenie i
+# patrzymy na nastepna odpowiedz: gdy wraca "true", zostaje bez
+# myslenia (Kamil ma miec siec, nie rozumowanie); gdy nadal "false",
+# przywracamy myslenie i mowimy zespolowi raz, jak dotad. Koszt
+# najwyzej jednej wiadomosci bez myslenia.
+_szukanie_proba = {}
+
+
+def _szukanie_bez_myslenia(name, session):
+    """
+    True = wlasnie przelaczylismy te role na tryb bez myslenia i
+    czekamy na nastepna odpowiedz (zespolowi jeszcze nic nie mowimy).
+    False = nie ma juz czego probowac.
+    """
+
+    stan = _szukanie_proba.get(name)
+
+    if stan is None and getattr(session, "thinking_enabled", False):
+
+        try:
+            session.thinking_enabled = False
+        except Exception:
+            return False
+
+        _szukanie_proba[name] = "probujemy"
+
+        log(
+            "DEEPSEEK",
+            name + ": serwer nie włączył szukania przy myśleniu "
+            "(search_enabled=false) — od następnej wiadomości ta "
+            "rola pyta BEZ myślenia; DeepSeek szuka w sieci tylko w "
+            "tym trybie."
+        )
+
+        return True
+
+    if stan == "probujemy":
+
+        try:
+            session.thinking_enabled = True
+        except Exception:
+            pass
+
+        _szukanie_proba[name] = "nie_pomoglo"
+
+        log(
+            "DEEPSEEK",
+            name + ": bez myślenia serwer też nie szukał — "
+            "przywracam myślenie, dalej bez sieci."
+        )
+
+    return False
+
+
+# v480dp: zapasowe dopytanie, gdy przyszlo samo myslenie, a nikt nie
+# zwrocil sie do roli po imieniu. Bylo "Podaj wynik." — bieg 2026-10-22
+# (druzyna 2, kroki 262-264; druzyna 1 piec razy): MAIN bral to za
+# prosbe uzytkownika o podsumowanie i trzy kroki pisal "wynik sesji".
+# Teraz mowi, co sie stalo i co zrobic. Po polsku i pelnym zdaniem —
+# z tego samego powodu co v336 (odpowiedz wraca w jezyku rozmowy).
+_DOPYTANIE_PO_SAMYM_MYSLENIU = (
+    "Program: Twoja poprzednia odpowiedź nie dotarła — przyszło samo "
+    "myślenie, bez tekstu odpowiedzi. Napisz jeszcze raz to, co "
+    "chciałeś odpowiedzieć na ostatnią wiadomość, w tej samej formie "
+    "co zwykle. To nie jest nowe pytanie ani prośba użytkownika."
+)
 
 # Ile razy Z RZEDU dana rola oddala samo myslenie bez odpowiedzi.
 _samo_myslenie_z_rzedu = {}
@@ -6354,8 +8063,13 @@ _STATUSY_KROKU_BEZ_WYKONANIA = (
     "TASK_DUPLICATE_OF_VERIFIED_POINT",
     "TASK_ALREADY_SATISFIED_ON_DISK",
     "WNIOSEK_ZE_SIE_NIE_DA",
+    "ZESPOL_WIDZI_INNA_DROGE",
+    "CEL_NIE_JEST_ZROBIONY",
+    "PYTANIE_ZOSTAJE_W_ZESPOLE",
+    "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
     "UNKNOWN_DECISION",
     "GEMINI_QUOTA_EXHAUSTED",
+    "ASK_PRZENIESIONE",
 )
 
 
@@ -6382,6 +8096,7 @@ _STATUSY_KLOPOTU = tuple(sorted(set(
         "FAILED",
         "BRAK_KODU_DO_ZAPISU",
         "DONE_REJECTED_VERIFICATION_FAILED",
+        "RUN_TOOL_ERROR",
     )
 )))
 
@@ -6436,6 +8151,16 @@ def _deepseek_looks_truncated(text, status):
         return False, None
 
     stripped = (text or "").rstrip()
+    # v480gl2: ogon znacznikow narzedzi DeepSeeka ("cat x.log</parameter>")
+    # to nie urwane zdanie — bieg 2026-10-27: 13 prosb o dokonczenie po
+    # samym "</parameter>", a Bartek dopisywal te sama komende drugi raz.
+    stripped = re.sub(r"(?:\s*</[A-Za-z_][\w:.-]*\s*>)+$", "", stripped).rstrip()
+    try:
+        if _PODGLAD_RE.match(stripped.split("\n")[-1]):
+            # ostatnia linia to komenda PODGLĄD/URUCHOM — skonczona
+            return False, None
+    except Exception:
+        pass
 
     # Niedomkniety blok ``` to dowod, nie poszlaka — i dziala przy
     # KAZDEJ dlugosci. Tak wlasnie wygladaly dwa urwania z tego
@@ -6509,8 +8234,13 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
         return _deepseek_raw_post_with_action(
             session, prompt, action
         )
-    except Exception as e:
+    except (AttributeError, TypeError, ImportError, KeyError) as e:
 
+        # v453: powrot do send_message() biblioteki TYLKO, gdy nasza
+        # kopia nie pasuje juz do jej ksztaltu (brak metody, pola,
+        # modulu). Blad serwera i sieci idzie w gore — deepseek() ma
+        # na to restart i ponowienie; wysylanie tej samej wiadomosci
+        # drugi raz od razu tutaj dawalo dwie wiadomosci w rozmowie.
         # v260: gdy prosilismy o action='continue', awaryjne
         # session.send_message() NIE jest tym samym — wysyla nowa
         # wiadomosc (jedna spacje) i dostaje SWIEZY tekst, ktory
@@ -6760,14 +8490,10 @@ def _length_notice_for(name):
     ile = _role_last_cut_len.get(name, 0)
 
     return (
-        "Uwaga ode mnie: Twoja poprzednia odpowiedź została "
-        "ucięta po " + str(ile) + " znakach — to limit długości "
-        "odpowiedzi w tej sesji, nie Twój błąd i nie niedbalstwo. "
-        "Nie przepraszaj za to i nie zaczynaj od nowa. Po prostu "
-        "zmieść się krócej: jeden krok albo jedna sprawa na "
-        "wiadomość, bez powtarzania tego, co już ustalone. Jeśli "
-        "masz do przekazania więcej, powiedz na końcu, że ciąg "
-        "dalszy podasz w następnej wiadomości.)\n\n"
+        "Twoja poprzednia odpowiedź została ucięta po " + str(ile)
+        + " znakach — to limit długości odpowiedzi w tej sesji. "
+        "Krótsze wiadomości dochodzą w całości; ciąg dalszy można "
+        "podać w następnej.\n\n"
     )
 
 
@@ -6779,13 +8505,753 @@ _STOPKA_DEEPSEEKA_RE = re.compile(
 )
 
 
+_BLOK_Z_PODPISEM_RE = re.compile(
+    r"(?m)^([ \t]*)```([A-Za-z0-9_+-]*)[ \t]*[:\t ][ \t]*([~/\w.-]*[\w-]\.[A-Za-z0-9]{1,5})[ \t]*$"
+)
+
+
 def _bez_stopki_deepseeka(text):
     """Odpowiedz bez stopki strony DeepSeek na koncu."""
 
-    return _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
+    # v480hs: noc 27/28.10 — przy odpowiedzi urwanej i doklejonej
+    # (dalszy ciag) stopka zostawala W SRODKU tekstu, raz w srodku kodu
+    # Bartka ("cptThis response is AI-generated…" w check23_v2.py, linia
+    # 19) i plik sie nie kompilowal. Usuwamy ja wszedzie.
+    t = _STOPKA_DEEPSEEKA_RE.sub("", str(text or ""))
+    # v480hu: blok podpisany w samym otwarciu ("```python:~/MAIN_2/x.py",
+    # "```python x.py"). Program znal tylko "```python", wiec taki blok w
+    # ogole nie byl kodem — bieg 2026-10-28 12:43 (druzyna 2, krok 325):
+    # cala nowa wersja pliku Bartka nie trafila na dysk. Sciezka idzie
+    # do linii nad blokiem, tak jak naglowek, ktory program juz rozumie.
+    t = _BLOK_Z_PODPISEM_RE.sub(lambda m: m.group(1) + "`" + m.group(3) + "`\n"
+                                + m.group(1) + "```" + m.group(2), t)
+    return t.replace("This response is AI-generated, for reference only.", "").replace(
+        "This response is AI-generated, for reference only", "")
+
+
+# v480ay: jedna rozmowa naraz na koncie — takze gdy Sedzia odpowiada
+# na prosbe druzyny 2 z osobnego watku (patrz _obsluguj_prosby_druzyny_2).
+_KOLEJKA_KONTA = _threading.RLock()
 
 
 def deepseek(name, message):
+    if name in _ROLE_Z_PODGLADEM:
+        try:
+            _st = _znane_pliki_zmienione(name, message)
+            if _st:
+                message = _st + "\n\n" + str(message)
+        except Exception:
+            pass
+    with _KOLEJKA_KONTA:
+        odp = _deepseek_jedna_rozmowa(name, message)
+    # v480ft: zespol zaglada do kodu sam (PODGLĄD: grep/sed -n/head...),
+    # zamiast prosic o caly plik — wynik wraca do tej samej rozmowy.
+    if name in _ROLE_Z_PODGLADEM:
+        try:
+            odp = _podglad_dla_roli(name, odp, message)
+        except Exception as e:
+            log("PROGRAM", "Podgląd dla " + str(name) + " nie wyszedł: " + str(e))
+    return odp
+
+
+# v480ft: uzytkownik (2026-10-25): "moga sobie grzebac komendami po kodzie,
+# jak ty to robisz, nie czytajac calosci". Linia "PODGLĄD: <komenda>" w
+# wypowiedzi roli -> program uruchamia te komende (tylko odczyt) w folderze
+# druzyny i oddaje wynik tej osobie; ona odpowiada dalej.
+_ROLE_Z_PODGLADEM = (
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
+    "CODE_REVIEWER", "CODE_FIXER",
+)
+# v480gg: "**PODGLĄD:** `komenda`" (pogrubienie i kod z markdownu) —
+# bieg 2026-10-26 18:30: Bartek 4 razy z rzedu dostal odmowe, bo "**" i
+# "`" szly do basha jako czesc komendy.
+# v480gi: "URUCHOM: <komenda>" — ta sama linia, ale do uruchomienia kodu.
+_PODGLAD_RE = re.compile(
+    r"^[ \t>*_`-]*(?:PODGL(?:Ą|A)D|URUCHOM)[*_]*:[*_]*\s*(.+?)\s*$", re.M | re.I)
+
+
+def _komenda_z_podgladu(k):
+    k = str(k or "").strip()
+    # v480gk: ogon znacznikow wywolania narzedzi DeepSeeka ("cat data.py
+    # </parameter>") — bieg 2026-10-26 19:27: bash dostawal go jako czesc
+    # komendy, a Bartek kilka rund nie wiedzial, czemu cat nie dziala.
+    k = re.sub(r"(?:\s*</[A-Za-z_][\w:.-]*\s*>)+\s*$", "", k).strip()
+    for _ in range(3):
+        k2 = re.sub(r"^(?:\*\*|__|`+)\s*", "", k)
+        k2 = re.sub(r"\s*(?:\*\*|__|`+)$", "", k2).strip()
+        if k2 == k:
+            break
+        k = k2
+    return k
+# v480ga: uzytkownik (2026-10-26): MAIN przy czekaniu na proces w tle
+# odpowiadal "Czekam 6 min" — "pracować nad czymś innym" nic mu nie mowilo.
+# Ta sama linia, ktora i tak przychodzi przy czekaniu, mowi teraz, na co
+# jest ten czas; caly zespol (prosba uzytkownika), bez przymusu.
+# v480gd: uzytkownik (2026-10-26, krok z 16:37): "MAIN ma wywolac, trzeba
+# mu to napisac" — linia mowi teraz wprost, ze wywoluje sie ich decyzja
+# ASK z imieniem, i pokazuje jej ksztalt.
+# v480ge: "Ten czas jest dla zespolu" MAIN czytal tak, jakby zespol sam
+# sie dogadywal (uzytkownik 2026-10-26) — zdanie mowi teraz, kto zaczyna.
+# v480gf: bez "wynik z tla i tak przyjdzie sam" na koncu — kazde miejsce,
+# ktore dokleja te linie, mowi to juz przed nia (echo, uzytkownik 17:03).
+_CZAS_DLA_ZESPOLU = (
+    "Zespół odzywa się tylko wtedy, gdy Ty go wywołasz — sami między sobą "
+    "nie pracują. Czekanie na wynik to dobry moment, żeby to zrobić: wyślij "
+    "teraz ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
+    "\"<imię>\", \"ask_question\": \"...\"}. Bartek może sprawdzić albo "
+    "dopisać kod, Piotr przejrzeć kod, Ania naprawić błąd, Marek obejrzeć "
+    "wyniki i znaleźć słabe punkty, Tomek ułożyć następny krok, Kamil sprawdzić fakty, Wojtek ocenić praktyczny sens, "
+    "Ola podsumować, co wyszło, Ela ocenić postęp, a Igor spojrzeć świeżym "
+    "okiem. Odpowiedź wraca do Ciebie od razu."
+)
+_CZAS_DLA_ZESPOLU_KROTKO = "Czekasz na wynik — to dobry moment na ASK do zespołu."
+
+# v480gz: linia o zespole przy WYNIKU, nie przy starcie czekania
+# (uzytkownik 2026-10-27: MAIN przez kilkanascie krokow tylko puszczal RUN
+# i czekal; sam przyznal, ze decyzja o H=224 powinna przejsc przez Marka).
+# Decyzja zapada, gdy przychodzi wynik — wtedy jedna linia z faktem, ile
+# krokow temu pytal zespol. Nie, gdy pytal przed chwila.
+_ZESPOL_PRZY_WYNIKU = (
+    "Wynik jest — zanim wybierzesz, co dalej, zespół może go ocenić: Marek "
+    "znajdzie słabe punkty, Tomek zaproponuje następny krok, Bartek sprawdzi "
+    "albo dopisze kod, Piotr przejrzy kod, Ania naprawi błąd, Kamil sprawdzi "
+    "fakty, Wojtek oceni praktyczny sens, Ola podsumuje, co wyszło, Ela oceni "
+    "postęp, a Igor spojrzy świeżym okiem."
+)
+_ZESPOL_PRZY_WYNIKU_ASK = (
+    " Pytasz przez ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": "
+    "\"<imię>\", \"ask_question\": \"...\"}; odpowiedź wraca od razu."
+)
+_ostatni_ask_krok = [0]
+# v480hb: RUN MAIN-a nie wniosl nic nowego (to samo czekanie/sprawdzenie) —
+# nastepna wiadomosc to jedna linia: postep i zespol (uzytkownik
+# 2026-10-27: "jak drugi raz wpisuje ta sama komende, sama wiadomosc o
+# druzynie"; glos co 1 min czekania).
+_run_bez_nowego = [False]
+# v480hc: linia postepu w krotkim glosie tylko raz; potem samo zdanie
+_glos_postep_byl = [False]
+# v480hf: ile krotkich glosow z rzedu (bez pelnej wiadomosci, czyli bez ASK)
+_glos_krotkie = [0]
+_glos_czemu_krok = [-100]
+# v480ho: uzytkownik: na koncu krotko, ze jest ASK i kto jest w zespole
+_CZEMU_ZDANIE = (
+    "Czemu nie pytasz zespołu? I tak czekasz na wynik. Masz pod ręką "
+    "Tomka, Kamila, Marka, Bartka, Piotra, Anię, Olę, Wojtka, Elę i Igora — "
+    "każdy może spojrzeć na to, co teraz robisz, ze swojej strony. Wystarczy "
+    "ASK z imieniem, np. {\"type\": \"ASK\", \"ask_role\": \"<imię>\", "
+    "\"ask_question\": \"...\"}; odpowiedź wraca od razu."
+)
+_CZEMU_CO_KROKOW = 5
+_GLOS_CO_S = int(os.environ.get("MAIN_GLOS_CO_S", "60"))
+# ustawiane, gdy program obudzil MAIN-a czesciowym wynikiem (co 25%)
+_wynik_do_decyzji = [False]
+
+
+_PODGLAD_KOMENDY = (
+    "grep", "sed", "head", "tail", "wc", "ls", "cat", "find", "nl", "sort",
+    "uniq", "cut", "tree", "du", "stat", "file", "diff", "cmp", "md5sum",
+    "sha256sum", "xxd", "od", "jq", "tr", "column",
+    # v480fw: srodowisko (bieg 2026-10-25 23:30: Bartek trzy razy probowal
+    # sprawdzic wersje torcha i Pythona, dostal odmowe i pisal na slepo)
+    "python3", "python", "pip", "pip3", "which", "command", "type", "nproc",
+    "free", "df", "uname", "echo", "printf", "date", "env", "printenv",
+    "getprop", "pwd", "whoami", "id", "ps", "pgrep", "true", "test", "[",
+    "pkg", "dpkg", "apt", "git", "ldd", "readlink", "realpath", "basename",
+    "dirname",
+    # v480fy: curl tylko GET/HEAD na ekran (patrz _podglad_odmowa)
+    "curl",
+)
+# python3 -c w podgladzie: tylko odczyt — sprawdzenie wersji, importu,
+# ksztaltu danych. Kod, ktory zmienia pliki, procesy albo siec, odpada.
+_PODGLAD_PY_ZMIANA_RE = re.compile(
+    r"\b(remove|unlink|rmdir|rmtree|rename|replace|system|popen|subprocess|"
+    r"kill|killpg|mkdir|makedirs|chmod|chown|symlink|truncate|write|"
+    r"write_text|write_bytes|writelines|socket|urlopen|urlretrieve|"
+    r"exec|eval|shutil|save|dump|to_csv|savez|fork|spawn)\b"
+    r"|\b(?:requests|httpx)\s*\.\s*(?:get|post|put|patch|delete|head|request|Session|Client)\b"
+    r"|open\([^)]*,\s*(?:mode\s*=\s*)?['\"][^'\"]*[wax+]"
+)
+_PODGLAD_PRZEKIEROWANIA = ("2>&1", "2>/dev/null", ">/dev/null", "1>/dev/null", "&>/dev/null")
+
+
+def _podglad_odmowa(komenda):
+    """Powod, dla ktorego tej komendy nie uruchomie, albo ""."""
+    k = komenda
+    for p in _PODGLAD_PRZEKIEROWANIA:
+        k = k.replace(p, " ")
+    # v480fw: cudzyslowy najpierw (python3 -c "a; b" to jedna komenda).
+    try:
+        lx = shlex.shlex(k, posix=True, punctuation_chars=";&|<>")
+        lx.whitespace_split = True
+        tokeny = list(lx)
+    except ValueError as e:
+        return "nie umiem rozebrać komendy (" + str(e) + ") — sprawdź cudzysłowy"
+    segmenty, biez = [], []
+    for t in tokeny:
+        if t in (";", "&&", "||", "|"):
+            segmenty.append(biez)
+            biez = []
+        elif t == "<":
+            # v480fz: wejscie z pliku (wc -c < plik) to tez odczyt
+            continue
+        elif (t and set(t) <= set(";&|<>")) or "`" in t or "$(" in t:
+            return ("w podglądzie komendy do odczytu łączysz przez | ; && ||, a wyjście "
+                    "kierujesz najwyżej do 2>&1 albo /dev/null (bez > do pliku, &, ` i $( )) — "
+                    "np. PODGLĄD: python3 --version; pip show torch | head -3")
+        else:
+            biez.append(t)
+    segmenty.append(biez)
+    for sl in segmenty:
+        while sl and re.fullmatch(r"[A-Za-z_]\w*=\S*", sl[0]):
+            sl = sl[1:]
+        # v480fz: petla i warunek powloki wokol komend do odczytu
+        # ("for f in a b; do head -c 250 "$f"; done", "cd ~/MAIN_1; ls").
+        # Bieg 2026-10-26: Bartek dostal odmowe za "cd" i za "for".
+        while sl and sl[0] in ("do", "then", "else", "if", "while", "until", "!", "{", "}"):
+            sl = sl[1:]
+        if not sl or sl[0] in ("done", "fi", "}"):
+            continue
+        if sl[0] == "for":
+            if len(sl) >= 3 and re.fullmatch(r"[A-Za-z_]\w*", sl[1]) and sl[2] == "in":
+                continue
+            return "pętla w podglądzie: for nazwa in a b c; do komenda do odczytu; done"
+        if sl[0] == "cd":
+            continue
+        cmd = sl[0].split("/")[-1]
+        if cmd not in _PODGLAD_KOMENDY:
+            return (sl[0] + " nie jest komendą do odczytu — w podglądzie działają: "
+                    + ", ".join(_PODGLAD_KOMENDY) + "; dłuższe uruchomienie zleca MAIN")
+        if cmd == "sed" and (any(a.startswith("-i") or a == "--in-place" for a in sl[1:])
+                             or "-n" not in sl
+                             or any(re.search(r"(?:^|[\d$/,;{}\s])[wWe](?:\s|$)", a)
+                                    for a in sl[1:] if not a.startswith("-"))):
+            return "sed w podglądzie tylko jako sed -n 'od,dop' plik (bez -i)"
+        if cmd == "find" and any(a in ("-exec", "-execdir", "-delete", "-ok", "-fprint", "-fprintf", "-fls") for a in sl):
+            return "find w podglądzie tylko do wyszukiwania (bez -exec/-delete)"
+        if cmd == "sort" and any(a.startswith("-o") for a in sl):
+            return "sort w podglądzie bez -o"
+        if cmd in ("python3", "python"):
+            args = sl[1:]
+            if args[:1] in (["--version"], ["-V"]) or args[:3] in (["-m", "pip", "show"], ["-m", "pip", "list"], ["-m", "pip", "freeze"]):
+                continue
+            if args[:1] == ["-c"] and len(args) >= 2:
+                if _PODGLAD_PY_ZMIANA_RE.search(args[1]):
+                    return ("python3 -c w podglądzie służy do odczytu (wersje, importy, kształt "
+                            "danych) — ten kod zmienia pliki, procesy albo sieć; takie "
+                            "uruchomienie zleca MAIN")
+                continue
+            return "python3 w podglądzie: --version, -m pip show/list albo -c \"kod do odczytu\"; uruchomienie skryptu zleca MAIN"
+        if cmd in ("pip", "pip3") and (sl[1:2] not in (["show"], ["list"], ["freeze"], ["--version"])):
+            return "pip w podglądzie: show, list, freeze; instalację zleca MAIN"
+        if cmd in ("pkg", "apt") and sl[1:2] not in (["list-installed"], ["show"], ["search"], ["list"]):
+            return "pkg/apt w podglądzie: list-installed, show, search; instalację zleca MAIN"
+        if cmd == "dpkg" and sl[1:2] not in (["-l"], ["-L"], ["-s"]):
+            return "dpkg w podglądzie: -l, -L, -s"
+        # v480fy: curl tylko do odczytu (GET na ekran albo -o /dev/null).
+        # Bieg 2026-10-26 00:16: Bartek trzy razy chcial sprawdzic, czy
+        # API odpowiada, zanim napisze pobieranie — podglad odmawial.
+        if cmd == "curl":
+            args = sl[1:]
+            for i, a in enumerate(args):
+                nast = args[i + 1] if i + 1 < len(args) else ""
+                # sklejone krotkie opcje ("-sLo plik") — kazda litera osobno
+                if re.fullmatch(r"-[A-Za-z]{2,}", a):
+                    if set(a[1:]) & set("OTFKcDd"):
+                        return "curl w podglądzie tylko czyta (GET/HEAD, bez zapisu i wysyłania danych)"
+                    if a.endswith("o") and nast != "/dev/null":
+                        return "curl w podglądzie wypisuje na ekran albo -o /dev/null; pobranie do pliku zleca MAIN"
+                    continue
+                if a in ("-o", "--output") and nast != "/dev/null":
+                    return "curl w podglądzie wypisuje na ekran albo -o /dev/null; pobranie do pliku zleca MAIN"
+                if (a in ("-O", "--remote-name", "-T", "--upload-file", "-F", "--form", "-K", "--config",
+                          "-c", "--cookie-jar", "-D", "--dump-header")
+                        or a.startswith(("--data", "-d", "--json", "--remote-name"))
+                        or (a in ("-X", "--request") and nast.upper() not in ("GET", "HEAD"))):
+                    return "curl w podglądzie tylko czyta (GET/HEAD, bez zapisu i wysyłania danych)"
+            continue
+        if cmd == "git" and sl[1:2] not in (["log"], ["status"], ["diff"], ["show"], ["branch"], ["ls-files"], ["blame"]):
+            return "git w podglądzie: log, status, diff, show, branch, ls-files, blame"
+    return ""
+
+
+_PODGLAD_PY_RYWAL_RE = re.compile(
+    r"\b(?:walk|listdir|scandir|glob|rglob|iterdir|expanduser|getenv|environ|chdir|home)\b|\.\.|~|MAIN_")
+
+
+def _podglad_siega_do_rywala(komenda):
+    """
+    v480fz: w rywalizacji podglad nie siega do folderu rywala ani do
+    folderu, ktory go zawiera (~, .., /) — takze przez cd, maske
+    (M*_2) albo grep -r. Sprawdzone na plikach: kazda sciezka z komendy,
+    po rozwinieciu maski, wzgledem katalogu z ostatniego cd.
+    """
+    if not _DRUZYNA:
+        return ""
+    import glob
+    try:
+        rywal = _folder_druzyny(_rywal()).resolve()
+        cwd = _folder_druzyny(_DRUZYNA).resolve()
+        lx = shlex.shlex(komenda, posix=True, punctuation_chars=";&|<>")
+        lx.whitespace_split = True
+        tokeny = list(lx)
+    except Exception:
+        return "nie umiem rozebrać tej komendy"
+    powod = ("w rywalizacji podgląd sięga tylko do folderu drużyny ("
+             + _sciezka_od_domu(str(_folder_druzyny(_DRUZYNA))) + ") i plików poza katalogiem "
+             "domowym — nie do ~, .. ani folderu drugiej drużyny")
+
+    def _zle(p):
+        try:
+            p = p.resolve()
+        except Exception:
+            return True
+        return p == rywal or rywal in p.parents or p in rywal.parents
+
+    poprzedni = ""
+    for t in tokeny + [";"]:
+        if t in (";", "&&", "||", "|"):
+            poprzedni = ""
+            continue
+        if poprzedni in ("python3", "python") or (poprzedni == "-c"):
+            if poprzedni == "-c" and _PODGLAD_PY_RYWAL_RE.search(t):
+                return powod + " (python3 -c czyta tylko pliki z folderu drużyny, po nazwie)"
+        if t.startswith("-") and "=" not in t:
+            poprzedni = t
+            continue
+        wart = t.split("=", 1)[1] if t.startswith("-") else t
+        if not wart or poprzedni == "-c":
+            poprzedni = t
+            continue
+        p = Path(os.path.expanduser(wart)) if wart.startswith(("~", "/")) else cwd / wart
+        trafione = [Path(x) for x in glob.glob(str(p))] if any(z in wart for z in "*?[") else [p]
+        if any(z in wart for z in "*?["):
+            # v480gl2: katalog, w ktorym maska szuka — "~/MAIN_2/*.pkl" to
+            # ~/MAIN_2, a nie jego rodzic ~ (bieg 2026-10-27: "ls *.pkl" po
+            # "cd ~/MAIN_2" odrzucany jako siegniecie do rywala)
+            _przed = re.split(r"[*?\[]", str(p), 1)[0]
+            trafione.append(Path(_przed) if _przed.endswith("/") else Path(_przed).parent)
+        if any(_zle(x) for x in trafione if x.exists() or x == p):
+            return powod
+        if poprzedni == "cd" and (p.exists() or wart in ("..", "~")):
+            cwd = p.resolve()
+        poprzedni = t
+    # katalog roboczy na koniec cd (np. "cd ..; grep -r x .")
+    return ""
+
+
+def _uruchom_podglad(komenda, rola=None):
+    """Wynik jednej komendy podgladu, gotowy do oddania roli."""
+    # v480fz: ogon znacznikow narzedzi DeepSeeka ("</｜｜DSML｜｜ parameter>")
+    # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
+    komenda = re.split(r"</?\s*[｜|]{1,2}\s*DSML|<[｜|]", str(komenda or ""))[0]
+    komenda = _komenda_z_podgladu(komenda)
+    # v480gl2: bieg 2026-10-27 00:16-00:59 — Bartek w jednej odpowiedzi dla
+    # MAIN-a puszczal "sleep 240 ; cat kn_tune3.log" raz za razem i MAIN stal
+    # 44 min w jednym pytaniu. Rola nie czeka w odpowiedzi: dluzszy sleep
+    # program pomija i od razu pokazuje stan; drugi raz w tej samej
+    # odpowiedzi — nie uruchamia, tylko prosi o odpowiedz.
+    _sek = _sekundy_sleep(komenda)
+    _uwaga = ""
+    if _sek >= _SLEEP_ROLI_MAKS_S:
+        _czekania_roli[rola] = _czekania_roli.get(rola, 0) + 1
+        if _czekania_roli[rola] > 1:
+            return _CZEKANIE_ROLI_ODMOWA
+        _bez = _bez_sleep(komenda)
+        _uwaga = ("(sleep " + _min_s(_sek) + " pominąłem — w odpowiedzi dla MAIN-a się nie "
+                  "czeka. To, co puściłeś w tle, liczy dalej samo, a MAIN może zapytać Cię "
+                  "o wynik później. Poniżej stan na teraz.)\n")
+        if _bez == komenda or not _bez.strip() or re.fullmatch(r"[\s;&|]*", _bez):
+            return "$ " + komenda + "\n" + _uwaga.rstrip()
+        komenda = _bez
+        return _uwaga + _uruchom_podglad(komenda, rola)
+    rywal = ""
+    if _siega_do_rywala("termux_run", {"command": komenda}):
+        rywal = "ta ścieżka to folder drugiej drużyny — tam nie zaglądamy"
+    odm = rywal or _podglad_odmowa(komenda)
+    # v480gk: scisle sprawdzenie sciezek podgladu (bez ~, .., sciezek
+    # absolutnych w python3 -c) jest dla samego odczytu, ktory idzie
+    # wprost do basha. Uruchomienie idzie przez termux_run z jego
+    # wlasna blokada folderu rywala — bieg 2026-10-26 19:49: zapis
+    # wynik.json do WLASNEGO folderu po pelnej sciezce byl odrzucony.
+    if not odm and _DRUZYNA:
+        _r = _podglad_siega_do_rywala(komenda)
+        if _r and "nie umiem rozebrać" not in _r:
+            rywal = odm = _r
+    cwd = str(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else str(Path.home())
+    if odm and not rywal:
+        # v480gi: uzytkownik (2026-10-26): zespol sam uruchamia kod,
+        # sprawdza i dostaje bledy. Komenda, ktora nie jest samym odczytem
+        # (python3 skrypt.py, bash run_all.sh, pip install …), idzie przez
+        # to samo termux_run co RUN MAIN-a — te same zabezpieczenia
+        # (folder rywala, pytanie przy usuwaniu, watki, straznik pamieci).
+        return _uruchom_dla_zespolu(komenda, cwd, rola)
+    if odm:
+        return "$ " + komenda + "\n(nie uruchomiłem: " + odm + ")"
+    try:
+        os.makedirs(cwd, exist_ok=True)
+        r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
+                           errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+        # v480il: podglad (ps/top bez uruchamiania) tez nie pokazuje nazw
+        # procesow rywala — tylko jego zuzycie, jak termux_run.
+        _uk = _ukryj_rywala_w_wyniku({"stdout": r.stdout or "", "stderr": r.stderr or ""})
+        out = (_uk.get("stdout") or "") + (("\n" + _uk.get("stderr")) if (_uk.get("stderr") or "").strip() else "")
+        kod = r.returncode
+    except subprocess.TimeoutExpired:
+        return "$ " + komenda + "\n(przerwane po 60 s — zawęź komendę, np. do jednego pliku)"
+    except Exception as e:
+        return "$ " + komenda + "\n(nie uruchomiłem: " + str(e) + ")"
+    out = out.rstrip()
+    if len(out) > 4000:
+        out = out[:4000] + "\n(… ucięte, całość ma " + str(len(out)) + " znaków — zawęź komendę: grep -n, sed -n 'od,dop')"
+    return ("$ " + komenda + " (w " + _sciezka_od_domu(cwd) + ")\n" + (out or "(nic nie wypisało)")
+            + ("" if kod in (0, None) or (kod == 1 and komenda.split()[0] == "grep") else "\nkod wyjścia: " + str(kod)))
+
+
+_SLEEP_ROLI_MAKS_S = 10
+_pytanie_roli = {}
+_czekania_roli = {}
+_CZEKANIE_ROLI_ODMOWA = (
+    "(nie uruchomiłem: to drugie czekanie w tej samej odpowiedzi. Odpowiedz teraz "
+    "MAIN-owi tym, co już wiesz — proces liczy dalej sam, a o jego wynik MAIN "
+    "może zapytać Cię później.)")
+
+
+def _sekundy_sleep(komenda):
+    """v480gl2: najdluzszy sleep w komendzie, w sekundach."""
+    naj = 0.0
+    for m in re.finditer(r"(?<![\w-])sleep\s+(\d+(?:\.\d+)?)([smh]?)(?=$|[\s;&|)])", str(komenda or "")):
+        try:
+            naj = max(naj, float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)])
+        except Exception:
+            pass
+    return naj
+
+
+def _uruchom_dla_zespolu(komenda, cwd, rola=None):
+    """v480gi: uruchomienie kodu przez role zespolu — wynik jak w terminalu.
+    v480gl: gdy liczy dluzej niz _W_TLE_PO_S, idzie dalej w tle (jak RUN
+    MAIN-a): rola odpowiada od razu, MAIN dostaje karte W TLE, a wynik
+    dostaje autor (skrzynka, przy jego nastepnej turze) i MAIN (karta
+    W TLE SKONCZONE)."""
+    imie = _IMIE_AUTORA.get(rola, (None, None)) if rola else (None, None)
+    # ta sama robota juz liczy w tle (od kogokolwiek) — nie puszczamy drugiej
+    _juz = _juz_liczy_w_tle(komenda)
+    if _juz:
+        return "$ " + komenda + "\n(" + _juz + " Teraz odpowiedz tym, co już wiesz.)"
+    rzecz = _rzecz_w_tle("komenda", komenda, 0, [])
+    rzecz["autor"] = rola
+    rzecz["autor_dop"] = imie[1]
+    rzecz["cwd"] = cwd
+    watek = _uruchom_rzecz(rzecz, lambda: _wynik_dla_zespolu(komenda, cwd, rola), True)
+    watek.join(timeout=_W_TLE_PO_S)
+    with _w_tle_lock:
+        wynik = rzecz["wynik"]
+        if wynik is None:
+            _do_listy_w_tle(rzecz)
+    if wynik is None:
+        log("PROGRAM", "Komenda " + (imie[1] or "zespołu") + " liczy dłużej niż "
+            + _min_s(_W_TLE_PO_S) + " — idzie dalej w tle: " + short(komenda, 120))
+        return ("$ " + komenda + " (uruchomione w " + _sciezka_od_domu(cwd) + ")\n"
+                "(liczy już dłużej niż " + _min_s(_W_TLE_PO_S) + ", więc liczy dalej w tle — "
+                "nic jej nie przerwał. Wynik dostaniesz Ty i MAIN, gdy się skończy. "
+                "Teraz odpowiedz tym, co już wiesz; pliki, które zapisuje, mogą być "
+                "jeszcze niepełne.)")
+    return _opis_dla_zespolu(komenda, cwd, wynik)
+
+
+# v480hu: kto z zespolu uruchamia te komende (URUCHOM) — w tym watku.
+_zespol_uruchamia = _threading.local()
+
+
+def _wynik_dla_zespolu(komenda, cwd, rola=None):
+    """v480gl: sama praca komendy zespolu (watek, moze skonczyc sie w tle)."""
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except Exception:
+        pass
+    _zespol_uruchamia.rola = rola or "zespół"
+    try:
+        wynik = dispatch_tool("termux_run", {"command": "cd " + shlex.quote(cwd) + " && " + komenda})
+    finally:
+        _zespol_uruchamia.rola = None
+    # v480gj: instalacja (pip/pkg install), pobieranie czy build idzie
+    # w tlo automatycznie — rola nie ma narzedzi do sledzenia procesu,
+    # wiec program czeka za nia do konca i oddaje koncowke logu.
+    if isinstance(wynik, dict) and wynik.get("status") == "AUTO_BACKGROUNDED" and wynik.get("pid"):
+        pid = wynik["pid"]
+        log("PROGRAM", "Komenda zespołu liczy się dłużej (" + short(komenda, 80)
+            + ") — czekam, aż się skończy.")
+        proc = _procesy_w_tle.get(pid)
+        kod = None
+        while True:
+            try:
+                if proc is not None and proc.poll() is not None and not _grupa_zyje(pid):
+                    kod = proc.returncode
+                    break
+                if proc is None and not _jeszcze_zyje(pid):
+                    break
+            except Exception:
+                break
+            time.sleep(2)
+        tekst = ""
+        try:
+            tekst = Path(str(wynik.get("log_file") or "")).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        wynik = {"stdout": tekst[-6000:], "returncode": kod if kod is not None else 0}
+        try:
+            # wynik idzie przez komende zespolu — bez osobnego raportu procesu z tla
+            _tlo_zgloszone_konce.add(pid)
+        except Exception:
+            pass
+    return wynik
+
+
+def _opis_dla_zespolu(komenda, cwd, wynik):
+    if isinstance(wynik, dict) and ("stdout" in wynik or "stderr" in wynik):
+        opis = _opis_wyniku_czekania({
+            k: wynik[k] for k in ("stdout", "stderr", "returncode", "czekanie") if k in wynik})
+    elif isinstance(wynik, dict):
+        # odmowa programu (np. folder rywala) — jej komunikat, bez pol technicznych
+        opis = str(wynik.get("message") or wynik.get("error") or "")
+    else:
+        opis = str(wynik)
+    log("PROGRAM", "Uruchomione dla zespołu: " + short(komenda, 120))
+    opis = str(opis or "").rstrip()
+    if len(opis) > 5000:
+        # przy bledzie liczy sie koniec (traceback), wiec zostaje poczatek i koniec
+        opis = opis[:1500] + "\n(… " + str(len(opis) - 4500) + " znaków pominięte …)\n" + opis[-3000:]
+    return "$ " + komenda + " (uruchomione w " + _sciezka_od_domu(cwd) + ")\n" + (opis or "(nic nie wypisało)")
+
+
+def _cudzyslow_otwarty(k):
+    try:
+        shlex.split(k)
+        return False
+    except ValueError:
+        return True
+    except Exception:
+        return False
+
+
+def _komenda_do_konca(tekst, m):
+    """v480gn: URUCHOM: python3 -c " ... w kilku liniach — bieg 2026-10-27
+    03:48: brana byla tylko pierwsza linia i powloka zglaszala otwarty
+    cudzyslow. Gdy cudzyslow nie jest domkniety, dokladamy kolejne linie,
+    az bedzie (najwyzej 200)."""
+    k = m.group(1)
+    if not _cudzyslow_otwarty(k):
+        return k
+    reszta = tekst[m.end():].split("\n")[1:201]
+    linie = [k]
+    for l in reszta:
+        linie.append(l)
+        if not _cudzyslow_otwarty("\n".join(linie)):
+            return "\n".join(linie)
+    return k
+
+
+def _na_co_odpowiada(wiadomosc, n=350):
+    """v480gt: koniec wiadomosci, na ktora rola odpowiada (tam stoi pytanie
+    MAIN-a albo zlecenie), od poczatku zdania."""
+    t = str(wiadomosc or "").strip()
+    # v480hz: zdanie programu "Od czasu, gdy ten plik byl..." (v480hw) stoi
+    # na poczatku wiadomosci — to nie pytanie MAIN-a (Tomek dostal je jako
+    # "MAIN pytal: «Od czasu, gdy...»", bieg 2026-10-28 20:45).
+    if t.startswith("Od czasu, gdy ") and "\n\n" in t:
+        t = t.split("\n\n", 1)[1].strip() or t
+    # v480ha: pytanie MAIN-a to jego ostatni blok "MAIN:" — po nim moga
+    # stac glosy kolegow (bieg 2026-10-27 13:30: Bartek dostawal jako
+    # "Odpowiadasz na" koncowke wypowiedzi Marka, nie pytanie MAIN-a).
+    _bloki = list(re.finditer(r"(?m)^MAIN:\s*\n", t))
+    if _bloki:
+        _po = t[_bloki[-1].end():]
+        _kon = re.search(r"\n\s*\n\s*\n|\n[A-ZŁŚŻ][a-ząćęłńóśźż]+:\s*\n", _po)
+        t = (_po[:_kon.start()] if _kon else _po).strip() or t
+    # v480hn: przy zleceniu (TASK) pierwszym zdaniem byl naglowek programu
+    # "MAIN zlecił programowi poniższe zadanie." — Bartek dostawal go jako
+    # "MAIN pytał: «…»"; liczy sie tresc zlecenia pod nim
+    if t.startswith("MAIN zlecił programowi") and "\n\n" in t:
+        t = t.split("\n\n", 1)[1].strip() or t
+    if len(t) <= n:
+        return t
+    # dlugie pytanie: pierwsze zdanie (o co chodzi) i koniec (samo pytanie)
+    _zd = re.split(r"(?<=[.!?])\s+", " ".join(t.split()))
+    if len(_zd) >= 2:
+        pocz, kon = _zd[0], _zd[-1]
+        for z in reversed(_zd[1:-1]):
+            if len(kon) + len(z) + 1 > n // 2:
+                break
+            kon = z + " " + kon
+        if len(pocz) <= n // 2 and len(kon) <= n:
+            return pocz + " … " + kon
+    t = t[-n:]
+    m = re.search(r"(?<=[.!?:\n])\s+", t)
+    return ("… " + t[m.end():]) if m and m.end() < n // 2 else "… " + t
+
+
+def _podglad_dla_roli(rola, odp, wiadomosc=""):
+    """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
+    odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
+    zapisane = []
+    _czekania_roli[rola] = 0
+    _pytanie_roli[rola] = _na_co_odpowiada(wiadomosc)
+    odp = _podglad_dla_roli_rundy(rola, odp, zapisane)
+    nowe = [z for z in zapisane if z not in str(odp)]
+    if nowe:
+        odp = str(odp).rstrip() + "\n\n" + "\n".join(nowe)
+    return odp
+
+
+def _podglad_dla_roli_rundy(rola, odp, zapisane):
+    imie = _IMIE_AUTORA.get(rola, (rola, rola))[0]
+    # v480gi: bez stalej liczby rund (uzytkownik: "bez limitow") — rola
+    # sprawdza i poprawia, dopoki potrzebuje; konczy sie, gdy dwa razy z
+    # rzedu prosi o to samo i dostaje to samo (nic sie nie zmienia).
+    poprzednio = None
+    powtorki = 0
+    runda = 0
+    _po_odmowie_czekania = False
+    _poprzednie_patrzenie = None
+    while True:
+        runda += 1
+        komendy = []
+        for m in _PODGLAD_RE.finditer(str(odp or "")):
+            k = _komenda_z_podgladu(_komenda_do_konca(str(odp or ""), m))
+            if k and k not in komendy:
+                komendy.append(k)
+        if not komendy:
+            return odp
+        # v480ii: po "Odpowiedz teraz MAIN-owi" (_CZEKANIE_ROLI_ODMOWA)
+        # nastepna odpowiedz roli JEST odpowiedzia dla MAIN-a. Bieg
+        # 2026-10-29 21:00 (druzyna 1): Tomek pisal "Gdy MAIN zapyta o
+        # wynik — jedna komenda: URUCHOM: …", program ja od razu
+        # uruchamial i rozmowa szla dalej (pilnowanie ewolucji), a MAIN
+        # czekal. Komendy zostaja w tekscie jako propozycja dla MAIN-a.
+        if _po_odmowie_czekania:
+            log("PROGRAM", imie + " dostał prośbę o odpowiedź dla MAIN-a — jego komendy "
+                "idą do MAIN-a jako propozycja, nie uruchamiam ich.")
+            return re.sub(r"(?im)^([ \t>*_`-]*)(?:URUCHOM|PODGL[AĄ]D)[*_]*\s*:",
+                          r"\1Komenda do uruchomienia później:", str(odp or ""))
+        # v480gg/gh: bieg 2026-10-26 18:56 — Bartek dal 5 plikow i w tej
+        # samej odpowiedzi PODGLĄD (ls, czy leza). Pliki program kladl
+        # dopiero z OSTATNIEJ odpowiedzi, wiec ls pokazal pusty folder i
+        # Bartek pisal wszystko drugi raz. Pliki z tej odpowiedzi ida na
+        # dysk najpierw, a podglad widzi je juz na miejscu.
+        zapis = []
+        if "```" in str(odp or ""):
+            try:
+                _po = _poloz_nowy_plik_autora(rola, odp, "")
+                zapis = [l.strip() for l in str(_po).split("\n")
+                         if l.strip().startswith("[Program") and l.strip() not in str(odp)]
+            except Exception as e:
+                log("PROGRAM", "Pliki z odpowiedzi " + imie + " przed podglądem: " + str(e))
+        zapisane.extend(zapis)
+        # v480hb: uzytkownik 2026-10-27 ("oddajemy mu wladze, jak juz dobrze
+        # sie kompiluje"): rola, ktora od drugiej rundy juz tylko pilnuje
+        # procesu liczacego w tle (tail/ps jego logu), konczy swoja
+        # odpowiedz — wynik dostanie MAIN (25%, koniec, blad), a MAIN moze
+        # ja zapytac znowu. Pierwsze spojrzenie zostaje.
+        # v480ij: ta sama komenda tylko do patrzenia (tail/ps/grep) runda po
+        # rundzie to pilnowanie procesu, nawet gdy program nie wie, ze ten
+        # proces liczy w tle (uruchomil go skrypt zespolu). Bieg 2026-10-29
+        # 21:11 (druzyna 1): Tomek co minute "tail evo/g0_i0_*.log; ps aux"
+        # w jednym pytaniu MAIN-a — log rosl, wiec nie bylo "powtorki".
+        try:
+            _same_patrzenie = all(
+                not re.search(r"(?:^|[;&|(]\s*)(?:python3?|pip|pkg|rm|mv|cp|kill|pkill|bash|sh|nohup|setsid|sed\s+-i)\b|>",
+                              re.sub(r"[12]?>\s*/dev/null|2>&1", "", k))
+                for k in komendy[:5])
+        except Exception:
+            _same_patrzenie = False
+        if (runda > 1 and not zapis and _same_patrzenie
+                and tuple(_bez_sleep(k) for k in komendy[:5]) == _poprzednie_patrzenie):
+            log("PROGRAM", imie + " sprawdza w kółko ten sam stan — kończę jego rozmowę, odpowiedź idzie do MAIN-a.")
+            _bez = "\n".join(l for l in str(odp or "").split("\n")
+                             if not _PODGLAD_RE.search(l)).strip()
+            return ((_bez + "\n\n") if _bez else "") + (
+                "[Program: " + imie + " drugi raz z rzędu sprawdzał ten sam stan — oddaje głos "
+                "MAIN-owi. Proces liczy dalej sam; MAIN może o niego znowu zapytać.]")
+        _poprzednie_patrzenie = tuple(_bez_sleep(k) for k in komendy[:5])
+        if runda > 1 and not zapis:
+            try:
+                _sl = _procesy_z_procentem()
+                _pilnuje = [st for rp, st in _sl.items()
+                            if any(os.path.basename(rp) in k for k in komendy[:5])]
+                if not _pilnuje:
+                    # v480he: tez bez procentu — wystarczy, ze czyta log
+                    # czegos, co liczy w tle
+                    _pilnuje = [st for rp, st in _logi_liczace_w_tle().items()
+                                if any(os.path.basename(rp) in k for k in komendy[:5])]
+                _tylko_patrzy = all(
+                    not re.search(r"(?:^|[;&|(]\s*)(?:python3?|pip|pkg|rm|mv|cp|kill|pkill|bash|sh|nohup)\b|>",
+                                  re.sub(r"[12]?>\s*/dev/null|2>&1", "", k))
+                    for k in komendy[:5])
+                if _pilnuje and _tylko_patrzy:
+                    _st = _pilnuje[0]
+                    _pr = _postep_z_logu(_st["plik"], _ogon_logu(_st["plik"])[1],
+                                         _st["start"], _st["kom"], _st["cwd"]) or (
+                        "działa " + _min_s(time.time() - (_st["start"] or time.time())))
+                    log("PROGRAM", imie + " tylko pilnuje " + _nazwa_w_tle(_st["kom"])
+                        + " — kończę jego rozmowę, wynik dostanie MAIN.")
+                    _bez = "\n".join(l for l in str(odp or "").split("\n")
+                                     if not _PODGLAD_RE.search(l)).strip()
+                    return ((_bez + "\n\n") if _bez else "") + (
+                        "[Program: " + _nazwa_w_tle(_st["kom"]) + " liczy w tle — " + _pr
+                        + ". " + imie + " oddaje głos MAIN-owi; wynik przyjdzie do MAIN-a sam "
+                        + ("(przy kolejnych 25%, końcu albo błędzie).]" if re.match(r"\d+%", _pr)
+                           else "(gdy się skończy albo pojawi się błąd).]"))
+            except Exception as e:
+                log("PROGRAM", "Sprawdzenie pilnowania procesu: " + str(e))
+        wyniki = list(zapis)
+        for k in komendy[:5]:
+            log("PROGRAM", imie + " zagląda do kodu: " + short(k, 160))
+            wyniki.append(_uruchom_podglad(k, rola))
+        # v480hb: rola czyta log procesu, ktory liczy w tle (bieg 2026-10-27
+        # 13:55: Bartek w jednym pytaniu w kolko "tail -3 resume.log; ps aux")
+        # — dostaje jego postep i to, ze wynik przyjdzie sam.
+        try:
+            _sl = _procesy_z_procentem()
+            for _rp, _st in _sl.items():
+                if any(os.path.basename(_rp) in k for k in komendy[:5]):
+                    _pr = _postep_z_logu(_st["plik"], _ogon_logu(_st["plik"])[1],
+                                         _st["start"], _st["kom"], _st["cwd"])
+                    wyniki.append(
+                        "[Program: " + _nazwa_w_tle(_st["kom"]) + " liczy w tle — " + _pr
+                        + ". Wynik dostanie MAIN, gdy się skończy; nie trzeba go pilnować w tej rozmowie.]")
+        except Exception:
+            pass
+        _teraz = (tuple(komendy[:5]), tuple(wyniki))
+        _po_odmowie_czekania = any(w == _CZEKANIE_ROLI_ODMOWA for w in wyniki)
+        if wyniki and all(w == _CZEKANIE_ROLI_ODMOWA for w in wyniki):
+            # sama prosba o czekanie po odmowie — tak samo jak powtorka
+            _teraz = ("czekanie",)
+        if _teraz == poprzednio and not zapis:
+            powtorki += 1
+            if powtorki >= 2:
+                log("PROGRAM", imie + " prosi w kółko o to samo i dostaje to samo — kończę sprawdzanie.")
+                return odp
+        else:
+            powtorki = 0
+        poprzednio = _teraz
+        with _KOLEJKA_KONTA:
+            # v480gt: "odpowiedz na pytanie, na które odpowiadasz" po kilku
+            # rundach nic nie mowi — od trzeciej rundy samo pytanie.
+            # v480ha: uzytkownik 2026-10-27 ("caly czas spam"): Bartek w
+            # jednym pytaniu dostal 12 razy to samo przypomnienie i to samo
+            # zdanie na koncu. Zdanie raz (pierwsza runda), pytanie MAIN-a
+            # raz (trzecia runda); dalej sam wynik.
+            _pyt = _pytanie_roli.get(rola) or ""
+            odp = _deepseek_jedna_rozmowa(rola, (
+                "Wynik:\n\n" + "\n\n".join(wyniki)
+                + (("\n\nMAIN pytał: «" + _pyt + "»") if runda == 3 and _pyt else "")
+                + ("\n\nGdy masz już odpowiedź — napisz ją; możesz też zajrzeć albo uruchomić jeszcze raz."
+                   if runda == 1 else "")
+            ))
+    return odp
+
+
+def _deepseek_jedna_rozmowa(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
 
@@ -6803,6 +9269,17 @@ def deepseek(name, message):
     """
 
     global _continue_action_supported
+
+    # v480ha: "Tomek:\nTomek, wcześniej (krok 337):" — imie dwa razy pod
+    # soba (bieg 2026-10-27 13:30, wiadomosc do Marka); zostaje jeden
+    # naglowek "Tomek (wcześniej, krok 337):".
+    try:
+        message = re.sub(
+            r"(?m)^([^\W\d_][\w]*):\n\1, wcześniej(?: \(krok (\d+)\))?:\n",
+            lambda m: m.group(1) + " (wcześniej" + (", krok " + m.group(2) if m.group(2) else "") + "):\n",
+            str(message))
+    except Exception:
+        pass
 
     # v278: jedno gardlo, przez ktore idzie KAZDE pytanie do roli —
     # wiec jedyne miejsce, gdzie da sie uczciwie zmierzyc, ile
@@ -6869,11 +9346,16 @@ def deepseek(name, message):
                     PROGRESS_ESTIMATOR_PROMPT,
                 "WOJTEK":
                     WOJTEK_PROMPT,
+                "ARBITER":
+                    ARBITER_PROMPT,
+                "IGOR":
+                    IGOR_PROMPT,
             }
 
             prompt = prompt_map.get(name)
 
-            if prompt:
+            # v480cf: pusty prompt (Igor) to tez prompt.
+            if prompt is not None:
                 # v191: restart = nowa, PUSTA historia po stronie
                 # DeepSeeka. Rola traci cel, który dostała wcześniej,
                 # więc musi dostać go ponownie przy najbliższej
@@ -6888,7 +9370,9 @@ def deepseek(name, message):
                     + " niedostępna i nie udało się jej wznowić."
                 )
 
-        for attempt in range(2):
+        _proby = _ProbyDeepSeek(2)
+
+        for attempt in _proby:
 
             try:
 
@@ -7045,9 +9529,20 @@ def deepseek(name, message):
                         )
 
                         if continue_text:
-                            text = _stitch_continuation(
-                                text, continue_text
-                            )
+                            # v480l: serwer moze oddac przy wznowieniu
+                            # cala odpowiedz od poczatku (stara czesc +
+                            # nowa) — wtedy bierzemy ja w calosci.
+                            _stary = str(text or "").strip()
+                            _nowy = str(continue_text).strip()
+                            if (
+                                _stary and len(_nowy) > len(_stary)
+                                and _nowy[:200] == _stary[:200]
+                            ):
+                                text = continue_text
+                            else:
+                                text = _stitch_continuation(
+                                    text, continue_text
+                                )
                             truncated, reason = (
                                 _deepseek_looks_truncated(
                                     text, continue_status
@@ -7179,7 +9674,7 @@ def deepseek(name, message):
                         # po chinsku.
                         _dopytanie = (
                             _o_co_pytal_kolega(message, name)
-                            or "Podaj wynik."
+                            or _DOPYTANIE_PO_SAMYM_MYSLENIU
                         )
 
                         # v318: i to dopytanie idzie BEZ MYSLENIA.
@@ -7488,14 +9983,33 @@ def deepseek(name, message):
                 else:
                     _speak(name, text)
 
+                # v451: szukanie dziala bez myslenia — patrz
+                # _szukanie_bez_myslenia(). Gdy serwer potwierdzil, ze
+                # szukal, a probowalismy wlasnie bez myslenia — zostaje.
+                if (
+                    getattr(session, "search_enabled", False)
+                    and _szukanie_serwera is True
+                    and _szukanie_proba.get(name) == "probujemy"
+                ):
+                    _szukanie_proba[name] = "dziala"
+                    log(
+                        "DEEPSEEK",
+                        name + ": bez myślenia serwer szuka w sieci "
+                        "(search_enabled=true) — ta rozmowa zostaje "
+                        "w trybie bez myślenia, żeby Kamil miał sieć."
+                    )
+
                 # v328: prosilismy o szukanie w sieci, a serwer go
                 # nie wlaczyl. Mowimy to raz — zespol przestanie
                 # prosic o zrodla kogos, kto ich nie ma jak zdobyc,
                 # i przestanie sie spierac, czy je podal.
+                # v451: najpierw jedna proba bez myslenia — dopiero gdy
+                # i to nie pomoze, mowimy zespolowi.
                 if (
                     getattr(session, "search_enabled", False)
                     and _szukanie_serwera is False
                     and name not in _powiedziane_o_szukaniu
+                    and not _szukanie_bez_myslenia(name, session)
                 ):
 
                     _powiedziane_o_szukaniu.add(name)
@@ -7544,6 +10058,8 @@ def deepseek(name, message):
                     tresc=str(text or "")
                 )
 
+                _zanotuj_odpowiedz_serwera(name, text)
+
                 # v432: w ktorym kroku ta rola naprawde sie odezwala
                 # — patrz _podpis_starej_wypowiedzi().
                 _krok_wypowiedzi[str(name)] = _biezacy_krok
@@ -7558,7 +10074,15 @@ def deepseek(name, message):
                 _przyspiesz_po_sukcesie(name)
 
                 _resume_unverified.discard(name)
-                _save_session_state(name, session)
+                # v480bj: czat testowy wskazal zablokowana rozmowe —
+                # _zanotuj_odpowiedz_serwera() ja porzucil; nie zapisujemy.
+                if sessions.get(name) is not None:
+                    _save_session_state(name, session)
+
+                # v480cl: ostatnia odpowiedz MAIN-a — z niej RUN bierze
+                # pytania, ktore staly obok (patrz petla run_agent).
+                if name == "MAIN":
+                    globals()["_ostatnia_odpowiedz_maina"] = text
 
                 return text
 
@@ -7568,6 +10092,13 @@ def deepseek(name, message):
                     "DEEPSEEK",
                     f"{name} próba {attempt + 1} błąd: {e}"
                 )
+
+                # v480cd: brak internetu — czekamy na siec i ponawiamy
+                # TA SAMA probe w TEJ SAMEJ rozmowie. Bez restartu sesji,
+                # bez kasowania stanu, bez liczenia porazek konta.
+                if _czekaj_na_internet(name, e):
+                    _proby.powtorz()
+                    continue
 
                 if name in _resume_unverified:
 
@@ -7628,11 +10159,15 @@ def deepseek(name, message):
                             PROGRESS_ESTIMATOR_PROMPT,
                         "WOJTEK":
                             WOJTEK_PROMPT,
+                        "ARBITER":
+                            ARBITER_PROMPT,
+                        "IGOR":
+                            IGOR_PROMPT,
                     }
 
                     prompt = prompt_map.get(name)
 
-                    if prompt:
+                    if prompt is not None:
 
                         # v290: "restart czysci historie" bylo
                         # nieprawda. start_session() wznawia z
@@ -7768,7 +10303,7 @@ def adb_connect_target():
     return saved or None
 
 
-def adb_try_connect(target, timeout=10):
+def adb_try_connect(target, timeout=5):
     """
     Wykonuje `adb connect <host:port>`.
 
@@ -7850,6 +10385,8 @@ def find_adb(auto_reconnect=True):
 
     def _list_devices():
 
+        znalezione = []
+
         try:
 
             result = subprocess.run(
@@ -7875,24 +10412,301 @@ def find_adb(auto_reconnect=True):
                     len(parts) >= 2
                     and parts[1] == "device"
                 ):
-                    return parts[0]
+                    # v480am: polaczenie lokalne dziala tez bez Wi-Fi.
+                    if parts[0] == _ADB_LOKALNY:
+                        return parts[0]
+                    znalezione.append(parts[0])
 
         except Exception:
             pass
 
-        return None
+        return znalezione[0] if znalezione else None
 
     device = _list_devices()
 
-    if device or not auto_reconnect:
+    if device:
+        _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+        if auto_reconnect:
+            device = _adb_przejdz_na_lokalne(device, _list_devices)
+        _adb_uzywaj(device)
         return device
+
+    if not auto_reconnect:
+        return device
+
+    # v480am: ADB w trybie lokalnym (127.0.0.1:5555) przezywa utrate
+    # Wi-Fi — proba trwa ulamek sekundy, wiec idzie przed przerwa.
+    if _adb_polacz_lokalnie():
+        device = _list_devices()
+        if device:
+            _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+            _adb_uzywaj(device)
+            return device
+
+    # v480ak: telefon nieosiagalny — kazdy krok tracil po 10 s na kazde
+    # `adb connect` (uzytkownik 2026-10-14: trzy razy po 10 s w jednym
+    # kroku). Po nieudanej probie kolejna dopiero po przerwie: 30 s,
+    # potem dluzej, najwyzej 5 min. Powrot telefonu do Wi-Fi skraca
+    # przerwe od razu.
+    if time.time() < _adb_offline[0] and not (
+        _adb_wifi_znikalo[0] and _ip_wifi_telefonu()
+    ) and not (time.time() - _adb_uzyty_o[0] < 10):
+        return None
 
     target = adb_connect_target()
 
     if target and adb_try_connect(target):
         device = _list_devices()
 
+    if device:
+        _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+        _adb_uzywaj(device)
+        return device
+
+    # v467: port debugowania bezprzewodowego zmienia sie po restarcie
+    # sesji; `adb mdns services` pokazuje aktualny (bieg 2026-09-30,
+    # kroki 21-24 i 48-49: "no devices/emulators found").
+    try:
+        mdns = subprocess.run(
+            ["adb", "mdns", "services"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in (mdns.stdout or "").splitlines():
+            if "_adb-tls-connect" not in line and "_adb._tcp" not in line:
+                continue
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+:\d+)", line)
+            if m and adb_try_connect(m.group(1)):
+                device = _list_devices()
+                if device:
+                    log("ANDROID", "ADB polaczone przez mDNS: " + m.group(1))
+                    _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+                    _adb_uzywaj(device)
+                    return device
+    except Exception:
+        pass
+
+    if not device:
+        device = _adb_po_powrocie_wifi(_list_devices)
+
+    if device:
+        _adb_offline[0], _adb_offline[1] = 0.0, 0.0
+        _adb_uzywaj(device)
+    else:
+        # v480hs: noc 27/28.10 — 87 prob `adb connect` po 5-10 s w
+        # druzynie 1, choc nikt nie uzywal telefonu. Bez uzycia narzedzi
+        # android_/chrome_ w ostatnich 30 min przerwa rosnie do 30 min;
+        # pierwsze takie narzedzie probuje od razu.
+        _sufit = 300.0 if time.time() - _adb_uzyty_o[0] < 1800 else 1800.0
+        _adb_offline[1] = min(_sufit, max(30.0, _adb_offline[1] * 2))
+        _adb_offline[0] = time.time() + _adb_offline[1]
+        log("ANDROID", "Telefon przez ADB nieosiągalny — następna próba za "
+            + str(int(_adb_offline[1])) + " s.")
+
     return device
+
+
+# (do kiedy nie probujemy, ostatnia przerwa w s)
+_adb_offline = [0.0, 0.0]
+_adb_uzyty_o = [0.0]
+
+
+# v480am: uzytkownik (2026-10-14): "bez wifi teraz jestem, a bez niego
+# [ADB] nie dziala". Debugowanie bezprzewodowe Android wylacza razem z
+# Wi-Fi. Tryb `adb tcpip 5555` slucha tez na 127.0.0.1 samego telefonu
+# i zostaje do restartu telefonu — Termux laczy sie wtedy sam ze soba,
+# z Wi-Fi albo bez. Przelaczamy raz, gdy ADB dziala przez Wi-Fi.
+_ADB_LOKALNY = "127.0.0.1:5555"
+_adb_lokalne_probowane = [False]
+
+
+def _adb_uzywaj(device):
+    """
+    Kazde `adb ...` bez -s (takze w komendach zespolu) idzie do tego
+    urzadzenia. Po przejsciu na lokalne ADB telefon bywa widoczny dwa
+    razy (lokalnie i przez Wi-Fi) i samo `adb shell` konczyloby sie
+    "more than one device".
+    """
+    if device:
+        os.environ["ANDROID_SERIAL"] = str(device)
+        # v480an: raport o zamknieciu czekal na ADB.
+        plik = _raport_czeka_na_adb[0]
+        if plik:
+            _raport_czeka_na_adb[0] = None
+            _threading.Thread(target=_dopisz_powod_z_androida, args=(plik,),
+                              name="raport-zamkniecia", daemon=True).start()
+        # v480an: start bez Wi-Fi — ochrona Termuksa, gdy ADB sie pojawi.
+        if not _chron_zrobione[0] and not _PO_AKTUALIZACJI:
+            _threading.Thread(target=chron_termuksa_przed_zamykaniem,
+                              name="ochrona-termuksa", daemon=True).start()
+
+
+def _adb_polacz_lokalnie(timeout=3):
+    """`adb connect 127.0.0.1:5555` bez zapisywania adresu i bez logu."""
+    try:
+        r = subprocess.run(
+            ["adb", "connect", _ADB_LOKALNY],
+            capture_output=True, text=True, timeout=timeout
+        )
+        out = ((r.stdout or "") + (r.stderr or "")).lower()
+        return "connected" in out and "cannot" not in out and "failed" not in out
+    except Exception:
+        return False
+
+
+def _adb_przejdz_na_lokalne(device, _list_devices):
+    """
+    ADB dziala przez Wi-Fi: raz na uruchomienie wlaczamy tryb lokalny.
+    Gdy sie nie uda, wracamy do adresu Wi-Fi. Zwraca urzadzenie, ktorego
+    uzywac dalej.
+    """
+    if (
+        device == _ADB_LOKALNY
+        or _adb_lokalne_probowane[0]
+        or ":" not in str(device) and "_adb-tls" not in str(device)
+    ):
+        return device
+    _adb_lokalne_probowane[0] = True
+
+    if _adb_polacz_lokalnie():
+        nowe = _list_devices()
+        if nowe == _ADB_LOKALNY:
+            log("ANDROID", "ADB lokalnie (" + _ADB_LOKALNY + ") — działa też bez Wi-Fi.")
+            return nowe
+
+    try:
+        subprocess.run(
+            ["adb", "-s", str(device), "tcpip", "5555"],
+            capture_output=True, text=True, timeout=10
+        )
+    except Exception:
+        pass
+
+    for _ in range(5):
+        time.sleep(1.5)
+        if _adb_polacz_lokalnie():
+            nowe = _list_devices()
+            if nowe == _ADB_LOKALNY:
+                log("ANDROID", "ADB przełączone na lokalne (" + _ADB_LOKALNY
+                    + ") — działa też bez Wi-Fi, do restartu telefonu.")
+                return nowe
+
+    log("ANDROID", "Lokalne ADB nie wyszło — zostaję przy Wi-Fi.")
+    nowe = _list_devices()
+    if nowe:
+        return nowe
+    if adb_try_connect(device):
+        return _list_devices() or device
+    return _list_devices()
+
+
+# v480ah: uzytkownik (2026-10-13): "jak mi sie adb rozlaczy albo odejde
+# za daleko od wifi, program zapyta mnie o wpisanie IP, bo za kazdym
+# razem sie zmienia — jak powroce do wifi". Zapamietany adres i mDNS
+# nie wystarczaja, gdy telefon dostal nowy port (a czasem nowy IP).
+# Uzytkownik: "ale tylko po ponownym polaczeniu wifi" — pytanie pada
+# raz, gdy telefon wraca do Wi-Fi po jego utracie, nie co jakis czas.
+_adb_wifi_znikalo = [False]
+_ADB_CZEKAJ_NA_ODPOWIEDZ_S = 120
+
+
+def _ip_wifi_telefonu():
+    """Adres IPv4 telefonu w sieci Wi-Fi albo None, gdy Wi-Fi nie ma."""
+
+    import socket
+
+    try:
+        import fcntl
+        import struct
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _s:
+            _adr = fcntl.ioctl(
+                _s.fileno(), 0x8915, struct.pack("256s", b"wlan0")
+            )[20:24]
+        return socket.inet_ntoa(_adr)
+    except OSError as e:
+        # 99: wlan0 bez adresu, 19: brak wlan0 — Wi-Fi wylaczone.
+        if getattr(e, "errno", None) in (19, 99):
+            return None
+    except Exception:
+        pass
+
+    # Android nie dal zajrzec do wlan0 — adres, przez ktory telefon
+    # wychodzi do sieci; Wi-Fi w domu to prawie zawsze 192.168.x.x.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _s:
+            _s.connect(("8.8.8.8", 80))
+            _adr = _s.getsockname()[0]
+        return _adr if _adr.startswith("192.168.") else None
+    except Exception:
+        return None
+
+
+def _adb_po_powrocie_wifi(_list_devices):
+    """
+    ADB zniknelo, a ani zapamietany adres, ani mDNS nie pomogly. Gdy
+    telefon jest w Wi-Fi, najpierw proba: nowy IP + stary port; potem
+    pytanie uzytkownika o adres (IP:port albo sam port) — tylko raz po
+    powrocie do Wi-Fi, z glownego watku, przy terminalu.
+    """
+
+    zapamietany = adb_connect_target() or ""
+    if not zapamietany:
+        return None
+
+    ip = _ip_wifi_telefonu()
+    if not ip:
+        if not _adb_wifi_znikalo[0]:
+            _adb_wifi_znikalo[0] = True
+            log("ANDROID", "ADB rozłączone, telefon nie ma Wi-Fi — o nowy adres "
+                "zapytam, gdy wróci do sieci.")
+        return None
+
+    stary_ip, _, stary_port = zapamietany.rpartition(":")
+    if stary_port.isdigit() and ip != stary_ip:
+        if adb_try_connect(ip + ":" + stary_port):
+            return _list_devices()
+
+    if (
+        not _adb_wifi_znikalo[0]
+        or _threading.current_thread() is not _threading.main_thread()
+        or not sys.stdin.isatty()
+    ):
+        return None
+    _adb_wifi_znikalo[0] = False
+
+    try:
+        try:
+            import termios
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        except Exception:
+            pass
+        print("\a")
+        print("📶 ADB przez Wi-Fi się rozłączyło. Telefon jest w sieci (IP " + ip + ").")
+        print("   Nowy adres: Ustawienia -> Opcje deweloperskie -> Debugowanie "
+              "bezprzewodowe -> \"Adres IP i port\".")
+        print("   Wpisz IP:port albo sam port (" + str(_ADB_CZEKAJ_NA_ODPOWIEDZ_S)
+              + " s, Enter/brak = pomiń) > ", end="", flush=True)
+        try:
+            gotowe, _, _ = select.select([sys.stdin], [], [], _ADB_CZEKAJ_NA_ODPOWIEDZ_S)
+        except Exception:
+            gotowe = []
+        if not gotowe:
+            print()
+            log("ANDROID", "Brak nowego adresu ADB — praca idzie dalej bez telefonu.")
+            return None
+        wpisane = str(sys.stdin.readline() or "").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+    if not wpisane:
+        return None
+    if wpisane.isdigit():
+        wpisane = ip + ":" + wpisane
+
+    if adb_try_connect(wpisane):
+        return _list_devices()
+
+    return None
 
 
 def init_android():
@@ -8086,6 +10900,28 @@ def _powiedz_jak_leca_komendy(pakiet):
     pass
 
 
+def _foreground_przez_adb():
+    """Pakiet na wierzchu z `dumpsys activity`/`dumpsys window` albo ""."""
+    try:
+        device = find_adb()
+        if not device:
+            return ""
+        for polecenie, wzor in (
+            ("dumpsys activity activities", r"(?:mResumedActivity|topResumedActivity)[^\n]*?\s([\w.]+)/"),
+            ("dumpsys window", r"mCurrentFocus[^\n]*?\s([\w.]+)/"),
+        ):
+            r = subprocess.run(
+                ["adb", "-s", device, "shell"] + polecenie.split(),
+                capture_output=True, text=True, timeout=6
+            )
+            m = re.search(wzor, r.stdout or "")
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
 def _foreground_app():
     """
     (pakiet, czytelna nazwa) aplikacji na wierzchu albo (None, None),
@@ -8093,20 +10929,26 @@ def _foreground_app():
     informacja pomocnicza, jej brak nie może wywrócić właściwej akcji.
     """
 
-    if android_device is None:
-        return None, None
+    # v480cv: bieg 2026-10-19 19:18 — uiautomator2 app_current() nie
+    # odpowiadal przez 10 s na kazdym kroku (Termux na wierzchu), choc
+    # telefon dzialal. Najpierw pytamy system przez adb (dumpsys, ~1 s);
+    # uiautomator2 zostaje tylko na wypadek, gdy adb nic nie powie.
+    pakiet = _foreground_przez_adb()
 
-    try:
-        biezaca = _android_with_deadline(
-            "android_app_current",
-            lambda: android_device.app_current(),
-            timeout=10
-        )
+    if not pakiet:
+        if android_device is None:
+            return None, None
+        try:
+            biezaca = _android_with_deadline(
+                "android_app_current",
+                lambda: android_device.app_current(),
+                timeout=10
+            )
 
-        pakiet = str((biezaca or {}).get("package") or "").strip()
+            pakiet = str((biezaca or {}).get("package") or "").strip()
 
-    except Exception:
-        return None, None
+        except Exception:
+            return None, None
 
     if not pakiet:
         return None, None
@@ -8185,6 +11027,18 @@ def android_summary(with_header=True):
     global android_device
     global adb_target
 
+    # v480fj: bieg 2026-10-25 10:09 — ADB nie dzialal (adb sie nie
+    # uruchamial), a stan na poczatku kazdego kroku i tak czekal 10 s na
+    # uiautomator2 ("android_app_current: brak odpowiedzi po 10 s"), w
+    # obu druzynach, choc nikt nie uzywal telefonu. Gdy ADB jest w
+    # przerwie po nieudanym polaczeniu, odpowiadamy od razu.
+    _za = _adb_offline[0] - time.time()
+    if _za > 0:
+        return (
+            "Android niedostępny — ADB nie odpowiada (kolejna próba połączenia "
+            "za " + str(int(_za)) + " s)."
+        )
+
     if android_device is None:
         try:
             if not init_android():
@@ -8222,7 +11076,48 @@ def android_summary(with_header=True):
 
         lines = []
 
+        # v461: pasek stanu (com.android.systemui — "Powiadomienie z
+        # aplikacji Messenger", "Bluetooth nie jest podlaczony") szedl
+        # na poczatku kazdego odczytu i zjadal limit; bieg 2026-09-28
+        # 17:30: MAIN dokladal zrzut + OCR, zeby zobaczyc apke.
+        _pakiety = [
+            str(n.attrib.get("package") or "") for n in root.iter("node")
+        ]
+        _jest_nie_systemui = any(
+            pk and pk != "com.android.systemui" for pk in _pakiety
+        )
+
+        # v468: klawiatura ekranowa (pakiet ...inputmethod...) zaslania
+        # dol ekranu — bieg 2026-09-30, kroki 18-24: MAIN nie widzial
+        # odpowiedzi bota i klikal w to, co bylo pod klawiatura.
+        _klaw_od = None
+        for n in root.iter("node"):
+            pk = str(n.attrib.get("package") or "")
+            if "inputmethod" in pk or pk.endswith(".keyboard") or ".keyboard." in pk:
+                m = re.search(r"\[\d+,(\d+)\]\[\d+,\d+\]", str(n.attrib.get("bounds") or ""))
+                if m:
+                    y = int(m.group(1))
+                    if _klaw_od is None or y < _klaw_od:
+                        _klaw_od = y
+        if _klaw_od is not None:
+            lines.append(
+                "KLAWIATURA EKRANOWA zasłania ekran od y=" + str(_klaw_od)
+                + " w dół — to, co pod nią, nie jest widoczne ani klikalne; "
+                "android_press(back) ją chowa."
+            )
+        globals()["_klawiatura_od_y"] = _klaw_od
+
         for node in root.iter("node"):
+
+            pk_node = str(node.attrib.get("package") or "")
+            if _klaw_od is not None and ("inputmethod" in pk_node or ".keyboard" in pk_node):
+                continue
+
+            if (
+                _jest_nie_systemui
+                and node.attrib.get("package") == "com.android.systemui"
+            ):
+                continue
             text = node.attrib.get(
                 "text",
                 ""
@@ -8393,6 +11288,27 @@ def android_summary(with_header=True):
                 "Na wierzchu jest teraz: " + _app_label
                 if (_app_label and with_header) else ""
             )
+
+            # v471: Termux w plywajacym oknie — patrz _okna_na_ekranie().
+            if naglowek and _app_pakiet == "com.termux":
+                _okno, _ekran, _pod = _okna_na_ekranie(xml)
+                if _okno is None and _termux_nie_zaslania(_okno, _ekran, _pod):
+                    naglowek = (
+                        "Na wierzchu jest teraz: " + str(_pod)
+                        + " — to jego drzewo jest poniżej. Termux ma "
+                        "fokus, ale nie ma go na tym ekranie (najwyżej "
+                        "mały podgląd), więc dotyk trafia w "
+                        + str(_pod) + "."
+                    )
+                elif _termux_plywa(_okno, _ekran) and _pod:
+                    naglowek = (
+                        "Na wierzchu jest teraz: " + str(_pod)
+                        + " (na całym ekranie), a nad nim Termux w "
+                        "pływającym oknie [" + str(_okno[0]) + ","
+                        + str(_okno[1]) + "][" + str(_okno[2]) + ","
+                        + str(_okno[3]) + "] — dotyk poza tym oknem "
+                        "trafia w " + str(_pod) + "."
+                    )
 
             if not lines:
                 return (
@@ -8578,6 +11494,32 @@ def android_click_text(text):
                 result["matched_via_synonym_of"] = target_text
             return result
 
+    # v468: elementu nie ma, a klawiatura zaslania ekran — chowamy ja
+    # (back) i probujemy raz jeszcze.
+    if (
+        result is not None
+        and not result.get("ok")
+        and globals().get("_klawiatura_od_y") is not None
+        and android_device is not None
+    ):
+        try:
+            android_device.press("back")
+            time.sleep(0.8)
+            ponownie = _android_click_single_text(target_text)
+            if ponownie.get("ok"):
+                ponownie["schowana_klawiatura"] = True
+                ponownie["message"] = (
+                    "Element był pod klawiaturą ekranową — schowałem ją "
+                    "(back) i kliknąłem."
+                )
+                return ponownie
+            result["schowana_klawiatura"] = True
+            result["hint"] = (
+                "Klawiatura zasłaniała ekran — schowałem ją (back), ale "
+                "elementu dalej nie ma. " + str(result.get("hint") or "")
+            ).strip()
+        except Exception:
+            pass
     if result is not None and len(tried) > 1:
         result["tried_synonyms"] = tried
 
@@ -9214,7 +12156,112 @@ def android_paste_text(text, target_text):
     }
 
 
-def _pisanie_do_wlasnego_terminala(co_robimy):
+# v471: Termux w plywajacym oknie.
+#
+# Bieg 2026-10-04 11:15, kroki 3-9: Messenger byl otwarty na calym
+# ekranie, a Termux wisial nad nim w plywajacym oknie
+# ([104,282][977,1834] — `dumpsys activity` pokazywal DWA
+# topResumedActivity: Termux i Messenger). app_current() mowil
+# "com.termux", wiec android_tap(864, 200) — w "Nowa wiadomość",
+# poza oknem Termuksa — byl odrzucany jako "poszłoby w Termux", a
+# android_state zaczynal sie od "Na wierzchu jest teraz: Termux".
+# Siedem krokow zeszlo, zanim MAIN obszedl to przez `adb shell input
+# tap`, ktory trafil od razu.
+_WEZEL_RE = re.compile(
+    r'package="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+)
+
+
+def _okna_na_ekranie(xml=None):
+    """
+    (okno Termuksa (x1, y1, x2, y2) albo None, ekran (szer, wys),
+    pakiet z najwieksza powierzchnia poza Termuksem albo None)
+    z drzewa ekranu. Nigdy nie rzuca wyjatkiem.
+    """
+
+    try:
+
+        if xml is None:
+            xml = _android_with_deadline(
+                "dump_hierarchy",
+                lambda: android_device.dump_hierarchy(compressed=False),
+                timeout=10
+            )
+
+        termux = None
+        szer = wys = 0
+        inne = {}
+
+        for m in _WEZEL_RE.finditer(str(xml or "")):
+
+            pakiet = m.group(1)
+            x1, y1, x2, y2 = (int(m.group(i)) for i in range(2, 6))
+            szer, wys = max(szer, x2), max(wys, y2)
+
+            if pakiet == "com.termux":
+                termux = (
+                    (x1, y1, x2, y2) if termux is None else (
+                        min(termux[0], x1), min(termux[1], y1),
+                        max(termux[2], x2), max(termux[3], y2)
+                    )
+                )
+            elif pakiet and pakiet not in (
+                "com.android.systemui",
+            ) and "inputmethod" not in pakiet:
+                pole = (x2 - x1) * (y2 - y1)
+                inne[pakiet] = max(inne.get(pakiet, 0), pole)
+
+        pod = max(inne, key=inne.get) if inne else None
+
+        # Drzewo moze miec tylko okno Termuksa — wtedy jego brzegi
+        # udawalyby brzegi ekranu.
+        try:
+            _w, _h = _android_with_deadline(
+                "window_size", lambda: android_device.window_size(),
+                timeout=5
+            )
+            szer, wys = max(szer, int(_w)), max(wys, int(_h))
+        except Exception:
+            pass
+
+        return termux, (szer, wys), pod
+
+    except Exception:
+        return None, (0, 0), None
+
+
+def _termux_plywa(okno, ekran):
+    """Okno Termuksa zajmuje wyraznie mniej niz caly ekran."""
+
+    if not okno or not ekran[0] or not ekran[1]:
+        return False
+
+    x1, y1, x2, y2 = okno
+    pole = max(0, x2 - x1) * max(0, y2 - y1)
+
+    return pole < 0.85 * ekran[0] * ekran[1]
+
+
+# v473: bieg 2026-10-04 12:24, kroki 30-50 — Termux mial fokus, ale na
+# ekranie byl tylko maly podglad w rogu, ktorego drzewo ekranu w ogole
+# nie zawieralo; cale drzewo to byl Chrome z formularzem Useme. Mimo to
+# android_state zaczynal sie od "Na wierzchu jest teraz: Termux", wiec
+# MAIN ani razu nie uzyl android_tap i przez 14 krokow klikal przycisk
+# "Przejdz do podsumowania" wlasnymi skryptami CDP (JS click, zdarzenia
+# myszy i dotyku, Enter, fetch POST) — bez skutku.
+def _termux_nie_zaslania(okno, ekran, pod):
+    """
+    Na ekranie jest inna aplikacja, a Termux (choc ma fokus) albo
+    plywa w mniejszym oknie, albo nie ma go w drzewie ekranu wcale.
+    """
+
+    if not pod:
+        return False
+
+    return okno is None or _termux_plywa(okno, ekran)
+
+
+def _pisanie_do_wlasnego_terminala(co_robimy, xy=None):
     """
     Czy to, co zaraz zrobimy na ekranie, poleci w terminal, w ktorym
     dziala sam agent. Zwraca gotowa odmowe albo None.
@@ -9250,6 +12297,42 @@ def _pisanie_do_wlasnego_terminala(co_robimy):
 
     if pakiet != "com.termux":
         return None
+
+    # v471: tap poza plywajacym oknem Termuksa trafia w aplikacje pod
+    # nim — patrz _okna_na_ekranie().
+    if xy is not None:
+        _okno, _ekran, _pod = _okna_na_ekranie()
+        if _okno is None and _termux_nie_zaslania(_okno, _ekran, _pod):
+            return None
+        if _termux_plywa(_okno, _ekran):
+            x, y = int(xy[0]), int(xy[1])
+            if not (_okno[0] <= x < _okno[2] and _okno[1] <= y < _okno[3]):
+                return None
+
+    # v463: bieg 2026-09-28 19:32 — po chrome_execute_js na wierzchu
+    # byl Termux i tap w karte ankiety zostal odrzucony. Gdy ostatnie
+    # narzedzie bylo w Chrome, to Chrome jest celem — wyciagamy go.
+    # v467: "ostatnie" bylo juz biezacym (android_tap) — bieg 2026-09-30
+    # 07:40: tap w "Dodaj ogloszenie" odrzucony, choc krok wczesniej
+    # pracowalismy w Chrome.
+    if str(globals().get("_poprzednie_narzedzie") or "").startswith("chrome_"):
+        try:
+            execute_shell(
+                "adb shell am start -n "
+                "com.android.chrome/com.google.android.apps.chrome.Main",
+                timeout=15
+            )
+            time.sleep(1.5)
+            pakiet2, _ = _foreground_app()
+            if pakiet2 and pakiet2 != "com.termux":
+                log(
+                    "ANDROID",
+                    "Termux byl na wierzchu — wyciagnalem Chrome, bo "
+                    "ostatnie narzedzie bylo w Chrome."
+                )
+                return None
+        except Exception:
+            pass
 
     return {
         "ok": False,
@@ -9292,8 +12375,20 @@ def android_tap(x, y):
     # nie ma poprawnego zastosowania: znaki ida na jego wlasne
     # wejscie, a wyniku i tak nie ma skad wziac.
     _odmowa = _pisanie_do_wlasnego_terminala(
-        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")"
+        "Kliknięcie we współrzędne (" + str(x) + ", " + str(y) + ")",
+        xy=(x, y)
     )
+
+    # v471: tap przeszedl, choc na wierzchu jest Termux — wiec trafil
+    # poza jego plywajace okno, w aplikacje pod nim.
+    if not _odmowa and pakiet == "com.termux":
+        _okno, _ekran, _pod = _okna_na_ekranie()
+        if _termux_nie_zaslania(_okno, _ekran, _pod):
+            pakiet = _pod
+            etykieta = (
+                (_ZNANE_PAKIETY.get(_pod, "") + " — " + _pod)
+                if _ZNANE_PAKIETY.get(_pod) else _pod
+            )
 
     if _odmowa:
         # v432: sam fakt, bez rady o termux_run.
@@ -9382,6 +12477,117 @@ def android_type(text):
             "ok": False,
             "error": str(e)
         }
+
+
+def _rozmiar_png(dane):
+    """(szerokosc, wysokosc) z naglowka PNG albo (None, None)."""
+    try:
+        if dane[:8] == b"\x89PNG\r\n\x1a\n" and dane[12:16] == b"IHDR":
+            return (
+                int.from_bytes(dane[16:20], "big"),
+                int.from_bytes(dane[20:24], "big")
+            )
+    except Exception:
+        pass
+    return (None, None)
+
+
+def android_look(question=None, path=None):
+    """
+    v468: Gemini jako OCZY. Zrzut ekranu idzie do modelu z drabinki
+    (multimodalny), a wraca opis: jaka aplikacja, jaki tekst, jakie
+    przyciski i pola z przyblizonymi wspolrzednymi w pikselach ekranu.
+    Bieg 2026-09-30: 16 krokow walki z botem w Telegramie, bo
+    android_state nie pokazywal odpowiedzi bota pod klawiatura, a
+    tapniecia po starych wspolrzednych trafialy w "Referrals" zamiast
+    w "All Available". Jedno spojrzenie modelu odpowiada na to od razu.
+    Jedno wywolanie = jedno zapytanie z dziennego limitu tego modelu.
+    """
+    if gemini_disabled and _wybierz_pare() is None:
+        return {
+            "ok": False,
+            "error": "Gemini ma teraz wyczerpane limity — nie ma kto obejrzeć ekranu. "
+                     "Zostają android_state (tekstem) i android_screenshot_ocr."
+        }
+    para = _wybierz_pare()
+    if para is None:
+        _najbl = _najblizsze_odnowienie()
+        return {
+            "ok": False,
+            "error": "Wszystkie modele Gemini mają wyczerpany limit"
+            + (" — najbliższy wraca o " + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+               if _najbl else "") + ". Zostają android_state i android_screenshot_ocr."
+        }
+    if path:
+        zrzut = _resolve_home_relative_path(str(path))
+        if not zrzut.exists():
+            return {"ok": False, "error": "Nie ma takiego pliku: " + str(zrzut)}
+    else:
+        z = android_screenshot()
+        if not isinstance(z, dict) or not z.get("ok"):
+            return {
+                "ok": False,
+                "error": "Nie udało się zrobić zrzutu ekranu: "
+                + str((z or {}).get("error") if isinstance(z, dict) else z)
+            }
+        zrzut = Path(str(z.get("path")))
+    try:
+        dane = zrzut.read_bytes()
+    except Exception as e:
+        return {"ok": False, "error": "Nie mogę odczytać zrzutu: " + str(e)}
+    klucz, client, model = para
+    szer, wys = _rozmiar_png(dane)
+    pytanie = str(question or "").strip()
+    prompt = (
+        "To jest zrzut ekranu telefonu z Androidem"
+        + (" o rozmiarze " + str(szer) + "x" + str(wys) + " pikseli" if szer else "")
+        + ". Opisz po polsku, zwięźle i konkretnie: (1) jaka aplikacja lub strona "
+        "jest na wierzchu, (2) najważniejszy widoczny tekst (dosłownie), (3) każdy "
+        "przycisk, link, pole, przełącznik i element listy — z przybliżonym środkiem "
+        "w pikselach ekranu jako (x, y), w kolejności od góry. Powiedz wprost, jeśli "
+        "widać klawiaturę ekranową, okno dialogowe, baner zgód, komunikat błędu albo "
+        "wskaźnik ładowania. Nie zgaduj tego, czego nie widać."
+        + ("\n\nPytanie, na które trzeba odpowiedzieć na końcu: " + pytanie if pytanie else "")
+    )
+    _para_w_uzyciu[:] = [klucz, model]
+    _policz_zapytanie(klucz, model)
+    try:
+        odp = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=dane, mime_type="image/png"),
+                prompt
+            ]
+        )
+        tekst = str(getattr(odp, "text", "") or "").strip()
+    except Exception as e:
+        blad = str(e)
+        log("GEMINI", "android_look: " + short(blad, 300))
+        if _to_limit(blad) or _gemini_przeciazony(blad):
+            try:
+                _odstaw_pare(klucz, model, blad)
+            except Exception:
+                pass
+        return {
+            "ok": False,
+            "error": "Gemini nie obejrzał ekranu: " + short(blad, 400),
+            "model": model
+        }
+    if not tekst:
+        return {"ok": False, "error": "Gemini odpowiedział pusto.", "model": model}
+    log("GEMINI", "android_look (" + str(model) + "): " + short(tekst, 300))
+    return {
+        "ok": True,
+        "action": "look",
+        "model": model,
+        "rozmiar_ekranu": [szer, wys],
+        "zrzut": str(zrzut),
+        "opis": short(tekst, 6000),
+        "uwaga": (
+            "Współrzędne są przybliżone (ocena z obrazu). Dokładne bounds daje "
+            "android_state, gdy element ma węzeł UI."
+        )
+    }
 
 
 def android_press(key):
@@ -9559,6 +12765,17 @@ def android_swipe(
                 "error": "Android niedostępny."
             }
 
+    # v469: bieg 2026-09-30, krok 22 — MAIN podal duration=500 (ms, jak
+    # w `adb shell input swipe`), a uiautomator2 liczy sekundy: gest
+    # mial trwac ponad 8 minut, wiec uiautomator2 i adb (500 000 ms)
+    # skonczyly sie limitem 20 s, a ekran stal. Gest dluzszy niz 10 s
+    # to milisekundy.
+    try:
+        if float(duration) > 10:
+            duration = float(duration) / 1000.0
+    except (TypeError, ValueError):
+        duration = 0.3
+
     try:
         _android_with_deadline(
             "android_swipe",
@@ -9579,6 +12796,31 @@ def android_swipe(
         }
 
     except Exception as e:
+        # v461: uiautomator2 potrafi nie odpowiadac (ekran systemowy,
+        # WebView) — `adb shell input swipe` rysuje gest bez niego.
+        # Bieg 2026-09-28 17:27 i 18:02: dwa swipe'y po 20 s bez ruchu.
+        try:
+            _ms = max(50, int(float(duration) * 1000))
+            _adb = execute_shell(
+                "adb shell input swipe " + " ".join(
+                    str(int(v)) for v in (x1, y1, x2, y2)
+                ) + " " + str(_ms),
+                timeout=20
+            )
+            if _adb.get("returncode") == 0:
+                return {
+                    "ok": True,
+                    "action": "swipe",
+                    "from": [int(x1), int(y1)],
+                    "to": [int(x2), int(y2)],
+                    "method": "adb input swipe",
+                    "message": (
+                        "uiautomator2 nie odpowiedział, gest poszedł "
+                        "przez adb (input swipe)."
+                    )
+                }
+        except Exception:
+            pass
         return {
             "ok": False,
             "action": "swipe",
@@ -9740,14 +12982,38 @@ def _zatrzymaj_to_co_zostawilismy():
     Osobno zwalniamy urzadzenia, ktore zostaly zajete — ale tylko te,
     ktore NAPRAWDE sa zajete. Patrz _zwolnij_zajete_urzadzenia().
 
+    v480: to, co zatrzymujemy, zapisujemy (pid, komenda, plik logu)
+    w _PLIK_ZATRZYMANYCH. Nastepne uruchomienie mowi o tym MAIN-owi
+    raz, na poczatku — patrz _zatrzymane_przy_zamknieciu_blok().
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (biegi 2026-10-11 08:45-09:30).
+    Trening perceptronu szedl w tle. Uzytkownik zamykal agenta, zeby
+    wgrac nowa wersje, a my przy wyjsciu ubijalismy trening — tak
+    jak powinnismy. Ale zespol po restarcie widzial tylko urwany log
+    i szukal winnego w Androidzie (doze, wake-lock), bo nikt mu nie
+    powiedzial, ze to my zatrzymalismy proces razem z programem.
+
     Nigdy nie rzuca — to sprzatanie przy wyjsciu, nie robota.
     """
+
+    _zatrzymane = []
 
     for pid, proces in list(_procesy_w_tle.items()):
 
         try:
             if proces.poll() is not None:
                 continue
+
+            _log_procesu = ""
+            for _sciezka, _wpis in list(_logi_w_tle.items()):
+                if _wpis and _wpis[0] == pid:
+                    _log_procesu = _sciezka
+            _zatrzymane.append({
+                "pid": pid,
+                "komenda": str(getattr(proces, "args", ""))[:300],
+                "log_file": _log_procesu,
+                "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
 
             print(
                 "Zatrzymuje to, co uruchomilem w tle (pid "
@@ -9780,10 +13046,1265 @@ def _zatrzymaj_to_co_zostawilismy():
         except Exception:
             continue
 
+    # v480s: to, co zostalo w tle po zwyklych komendach.
+    for _grupa, (_komenda, _start) in list(_grupy_z_komend.items()):
+        try:
+            if not _grupa or _grupa == os.getpgrp():
+                continue
+            os.killpg(_grupa, 0)
+        except Exception:
+            continue
+        _zatrzymane.append({
+            "pid": _grupa,
+            "komenda": _komenda,
+            "log_file": "",
+            "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        print(
+            "Zatrzymuje to, co zostalo w tle po komendzie (grupa "
+            + str(_grupa) + ")."
+        )
+        try:
+            os.killpg(_grupa, signal.SIGTERM)
+            for _ in range(50):
+                time.sleep(0.1)
+                os.killpg(_grupa, 0)
+            os.killpg(_grupa, signal.SIGKILL)
+        except Exception:
+            pass
+
     _zwolnij_zajete_urzadzenia()
+
+    # v480ab: zapis takze wtedy, gdy nic nie dzialalo w tle — nastepne
+    # uruchomienie mowi MAIN-owi, ze program zamknal uzytkownik (a nie
+    # ze urwal sie sam). Uzytkownik: "musimy informowac Main, jak
+    # zamkne program, zeby wiedzial, ze zamknalem".
+    # Tylko przy zamknieciu przez uzytkownika (Ctrl+C, zamkniete okno,
+    # pkill) — po DONE albo po bledzie programu to nieprawda.
+    _przez_uzytkownika = bool(globals().get("_zamkniete_przez_uzytkownika"))
+
+    if _przez_uzytkownika or _zatrzymane:
+        try:
+            _PLIK_ZATRZYMANYCH.write_text(
+                json.dumps({
+                    "zamkniete": (
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        if _przez_uzytkownika else ""
+                    ),
+                    "zatrzymane": _zatrzymane,
+                }, ensure_ascii=False),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+
+_PLIK_ZATRZYMANYCH = AGENT_DIR / "zatrzymane_przy_zamknieciu.json"
+
+
+# ============================================================
+# v480k: CICHA AKTUALIZACJA W TRAKCIE BIEGU
+# ============================================================
+#
+# Uzytkownik: "w programie najlepiej niech sprawdza co 15 min",
+# "i sie cicho resetuje bez zmian w czacie", "jakby caly czas
+# dzialal, ale z aktualizacja".
+#
+# Co 15 minut watek w tle pyta GitHuba, czy na galezi, z ktorej
+# telefon bierze program (~/.ael-repo), jest nowszy commit. Gdy jest,
+# na granicy krokow puszczamy ~/update_agent.sh (pobiera, sprawdza
+# skladnie, podmienia ~/agent/agent.py) i przeladowujemy program
+# os.execv — ten sam pid, wiec robota w tle (treningi) zyje dalej i
+# dalej jest nasza. Przed przeladowaniem zapisujemy stan biegu (krok,
+# ostatni wynik, co ktora rola juz widziala, pliki logu, procesy w
+# tle); nowa wersja go wczytuje i ciagnie bieg dalej. Agentom nic
+# nie mowimy — ich rozmowy sa wznawiane, nic sie w nich nie zmienia.
+
+AKTUALIZACJA_CO_SEKUND = 15 * 60
+_REPO_TELEFONU = HOME / ".ael-repo"
+_SKRYPT_AKTUALIZACJI = HOME / "update_agent.sh"
+_nowa_wersja = {"commit": ""}
+_ostatnie_pytanie_githuba = [time.time()]
+
+
+def _git_telefonu(*argumenty, czas=60):
+
+    return subprocess.run(
+        ["git", "-C", str(_REPO_TELEFONU)] + list(argumenty),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        timeout=czas
+    )
+
+
+def _commit_na_dysku():
+    try:
+        _c = _git_telefonu("rev-parse", "--short=7", "HEAD", czas=10).stdout.strip()
+        return _c or "wgrana na dysk"
+    except Exception:
+        return "wgrana na dysk"
+
+
+def _sprawdz_nowa_wersje():
+    """Commit z GitHuba, gdy rozni sie od wgranego; inaczej ""."""
+
+    # v480aq: druzyna 2 nie pobiera sama — robi to druzyna 1. Druzyna 2
+    # przeladowuje sie, gdy agent.py na dysku jest nowszy niz ten,
+    # z ktorym wystartowala.
+    # v480hg: tak samo drużyna 1 i zwykły program — użytkownik wgrał nową
+    # wersję ręcznie (bash ~/update_agent.sh w drugim terminalu), więc
+    # GitHub i ~/.ael-repo są już równe i porównanie commitów nic nie
+    # widziało; program działał na starym kodzie do zamknięcia.
+    try:
+        _mt = os.path.getmtime(_SCIEZKA_PROGRAMU)
+        if _mt > _MTIME_PROGRAMU + 1:
+            # v480ih: ten sam kod zapisany jeszcze raz (druga druzyna albo
+            # reczne update_agent.sh na tej samej wersji) to nie nowa
+            # wersja. Bieg 2026-10-29: druzyna 1 przeladowala sie na
+            # c52aa46 trzy razy (19:28, 19:43, 19:51).
+            _o = _odcisk_programu()
+            if _o and _o == _ODCISK_PROGRAMU:
+                globals()["_MTIME_PROGRAMU"] = _mt
+            else:
+                return "nowy-plik"
+    except Exception:
+        pass
+    if _DRUZYNA == "2" or time.time() - _ostatnie_pytanie_githuba[0] < AKTUALIZACJA_CO_SEKUND:
+        return ""
+    _ostatnie_pytanie_githuba[0] = time.time()
+
+    try:
+        if not (_REPO_TELEFONU / ".git").exists():
+            return ""
+
+        if not _SKRYPT_AKTUALIZACJI.exists():
+            return ""
+
+        # v480m: galaz bierzemy z ~/update_agent.sh, a nie z nazwy
+        # galezi w ~/.ael-repo. Bieg 2026-10-11 16:58: klon na telefonie
+        # nazywa sie wciaz claude/android-termux-agent-repair-18dvrp
+        # (stara v450), a skrypt od dawna pobiera inna galaz (fetch +
+        # reset nie zmienia nazwy). Porownywalismy wiec z obca galezia:
+        # "nowa wersja 3a034ba" co 15 minut i przeladowanie na ten sam
+        # kod.
+        galaz = os.environ.get("BRANCH", "").strip()
+
+        if not galaz:
+            _m = re.search(
+                r'BRANCH="\$\{BRANCH:-([^}"]+)\}"',
+                _SKRYPT_AKTUALIZACJI.read_text(encoding="utf-8", errors="replace")
+            )
+            galaz = _m.group(1).strip() if _m else ""
+
+        if not galaz:
+            return ""
+
+        wgrany = _git_telefonu("rev-parse", "HEAD").stdout.strip()
+
+        zdalny = _git_telefonu(
+            "ls-remote", "origin", "refs/heads/" + galaz
+        ).stdout.split()
+
+        if not zdalny or not wgrany:
+            return ""
+
+        return zdalny[0] if zdalny[0] != wgrany else ""
+
+    except Exception:
+        return ""
+
+
+def _pilnuj_aktualizacji():
+
+    while True:
+
+        # v480ax: druzyna 2 sprawdza tylko date pliku na dysku (nic nie
+        # pobiera), wiec moze co pol minuty — nowa wersje, ktora wgrala
+        # druzyna 1, ma od razu, a nie do 15 min pozniej.
+        # v480hg: co 30 s także drużyna 1 — data pliku jest tania, GitHub
+        # dalej co 15 min (_sprawdz_nowa_wersje pilnuje odstępu).
+        time.sleep(30)
+
+        if _nowa_wersja["commit"]:
+            continue
+
+        _commit = _sprawdz_nowa_wersje()
+
+        if _commit:
+            _nowa_wersja["commit"] = _commit
+            log(
+                "AKTUALIZACJA",
+                (
+                    ("Nowa wersja jest już na dysku" + (" (pobrała ją drużyna 1)" if _DRUZYNA == "2" else ""))
+                    if _commit == "nowy-plik" else
+                    "Na GitHubie jest nowa wersja (" + _commit[:7] + ")"
+                ) + " — wgram ją po tym kroku."
+            )
+
+
+def uruchom_pilnowanie_aktualizacji():
+
+    try:
+        import threading
+
+        threading.Thread(
+            target=_pilnuj_aktualizacji,
+            name="aktualizacja",
+            daemon=True
+        ).start()
+
+    except Exception as e:
+        log("AKTUALIZACJA", "Nie ruszyło sprawdzanie wersji: " + str(e))
+
+
+class _ProcesPoAktualizacji:
+    """
+    Proces w tle uruchomiony przed przeladowaniem. Po os.execv to
+    wciaz nasze dziecko (ten sam pid programu), ale obiektu Popen juz
+    nie ma — ten udaje go na tyle, na ile reszta programu go uzywa.
+    """
+
+    def __init__(self, pid, args=""):
+        self.pid = int(pid)
+        self.args = args
+        self.returncode = None
+
+    def poll(self):
+
+        if self.returncode is not None:
+            return self.returncode
+
+        try:
+            _pid, _status = os.waitpid(self.pid, os.WNOHANG)
+
+            if _pid == 0:
+                return None
+
+            self.returncode = os.waitstatus_to_exitcode(_status)
+
+        except ChildProcessError:
+            # Nie nasze dziecko (juz odebrane albo obcy pid) — nie
+            # udajemy, ze dziala, i nigdy go nie ubijamy.
+            self.returncode = 0
+
+        return self.returncode
+
+    def wait(self, timeout=None):
+
+        _start = time.time()
+
+        while self.poll() is None:
+
+            if timeout is not None and time.time() - _start > timeout:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+
+            time.sleep(0.2)
+
+        return self.returncode
+
+    def send_signal(self, sig):
+        try:
+            os.kill(self.pid, sig)
+        except Exception:
+            pass
+
+    def terminate(self):
+        self.send_signal(signal.SIGTERM)
+
+    def kill(self):
+        self.send_signal(signal.SIGKILL)
+
+
+def _przywroc_procesy_w_tle():
+
+    for _wpis in _stan_przed_aktualizacja.get("procesy_w_tle") or []:
+        try:
+            _p = _ProcesPoAktualizacji(_wpis["pid"], _wpis.get("args", ""))
+            _procesy_w_tle[_p.pid] = _p
+        except Exception:
+            pass
+
+    for _sciezka, _wpis in (_stan_przed_aktualizacja.get("logi_w_tle") or {}).items():
+        try:
+            _logi_w_tle[_sciezka] = (int(_wpis[0]), float(_wpis[1]))
+        except Exception:
+            pass
+
+    for _grupa, _wpis in (_stan_przed_aktualizacja.get("grupy_z_komend") or {}).items():
+        try:
+            _grupy_z_komend[int(_grupa)] = (str(_wpis[0]), float(_wpis[1]))
+        except Exception:
+            pass
+
+    # v480hi: licznik krotkich glosow MAIN-a przezywa przeladowanie (bieg
+    # 2026-10-27 17:56: druzyna 1 przeladowala sie w trakcie czekania,
+    # licznik spadl do zera i pytanie "czemu nie pytasz zespolu?" nie padlo)
+    try:
+        _g = _stan_przed_aktualizacja.get("glos") or {}
+        _glos_krotkie[0] = int(_g.get("krotkie") or 0)
+        _glos_postep_byl[0] = bool(_g.get("postep_byl"))
+        _ostatni_ask_krok[0] = int(_g.get("ask_krok") or _ostatni_ask_krok[0] or 0)
+        _glos_czemu_krok[0] = int(_g.get("czemu_krok") if _g.get("czemu_krok") is not None else -100)
+    except Exception:
+        pass
+    try:
+        _z = _stan_przed_aktualizacja.get("znane_roli") or {}
+        for r in _z.get("pliki") or []:
+            _tresc_znana_roli[tuple(r[:3])] = r[3]
+        for r in _z.get("katalogi") or []:
+            _katalog_znany_roli[tuple(r[:3])] = list(r[3])
+    except Exception:
+        pass
+
+
+def _przeladuj_po_aktualizacji(step, last_result, signatures):
+    """
+    Wgrywa nowa wersje i przeladowuje program w tym samym procesie.
+    Gdy cokolwiek nie wyjdzie — zostajemy na starej wersji i bieg
+    idzie dalej. Nigdy nie rzuca.
+    """
+
+    _commit = _nowa_wersja["commit"]
+    _nowa_wersja["commit"] = ""
+
+    try:
+        if _DRUZYNA == "2" or _commit == "nowy-plik":
+            # Nowy agent.py jest juz na dysku (druzyna 1 albo uzytkownik).
+            wynik = subprocess.CompletedProcess([], 0, "")
+        else:
+            wynik = subprocess.run(
+                ["bash", str(_SKRYPT_AKTUALIZACJI)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=600
+            )
+    except Exception as e:
+        log("AKTUALIZACJA", "Aktualizacja nie przeszła: " + str(e))
+        return
+
+    if wynik.returncode != 0 or not _SCIEZKA_PROGRAMU:
+        log(
+            "AKTUALIZACJA",
+            "Aktualizacja nie przeszła — zostaję na obecnej wersji: "
+            + short(str(wynik.stdout or "").strip(), 400)
+        )
+        return
+
+    stan = {
+        "commit": _commit,
+        "krok": int(step or 0),
+        "last_result": last_result,
+        "signatures": signatures,
+        "goal_briefed": sorted(_goal_briefed),
+        "role_seen_blocks": [
+            [k[0], k[1], v] for k, v in _role_seen_blocks.items()
+        ],
+        "pliki_biegu": (
+            [str(_plik_przebiegu), str(_plik_zdarzen)]
+            if _plik_przebiegu and _plik_zdarzen else []
+        ),
+        "procesy_w_tle": [
+            {"pid": pid, "args": str(getattr(p, "args", ""))[:300]}
+            for pid, p in list(_procesy_w_tle.items())
+            if p.poll() is None
+        ],
+        "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
+        "glos": {"krotkie": _glos_krotkie[0], "postep_byl": _glos_postep_byl[0],
+                 "ask_krok": _ostatni_ask_krok[0], "czemu_krok": _glos_czemu_krok[0]},
+        # v480hs: co kto z zespolu juz ma w swojej rozmowie (pliki, spisy)
+        "znane_roli": {
+            "pliki": [list(k) + [v] for k, v in _tresc_znana_roli.items()],
+            "katalogi": [list(k) + [v] for k, v in _katalog_znany_roli.items()],
+        },
+        "grupy_z_komend": {
+            str(k): list(v) for k, v in _grupy_z_komend.items()
+        },
+    }
+
+    try:
+        _PLIK_STANU_AKTUALIZACJI.write_text(
+            json.dumps(stan, ensure_ascii=False, default=str),
+            encoding="utf-8"
+        )
+    except Exception as e:
+        log("AKTUALIZACJA", "Nie zapisałem stanu biegu — nie przeładowuję: " + str(e))
+        return
+
+    log(
+        "AKTUALIZACJA",
+        "Wgrana nowa wersja ("
+        + (_commit_na_dysku() if _commit == "nowy-plik" else _commit[:7])
+        + ") — przeładowuję program, "
+        "bieg idzie dalej od kroku " + str(int(step or 0) + 1) + "."
+    )
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+    os.environ["AEL_PO_AKTUALIZACJI"] = "1"
+    os.environ["AEL_URUCHOMIENIE_ID"] = _URUCHOMIENIE_ID
+
+    # v480ay: Sedzia nie moze zostac przerwany w pol odpowiedzi.
+    _KOLEJKA_KONTA.acquire()
+    try:
+        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
+    except Exception as e:
+        _KOLEJKA_KONTA.release()
+        os.environ.pop("AEL_PO_AKTUALIZACJI", None)
+        os.environ.pop("AEL_URUCHOMIENIE_ID", None)
+        log("AKTUALIZACJA", "Przeładowanie nie wyszło — zostaję na starej wersji: " + str(e))
+
+
+def _zatrzymane_przy_zamknieciu_blok():
+    """
+    v480: jednorazowa wiadomosc dla MAIN-a po starcie — co poprzednie
+    uruchomienie zatrzymalo przy zamknieciu i gdzie zostaly logi.
+    Plik kasujemy po odczytaniu, wiec to samo nie wraca. Pusty tekst,
+    gdy niczego nie zatrzymalismy. Nigdy nie rzuca.
+    """
+
+    try:
+        wpisy = json.loads(
+            _PLIK_ZATRZYMANYCH.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return ""
+
+    try:
+        _PLIK_ZATRZYMANYCH.unlink()
+    except Exception:
+        pass
+
+    # v480ab: {"zamkniete": czas, "zatrzymane": [...]}; stary zapis to
+    # sama lista.
+    zamkniete = ""
+    if isinstance(wpisy, dict):
+        zamkniete = str(wpisy.get("zamkniete") or "")
+        wpisy = wpisy.get("zatrzymane") or []
+
+    linie = []
+
+    for w in wpisy if isinstance(wpisy, list) else []:
+        try:
+            linie.append(
+                "- pid " + str(w.get("pid")) + " ("
+                + short(str(w.get("komenda") or ""), 200) + ")"
+                + (", log: " + str(w["log_file"])
+                   if w.get("log_file") else "")
+            )
+        except Exception:
+            continue
+
+    # v480fa: zamkniecie to nie polecenie. Bieg 2026-10-25 08:04 (druzyna
+    # 1): po "Uzytkownik zamknal program … zatrzymalo sie to, co dzialalo w
+    # tle" MAIN uznal to za "sygnal przerwania", nie wznowil przerwanego
+    # testu i przez 10 krokow krecil puste `true` ("sesja domknieta, tryb
+    # oczekiwania"). Mowimy wprost, co to znaczy.
+    _dalej = (
+        "Zamknięcie programu to nie polecenie ani ocena Waszej pracy — "
+        "program zamyka się np. przy aktualizacji, restarcie telefonu albo "
+        "gdy użytkownik go uruchamia od nowa. Cel się nie zmienił, bieg "
+        "trwa dalej i nie czeka na użytkownika. "
+    )
+    if zamkniete:
+        return (
+            "Użytkownik zamknął program (" + zamkniete + ")"
+            + (
+                " — razem z nim zatrzymało się to, co działało w tle:\n"
+                + "\n".join(linie) + "\n" + _dalej
+                + "Jeśli to, co się przerwało, jest dalej potrzebne, możecie "
+                "to puścić od nowa.\n"
+                if linie else
+                ". W tle nic wtedy nie działało. " + _dalej + "\n"
+            )
+        )
+
+    if not linie:
+        return ""
+
+    czas = str((wpisy[0] or {}).get("czas") or "")
+
+    return (
+        "Przy zamknięciu programu" + (" (" + czas + ")" if czas else "")
+        + " zatrzymałem to, co działało w tle:\n" + "\n".join(linie) + "\n"
+        + "Bieg trwa dalej; jeśli to jest dalej potrzebne, możecie to puścić od nowa.\n"
+    )
 
 
 atexit.register(_zatrzymaj_to_co_zostawilismy)
+
+
+# ============================================================
+# v480al: DLACZEGO PROGRAM SIE ZAMKNAL
+# ============================================================
+#
+# Bieg 2026-10-14 urwal sie dwa razy w pol linii (08:09 i 09:00) —
+# okno Termuksa zniknelo, w logu ani slowa. Python nie moze zapisac
+# niczego w chwili SIGKILL, wiec slad zostawiamy zawczasu: "oddech"
+# co pol minuty (czas, krok, wolna pamiec). Czyste wyjscie go kasuje.
+# Jesli przy nastepnym starcie oddech wciaz lezy, poprzedni bieg
+# zostal ubity — wtedy pytamy Androida przez ADB, kto i dlaczego
+# (dumpsys activity exit-info + logcat) i zapisujemy raport obok
+# logow przebiegu.
+
+_PLIK_ODDECHU = STATE_DIR / "ostatni_oddech.json"
+_ODDECH_CO_S = 30
+_oddech_zostaw = False
+_oddech_watek = None
+_poprzedni_oddech = None
+
+
+def _wolna_pamiec_mb():
+    """MemAvailable z /proc/meminfo w MB albo None."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for linia in f:
+                if linia.startswith("MemAvailable:"):
+                    return int(linia.split()[1]) // 1024
+    except Exception:
+        pass
+    return None
+
+
+def _oddech_zapisz(**dodatkowe):
+    try:
+        dane = {
+            "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ts": time.time(),
+            "krok": _biezacy_krok,
+            "pid": os.getpid(),
+            "wolna_pamiec_mb": _wolna_pamiec_mb(),
+        }
+        dane.update(dodatkowe)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _PLIK_ODDECHU.with_name(_PLIK_ODDECHU.name + ".tmp")
+        tmp.write_text(json.dumps(dane, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, _PLIK_ODDECHU)
+    except Exception:
+        pass
+
+
+def _oddech_na_wyjsciu():
+    """Czyste wyjscie: oddech znika. Po sygnale zostaje z jego nazwa."""
+    if _oddech_zostaw:
+        return
+    try:
+        _PLIK_ODDECHU.unlink()
+    except Exception:
+        pass
+
+
+def zacznij_oddech():
+    """
+    Odczytuje oddech poprzedniego biegu (jesli zostal) i zaczyna
+    wlasny. Po cichej aktualizacji (execv) to ten sam bieg, wiec
+    stary oddech niczego nie znaczy.
+    """
+    global _oddech_watek, _poprzedni_oddech
+
+    if _oddech_watek is not None:
+        return
+
+    if not _PO_AKTUALIZACJI:
+        try:
+            if _PLIK_ODDECHU.exists():
+                _poprzedni_oddech = json.loads(
+                    _PLIK_ODDECHU.read_text(encoding="utf-8")
+                )
+        except Exception:
+            _poprzedni_oddech = {}
+
+    _oddech_zapisz()
+
+    def _petla():
+        ostatni_wpis = 0.0
+        while True:
+            if time.time() - ostatni_wpis >= 60:
+                ostatni_wpis = time.time()
+                _dziennik_oddechu_dopisz()
+            time.sleep(_ODDECH_CO_S)
+            if _oddech_zostaw:
+                return
+            _oddech_zapisz()
+
+    _oddech_watek = _threading_bootstrap.Thread(
+        target=_petla, name="oddech", daemon=True
+    )
+    _oddech_watek.start()
+
+
+atexit.register(_oddech_na_wyjsciu)
+
+
+# v480cm: straznik pamieci telefonu.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (noc 2026-10-18, 03:08-03:22). Obie
+# druzyny odpalily ciezkie skrypty naraz (z 4 procesow zrobilo sie 8),
+# wolna pamiec zjechala do ~500 MB i Android (LOW_MEMORY) zabil caly
+# Termux: obie druzyny i straznika druzyny 2. Do rana nic nie wstalo.
+#
+# Nie ograniczamy skryptow: zadnego limitu czasu, krokow ani rozmiaru,
+# skrypt bierze tyle pamieci, ile telefon da. Dopiero gdy wolnej
+# pamieci jest tak malo, ze Android za chwile zabije wszystko,
+# zatrzymujemy JEDEN, najciezszy skrypt zespolu i dopisujemy do jego
+# wyjscia, dlaczego. Program i reszta pracuja dalej, a zespol widzi
+# w wyniku, co sie stalo.
+_PAMIEC_PROG_MB = 700
+_PAMIEC_CO_S = 3
+# v480it: raport zamkniecia 2026-10-31 10:33 (LOW_MEMORY, drugi raz tego
+# dnia): o 10:30 wolne bylo 1.8 GB, o 10:32 Android zabil juz termux.api,
+# a 10:33 caly Termux — straznik (dwa odczyty < 700 MB) nie zdazyl albo
+# MemAvailable nie spadlo tak nisko, bo pamiec szla do swapu (zram), a
+# Android zabija tez wtedy, gdy swap sie konczy. Dlatego: odczyt ponizej
+# _PAMIEC_KRYTYCZNA_MB dziala od razu, bez drugiego; i niski swap przy
+# malej wolnej pamieci liczy sie jak niska pamiec. Zadnego limitu na
+# skrypt — nadal zatrzymujemy jeden, najciezszy, po rowno miedzy druzynami.
+_PAMIEC_KRYTYCZNA_MB = 450
+_PAMIEC_PRZY_SWAPIE_MB = 1200
+_SWAP_PROG_PROC = 15
+_PAMIEC_MIN_SKRYPT_MB = 120
+_PLIK_STRAZNIKA_PAMIECI = HOME / ".ael_straznik_pamieci"
+_straznik_pamieci_watek = None
+
+
+def _status_procesu(pid):
+    """Uid i pamiec (RSS + swap, w MB) procesu z /proc/<pid>/status."""
+    uid, mb = None, 0
+    try:
+        with open("/proc/" + str(pid) + "/status", encoding="utf-8") as f:
+            for linia in f:
+                if linia.startswith("Uid:"):
+                    uid = int(linia.split()[1])
+                elif linia.startswith(("VmRSS:", "VmSwap:")):
+                    mb += int(linia.split()[1]) // 1024
+    except Exception:
+        return None, 0
+    return uid, mb
+
+
+def _nasi_przodkowie():
+    """Ten proces i wszyscy jego rodzice — ich nie ruszamy."""
+    pidy, pid = set(), os.getpid()
+    while pid > 1 and pid not in pidy:
+        pidy.add(pid)
+        try:
+            with open("/proc/" + str(pid) + "/stat", encoding="utf-8") as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except Exception:
+            break
+    return pidy
+
+
+def _druzyna_procesu(pid):
+    """Numer druzyny ze srodowiska procesu (dzieci druzyny 2 dziedzicza AEL_DRUZYNA=2)."""
+    try:
+        with open("/proc/" + str(pid) + "/environ", "rb") as f:
+            for zmienna in f.read().split(b"\0"):
+                if zmienna.startswith(b"AEL_DRUZYNA="):
+                    return zmienna.split(b"=", 1)[1].decode("utf-8", "replace").strip() or "1"
+    except Exception:
+        pass
+    return "1"
+
+
+def _najciezszy_skrypt():
+    """
+    (pid, MB, komenda) skryptu do zatrzymania albo None.
+
+    Obie druzyny maja te same szanse: liczymy, ile pamieci zajmuja
+    WSZYSTKIE skrypty kazdej druzyny, i ustepuje ta, ktora bierze
+    wiecej — jej najciezszy skrypt. Zadna druzyna nie wypchnie wiec
+    drugiej z telefonu tylko dlatego, ze wystartowala pierwsza.
+    """
+    nasze = _nasi_przodkowie()
+    program = os.path.basename(str(_SCIEZKA_PROGRAMU)) or "agent.py"
+    skrypty = []
+    for wpis in os.listdir("/proc"):
+        if not wpis.isdigit() or int(wpis) in nasze:
+            continue
+        uid, mb = _status_procesu(wpis)
+        if uid != os.getuid() or mb < 10:
+            continue
+        try:
+            with open("/proc/" + wpis + "/cmdline", "rb") as f:
+                komenda = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except Exception:
+            continue
+        # Sam program (obie druzyny), aplikacja Termux i pomocnik
+        # DeepSeeka to nie skrypty zespolu.
+        if (
+            not komenda
+            or program in komenda
+            or komenda.startswith("com.")
+            or "pow_helper" in komenda
+        ):
+            continue
+        skrypty.append((int(wpis), mb, komenda, _druzyna_procesu(wpis)))
+    duze = [s for s in skrypty if s[1] >= _PAMIEC_MIN_SKRYPT_MB]
+    if not duze:
+        return None
+    razem = {}
+    for s in skrypty:
+        razem[s[3]] = razem.get(s[3], 0) + s[1]
+    for druzyna in sorted(razem, key=razem.get, reverse=True):
+        jej = [s for s in duze if s[3] == druzyna]
+        if jej:
+            pid, mb, komenda, _ = max(jej, key=lambda s: s[1])
+            return pid, mb, komenda
+    return None
+
+
+def _plik_wyjscia_procesu(pid):
+    """Plik, do ktorego proces pisze wyjscie (stdout albo stderr), albo None."""
+    for fd in ("1", "2"):
+        try:
+            cel = os.readlink("/proc/" + str(pid) + "/fd/" + fd)
+        except Exception:
+            continue
+        if cel.startswith("/") and os.path.isfile(cel):
+            return cel
+    return None
+
+
+def _zatrzymaj_przy_braku_pamieci(wolna):
+    try:
+        ostatnio = float(read_text(_PLIK_STRAZNIKA_PAMIECI).strip() or 0)
+    except Exception:
+        ostatnio = 0.0
+    # Druga druzyna mogla wlasnie cos zatrzymac — dajemy pamieci
+    # chwile, zeby sie zwolnila, zanim ruszymy nastepny skrypt.
+    if time.time() - ostatnio < 15:
+        return
+    skrypt = _najciezszy_skrypt()
+    if not skrypt:
+        return
+    pid, mb, komenda = skrypt
+    try:
+        _PLIK_STRAZNIKA_PAMIECI.write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
+    plik_wyjscia = _plik_wyjscia_procesu(pid)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        return
+    tekst = (
+        "Zatrzymałem proces " + str(pid) + " (" + short(komenda, 120)
+        + "), bo zajmował " + str(mb) + " MB, a telefonowi zostało tylko "
+        + str(wolna) + " MB wolnej pamięci"
+        + ((" i " + str(int(_swap_wolny_proc())) + "% wolnego swapu")
+           if (_swap_wolny_proc() is not None and wolna >= _PAMIEC_PROG_MB) else "")
+        + ". Za chwilę Android zamknąłby "
+        "cały Termux razem z programem. Ten skrypt może ruszyć ponownie, "
+        "gdy będzie potrzebował mniej pamięci naraz."
+    )
+    if plik_wyjscia:
+        try:
+            with open(plik_wyjscia, "a", encoding="utf-8") as f:
+                f.write("\n[program] " + tekst + "\n")
+        except Exception:
+            pass
+    else:
+        # v480is: bieg 2026-10-30 19:37 (druzyna 1, krok 1014): eval_mix.py
+        # z petli "for i in 1 2 3" pisal do rury, nie do pliku — zespol nie
+        # dowiadywal sie, czemu proces zniknal (i petla puszczala go znowu).
+        # Wtedy uwaga trafia do MAIN-a druzyny, ktorej to byl skrypt.
+        try:
+            with open(_plik_uwag_pamieci(_druzyna_procesu(pid)), "a", encoding="utf-8") as f:
+                f.write(tekst + "\n")
+        except Exception:
+            pass
+    log("PAMIĘĆ", tekst)
+
+
+def _plik_uwag_pamieci(druzyna):
+    return HOME / (".ael_pamiec_uwagi_" + (str(druzyna or "").strip() or "1") + ".txt")
+
+
+def _uwagi_pamieci_dla_maina():
+    """v480is: zatrzymania przez straznika pamieci skryptow tej druzyny,
+    ktore nie pisaly do pliku — raz, potem plik znika."""
+    p = _plik_uwag_pamieci(_DRUZYNA or "1")
+    try:
+        tekst = p.read_text(encoding="utf-8").strip()
+        p.unlink()
+    except Exception:
+        return ""
+    return tekst
+
+
+def _swap_wolny_proc():
+    """SwapFree jako procent SwapTotal albo None (brak swapu / odczytu)."""
+    wolny = _kb_z_pliku("/proc/meminfo", "SwapFree:")
+    caly = _kb_z_pliku("/proc/meminfo", "SwapTotal:")
+    if not caly or wolny is None:
+        return None
+    return 100.0 * wolny / caly
+
+
+def _pamiec_nisko(wolna):
+    """v480it: malo wolnej pamieci albo konczy sie swap przy malej wolnej."""
+    if wolna is None:
+        return False
+    if wolna < _PAMIEC_PROG_MB:
+        return True
+    if wolna < _PAMIEC_PRZY_SWAPIE_MB:
+        sw = _swap_wolny_proc()
+        if sw is not None and sw < _SWAP_PROG_PROC:
+            return True
+    return False
+
+
+_pamiec_dziennik_t = [0.0]
+
+
+def _pamiec_do_dziennika(wolna):
+    """v480it: gdy wolnej pamieci jest malo (< 1 GB), co 10 s jedna linia w
+    dzienniku pracy: ile wolne, ile swapu i ktory skrypt bierze najwiecej —
+    zeby raport zamkniecia mowil, co zjadlo pamiec (10:33 nie bylo wiadomo)."""
+    if wolna is None or wolna >= 1000 or time.time() - _pamiec_dziennik_t[0] < 10:
+        return
+    _pamiec_dziennik_t[0] = time.time()
+    nasze = _nasi_przodkowie()
+    najw = None
+    for wpis in os.listdir("/proc"):
+        if not wpis.isdigit() or int(wpis) in nasze:
+            continue
+        uid, mb = _status_procesu(wpis)
+        if uid != os.getuid() or (najw and mb <= najw[0]):
+            continue
+        try:
+            with open("/proc/" + wpis + "/cmdline", "rb") as f:
+                kom = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except Exception:
+            continue
+        if kom:
+            najw = (mb, kom, _druzyna_procesu(wpis))
+    sw = _swap_wolny_proc()
+    linia = (datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " | [pamięć] wolna "
+             + str(wolna) + " MB | swap wolny "
+             + (str(int(sw)) + "%" if sw is not None else "?")
+             + (" | najwięcej: " + short(najw[1], 80) + " — " + str(najw[0])
+                + " MB (drużyna " + str(najw[2]) + ")" if najw else ""))
+    PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_DZIENNIK_ODDECHU, "a", encoding="utf-8") as f:
+        f.write(linia + "\n")
+
+
+def zacznij_straznika_pamieci():
+    global _straznik_pamieci_watek
+
+    if _straznik_pamieci_watek is not None:
+        return
+
+    def _petla():
+        nisko = 0
+        while True:
+            time.sleep(_PAMIEC_CO_S)
+            wolna = _wolna_pamiec_mb()
+            try:
+                _pamiec_do_dziennika(wolna)
+            except Exception:
+                pass
+            # Dwa odczyty z rzedu, zeby chwilowy skok nie zatrzymal
+            # niczego bez potrzeby — chyba ze juz jest krytycznie (v480it).
+            nisko = nisko + 1 if _pamiec_nisko(wolna) else 0
+            if nisko >= 2 or (wolna is not None and wolna < _PAMIEC_KRYTYCZNA_MB):
+                nisko = 0
+                try:
+                    _zatrzymaj_przy_braku_pamieci(wolna)
+                except Exception:
+                    pass
+
+    _straznik_pamieci_watek = _threading_bootstrap.Thread(
+        target=_petla, name="pamiec", daemon=True
+    )
+    _straznik_pamieci_watek.start()
+
+
+def _adb_szybko(polecenie, timeout=10):
+    """adb shell na nasz telefon; stdout albo "" przy bledzie."""
+    try:
+        cmd = ["adb"]
+        if adb_target:
+            cmd += ["-s", str(adb_target)]
+        cmd += ["shell", polecenie]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout or "") + ((r.stderr or "") if r.returncode else "")
+    except Exception as e:
+        return "(" + str(e) + ")"
+
+
+def _wpisy_exit_info(tekst, ile=5):
+    """Najnowsze wpisy ApplicationExitInfo jako slowniki."""
+    wpisy = []
+    for blok in re.split(r"ApplicationExitInfo #\d+:", tekst or "")[1:]:
+        w = {}
+        for klucz in ("timestamp", "pid", "process", "reason", "subreason",
+                      "importance", "pss", "rss", "description", "state"):
+            m = re.search(
+                r"\b" + klucz + r"=(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?"
+                r"|\d+ \([A-Z_ ]+\)|\S+)",
+                blok
+            )
+            if m:
+                w[klucz] = m.group(1)
+        if w:
+            wpisy.append(w)
+        if len(wpisy) >= ile:
+            break
+    return wpisy
+
+
+_WAZNOSC_PO_LUDZKU = {
+    "100": "na wierzchu",
+    "125": "usługa na pierwszym planie (powiadomienie Termuksa)",
+    "200": "widoczny",
+    "230": "dostrzegalny",
+    "300": "usługa w tle",
+    "400": "w tle (zapamiętany)",
+}
+
+
+# v480an: uzytkownik (2026-10-14): ADB dziala tylko przez Wi-Fi, a
+# chce miec zapisane, co sie dzialo i przez co program sie wylacza.
+# Dziennik pisze sie bez ADB: co minute linia z pamiecia, rozmiarem
+# programu, liczba procesow, co 5 min bateria. Raport po naglym koncu
+# powstaje od razu z tego dziennika; powod od Androida (przez ADB)
+# dopisujemy pozniej, gdy ADB wroci — Android pamieta ostatnie
+# zamkniecia Termuksa, wiec da sie to sprawdzic i po godzinie.
+_DZIENNIK_ODDECHU = PRZEBIEG_DIR / "dziennik_pracy.log"
+_DZIENNIK_MAKS_B = 1500000
+_raport_czeka_na_adb = [None]
+_ostatnia_bateria = [0.0, ""]
+
+
+def _kb_z_pliku(plik, klucz):
+    try:
+        with open(plik, encoding="utf-8") as f:
+            for linia in f:
+                if linia.startswith(klucz):
+                    return int(linia.split()[1])
+    except Exception:
+        pass
+    return None
+
+
+def _bateria_krotko():
+    """Co 5 min: "bateria 54% (ładuje, 31.2°C)"; pomiedzy — ostatni odczyt."""
+    if time.time() - _ostatnia_bateria[0] < 300:
+        return _ostatnia_bateria[1]
+    _ostatnia_bateria[0] = time.time()
+    try:
+        r = subprocess.run(["termux-battery-status"], capture_output=True,
+                           text=True, timeout=8)
+        b = json.loads(r.stdout or "{}")
+        _ostatnia_bateria[1] = (
+            "bateria " + str(b.get("percentage", "?")) + "% ("
+            + str(b.get("status", "?")).lower() + ", "
+            + str(b.get("temperature", "?"))[:4] + "°C)"
+        )
+    except Exception:
+        _ostatnia_bateria[1] = ""
+    return _ostatnia_bateria[1]
+
+
+def _dziennik_oddechu_dopisz():
+    """Jedna linia stanu telefonu i programu. Nigdy nie rzuca."""
+    try:
+        wolna = _kb_z_pliku("/proc/meminfo", "MemAvailable:")
+        swap = _kb_z_pliku("/proc/meminfo", "SwapFree:")
+        rss = _kb_z_pliku("/proc/self/status", "VmRSS:")
+        try:
+            procesow = sum(1 for p in os.listdir("/proc") if p.isdigit())
+        except Exception:
+            procesow = "?"
+        czesci = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "krok " + str(_biezacy_krok),
+            "wolna pamięć " + (str(wolna // 1024) if wolna else "?") + " MB",
+            "swap wolny " + (str(swap // 1024) if swap is not None else "?") + " MB",
+            "program " + (str(rss // 1024) if rss else "?") + " MB",
+            "procesów " + str(procesow),
+        ]
+        bat = _bateria_krotko()
+        if bat:
+            czesci.append(bat)
+        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            if _DZIENNIK_ODDECHU.stat().st_size > _DZIENNIK_MAKS_B:
+                os.replace(_DZIENNIK_ODDECHU,
+                           _DZIENNIK_ODDECHU.with_suffix(".log.1"))
+        except Exception:
+            pass
+        with open(_DZIENNIK_ODDECHU, "a", encoding="utf-8") as f:
+            f.write(" | ".join(czesci) + "\n")
+    except Exception:
+        pass
+
+
+def _ostatnie_linie(plik, ile):
+    try:
+        with open(plik, encoding="utf-8", errors="replace") as f:
+            return f.readlines()[-ile:]
+    except Exception:
+        return []
+
+
+def _na_telefon(plik):
+    """Kopia do AEL-MINI (widac w menedzerze plikow); zwraca, gdzie lezy."""
+    try:
+        if PRZEBIEG_NA_TELEFONIE.parent.exists():
+            PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(plik, PRZEBIEG_NA_TELEFONIE / Path(plik).name)
+            try:  # v480iq: widoczny od razu w menedzerze plikow
+                subprocess.Popen(["termux-media-scan", str(PRZEBIEG_NA_TELEFONIE / Path(plik).name)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 stdin=subprocess.DEVNULL)
+            except Exception:
+                pass
+            return str(PRZEBIEG_NA_TELEFONIE / Path(plik).name)
+    except Exception:
+        pass
+    return str(plik)
+
+
+def _powod_z_androida():
+    """(linie raportu, jedno zdanie) z dumpsys exit-info i logcat przez ADB."""
+    surowe = _adb_szybko("dumpsys activity exit-info com.termux", 15)
+    wpisy = _wpisy_exit_info(surowe)
+    zabicia = _adb_szybko(
+        "logcat -d -b events,main,system 2>/dev/null | "
+        "grep -iE 'am_kill|am_proc_died|lowmemorykiller|lmkd|"
+        "PhantomProcess|am_anr' | grep -i termux | tail -n 30",
+        20
+    )
+    linie = ["", "Co zapisał Android (najnowsze zamknięcia Termuksa):"]
+    streszczenie = ""
+    if wpisy:
+        for w in wpisy:
+            imp = str(w.get("importance", ""))
+            linie.append(
+                "- " + str(w.get("timestamp", "?"))
+                + " | powód: " + str(w.get("reason", "?"))
+                + " | podpowód: " + str(w.get("subreason", "?"))
+                + " | opis: " + str(w.get("description", "-"))
+                + " | pamięć procesu: " + str(w.get("pss", "?"))
+                + " | stan: " + _WAZNOSC_PO_LUDZKU.get(imp, imp or "?")
+            )
+        n = wpisy[0]
+        streszczenie = (
+            "Android: " + str(n.get("timestamp", "?"))[:16]
+            + ", powód " + str(n.get("reason", "?"))
+            + (", opis " + str(n["description"]) if n.get("description") else "")
+        )
+    else:
+        linie.append("(brak wpisów albo telefon nie odpowiedział)")
+        streszczenie = "Android nie podał powodu"
+    linie += ["", "Logcat (wpisy o zabiciu procesów Termuksa):",
+              (zabicia.strip() or "(nic — bufor mógł się już nadpisać)")]
+    # v480co: "o-kill(6) from 1000,3217" mowi tylko, ze zabil proces
+    # systemowy 3217. Nazwe sprawdzamy od razu, poki pid jeszcze zyje
+    # (do restartu telefonu), zeby wiedziec, ktora czesc systemu to robi.
+    kto_zabil = []
+    for _pid in dict.fromkeys(re.findall(r"from \d+,(\d+)", zabicia or "")):
+        _nazwa = _adb_szybko("cat /proc/" + _pid + "/cmdline", 5)
+        _nazwa = _nazwa.replace("\0", " ").strip() or "(proces już nie żyje)"
+        kto_zabil.append("- pid " + _pid + ": " + _nazwa[:200])
+    if kto_zabil:
+        linie += ["", "Kto zabił (proces systemowy z logcat):"] + kto_zabil
+    linie += ["", "Surowy dumpsys exit-info:", (surowe or "")[:12000]]
+    return linie, streszczenie
+
+
+def _dopisz_powod_z_androida(plik):
+    """ADB wrocilo: dopisuje do czekajacego raportu powod od Androida."""
+    try:
+        linie, streszczenie = _powod_z_androida()
+        with open(plik, "a", encoding="utf-8") as f:
+            f.write("\n(dopisane po powrocie ADB, "
+                    + datetime.now().strftime("%H:%M") + ")\n"
+                    + "\n".join(linie) + "\n")
+        gdzie = _na_telefon(plik)
+        log("PROGRAM", "Do raportu o zamknięciu dopisałem powód od Androida — "
+            + streszczenie + ". Raport: " + gdzie)
+    except Exception:
+        pass
+
+
+def raport_poprzedniego_zamkniecia():
+    """
+    Gdy poprzedni bieg nie wyszedl czysto, zapisuje raport: ostatni
+    oddech, koncowka dziennika pracy, logi samego Termuksa, a gdy jest
+    ADB — co Android zapisal o zamknieciu. Bez ADB powod od Androida
+    dopisze sie, gdy ADB wroci. Jedna linia w logu. Nigdy nie rzuca.
+    """
+    global _poprzedni_oddech
+
+    oddech = _poprzedni_oddech
+    if oddech is None:
+        return None
+    _poprzedni_oddech = None
+
+    try:
+        teraz = datetime.now().strftime("%Y%m%d_%H%M%S")
+        linie = ["Poprzednie uruchomienie nie zamknęło się samo.", ""]
+        linie.append("Ostatni ślad programu: " + str(oddech.get("czas"))
+                     + ", krok " + str(oddech.get("krok"))
+                     + ", wolna pamięć " + str(oddech.get("wolna_pamiec_mb"))
+                     + " MB, pid " + str(oddech.get("pid")))
+        if oddech.get("sygnal"):
+            linie.append("Program dostał sygnał " + str(oddech["sygnal"])
+                         + " (zamknięcie okna/sesji albo prośba systemu).")
+        else:
+            linie.append("Bez sygnału — proces zabity od razu (SIGKILL).")
+
+        linie += ["", "Ostatnie minuty z dziennika pracy (co minutę):"]
+        linie += [l.rstrip("\n") for l in _ostatnie_linie(_DZIENNIK_ODDECHU, 20)] \
+            or ["(pusty)"]
+
+        # Termux widzi bez ADB wlasne logi Androida (swojej aplikacji).
+        try:
+            r = subprocess.run(["logcat", "-d", "-t", "400"],
+                               capture_output=True, text=True, timeout=10)
+            # v480ap: bez wpisow SELinux "avc: granted" — kazde
+            # uruchomienie programu (takze nasz wlasny start) sypie ich
+            # dziesiatkami, a o zamknieciu nie mowia nic.
+            wlasne = [l for l in (r.stdout or "").splitlines()
+                      if re.search(r"termux|kill|destroy|memory|died", l, re.I)
+                      and "avc:" not in l and "audit(" not in l]
+            linie += ["", "Logi aplikacji Termux (bez ADB):"]
+            linie += wlasne[-40:] or ["(nic)"]
+        except Exception:
+            pass
+
+        if adb_target:
+            dalej, streszczenie = _powod_z_androida()
+            linie += dalej
+        else:
+            linie += ["", "ADB teraz niedostępne — powód od Androida dopiszę "
+                      "tutaj, gdy ADB wróci."]
+            streszczenie = "powód od Androida dopiszę, gdy wróci ADB"
+
+        PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+        plik = PRZEBIEG_DIR / ("zamkniecie_" + teraz + ".txt")
+        plik.write_text("\n".join(linie) + "\n", encoding="utf-8")
+        gdzie = _na_telefon(plik)
+        if not adb_target:
+            _raport_czeka_na_adb[0] = plik
+
+        log(
+            "PROGRAM",
+            "Poprzedni bieg urwał się o " + str(oddech.get("czas", "?"))[11:16]
+            + " (krok " + str(oddech.get("krok", "?")) + ", wolna pamięć "
+            + str(oddech.get("wolna_pamiec_mb", "?")) + " MB"
+            + (", sygnał " + str(oddech["sygnal"]) if oddech.get("sygnal") else ", bez sygnału")
+            + "). " + streszczenie + ". Raport: " + gdzie
+        )
+        return gdzie
+    except Exception as e:
+        try:
+            log("PROGRAM", "Raportu o zamknięciu nie zapisałem: " + str(e))
+        except Exception:
+            pass
+        return None
+
+
+_OCHRONA_TERMUKSA = [
+    ("bez usypiania (Doze)", "dumpsys deviceidle whitelist +com.termux"),
+    ("praca w tle", "cmd appops set com.termux RUN_ANY_IN_BACKGROUND allow"),
+    ("praca w tle", "cmd appops set com.termux RUN_IN_BACKGROUND allow"),
+    ("zawsze aktywny", "am set-standby-bucket com.termux active"),
+    ("bez limitu procesów-dzieci",
+     "device_config set_sync_disabled_for_tests persistent; "
+     "device_config put activity_manager max_phantom_processes 2147483647"),
+    ("bez limitu procesów-dzieci",
+     "settings put global settings_enable_monitor_phantom_procs false"),
+]
+
+
+_chron_zrobione = [False]
+
+
+def chron_termuksa_przed_zamykaniem():
+    """
+    Raz na start: przez ADB wylaczamy to, co Android sam moze
+    Termuksowi zrobic — usypianie, limit pracy w tle i zabijanie
+    "procesow-dzieci" (Android 12+ ubija ponad 32 takie procesy,
+    a nasz Python i wszystko, co odpala, to wlasnie one). Na brak
+    pamieci nie ma ustawienia — to widac potem w raporcie.
+    """
+    if (
+        _PO_AKTUALIZACJI or _chron_zrobione[0] or _DRUZYNA == "2"
+        or not (adb_target or os.environ.get("ANDROID_SERIAL"))
+    ):
+        return
+    _chron_zrobione[0] = True
+    udane, nieudane = [], []
+    for nazwa, polecenie in _OCHRONA_TERMUKSA:
+        wynik = _adb_szybko(polecenie + " && echo AEL_OK", 10)
+        cel = udane if "AEL_OK" in wynik else nieudane
+        if nazwa not in cel:
+            cel.append(nazwa)
+    nieudane = [n for n in nieudane if n not in udane]
+    try:
+        log(
+            "ANDROID",
+            "Ochrona Termuksa przed zamykaniem: "
+            + (", ".join(udane) if udane else "nic nie przeszło")
+            + ("; nie przeszło: " + ", ".join(nieudane) if nieudane else "")
+            + "."
+        )
+    except Exception:
+        pass
+
+
+def _zamknij_po_sygnale(signum, frame):
+    """
+    v480: `pkill -f agent.py` (SIGTERM) i zamkniecie okna Termuksa
+    (SIGHUP) koncza program tak samo jak Ctrl+C — przez sys.exit,
+    wiec atexit sprzata to, co puscilismy w tle. Dotad Python przy
+    tych sygnalach wychodzil bez atexit i procesy w tle zostawaly.
+    """
+
+    # v480: slad w logu. Bieg 2026-10-11 12:42 urwal sie w pol slowa
+    # (telefon zamknal wszystkie aplikacje) i z logu nie dalo sie
+    # powiedziec, czy program dostal sygnal, czy zostal zabity od razu.
+    # Teraz sygnal zostawia linie; brak tej linii = SIGKILL (Android
+    # ubil proces bez ostrzezenia, np. przy braku pamieci).
+    try:
+        _nazwa = signal.Signals(signum).name
+    except Exception:
+        _nazwa = str(signum)
+    globals()["_zamkniete_przez_uzytkownika"] = True
+    # v480al: sygnal zostaje w oddechu — nastepny start go zaraportuje.
+    globals()["_oddech_zostaw"] = True
+    _oddech_zapisz(sygnal=_nazwa)
+    try:
+        log(
+            "PROGRAM",
+            "Dostałem sygnał " + _nazwa + " od systemu — zamykam się "
+            "(SIGHUP: zamknięto okno/sesję Termuksa; SIGTERM: ktoś "
+            "albo Android poprosił o zamknięcie)."
+        )
+    except Exception:
+        pass
+
+    raise SystemExit(128 + int(signum))
+
+
+for _sygnal in ("SIGTERM", "SIGHUP"):
+    try:
+        signal.signal(getattr(signal, _sygnal), _zamknij_po_sygnale)
+    except Exception:
+        pass
 
 
 atexit.register(_cleanup_screenshots_silently)
@@ -10005,6 +14526,155 @@ def android_screenshot_ocr(path=None, lang=None):
 _confirmed_app_launches = {}
 
 
+# v472: aplikacja ze Sklepu Google Play.
+#
+# Bieg 2026-10-04 11:15 i 11:51: zespol chcial pisac do ludzi z grupy
+# na Facebooku, aplikacji Facebook (com.facebook.katana) nie bylo
+# (android_list_packages: tylko Messenger), wiec MAIN poprosil
+# uzytkownika o instalacje ("Wejdź do Play Store -> Facebook ->
+# Zainstaluj") i stanal. Uzytkownik: "google play mógł sam sobie
+# pobrać". android_launch_app pakietu, ktorego nie ma, otwiera teraz
+# jego strone w Sklepie, naciska "Zainstaluj", czeka na instalacje i
+# uruchamia aplikacje.
+_PLAY_INSTALUJ_RE = r"(?i)^(zainstaluj|install|instaluj)$"
+_PLAY_OTWORZ_RE = r"(?i)^(otwórz|otworz|open|graj|play)$"
+PLAY_CZEKANIE_NA_INSTALACJE_S = float(
+    os.environ.get("PLAY_CZEKANIE_NA_INSTALACJE_S", "600")
+)
+
+
+def _pakiet_jest_na_telefonie(package):
+    """True / False, albo None, gdy adb nie odpowiedzialo jak trzeba."""
+
+    wynik = execute_shell(
+        "adb shell pm path " + shlex.quote(package), timeout=20
+    )
+
+    if "package:" in str(wynik.get("stdout") or ""):
+        return True
+
+    if str(wynik.get("stderr") or "").strip() or wynik.get("returncode") not in (0, 1):
+        return None
+
+    return False
+
+
+def _zainstaluj_ze_sklepu(package):
+    """
+    Instaluje `package` ze Sklepu Google Play. Zwraca slownik z "ok"
+    (True, gdy pakiet jest juz na telefonie) i tym, co sie stalo.
+    """
+
+    if android_device is None and not init_android():
+        return {"ok": False, "error": "Android niedostępny."}
+
+    otwarcie = execute_shell(
+        "adb shell am start -a android.intent.action.VIEW -p "
+        "com.android.vending -d "
+        + shlex.quote("market://details?id=" + package),
+        timeout=20
+    )
+
+    if not otwarcie.get("ok"):
+        return {
+            "ok": False,
+            "error": "Sklep Google Play się nie otworzył: "
+            + short(str(otwarcie.get("stderr") or otwarcie.get("error") or ""), 200)
+        }
+
+    log("ANDROID", "Nie ma " + package + " — otwieram jego stronę w Sklepie Google Play.")
+
+    # Strona Sklepu laduje sie kilka sekund; przycisk szukamy, az sie
+    # pojawi.
+    kliknieto = False
+    widac_otworz = False
+    koniec = time.time() + 30
+
+    while time.time() < koniec and not kliknieto:
+
+        time.sleep(2.0)
+
+        try:
+            przycisk = android_device(textMatches=_PLAY_INSTALUJ_RE)
+            if _android_with_deadline(
+                "play_install_exists", lambda: przycisk.exists, timeout=10
+            ):
+                _android_with_deadline(
+                    "play_install_click", lambda: przycisk.click(), timeout=10
+                )
+                kliknieto = True
+                break
+
+            otworz = android_device(textMatches=_PLAY_OTWORZ_RE)
+            if _android_with_deadline(
+                "play_open_exists", lambda: otworz.exists, timeout=10
+            ):
+                widac_otworz = True
+        except Exception:
+            pass
+
+        if _pakiet_jest_na_telefonie(package) is True:
+            return {"ok": True, "zainstalowano": True, "metoda": "Sklep Google Play"}
+
+    if not kliknieto:
+
+        if widac_otworz or _pakiet_jest_na_telefonie(package) is True:
+            return {"ok": True, "zainstalowano": True, "metoda": "Sklep Google Play"}
+
+        return {
+            "ok": False,
+            "error": "play_brak_przycisku",
+            "message": (
+                "Otworzyłem stronę " + package + " w Sklepie Google Play, "
+                "ale nie ma na niej przycisku „Zainstaluj”. Co jest na "
+                "ekranie, pokaże android_state."
+            ),
+            "sklep_na_wierzchu": True
+        }
+
+    globals()["_ostatnia_instalacja_ts"] = time.time()
+    log("ANDROID", "Kliknąłem „Zainstaluj” dla " + package + " — czekam na instalację.")
+
+    start = time.time()
+    ostatni_log = start
+
+    while time.time() - start < PLAY_CZEKANIE_NA_INSTALACJE_S:
+
+        time.sleep(5.0)
+
+        if _pakiet_jest_na_telefonie(package) is True:
+            log(
+                "ANDROID",
+                package + " zainstalowany po "
+                + str(int(time.time() - start)) + " s."
+            )
+            return {
+                "ok": True,
+                "zainstalowano": True,
+                "metoda": "Sklep Google Play",
+                "instalacja_s": round(time.time() - start, 1)
+            }
+
+        if time.time() - ostatni_log >= 60:
+            ostatni_log = time.time()
+            log(
+                "ANDROID",
+                "Instalacja " + package + " trwa ("
+                + str(int(time.time() - start)) + " s)."
+            )
+
+    return {
+        "ok": False,
+        "error": "instalacja_trwa",
+        "message": (
+            "Kliknąłem „Zainstaluj” dla " + package + ", po "
+            + str(int(PLAY_CZEKANIE_NA_INSTALACJE_S)) + " s jeszcze go "
+            "nie ma. Pobieranie może dalej trwać — android_list_packages "
+            "pokaże, kiedy będzie."
+        )
+    }
+
+
 def android_launch_app(package):
     """
     Uruchamia zainstalowaną aplikację po nazwie pakietu przez
@@ -10028,6 +14698,23 @@ def android_launch_app(package):
             "ok": False,
             "error": "Pusta nazwa pakietu."
         }
+
+    # v472: nie ma go na telefonie — najpierw Sklep Google Play.
+    _instalacja = None
+
+    if (
+        re.fullmatch(r"[A-Za-z][\w]*(\.[A-Za-z][\w]*)+", package)
+        and _pakiet_jest_na_telefonie(package) is False
+    ):
+        _instalacja = _zainstaluj_ze_sklepu(package)
+
+        if not _instalacja.get("ok"):
+            return dict(
+                _instalacja,
+                action="launch_app",
+                package=package,
+                nie_bylo_na_telefonie=True
+            )
 
     result = execute_shell(
         "adb shell monkey -p " + shlex.quote(package)
@@ -10082,6 +14769,12 @@ def android_launch_app(package):
     if already_launched_note:
         output["already_launched_note"] = already_launched_note
 
+    if _instalacja:
+        output["zainstalowano_ze_sklepu"] = (
+            package + " nie było na telefonie — pobrałem go ze Sklepu "
+            "Google Play i uruchomiłem."
+        )
+
     return output
 
 
@@ -10135,6 +14828,24 @@ def android_list_packages(filter_text=None):
         and not str(result.get("stdout") or "").strip()
         and not str(result.get("stderr") or "").strip()
     )
+
+    # v461: drugie spojrzenie po 20 s ma sens tylko wtedy, gdy cos sie
+    # wlasnie instaluje (adb install w ostatnich 5 min albo Sklep Play
+    # na wierzchu). Bieg 2026-09-28 16:39: osiem sprawdzen "czy jest
+    # paypal/revolut/..." po 20 s kazde — prawie 3 minuty czekania.
+    if _nic_nie_pasuje:
+        _instalacja = (
+            time.time() - float(globals().get("_ostatnia_instalacja_ts") or 0)
+            < 300
+        )
+        if not _instalacja:
+            try:
+                _instalacja = (_foreground_app()[0] or "") == "com.android.vending"
+            except Exception:
+                _instalacja = False
+        if not _instalacja:
+            _nic_nie_pasuje = False
+            result = dict(result, ok=True, stdout="")
 
     if _nic_nie_pasuje:
 
@@ -10206,6 +14917,16 @@ def android_list_packages(filter_text=None):
             "Za pierwszym razem tego nie było — po "
             + str(DRUGIE_SPOJRZENIE) + " s już jest. Instalacja "
             "właśnie się kończyła."
+        )
+
+    # v472: brak aplikacji to nie koniec drogi — patrz
+    # _zainstaluj_ze_sklepu().
+    if filter_text and not packages:
+        _wynik["nie_ma_na_telefonie"] = (
+            "Nic pasującego do „" + short(str(filter_text), 60) + "”. "
+            "android_launch_app z pełną nazwą pakietu (np. "
+            "com.facebook.katana) pobierze aplikację ze Sklepu Google "
+            "Play i ją uruchomi."
         )
 
     return _wynik
@@ -10434,6 +15155,7 @@ def android_install_apk(path, reinstall=True):
         }
 
     flags = "-r" if reinstall else ""
+    globals()["_ostatnia_instalacja_ts"] = time.time()
 
     result = execute_shell(
         "adb install " + flags + " " + shlex.quote(path),
@@ -10575,8 +15297,13 @@ def android_logcat(package=None, lines=200):
 # operatora w terminalu, zanim cokolwiek faktycznie zniknie.
 # ============================================================
 
+# v480fj: ".unlink(" to metoda w kodzie Pythona (os.unlink, Path.unlink),
+# nie komenda powloki — tak samo jak os.remove, ktorego straznik nigdy nie
+# lapal. Bieg 2026-10-25 10:15, druzyna 2: test tokenizera w heredocu
+# sprzatal po sobie plik z tempfile (os.unlink(tmp)) i caly RUN stanal
+# na "nikt nie potwierdził w terminalu", bo druzyna 2 nie ma terminala.
 _DELETE_COMMAND_PATTERN = re.compile(
-    r"\b(rm|rmdir|unlink)\b|\bfind\b[^\n]*-delete\b",
+    r"(?<![.\w])(rm|rmdir|unlink)\b(?!\s*\()|\bfind\b[^\n]*-delete\b",
     re.IGNORECASE
 )
 
@@ -10687,6 +15414,326 @@ def _usuwa_tylko_nasze_logi_z_tego_biegu(command):
     return usuwajace > 0
 
 
+def _czlony_komendy(command):
+    """
+    v475: komenda podzielona na czlony po &&, ||, ;, | i nowej linii —
+    ale tylko POZA cudzyslowami. Bieg 2026-10-10 23:03, krok 22:
+    `python3 -c "...; c = r.count('echo text'); ..."; rm -f stan.json`
+    — podzial po kazdym ";" rozcinal cudzyslow, shlex.split rzucal
+    "No closing quotation" i termux_run padal, zanim komenda ruszyla.
+    """
+    tekst = str(command or "")
+    czlony, biezacy, i, cudzyslow = [], [], 0, None
+    while i < len(tekst):
+        z = tekst[i]
+        if cudzyslow:
+            biezacy.append(z)
+            if z == "\\" and cudzyslow == '"' and i + 1 < len(tekst):
+                biezacy.append(tekst[i + 1])
+                i += 2
+                continue
+            if z == cudzyslow:
+                cudzyslow = None
+            i += 1
+            continue
+        if z in "'\"":
+            cudzyslow = z
+            biezacy.append(z)
+            i += 1
+            continue
+        if z == "\\" and i + 1 < len(tekst):
+            biezacy.append(tekst[i:i + 2])
+            i += 2
+            continue
+        if tekst[i:i + 2] in ("&&", "||"):
+            czlony.append("".join(biezacy))
+            biezacy = []
+            i += 2
+            continue
+        if z in ";|\n":
+            czlony.append("".join(biezacy))
+            biezacy = []
+            i += 1
+            continue
+        biezacy.append(z)
+        i += 1
+    czlony.append("".join(biezacy))
+    return czlony
+
+
+def _zmienna_wzgledna_w_komendzie(command, arg, slowa):
+    """
+    v480fz: arg z $zmienna to na pewno wzgledna nazwa pliku: bez -r, bez `,
+    arg nie zaczyna sie od / ~ ani zmiennej domu, a kazda jego zmienna jest
+    w tej komendzie ustawiona (NAZWA=... albo for NAZWA in ...) wylacznie
+    na wartosci, ktore nie zaczynaja sie od / ~ $HOME i nie maja "..".
+    """
+    if "`" in arg or "$(" in arg or arg.startswith(("/", "~")):
+        return False
+    if any(re.fullmatch(r"-[A-Za-z]*[rR][A-Za-z]*|--recursive", a) for a in slowa[1:]):
+        return False
+    nazwy = re.findall(r"\$\{?([A-Za-z_]\w*)", arg)
+    if not nazwy:
+        return False
+    tekst = str(command or "")
+
+    def _ok(w):
+        w = w.strip().strip("'\"")
+        return bool(w) and not w.startswith(("/", "~", "$HOME", "${HOME", "$PWD", "$OLDPWD")) and ".." not in w
+
+    for n in nazwy:
+        if n in ("HOME", "PWD", "OLDPWD", "TMPDIR", "PREFIX"):
+            return False
+        wartosci = re.findall(r"(?:^|[\s;&|(])" + n + r"=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)", tekst)
+        for m in re.finditer(r"\bfor\s+" + n + r"\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b", tekst):
+            lista = m.group(1).strip()
+            if lista.startswith("$"):
+                zrodlo = re.findall(r"(?:^|[\s;&|(])" + re.escape(lista.strip("$\"{}")) + r"=(\"[^\"]*\"|'[^']*')", tekst)
+                if not zrodlo:
+                    return False
+                wartosci += zrodlo[-1].strip("'\"").split()
+            else:
+                wartosci += lista.split()
+        if not wartosci or not all(_ok(w) for w in wartosci):
+            return False
+    return True
+
+
+def _usuwa_tylko_wlasne_katalogi(command, folder=None):
+    """
+    v465: czy ta komenda usuwa WYLACZNIE rzeczy wewnatrz katalogow, ktore
+    program sam zalozyl w tym albo poprzednich biegach (PROJECT_DIRS_FILE —
+    patrz _track_project_path). Wtedy nie ma o co pytac czlowieka: to
+    porzadki we wlasnym warsztacie (bieg 2026-09-28 20:48: `cd ~/olx &&
+    rm -rf ogloszenia` — ~/olx zalozyl MAIN 6 minut wczesniej).
+    False przy najmniejszej watpliwosci — wtedy zostaje pytanie.
+    """
+    # v480fj: folder= — tylko wnetrze tego folderu, a komenda startuje w
+    # nim (Sedzia uruchamia "sprawdz" druzyny w jej ~/MAIN_<n>).
+    try:
+        wlasne = [] if folder is not None else [
+            Path(str(p)).expanduser().resolve()
+            for p in (read_json(PROJECT_DIRS_FILE, []) or [])
+            if str(p).strip()
+        ]
+    except Exception:
+        wlasne = []
+    # v480fj: w rywalizacji ~/MAIN_<n> to warsztat tej druzyny, nawet gdy
+    # istnial przed biegiem (restart na tym samym celu zostawia pliki, a
+    # v437 nie liczy takiego katalogu jako zalozonego przez program). Bieg
+    # 2026-10-25 10:33: "cd ~/MAIN_1 && rm -f wynik.json" stanelo na
+    # pytaniu w terminalu.
+    warsztat = None
+    if folder is not None:
+        try:
+            warsztat = Path(str(folder)).expanduser().resolve()
+        except Exception:
+            return False
+    elif _DRUZYNA:
+        try:
+            warsztat = _folder_druzyny(_DRUZYNA).resolve()
+        except Exception:
+            warsztat = None
+    if not wlasne and warsztat is None:
+        return False
+
+    def _wlasna(sciezka):
+        try:
+            cel = sciezka.resolve()
+        except Exception:
+            return False
+        # caly ~/MAIN_<n> naraz — dalej z pytaniem; to, co w srodku — bez
+        if warsztat is not None and warsztat in cel.parents:
+            return True
+        return any(w == cel or w in cel.parents for w in wlasne)
+
+    cwd = warsztat if folder is not None else Path.home()
+    usuwajace = 0
+    for czlon in _czlony_komendy(command):
+        try:
+            slowa = shlex.split(czlon) if czlon.strip() else []
+        except ValueError:
+            return False
+        # v480fz: "do rm -f x", "then rm ...", "{ rm ...": slowo skladni
+        # powloki przed komenda nie zmienia tego, co usuwa
+        while slowa and slowa[0] in ("do", "then", "else", "{", "(", "!"):
+            slowa = slowa[1:]
+        if not slowa:
+            continue
+        if slowa[0] == "cd":
+            if len(slowa) < 2:
+                cwd = Path.home()
+            else:
+                cwd = (Path(os.path.expanduser(slowa[1]))
+                       if slowa[1].startswith(("/", "~"))
+                       else cwd / slowa[1])
+            continue
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        if slowa[0] not in ("rm", "rmdir"):
+            return False
+        cele = [a for a in slowa[1:] if not a.startswith("-")]
+        if not cele:
+            return False
+        for arg in cele:
+            if any(z in arg for z in "$`"):
+                # v480fz: w warsztacie druzyny `rm -f "$out"`, gdzie out to
+                # nazwa ustawiona w tej samej komendzie (out="$slug.txt",
+                # for slug in a b c) — wzgledna, bez .. i bez -r. Bieg
+                # 2026-10-26 00:38, druzyna 2: skrypt pobierania kasowal
+                # nieudane pobrania i stanal na pytaniu w terminalu.
+                if (warsztat is not None and _zmienna_wzgledna_w_komendzie(command, arg, slowa)
+                        and (cwd.resolve() == warsztat or warsztat in cwd.resolve().parents)):
+                    continue
+                return False
+            # v467: `rm -f ~/ocr2docx/out/multi.*` — maska wewnatrz
+            # wlasnego katalogu; liczy sie czesc przed pierwsza maska.
+            if any(z in arg for z in "*?"):
+                arg = re.split(r"[*?]", arg, 1)[0]
+                if "/" in arg:
+                    arg = arg.rsplit("/", 1)[0] or "/"
+                else:
+                    arg = "."
+            sciezka = (Path(os.path.expanduser(arg))
+                       if arg.startswith(("/", "~")) else cwd / arg)
+            if not _wlasna(sciezka):
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
+def _po_komendzie(command, wynik, effective_timeout):
+    """
+    v467: dwa fakty dopisywane do wyniku komendy, bo w biegu 2026-09-30
+    kosztowaly po kilka krokow:
+    - "/tmp/...: Permission denied" — w Termuksie nie ma /tmp, jest
+      $PREFIX/tmp (i ~);
+    - "adb: no devices/emulators found" — bezprzewodowe ADB zmienilo
+      port; laczymy ponownie (find_adb: zapamietany adres, potem mDNS)
+      i powtarzamy komende raz.
+    """
+    if not isinstance(wynik, dict):
+        return wynik
+    tekst = str(wynik.get("stderr") or "") + " " + str(wynik.get("stdout") or "")
+    if "/tmp/" in tekst and ("Permission denied" in tekst or "No such file" in tekst):
+        wynik["podpowiedz"] = (
+            "W Termuksie nie ma /tmp — pliki tymczasowe idą do "
+            "$PREFIX/tmp (" + str(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+            + "/tmp) albo do ~/."
+        )
+    if "no devices/emulators found" in tekst and "adb" in str(command):
+        if not globals().get("_adb_ponowka_w_toku"):
+            globals()["_adb_ponowka_w_toku"] = True
+            try:
+                urzadzenie = find_adb(auto_reconnect=True)
+                if urzadzenie:
+                    log("ANDROID", "ADB wróciło (" + str(urzadzenie) + ") — powtarzam komendę raz.")
+                    try:
+                        init_android()
+                    except Exception:
+                        pass
+                    ponow = _uruchom_z_podgladem(command, effective_timeout, datetime.now())
+                    if isinstance(ponow, dict):
+                        ponow["adb_polaczone_ponownie"] = str(urzadzenie)
+                        return ponow
+                else:
+                    wynik["podpowiedz"] = (
+                        "Bezprzewodowe ADB nie odpowiada i nie udało się połączyć "
+                        "ponownie (ani zapamiętany adres, ani mDNS). Zwykle pomaga "
+                        "ponowne włączenie 'Debugowanie bezprzewodowe' na telefonie "
+                        "— to jest sprawa dla użytkownika."
+                    )
+            finally:
+                globals()["_adb_ponowka_w_toku"] = False
+    return wynik
+
+
+def _usuwa_tylko_nieistniejace(command):
+    """
+    v480aj: `rm -f ~/wynik.json && python skrypt.py --out ~/wynik.json`
+    — czyszczenie przed zapisem, a pliku jeszcze nie ma. Bieg
+    2026-10-14 09:52: bramka zapytala uzytkownika o usuniecie pliku,
+    ktorego nie bylo, a po 120 s bez odpowiedzi odrzucila cala komende.
+    Gdy KAZDY cel rm na pewno nie istnieje, nie ma czego usuwac i nie
+    ma o co pytac. False przy najmniejszej watpliwosci.
+    """
+    tekst = str(command or "")
+    katalog = str(HOME)
+    usuwajace = 0
+    for czlon in _czlony_komendy(tekst):
+        try:
+            slowa = shlex.split(czlon)
+        except Exception:
+            return False
+        if not slowa:
+            continue
+        if slowa[0] == "cd":
+            if len(slowa) != 2 or any(z in slowa[1] for z in "*?$`"):
+                return False
+            katalog = os.path.join(katalog, os.path.expanduser(slowa[1]))
+            continue
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        if slowa[0] != "rm":
+            return False
+        cele = [a for a in slowa[1:] if not a.startswith("-")]
+        if not cele:
+            return False
+        for arg in cele:
+            if any(z in arg for z in "*?$`{"):
+                return False
+            sciezka = os.path.join(katalog, os.path.expanduser(arg))
+            if os.path.lexists(sciezka):
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
+def _usuwa_wlasny_plik_tymczasowy(command):
+    """
+    v466: `screencap -p /sdcard/_t.png && ... && rm /sdcard/_t.png` —
+    komenda sprzata po sobie plik, ktory sama utworzyla. Bieg
+    2026-09-29 16:22: bramka czekala 120 s i odmowila. Pozwalamy, gdy
+    KAZDY cel rm pojawil sie w tej komendzie WCZESNIEJ (jako plik
+    wyjsciowy). False przy najmniejszej watpliwosci.
+    """
+    tekst = str(command or "")
+    usuwajace = 0
+    pozycja = 0
+    for czlon in _czlony_komendy(tekst):
+        start = tekst.find(czlon, pozycja)
+        if start < 0:
+            start = pozycja
+        pozycja = start + len(czlon)
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        try:
+            slowa = shlex.split(czlon)
+        except Exception:
+            return False
+        if "rm" not in slowa:
+            return False
+        po_rm = slowa[slowa.index("rm") + 1:]
+        cele = [a for a in po_rm if not a.startswith("-")]
+        if not cele:
+            return False
+        wczesniej = tekst[:start]
+        for arg in cele:
+            if any(z in arg for z in "*?`") or arg not in wczesniej:
+                return False
+            # v480fr: ze zmienna ($$, $PREFIX) tylko plik, ktory ta sama
+            # komenda wczesniej utworzyla przekierowaniem (> plik).
+            # Bieg 2026-10-25 22:25: "echo hi > /tmp/t_$$.txt ... rm -f
+            # /tmp/t_$$.txt" stanelo na pytaniu w terminalu.
+            if "$" in arg and (
+                arg.rstrip("/") != arg
+                or not re.search(r">>?\s*" + re.escape(arg) + r"(?![\w./$-])", wczesniej)
+            ):
+                return False
+        usuwajace += 1
+    return usuwajace > 0
+
+
 def _confirm_destructive_action(description):
     """
     Blokuje i pyta operatora w terminalu, zanim agent wykona
@@ -10729,9 +15776,27 @@ def _confirm_destructive_action(description):
         except Exception:
             pass
 
-        answer = input(
-            "   Zezwolić? [t/N] > "
-        ).strip().lower()
+        # v465: bieg 2026-09-28 20:48 — `rm -rf ogloszenia` w katalogu,
+        # ktory MAIN sam zalozyl, czekalo na odpowiedz 2 godziny; program
+        # stal. Teraz 120 s bez odpowiedzi = NIE, i lecimy dalej.
+        print("   Zezwolić? [t/N] (120 s, brak odpowiedzi = NIE) > ", end="", flush=True)
+        try:
+            gotowe, _, _ = select.select([sys.stdin], [], [], 120)
+        except Exception:
+            gotowe = [sys.stdin]
+        if not gotowe:
+            print()
+            print("   (brak odpowiedzi w 120 s — traktuję jako NIE)")
+            return False
+        answer = str(sys.stdin.readline() or "").strip().lower()
+
+        # v480fl: pytanie i odpowiedz w logu — po restarcie widac, na co
+        # poszlo ktore "t" (bieg 2026-10-25 10:58 nie dal sie odtworzyc).
+        try:
+            log("PYTANIE", short(str(description), 160) + " → "
+                + ("TAK" if answer in ("t", "tak", "y", "yes") else "NIE (" + (answer or "Enter") + ")"))
+        except Exception:
+            pass
 
         return answer in ("t", "tak", "y", "yes")
 
@@ -10897,6 +15962,9 @@ def execute_shell(command, timeout=None):
     if (
         _looks_like_delete_command(command)
         and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+        and not _usuwa_tylko_wlasne_katalogi(command)
+        and not _usuwa_wlasny_plik_tymczasowy(command)
+        and not _usuwa_tylko_nieistniejace(command)
     ):
 
         if not _confirm_destructive_action(
@@ -10905,15 +15973,24 @@ def execute_shell(command, timeout=None):
             return {
                 "ok": False,
                 "error": (
-                    "Operacja usuwania odrzucona (brak "
-                    "potwierdzenia operatora). Jeżeli to "
-                    "naprawdę potrzebne, zapytaj użytkownika "
-                    "wprost i poczekaj na jego decyzję zamiast "
-                    "ponawiać tę samą komendę."
+                    "Usunięcie odrzucone — nikt nie potwierdził w "
+                    "terminalu. Bez pytania wolno usuwać tylko wewnątrz "
+                    "katalogów, które program sam założył. Cudze pliki "
+                    "zostają: zamiast usuwać, przenieś je (mv) albo "
+                    "zapisz obok pod nową nazwą."
                 ),
                 "command": command,
                 "blocked_by_safety_gate": True
             }
+    elif _looks_like_delete_command(command) and (
+        _usuwa_tylko_wlasne_katalogi(command)
+        or _usuwa_wlasny_plik_tymczasowy(command)
+    ):
+        log(
+            "TERMUX",
+            "Usuwanie własnego pliku (katalog programu albo plik z tej "
+            "samej komendy) — bez pytania."
+        )
 
     # v283: gdy wywolujacy nie narzucil limitu, dobieramy go do
     # tego, co ta komenda ma zrobic. Sondy po plikach wolaja z
@@ -10922,15 +15999,43 @@ def execute_shell(command, timeout=None):
         effective_timeout = int(timeout)
     elif _to_dluga_robota(command):
         effective_timeout = DLUGA_ROBOTA_TIMEOUT
-        log(
-            "TERMUX",
-            "To jest robota na dluzej (pobieranie/kompilacja) — "
-            "czekam do skutku, maks. "
-            + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Co "
-            + str(PODGLAD_CO_SEKUND) + " s bede pisal, na czym stoi."
-        )
+        # v480fo: bez tej linii, gdy komenda sama trzyma krotki limit
+        # (curl --max-time 15, timeout 90). Bieg 2026-10-25 19:09: 22 razy
+        # "robota na dluzej" przy sondach curl, ktore koncza sie po 15 s.
+        _wlasne = [
+            int(x) for x in re.findall(
+                r"(?:--max-time|\btimeout)\s+(\d+)", str(command)
+            )
+        ]
+        if not (_wlasne and max(_wlasne) <= COMMAND_TIMEOUT):
+            log(
+                "TERMUX",
+                "To jest robota na dluzej (pobieranie/kompilacja) — "
+                "czekam do skutku, maks. "
+                + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min. Co "
+                + str(PODGLAD_CO_SEKUND) + " s bede pisal, na czym stoi."
+            )
     else:
         effective_timeout = COMMAND_TIMEOUT
+
+    # v477: `sleep` to zamierzone czekanie, nie zawieszenie. Bieg
+    # 2026-10-11 rano: trening w tle, a MAIN sprawdzal go komendami
+    # `sleep 60 && tail log` / `sleep 90 && tail` — bo sleep nie pisze
+    # i nie liczy, wiec po 120 s ciszy (COMMAND_TIMEOUT, patrz v293)
+    # zostalby przerwany. Kazde sprawdzenie to osobna tura MAIN-a.
+    # Komenda z `sleep N` dostaje na cisze tyle, ile sama zamierza
+    # czekac, plus zwykly zapas.
+    if not timeout:
+        _spanie = _sekundy_spania(command)
+        if _spanie:
+            effective_timeout = max(
+                effective_timeout, _spanie + COMMAND_TIMEOUT
+            )
+        # v480: `timeout N` — tyle ciszy, ile komenda sama sobie daje.
+        # Patrz _sekundy_timeoutu().
+        _wlasny_limit = _sekundy_timeoutu(command)
+        if _wlasny_limit:
+            effective_timeout = max(effective_timeout, _wlasny_limit + 15)
 
     started = datetime.now()
 
@@ -10975,9 +16080,10 @@ def execute_shell(command, timeout=None):
         # skrypt nagrywajacy potrafil przez to wisiec pelne 120 s i
         # wrocic jako "Timeout". Cala reszta programu dostaje
         # dokladnie ten sam slownik co dotad.
-        return _uruchom_z_podgladem(
+        _wynik_sh = _uruchom_z_podgladem(
             command, effective_timeout, started
         )
+        return _po_komendzie(command, _wynik_sh, effective_timeout)
 
     except subprocess.TimeoutExpired as e:
 
@@ -11042,9 +16148,37 @@ def execute_shell(command, timeout=None):
 # zamiast przestać próbować całkowicie — telefon może w
 # międzyczasie odzyskać CDP (np. użytkownik ręcznie otworzy kartę).
 _CDP_CONSECUTIVE_FAILURES = 0
+_budzenie_chrome = [False]
 
 
-def ensure_chrome_cdp_forward(retries=3):
+_powiedziane_o_blokadzie = [False]
+
+
+def _ekran_zablokowany(device):
+    """v480dz: czy na telefonie jest teraz ekran blokady (False, gdy nie wiadomo)."""
+    try:
+        wy = subprocess.run(
+            ["adb", "-s", device, "shell", "dumpsys", "window", "policy"],
+            capture_output=True, text=True, timeout=10
+        ).stdout
+        if not wy.strip():
+            wy = subprocess.run(
+                ["adb", "-s", device, "shell", "dumpsys", "window"],
+                capture_output=True, text=True, timeout=10
+            ).stdout
+        if re.search(
+            r"\b(mShowingLockscreen|mDreamingLockscreen|isStatusBarKeyguard|"
+            r"mKeyguardShowing)=true", wy
+        ):
+            return True
+        # Nowszy Android: sekcja "KeyguardServiceDelegate" z "showing=true".
+        _i = wy.find("KeyguardServiceDelegate")
+        return _i >= 0 and bool(re.search(r"\bshowing=true", wy[_i:_i + 600]))
+    except Exception:
+        return False
+
+
+def ensure_chrome_cdp_forward(retries=3, budz=True):
     """
     Ustawia `adb forward` dla CDP i sprawdza /json/version.
 
@@ -11069,7 +16203,9 @@ def ensure_chrome_cdp_forward(retries=3):
 
     global _CDP_CONSECUTIVE_FAILURES
 
-    if _CDP_CONSECUTIVE_FAILURES >= 2:
+    # v480dy: po wyciagnieciu Chrome'a na wierzch (_budzenie_chrome)
+    # proby zostaja — wczesniej spadaly do 1 i budzenie mialo jedna szanse.
+    if (_CDP_CONSECUTIVE_FAILURES >= 2 or not budz) and not _budzenie_chrome[0]:
         retries = 1
 
     device = find_adb()
@@ -11167,6 +16303,98 @@ def ensure_chrome_cdp_forward(retries=3):
             if refreshed:
                 device = refreshed
 
+    # v480ct: bieg 2026-10-19 — Chrome dzialal w tle, ale Android
+    # (ColorOS) go zamrazal: "Read timed out" na kazdym kroku. Uzytkownik:
+    # "niech program sam wlacza wylaczone". Gdy rola naprawde siega po
+    # Chrome (budz=True), program wyciaga go na wierzch — to go budzi,
+    # a gdy nie dziala, uruchamia — i sprawdza jeszcze raz. Stan na
+    # poczatku kroku (budz=False) Chrome'a nie budzi i nie zabiera ekranu.
+    if (
+        budz and last_error
+        and not str(last_error).startswith("ADB forward ERROR")
+        and not _budzenie_chrome[0]
+    ):
+        # v480dz: za zablokowanym ekranem Android Chrome'a nie budzi, a
+        # program telefonu nie odblokowuje (uzytkownik 2026-10-24: "a jak
+        # jest zablokowany?"). Rola dostaje raz zdanie, co i jak dalej.
+        if _ekran_zablokowany(device):
+            _zd = (
+                "Program: Chrome nie odpowiada, bo ekran telefonu jest "
+                "zablokowany — za blokadą Android go nie budzi, a program "
+                "nie odblokowuje telefonu. Narzędzia chrome_ zadziałają, gdy "
+                "użytkownik odblokuje ekran; do tego czasu stronę można "
+                "pobrać bez przeglądarki (np. curl albo Python w Termuksie)."
+            )
+            log("CHROME", _zd)
+            if not _powiedziane_o_blokadzie[0]:
+                _powiedziane_o_blokadzie[0] = True
+                _pending_team_warnings.append(_zd)
+            _CDP_CONSECUTIVE_FAILURES += 1
+            return False
+        _powiedziane_o_blokadzie[0] = False
+        log(
+            "CHROME",
+            "Chrome nie odpowiada (w tle Android go usypia albo nie działa) "
+            "— wyciągam go na wierzch, żeby się obudził."
+        )
+        try:
+            subprocess.run(
+                ["adb", "-s", device, "shell", "am", "start", "-n",
+                 "com.android.chrome/com.google.android.apps.chrome.Main"],
+                capture_output=True, text=True, timeout=15
+            )
+        except Exception:
+            pass
+        # v480dy: zamrozony Chrome po wyciagnieciu na wierzch potrzebuje
+        # chwili, zanim CDP odpowie — 2 s i 2 proby bywalo za malo.
+        time.sleep(4)
+        _budzenie_chrome[0] = True
+        try:
+            ok = ensure_chrome_cdp_forward(retries=4, budz=False)
+        finally:
+            _budzenie_chrome[0] = False
+        if not ok:
+            # v480dz: bieg 2026-10-23/24 — od 22:32 ani jednego "CDP OK".
+            # Chrome dzialal, ale nie mial gniazda chrome_devtools_remote
+            # (w /proc/net/unix byly tylko gniazda Wiadomosci Google);
+            # pomoglo dopiero uruchomienie go od nowa (karty zostaja).
+            try:
+                _gn = subprocess.run(
+                    ["adb", "-s", device, "shell", "cat", "/proc/net/unix"],
+                    capture_output=True, text=True, timeout=10
+                ).stdout
+            except Exception:
+                _gn = None
+            if _gn is not None and "@chrome_devtools_remote" not in _gn:
+                log(
+                    "CHROME",
+                    "Chrome działa, ale nie ma gniazda do sterowania "
+                    "(chrome_devtools_remote) — uruchamiam go od nowa "
+                    "(karty zostają)."
+                )
+                try:
+                    subprocess.run(
+                        ["adb", "-s", device, "shell", "am", "force-stop",
+                         "com.android.chrome"],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    subprocess.run(
+                        ["adb", "-s", device, "shell", "am", "start", "-n",
+                         "com.android.chrome/com.google.android.apps.chrome.Main"],
+                        capture_output=True, text=True, timeout=15
+                    )
+                except Exception:
+                    pass
+                time.sleep(5)
+                _budzenie_chrome[0] = True
+                try:
+                    ok = ensure_chrome_cdp_forward(retries=4, budz=False)
+                finally:
+                    _budzenie_chrome[0] = False
+        if ok:
+            log("CHROME", "Chrome obudzony — CDP odpowiada.")
+        return ok
+
     log(
         "CHROME",
         f"CDP AUTO ERROR (po {retries} próbach): {last_error}"
@@ -11177,9 +16405,9 @@ def ensure_chrome_cdp_forward(retries=3):
     return False
 
 
-def chrome_tabs():
+def chrome_tabs(budz=True):
 
-    if not ensure_chrome_cdp_forward():
+    if not ensure_chrome_cdp_forward(budz=budz):
         return []
 
     try:
@@ -11279,9 +16507,9 @@ def _adres_bez_ogona(url):
     return baza + "?" + "&".join(zostaje)
 
 
-def chrome_summary():
+def chrome_summary(budz=True):
 
-    tabs = chrome_tabs()
+    tabs = chrome_tabs(budz=budz)
 
     if not tabs:
         return "Brak dostępnych kart Chrome/CDP."
@@ -11350,13 +16578,19 @@ def _przelacz_na_karte(tab_id):
             + "/json/activate/" + str(tab_id),
             timeout=5
         )
+
+        # v473: patrz dispatch_tool() — karta, na ktora przelaczylismy,
+        # jest ta, na ktorej teraz pracujemy.
+        if r.status_code == 200:
+            _ostatnio_aktywna_karta[0] = str(tab_id)
+
         return r.status_code == 200
 
     except Exception:
         return False
 
 
-def find_tab(
+def _find_tab_bez_aktywacji(
     tab_id=None,
     contains=None
 ):
@@ -11400,7 +16634,152 @@ def find_tab(
     if not tab_id and not contains and len(tabs) == 1:
         return tabs[0]
 
+    # v468: bieg 2026-09-30 — osiem razy "Brak istniejącej karty", bo
+    # MAIN nie podal tab_id przy kilku kartach. Bez wskazania bierzemy
+    # karte, na ktorej ostatnio pracowalismy, a gdy jej nie ma —
+    # pierwsza z adresem http(s) (CDP wymienia aktywna jako pierwsza).
+    if not tab_id and not contains and tabs:
+        ostatnia = _ostatnio_aktywna_karta[0]
+        for tab in tabs:
+            if ostatnia and tab.get("id") == ostatnia:
+                return tab
+        for tab in tabs:
+            if str(tab.get("url") or "").lower().startswith(("http://", "https://")):
+                return tab
+        return tabs[0]
     return None
+
+
+# ============================================================
+# KARTA W TLE NIE ODPOWIADA (v457)
+# ============================================================
+#
+# Bieg 2026-09-27 21:19, kroki 1-5: piec zadan z rzedu padlo na CDP —
+# "Page.navigate nie powiodlo sie" i "Brak danych strony", kazde po
+# 40 s. Wspolny mianownik: karta, na ktorej pracowalismy, NIE byla
+# na wierzchu (1492, 1494, 1500, 1503 lezaly w tle; 1502 na wierzchu
+# dzialala bez zarzutu). Chrome na Androidzie zamraza karty w tle —
+# ich renderer nie odpowiada na Runtime.evaluate ani Page.navigate,
+# az karta wroci na ekran. Po tych bledach wykonanie porzucilo Chrome
+# i przez 12 krokow stukalo w ekran przez `adb shell input tap` na
+# zgadywanych wspolrzednych.
+#
+# Wiec kazda operacja na karcie zaczyna sie od wyciagniecia jej na
+# wierzch (/json/activate) — jedno tanie zadanie HTTP; po zmianie
+# karty chwila na odmrozenie. find_tab() jest jedynym miejscem, przez
+# ktore narzedzia Chrome dostaja karte, wiec to tu.
+_ostatnio_aktywna_karta = [None]
+
+# v469: find_tab() wzial inna karte niz wskazana — dispatch_tool()
+# dopisuje to do wyniku narzedzia jako "karta".
+_uwaga_o_karcie = [None]
+
+
+def _aktywuj_karte(tab):
+    """Karta na wierzch; True, gdy byla juz na wierzchu albo sie udalo."""
+
+    ident = str((tab or {}).get("id") or "")
+
+    if not ident:
+        return False
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/activate/" + ident,
+            timeout=5
+        )
+        ok = r.status_code == 200
+    except Exception:
+        ok = False
+
+    if ok and _ostatnio_aktywna_karta[0] != ident:
+        _ostatnio_aktywna_karta[0] = ident
+        time.sleep(0.7)
+
+    return ok
+
+
+def _obudz_karte(tab):
+    """
+    v458: karta, ktora CDP nie odpowiada, dostaje swoj adres od nowa
+    przez Android (`am start`); zwraca karte, ktora ten adres pokazuje
+    (te sama albo nowa), albo None.
+    """
+
+    adres = str((tab or {}).get("url") or "")
+
+    if not adres.lower().startswith(("http://", "https://")):
+        return None
+
+    wynik = execute_shell(
+        "am start -a android.intent.action.VIEW -p com.android.chrome -d "
+        + shlex.quote(adres),
+        timeout=20
+    )
+
+    if not wynik.get("ok"):
+        return None
+
+    time.sleep(1.5)
+
+    nowa = _karta_z_tym_adresem(adres)
+
+    if nowa is not None and _stan_strony(nowa) is not None:
+        return nowa
+
+    return None
+
+
+def find_tab(
+    tab_id=None,
+    contains=None
+):
+    """Karta wg id / fragmentu adresu, wyciagnieta na wierzch (v457)."""
+
+    tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    # v469: bieg 2026-09-30, kroki 60, 61, 64 — MAIN podal tab_id=1614,
+    # a tej karty juz nie bylo (Chrome zamknal ja przy porzadkach), wiec
+    # chrome_type, chrome_execute_js i chrome_click wrocily z "Brak
+    # istniejącej karty", choc strona, o ktora chodzilo, byla na
+    # wierzchu w karcie 1623. Kroki 3, 9, 24: chrome_inspect z
+    # contains="Moje OLX" / "Visit website" — MAIN szukal tekstu NA
+    # stronie, a contains porownuje tytul i adres karty. Gdy wskazanie
+    # niczego nie trafia, bierzemy karte, na ktorej pracujemy (ta sama
+    # regula, co bez tab_id — v468), a wynik mowi o zamianie.
+    # chrome_close wola _find_tab_bez_aktywacji wprost — nigdy nie
+    # zamknie karty innej niz wskazana.
+    if tab is None and (tab_id or contains):
+
+        tab = _find_tab_bez_aktywacji(None, None)
+
+        if tab is not None:
+
+            if tab_id and not contains:
+                _co = "Karty " + str(tab_id) + " już nie ma"
+            elif tab_id:
+                _co = (
+                    "Karty " + str(tab_id) + " już nie ma i żadna nie ma "
+                    "w tytule ani adresie „" + short(str(contains), 60) + "”"
+                )
+            else:
+                _co = (
+                    "Żadna karta nie ma w tytule ani adresie „"
+                    + short(str(contains), 60) + "”"
+                )
+
+            _uwaga_o_karcie[0] = (
+                _co + " — użyłem karty " + str(tab.get("id")) + " ("
+                + short(str(tab.get("url") or ""), 100) + ")."
+            )
+
+            log("CHROME", _uwaga_o_karcie[0])
+
+    if tab is not None:
+        _aktywuj_karte(tab)
+
+    return tab
 
 
 # Na wyraźną prośbę użytkownika (2026-08-28): najsłabszym punktem
@@ -11483,7 +16862,8 @@ def cdp_call(
 def chrome_eval(
     tab,
     javascript,
-    timeout=20
+    timeout=20,
+    zglos_wyjatek=False
 ):
 
     ws = cdp_connect(tab)
@@ -11521,12 +16901,39 @@ def chrome_eval(
     if not result.get("ok"):
         return result
 
-    return (
-        result
-        .get("result", {})
-        .get("result", {})
-        .get("value")
-    )
+    # v470: bieg 2026-10-03 — 32 wywolania chrome_execute_js wrocily z
+    # "value": null, w tym kroki 48-59, gdzie kod mial zbedne "})" na
+    # koncu (SyntaxError, wynik po 0,6 s zamiast po setTimeout 2-4 s).
+    # Blad JavaScriptu przychodzi z CDP jako exceptionDetails, a my
+    # oddawalismy samo "value" — wiec MAIN uznal, ze "Promise w
+    # chrome_execute_js gubi wynik" i przez kilka krokow obchodzil
+    # problem, ktorego nie bylo. Wewnetrzne sondy dalej dostaja None.
+    _odp = result.get("result", {}) or {}
+
+    if zglos_wyjatek and _odp.get("exceptionDetails"):
+
+        _szczegoly = _odp.get("exceptionDetails") or {}
+        _wyjatek = _szczegoly.get("exception") or {}
+        _opis = str(
+            _wyjatek.get("description")
+            or _wyjatek.get("value")
+            or _szczegoly.get("text")
+            or "wyjątek"
+        )
+
+        return {
+            "ok": False,
+            "error": "Błąd JavaScriptu: " + short(_opis, 400),
+            "linia": int(_szczegoly.get("lineNumber") or 0) + 1,
+            "kolumna": int(_szczegoly.get("columnNumber") or 0) + 1
+        }
+
+    _wynik = _odp.get("result", {}) or {}
+
+    if zglos_wyjatek and _wynik.get("type") == "undefined":
+        return {"ok": True, "undefined": True}
+
+    return _wynik.get("value")
 
 
 # ============================================================
@@ -11640,11 +17047,25 @@ def chrome_inspect(
 
     widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
 
+    # v458: karta wyladowana przez Chrome — Android laduje jej adres od
+    # nowa, my bierzemy karte, ktora go pokazuje.
+    if not widok:
+        _nowa = _obudz_karte(tab)
+        if _nowa is not None:
+            tab = _nowa
+            widok = _widok_strony(tab, ile=200, znakow=CHROME_TEXT_LIMIT)
+
     if not widok:
 
         return {
             "ok": False,
-            "error": "Brak danych strony"
+            "error": "Brak danych strony",
+            "message": (
+                "Karta " + str(tab.get("id")) + " nie odpowiada mimo "
+                "wyciągnięcia na wierzch i ponownego otwarcia adresu. "
+                "chrome_close ją zamyka; chrome_open bez tab_id otwiera "
+                "adres w karcie, która działa."
+            )
         }
 
     return {
@@ -11719,6 +17140,14 @@ def _chrome_stan_sie_zmienil(przed, po):
         return True
 
     if przed.get("title") != po.get("title"):
+        return True
+
+    # v460: inna tresc o tej samej dlugosci to tez zmiana.
+    if (
+        przed.get("skrot") is not None
+        and po.get("skrot") is not None
+        and przed.get("skrot") != po.get("skrot")
+    ):
         return True
 
     try:
@@ -12088,11 +17517,23 @@ def _chrome_open_wynik(
     stan = _stan_strony(tab)
     tresc = _tresc_strony(tab)
 
+    # v469: tytul z listy kart CDP tylko wtedy, gdy ta lista mowi o tym
+    # samym adresie. Bieg 2026-09-30, krok 4: otwieralismy
+    # /mojolx/szukampracy/pulpit/, strona nie miala jeszcze tytulu, a
+    # wynik podawal "title": "m.olx.pl/konto/portfel/" — tytul
+    # poprzedniej strony z listy sprzed nawigacji.
+    _tytul = (stan or {}).get("title")
+
+    if not _tytul and _ta_sama_strona(
+        (tab or {}).get("url"), (stan or {}).get("href") or url
+    ):
+        _tytul = (tab or {}).get("title")
+
     wynik = {
         "ok": True,
         "tab_id": (tab or {}).get("id"),
         "url": (stan or {}).get("href") or str(url),
-        "title": (stan or {}).get("title") or (tab or {}).get("title")
+        "title": _tytul or ""
     }
 
     if czekalismy:
@@ -12169,16 +17610,102 @@ def _chrome_open_wynik(
     return wynik
 
 
+def _karta_po_am_start(url, karty_przed, limit=12.0, na_koniec=True):
+    """
+    v469: karta, ktora pokazala sie po `am start`, albo None.
+
+    Bieg 2026-09-30, kroki 5 i 6: `am start` otworzyl adres, ale po
+    sztywnej sekundzie CDP jeszcze nie wymienial nowej karty (w kroku 5
+    Chrome dopiero wstawal po zerwanym polaczeniu) — chrome_open wrocil
+    z bledem, a w nastepnym kroku "W Chrome jest teraz" pokazywalo te
+    karte z tym adresem. Pytamy wiec co sekunde, az do `limit`: karta
+    z TYM adresem albo karta, ktorej przed `am start` nie bylo (adres
+    mogl przeniesc, np. www.olx.pl -> m.olx.pl). Dopiero po czasie,
+    gdy `na_koniec`, karta z tej domeny, a potem ta, na ktorej
+    pracujemy (v367: nie pierwsza z domeny, gdy jest dokladna).
+    """
+
+    koniec = time.time() + float(limit)
+    time.sleep(1.0)
+
+    while True:
+
+        karty = chrome_tabs()
+
+        for karta in karty:
+            if _ta_sama_strona(karta.get("url"), url):
+                _aktywuj_karte(karta)
+                return karta
+
+        # Bez listy sprzed `am start` (CDP lezalo) kazda karta
+        # wygladalaby na nowa — wtedy liczy sie tylko adres.
+        for karta in (karty if karty_przed else []):
+            if str(karta.get("id")) not in karty_przed:
+                _aktywuj_karte(karta)
+                return karta
+
+        if time.time() >= koniec:
+            break
+
+        time.sleep(1.0)
+
+    if not na_koniec:
+        return None
+
+    domain = ""
+
+    try:
+        domain = urlparse(str(url)).netloc
+    except Exception:
+        pass
+
+    karta = (
+        (_find_tab_bez_aktywacji(None, domain) if domain else None)
+        or _find_tab_bez_aktywacji(None, None)
+    )
+
+    if karta is not None:
+        _aktywuj_karte(karta)
+
+    return karta
+
+
 def chrome_open(
     url,
     tab_id=None,
     contains=None
 ):
 
+    # v452: chrome_open otwiera strony. Bieg 2026-09-26 14:04, krok 7:
+    # wykonanie podalo file:///…/olx_form.png, poszlo `am start`, karty
+    # CDP nie bylo i cale zadanie padlo. Plik to nie strona — mowimy
+    # to jako wynik, bez uruchamiania czegokolwiek.
+    _adres = str(url or "").strip()
+
+    if not _adres.lower().startswith(("http://", "https://")):
+        return {
+            "ok": False,
+            "error": "nie_adres_http",
+            "nie_adres_http": True,
+            "url": _adres,
+            "message": (
+                "chrome_open otwiera adresy http(s); „"
+                + short(_adres, 120) + "” nim nie jest. Plik z dysku "
+                "czyta termux_read_file (tekst), a zrzut ekranu ogląda "
+                "android_screenshot_ocr."
+            )
+        }
+
     # Ta strona moze juz gdzies wisiec. Wtedy jej nie otwieramy drugi
     # raz — wyciagamy istniejaca karte na wierzch. Patrz
     # _przelacz_na_karte().
-    if not tab_id and not contains:
+    # v469: takze wtedy, gdy wskazanej karty juz nie ma — find_tab()
+    # wzialby karte, na ktorej pracujemy, i nadpisal ja, choc ten adres
+    # wisi obok.
+    if (
+        (not tab_id and not contains)
+        or _find_tab_bez_aktywacji(tab_id, contains) is None
+    ):
 
         _juz = _karta_z_tym_adresem(url)
 
@@ -12282,6 +17809,10 @@ def chrome_open(
                 )
             )
 
+        _karty_przed = {
+            str(k.get("id")) for k in chrome_tabs()
+        }
+
         fallback = execute_shell(
             "am start -a android.intent.action.VIEW -p "
             "com.android.chrome -d "
@@ -12313,29 +17844,7 @@ def chrome_open(
         # dashboard w Reakcie potrzebuje jeszcze chwili; kto zajrzy w
         # ta chwile, zobaczy "Loading...". Czekamy wiec na karte, a
         # potem na sama strone — dokladnie tyle, ile trzeba.
-        time.sleep(1.0)
-
-        domain = ""
-
-        try:
-            domain = urlparse(str(url)).netloc
-        except Exception:
-            pass
-
-        # v367: NAJPIERW karta z TYM adresem, dopiero potem
-        # jakakolwiek z tej domeny.
-        #
-        # Bylo: find_tab(None, domain) — czyli PIERWSZA karta z tej
-        # domeny. Gdy na dashboard.daily.co wisiala juz karta
-        # /login, a wlasnie otwierali smy /rooms, dostawalismy z
-        # powrotem /login i jego tresc. Nawigacja sie udala, a
-        # odpowiedz mowila o zupelnie innej stronie — stad
-        # "przeciez otworzylem, a widze stare".
-        tab = (
-            _karta_z_tym_adresem(url)
-            or find_tab(None, domain or None)
-            or find_tab(None, None)
-        )
+        tab = _karta_po_am_start(url, _karty_przed)
 
         if tab is None:
 
@@ -12397,6 +17906,64 @@ def chrome_open(
 
     # Zamiast sztywnych 1,5 s — czekamy dokladnie tyle, ile ta strona
     # potrzebuje. Patrz _poczekaj_az_strona_dojdzie().
+    # v457: karta mogla byc zamrozona w tle — na wierzch i jeszcze raz.
+    if not result.get("ok", False):
+
+        _aktywuj_karte(tab)
+        time.sleep(1.0)
+
+        ws = cdp_connect(tab)
+
+        if ws is not None:
+            try:
+                result = cdp_call(
+                    ws, 1, "Page.navigate", {"url": str(url)}, timeout=15
+                )
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+
+    # v458: karta wciaz nie odpowiada (bieg 2026-09-27 22:11, kroki 3-4:
+    # karta 1504 sprzed restartu — Chrome ja wyladowal i CDP milczy
+    # mimo aktywacji). Adres otwiera wtedy sam Android (`am start`),
+    # a my bierzemy karte, ktora go pokazuje — nawet gdy to nowa.
+    if not result.get("ok", False):
+
+        _stara = str(tab.get("id") or "")
+        _karty_przed = {str(k.get("id")) for k in chrome_tabs()}
+
+        _zapas = execute_shell(
+            "am start -a android.intent.action.VIEW -p "
+            "com.android.chrome -d " + shlex.quote(str(url)),
+            timeout=20
+        )
+
+        if _zapas.get("ok"):
+
+            _nowa = _karta_po_am_start(url, _karty_przed, na_koniec=False)
+
+            if _nowa is not None:
+
+                if str(_nowa.get("id")) != _stara:
+                    log(
+                        "CHROME",
+                        "Karta " + _stara + " nie odpowiada (zamrożona) — "
+                        "adres otworzył Android w karcie "
+                        + str(_nowa.get("id")) + "."
+                    )
+
+                _czekalismy = _poczekaj_az_strona_dojdzie(_nowa)
+
+                return _chrome_open_wynik(
+                    _nowa,
+                    url,
+                    czekalismy=_czekalismy,
+                    metoda="am_start_po_zamrozonej_karcie",
+                    nowa_karta=str(_nowa.get("id")) != _stara
+                )
+
     _czekalismy = _poczekaj_az_strona_dojdzie(tab)
 
     if not result.get("ok", False):
@@ -12405,7 +17972,15 @@ def chrome_open(
             "ok": False,
             "tab_id": tab["id"],
             "url": str(url),
-            "error": "Page.navigate nie powiodlo sie"
+            "error": "Page.navigate nie powiodlo sie",
+            "message": (
+                "Karta " + str(tab["id"]) + " nie odpowiada mimo "
+                "wyciągnięcia na wierzch i otwarcia adresu przez Android — "
+                + short(str(result.get("error") or ""), 120)
+                + ". chrome_tabs pokazuje karty; chrome_close zamyka "
+                "zbędne, a chrome_open bez tab_id otwiera adres w karcie, "
+                "która działa."
+            )
         }
 
     return _chrome_open_wynik(
@@ -12434,7 +18009,12 @@ def _stan_strony(tab):
             " title: document.title,"
             " znakow: (document.body ?"
             " document.body.innerText.replace(/\\s+/g, ' ')"
-            ".trim().length : 0)"
+            ".trim().length : 0),"
+            " skrot: (() => { const t = document.body ?"
+            " document.body.innerText.replace(/\\s+/g, ' ').trim()"
+            ".slice(0, 20000) : ''; let h = 0;"
+            " for (let i = 0; i < t.length; i++)"
+            " h = (h * 31 + t.charCodeAt(i)) | 0; return h; })()"
             "}))()"
         )
 
@@ -12442,7 +18022,11 @@ def _stan_strony(tab):
             return {
                 "href": stan.get("href"),
                 "title": stan.get("title"),
-                "znakow": stan.get("znakow")
+                "znakow": stan.get("znakow"),
+                # v460: skrot tresci — "Twoje doswiadczenie zostalo
+                # zapisane" mialo te sama dlugosc co formularz z bledem
+                # i klikniecie "Zapisz" wracalo jako "bez skutku".
+                "skrot": stan.get("skrot")
             }
 
     except Exception:
@@ -12634,6 +18218,62 @@ def _dolacz_widok(wynik, tab):
     return wynik
 
 
+def _dotknij_punkt(tab, x, y):
+    """
+    v467: dotyk palcem przez CDP (Input.dispatchTouchEvent). Mobilne
+    SPA (m.olx.pl "Dodaj ogloszenie") reaguja na touchstart/touchend,
+    a nie na zdarzenia myszy — bieg 2026-09-30, kroki 60-68.
+    """
+    ws = cdp_connect(tab)
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+    try:
+        for i, (typ, punkty) in enumerate((
+            ("touchStart", [{"x": float(x), "y": float(y)}]),
+            ("touchEnd", []),
+        )):
+            odp = cdp_call(ws, 30 + i, "Input.dispatchTouchEvent", {
+                "type": typ,
+                "touchPoints": punkty
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+def _kliknij_w_punkt(tab, x, y):
+    """Prawdziwe klikniecie myszy przez CDP w punkt (x, y) karty."""
+
+    ws = cdp_connect(tab)
+
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+
+    try:
+        for i, typ in enumerate(("mouseMoved", "mousePressed", "mouseReleased")):
+            odp = cdp_call(ws, 10 + i, "Input.dispatchMouseEvent", {
+                "type": typ,
+                "x": float(x),
+                "y": float(y),
+                "button": "none" if typ == "mouseMoved" else "left",
+                "clickCount": 0 if typ == "mouseMoved" else 1
+            })
+            if not odp.get("ok"):
+                return {"ok": False, "error": odp.get("error")}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    return {"ok": True}
+
+
 def _kliknij_nr(tab, nr):
     """
     Klika element o numerze z listy _widok_strony — prawdziwym
@@ -12688,7 +18328,87 @@ def _kliknij_nr(tab, nr):
         except Exception:
             pass
 
-    return {"ok": True, "clicked": polozenie.get("opis") or ("nr " + str(nr))}
+    return {
+        "ok": True,
+        "clicked": polozenie.get("opis") or ("nr " + str(nr)),
+        "_xy": (polozenie["x"], polozenie["y"])
+    }
+
+
+def chrome_upload_file(path, nr=None, selector=None, tab_id=None, contains=None):
+    """
+    v467: wklada plik do pola input[type=file] w Chrome przez CDP
+    (DOM.setFileInputFiles). Bieg 2026-09-30: OLX wymagal zdjecia,
+    MAIN probowal base64/DataTransfer/fetch z localhost i w koncu
+    oddal to uzytkownikowi. Plik z Termuksa idzie najpierw przez
+    `adb push` do /sdcard/Download/ael_upload/, bo Chrome czyta tylko
+    pamiec wspoldzielona.
+    """
+    tab = find_tab(tab_id, contains)
+    if tab is None:
+        return {"ok": False, "error": "Brak istniejącej karty"}
+    src = Path(os.path.expanduser(str(path or "").strip()))
+    if not src.exists() or not src.is_file():
+        return {"ok": False, "error": "Nie ma takiego pliku: " + str(src)}
+    if str(src).startswith(("/sdcard/", "/storage/")):
+        na_telefonie = str(src).replace("/sdcard/", "/storage/emulated/0/", 1)
+    else:
+        docelowy = "/sdcard/Download/ael_upload/" + src.name
+        push = execute_shell(
+            "adb shell mkdir -p /sdcard/Download/ael_upload && adb push "
+            + shlex.quote(str(src)) + " " + shlex.quote(docelowy),
+            timeout=60
+        )
+        if not push.get("ok"):
+            return {
+                "ok": False,
+                "error": "adb push nie przeszedł: "
+                + short(str(push.get("stderr") or push.get("error") or ""), 300)
+            }
+        na_telefonie = "/storage/emulated/0/Download/ael_upload/" + src.name
+    if nr is not None and str(nr).strip():
+        sel = '[data-ael-nr="' + str(int(str(nr).strip())) + '"]'
+    else:
+        sel = str(selector or "").strip() or 'input[type="file"]'
+    ws = cdp_connect(tab)
+    if ws is None:
+        return {"ok": False, "error": "CDP connect failed"}
+    try:
+        doc = cdp_call(ws, 40, "DOM.getDocument", {"depth": 1})
+        if not doc.get("ok"):
+            return {"ok": False, "error": str(doc.get("error"))}
+        root = ((doc.get("result") or {}).get("root") or {}).get("nodeId")
+        q = cdp_call(ws, 41, "DOM.querySelector", {"nodeId": root, "selector": sel})
+        node = (q.get("result") or {}).get("nodeId") if q.get("ok") else None
+        if not node:
+            return {
+                "ok": False,
+                "error": "Na stronie nie ma pola pliku pasującego do " + sel
+                + " — chrome_inspect pokaże, co jest (pola typu file są na liście)."
+            }
+        odp = cdp_call(ws, 42, "DOM.setFileInputFiles", {"files": [na_telefonie], "nodeId": node})
+        if not odp.get("ok"):
+            return {"ok": False, "error": str(odp.get("error"))}
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    _poczekaj_az_strona_dojdzie(tab)
+    sprawdzenie = chrome_eval(
+        tab,
+        "(() => { const el = document.querySelector(" + json.dumps(sel) + ");"
+        " if (!el || !el.files) return null; return Array.from(el.files).map(f => f.name + ' (' + f.size + ' B)'); })()"
+    )
+    wynik = {
+        "ok": True,
+        "tab_id": tab.get("id"),
+        "plik": na_telefonie,
+        "pole": sel,
+        "pliki_w_polu": sprawdzenie if isinstance(sprawdzenie, list) else [],
+        "message": "Plik włożony do pola przez CDP; strona dostała zdarzenie change."
+    }
+    return _dolacz_widok(wynik, tab)
 
 
 def chrome_click(
@@ -12713,7 +18433,7 @@ def chrome_click(
 
     # Klikniecie w strone, ktora sie jeszcze rysuje, trafia w pustke
     # albo w nie ten element — patrz _poczekaj_az_strona_dojdzie().
-    _czekalismy = _poczekaj_az_strona_dojdzie(tab)
+    _poczekaj_az_strona_dojdzie(tab)
 
     target = json.dumps(
         str(text),
@@ -12734,24 +18454,52 @@ def chrome_click(
     const elements =
         Array.from(
             document.querySelectorAll(
-                'a,button,input,' +
-                '[role="button"]'
+                'a,button,input,select,label,summary,' +
+                '[role="button"],[role="link"],[role="tab"],' +
+                '[role="option"],[role="menuitem"],[role="radio"],' +
+                '[role="checkbox"],[tabindex],[onclick]'
             )
-        );
+        ).filter(e => !!(e.offsetParent || e.getClientRects().length));
 
-    const el =
-        elements.find(
-            e =>
-                clean(
-                    e.innerText ||
-                    e.value ||
-                    e.getAttribute(
-                        "aria-label"
-                    )
-                )
-                .toLowerCase()
-                .includes(target)
-        );
+    const opis = (e) =>
+        clean(
+            e.innerText ||
+            e.value ||
+            e.getAttribute("aria-label") ||
+            e.getAttribute("title")
+        ).toLowerCase();
+
+    // v455: najpierw dokladnie ten napis, potem poczatek, potem
+    // fragment — a przy remisie NAJMNIEJSZY element (sam przycisk,
+    // nie jego pojemnik: "Zmień" zamiast "Pozostałe Elektronika Zmień").
+    const kandydaci = elements
+        .map(e => ({{ e, t: opis(e) }}))
+        .filter(k => k.t && k.t.includes(target))
+        .sort((a, b) => {{
+            const ra = a.t === target ? 0 : a.t.startsWith(target) ? 1 : 2;
+            const rb = b.t === target ? 0 : b.t.startsWith(target) ? 1 : 2;
+            return ra - rb || a.t.length - b.t.length;
+        }});
+
+    let el = kandydaci.length ? kandydaci[0].e : null;
+    // v463: karty ankiet Bitlabs to zwykle divy bez roli — "5 min"
+    // bylo w tekscie strony, a chrome_click mowil "Nie znaleziono".
+    // Najmniejszy widoczny element z tym napisem; klik i tak idzie
+    // myszka przez CDP w jego srodek, wiec trafia w to, co reaguje.
+    if (!el) {{
+        const wszystkie = Array.from(
+            document.querySelectorAll("div,span,p,li,td,th,h1,h2,h3,h4,h5,h6,label,img,svg,section,article")
+        ).filter(e => !!(e.offsetParent || e.getClientRects().length));
+        const luzne = wszystkie
+            .map(e => ({{ e, t: opis(e) }}))
+            .filter(k => k.t && k.t.includes(target) && k.t.length <= target.length + 80)
+            .sort((a, b) => {{
+                const ra = a.t === target ? 0 : a.t.startsWith(target) ? 1 : 2;
+                const rb = b.t === target ? 0 : b.t.startsWith(target) ? 1 : 2;
+                return ra - rb || a.t.length - b.t.length;
+            }});
+        el = luzne.length ? luzne[0].e : null;
+    }}
 
     if (!el) {{
 
@@ -12768,10 +18516,12 @@ def chrome_click(
         block: "center"
     }});
 
-    el.click();
+    const r = el.getBoundingClientRect();
 
     return {{
         ok: true,
+        x: r.x + r.width / 2,
+        y: r.y + r.height / 2,
         clicked:
             clean(
                 el.innerText ||
@@ -12833,6 +18583,27 @@ def chrome_click(
             javascript
         )
 
+        # v455: prawdziwe klikniecie myszy w srodek elementu — tak jak
+        # przy numerze (_kliknij_nr). `el.click()` z JS strony w React/
+        # react-aria czesto nie robi nic: bieg 2026-09-27 20:18, OLX —
+        # "Nie, zaczynam od nowa", "Dalej", "Zmień" bez skutku, a te
+        # same przyciski ruszaly od zdarzen myszy. Gdy myszka sie nie
+        # uda (CDP), zostaje el.click() jak dotad.
+        if isinstance(wynik, dict) and wynik.get("clicked") and "x" in wynik:
+            _mysz = _kliknij_w_punkt(tab, wynik["x"], wynik["y"])
+            if not _mysz.get("ok"):
+                chrome_eval(
+                    tab,
+                    "(() => { const el = document.elementFromPoint("
+                    + str(float(wynik["x"])) + ", " + str(float(wynik["y"]))
+                    + "); if (el) el.click(); return !!el; })()"
+                )
+            wynik = {
+                "ok": True,
+                "clicked": wynik["clicked"],
+                "_xy": (wynik["x"], wynik["y"])
+            }
+
     if not isinstance(wynik, dict) or not wynik.get("clicked"):
         # v443: nie ma takiego elementu — razem z tym, co na stronie
         # jest, zeby nastepny ruch mogl trafic po numerze.
@@ -12872,6 +18643,36 @@ def chrome_click(
             "tresc strony: " + str(_przed.get("znakow"))
             + " -> " + str(_po.get("znakow")) + " znakow"
         )
+
+    # v460: bieg 2026-09-27 23:18 — po "Zapisz" strona pokazala
+    # "Twoje doswiadczenie zostalo zapisane", ale miala te sama
+    # dlugosc co formularz z bledem, wiec szlo "bez skutku".
+    if (
+        not _co_sie_zmienilo
+        and _przed.get("skrot") is not None
+        and _po.get("skrot") is not None
+        and _przed.get("skrot") != _po.get("skrot")
+    ):
+        _co_sie_zmienilo.append(
+            "treść strony zmieniła się (ta sama długość, inna treść)"
+        )
+
+    # v467: klik myszka nie ruszyl strony — probujemy dotyku palcem w
+    # ten sam punkt (mobilne SPA slucha touch, nie mouse).
+    _xy = wynik.pop("_xy", None)
+    if not _co_sie_zmienilo and _xy:
+        _dotyk = _dotknij_punkt(tab, _xy[0], _xy[1])
+        if _dotyk.get("ok"):
+            _poczekaj_az_strona_dojdzie(tab)
+            _po2 = _stan_strony(tab)
+            if _po2 and _chrome_stan_sie_zmienil(_po, _po2):
+                _po = _po2
+                _co_sie_zmienilo.append(
+                    "po dotknięciu palcem (touch, nie mysz): "
+                    + ("adres " + str(_po2.get("href")) if _przed.get("href") != _po2.get("href")
+                       else "treść strony " + str(_przed.get("znakow")) + " -> " + str(_po2.get("znakow")) + " znaków")
+                )
+                wynik["metoda"] = "touch"
 
     wynik["adres"] = _po.get("href")
 
@@ -12928,6 +18729,49 @@ def chrome_click(
 # ============================================================
 # CHROME TYPE
 # ============================================================
+
+def chrome_close(tab_id=None, contains=None):
+    """
+    v457: zamyka karte (/json/close). Osiem i wiecej kart w tle to
+    zamrozone renderery i CDP, ktore nie odpowiada — patrz
+    _aktywuj_karte(). Zwraca, ktore karty zostaly.
+    """
+
+    tab = _find_tab_bez_aktywacji(tab_id, contains)
+
+    if tab is None:
+        return {"ok": False, "error": "Brak takiej karty"}
+
+    if not ensure_chrome_cdp_forward():
+        return {"ok": False, "error": "CDP niedostępne"}
+
+    try:
+        r = requests.get(
+            "http://" + CDP_HOST + ":" + str(CDP_PORT)
+            + "/json/close/" + str(tab["id"]),
+            timeout=5
+        )
+        ok = r.status_code == 200
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    time.sleep(0.5)
+
+    if _ostatnio_aktywna_karta[0] == str(tab["id"]):
+        _ostatnio_aktywna_karta[0] = None
+
+    zostaly = [
+        {"tab_id": k.get("id"), "title": short(str(k.get("title") or ""), 60),
+         "url": short(str(k.get("url") or ""), 100)}
+        for k in (chrome_tabs() or [])[:12]
+    ]
+
+    return {
+        "ok": bool(ok),
+        "zamknieta": {"tab_id": tab.get("id"), "title": tab.get("title"), "url": tab.get("url")},
+        "otwarte_karty": zostaly
+    }
+
 
 def chrome_back(
     tab_id=None,
@@ -13015,8 +18859,8 @@ def chrome_type(
     const q = szukane.trim().toLowerCase();
     const widoczny = (el) => !!(el.offsetParent || el.getClientRects().length);
     const pola = Array.from(document.querySelectorAll(
-        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable=""], [contenteditable="true"]'
-    )).filter(widoczny);
+        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), textarea, [contenteditable]:not([contenteditable="false"])'
+    )).filter(widoczny).filter(e => !e.disabled && !e.readOnly);
     const opis = (el) => [
         el.id, el.name, el.getAttribute('placeholder'),
         el.getAttribute('aria-label'),
@@ -13025,7 +18869,7 @@ def chrome_type(
             .map(i => (document.getElementById(i) || {{}}).innerText || '').join(' ')
     ].filter(Boolean).join(' | ');
     let el = null;
-    if (/^\d+$/.test(q)) {{
+    if (/^\\d+$/.test(q)) {{
         el = document.querySelector('[data-ael-nr="' + q + '"]');
         if (!el) {{
             return {{ok: false, error: 'Na stronie nie ma już elementu nr ' + q
@@ -13043,8 +18887,15 @@ def chrome_type(
         el = document.activeElement;
         const tag = el ? el.tagName.toLowerCase() : '';
         if (!el || !(tag === 'input' || tag === 'textarea' || el.isContentEditable)) {{
-            return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
-                     pola: pola.slice(0, 15).map(opis)}};
+            // v470: bieg 2026-10-03, krok 41 — szesc razy "Kursor nie
+            // stoi w polu tekstowym", a na stronie bylo jedno pole.
+            // Jedno pole to jedyny mozliwy adresat.
+            if (pola.length === 1) {{
+                el = pola[0];
+            }} else {{
+                return {{ok: false, error: 'Kursor nie stoi w polu tekstowym',
+                         pola: pola.slice(0, 15).map(opis)}};
+            }}
         }}
     }}
     el.scrollIntoView({{block: 'center'}});
@@ -13263,8 +19114,58 @@ def chrome_execute_js(
     result = chrome_eval(
         tab,
         javascript,
-        timeout=10
+        timeout=10,
+        zglos_wyjatek=True
     )
+
+    # v452: "Calling Runtime.evaluate timeout" konczylo cale zadanie
+    # (biegi 2026-09-25 16:15 krok 7 i 2026-09-26 14:04 krok 10) — a
+    # to zwykle strona zajeta po kliknieciu albo kod czekajacy na cos,
+    # co nie nadejdzie. Jedno ponowienie na swiezym polaczeniu; gdy
+    # dalej nic, wynik mowi, co sie stalo, i zadanie idzie dalej
+    # (patrz _brak_to_odpowiedz).
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+        and "timeout" in str(result.get("error") or "").lower()
+    ):
+        time.sleep(1.0)
+        result = chrome_eval(tab, javascript, timeout=10, zglos_wyjatek=True)
+
+        if (
+            isinstance(result, dict)
+            and result.get("ok") is False
+            and "timeout" in str(result.get("error") or "").lower()
+        ):
+            result["skrypt_nie_skonczyl_sie"] = (
+                "Kod nie oddał wyniku w 10 s, dwa razy z rzędu. Tak "
+                "kończy się await na coś, co nie nadchodzi, odczyt "
+                "schowka i strona zajęta tuż po kliknięciu. Strona "
+                "dalej stoi — chrome_inspect pokazuje, co na niej jest."
+            )
+
+    # v470: bieg 2026-10-03, krok 60 — kod kliknal "Wyślij", strona
+    # przeszla dalej i CDP oddal "Inspected target navigated or closed".
+    # Kod sie wykonal; wyniku nie ma, bo strona, ktora mialaby go oddac,
+    # juz zniknela. Mowimy, gdzie jestesmy teraz.
+    if (
+        isinstance(result, dict)
+        and result.get("ok") is False
+        and "navigated or closed" in str(result.get("error") or "")
+    ):
+        _poczekaj_az_strona_dojdzie(tab)
+        _po = _stan_strony(tab) or {}
+        return {
+            "ok": True,
+            "value": None,
+            "strona_przeszla_dalej": (
+                "Kod się wykonał, a strona w tym czasie przeszła na "
+                + short(str(_po.get("href") or "inny adres"), 150)
+                + " — dlatego bez wyniku."
+            ),
+            "url": _po.get("href"),
+            "tytul": _po.get("title")
+        }
 
     if (
         isinstance(result, dict)
@@ -13272,12 +19173,26 @@ def chrome_execute_js(
     ):
         return result
 
+    _bez_wartosci = (
+        isinstance(result, dict) and result.get("undefined") is True
+        and len(result) == 2
+    )
+
+    if _bez_wartosci:
+        result = None
+
     dom_fields_warning = _detect_empty_js_fields(result)
 
     final = {
         "ok": True,
         "value": result
     }
+
+    if _bez_wartosci:
+        final["undefined"] = (
+            "Kod skończył się bez wartości (undefined) — nic nie "
+            "zwrócił ani nie rozwiązał Promise wartością."
+        )
 
     if _czekalismy:
         final["czekalem_na_zaladowanie_s"] = _czekalismy
@@ -13380,126 +19295,19 @@ def load_gemini_keys():
 
 
 # ============================================================
-# WYCZERPANY KLUCZ GEMINI WRACA DO GRY (v277)
+# v451: bez osobnego stanu kluczy. mark_quota/mark_key_ok/key_disabled
+# (v277) liczyly odstepy per KLUCZ; od v449 liczy je _odstaw_pare()
+# per para klucz+model i tylko ta sciezka jest uzywana. Tamte funkcje
+# zostaly jako martwy kod (get_gemini_client nikt nie wolal) — i
+# mark_key_ok() kasowalo wpisy w pliku, ktorego nikt juz nie pisal.
+#
+# Zostaja same odstepy dla nieznanego limitu (patrz _czas_odnowienia):
+# pierwszy raz krotko, bo 429 to zwykle limit na minute; gdy ta sama
+# para pada zaraz po powrocie, podwajamy — do 6 godzin.
 # ============================================================
-#
-# Byly tu dwa bledy wskazujace w PRZECIWNE strony, ktore sie
-# nawzajem maskowaly — dlatego nigdy nie bylo tego widac w logu
-# jako jednej awarii.
-#
-# 1. mark_quota() zapisywalo "ten klucz padl" do gemini.json, ale
-#    KAZDA udana interakcja z Gemini nadpisywala ten sam plik
-#    w calosci ({"task_id": ..., "interaction_id": ...}). write_json
-#    nadpisuje, nie doklada. Wiedza o wyczerpanym kluczu znikala
-#    wiec po jednym wywolaniu i agent wracal do martwego klucza:
-#    429, przelaczenie, zapomnienie, znowu 429.
-#
-# 2. W druga strone: key_disabled() czytalo tylko "status", a pole
-#    "time" nie bylo czytane NIGDZIE. Gdyby wpis jednak przetrwal,
-#    klucz bylby martwy na zawsze — mimo ze limit Gemini sie
-#    odnawia. Wskrzeszal go dopiero "wyczysc".
-#
-# Teraz: stan kluczy ma wlasny plik, a "time" jest czytane. Odstep
-# rosnie tak samo, jak przy przeciazeniu DeepSeeka (v268): pierwszy
-# raz krotko, bo 429 to zwykle limit na minute; gdy ten sam klucz
-# pada zaraz po powrocie, to znaczy, ze to limit dzienny — wtedy
-# podwajamy, zeby nie dobijac sie co chwile. Udane wywolanie
-# kasuje wpis.
+
 _GEMINI_COOLDOWN_START = 60.0
 _GEMINI_COOLDOWN_MAX = 6 * 3600.0
-
-
-def gemini_keys_state():
-
-    value = read_json(
-        GEMINI_KEYS_FILE,
-        {}
-    )
-
-    if not isinstance(value, dict):
-        return {}
-
-    return value
-
-
-def save_gemini_keys_state(value):
-
-    write_json(
-        GEMINI_KEYS_FILE,
-        value
-    )
-
-
-def mark_quota(key_name):
-
-    state = gemini_keys_state()
-
-    poprzedni = state.get(str(key_name)) or {}
-
-    try:
-        byl_odstep = float(poprzedni.get("cooldown") or 0.0)
-        byl_kiedy = float(poprzedni.get("time") or 0.0)
-    except (TypeError, ValueError):
-        byl_odstep, byl_kiedy = 0.0, 0.0
-
-    # Padl znowu tuz po tym, jak wrocil do gry — poprzedni odstep
-    # byl za krotki.
-    if byl_odstep and (time.time() - byl_kiedy) < byl_odstep * 3:
-        odstep = min(byl_odstep * 2, _GEMINI_COOLDOWN_MAX)
-    else:
-        odstep = _GEMINI_COOLDOWN_START
-
-    state[str(key_name)] = {
-        "status": "QUOTA_EXHAUSTED",
-        "time": time.time(),
-        "cooldown": odstep
-    }
-
-    save_gemini_keys_state(state)
-
-    log(
-        "GEMINI",
-        "Klucz " + str(key_name) + " odstawiony na "
-        + str(int(odstep // 60)) + " min — potem sam wroci do gry."
-    )
-
-
-def mark_key_ok(key_name):
-    """Klucz odpowiedzial — nie ma powodu go dalej omijac."""
-
-    state = gemini_keys_state()
-
-    if str(key_name) in state:
-
-        del state[str(key_name)]
-
-        save_gemini_keys_state(state)
-
-        log(
-            "GEMINI",
-            "Klucz " + str(key_name) + " znowu odpowiada — "
-            "wraca do normalnego uzycia."
-        )
-
-
-def key_disabled(key_name):
-
-    info = gemini_keys_state().get(str(key_name))
-
-    if not info:
-        return False
-
-    if info.get("status") != "QUOTA_EXHAUSTED":
-        return False
-
-    try:
-        czekaj = float(info.get("cooldown") or _GEMINI_COOLDOWN_START)
-        kiedy = float(info.get("time") or 0.0)
-    except (TypeError, ValueError):
-        return False
-
-    return (time.time() - kiedy) < czekaj
-
 
 # ============================================================
 # v449: NAJLEPSZY DARMOWY MODEL I DRABINKA MODELI
@@ -13521,17 +19329,24 @@ def key_disabled(key_name):
 #
 # GEMINI_MODEL w srodowisku wymusza jeden model — bez sprawdzania.
 
-GEMINI_MODELE_FILE = STATE_DIR / "gemini_modele.json"
+# v480at: jeden plik dla zwyklego programu i obu druzyn rywalizacji —
+# klucze sa wspolne, wiec limit wyczerpany przez jedna druzyne jest
+# wyczerpany tez dla drugiej. W zwyklym programie to ta sama sciezka co
+# dotad (~/agent/state).
+GEMINI_MODELE_FILE = _AGENT_DIR_WSPOLNY / "state" / "gemini_modele.json"
 
 _GEMINI_MODEL_WYMUSZONY = os.environ.get("GEMINI_MODEL", "").strip()
 
 # Ilu kandydatow sprawdzamy raz dziennie (kazdy = jedno zapytanie).
-_GEMINI_ILU_KANDYDATOW = 6
+# v480z: 8 — od 8.10.2026 Google przekierowuje gemini-3.7-flash na
+# 3.8-flash i gemini-3.5-flash na 3.6-flash; takie nazwy dalej sa na
+# liscie i zajmowaly miejsca w pierwszej szostce.
+_GEMINI_ILU_KANDYDATOW = 8
 
 _NIE_DO_ZADAN = (
     "embedding", "image", "imagen", "veo", "tts", "audio", "live",
     "native", "vision", "aqa", "exp", "computer-use", "robotics",
-    "learnlm", "gemma",
+    "learnlm", "gemma", "transcribe",
 )
 
 
@@ -13544,7 +19359,17 @@ def _stan_modeli():
 
 
 def _zapisz_stan_modeli(stan):
-    write_json(GEMINI_MODELE_FILE, stan)
+    # v480at: zapis przez plik tymczasowy — w rywalizacji czyta go druga
+    # druzyna i nie moze trafic na polowe zapisu.
+    try:
+        GEMINI_MODELE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _tmp = GEMINI_MODELE_FILE.with_name(
+            GEMINI_MODELE_FILE.name + "." + str(os.getpid()) + ".tmp"
+        )
+        _tmp.write_text(json.dumps(stan, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(_tmp, GEMINI_MODELE_FILE)
+    except Exception:
+        write_json(GEMINI_MODELE_FILE, stan)
 
 
 def _ranga_modelu(nazwa):
@@ -13626,25 +19451,72 @@ def _poza_darmowa_wersja(blad):
     return bool(re.search(r"limit['\"]?\s*[:=]\s*0\b", str(blad or "")))
 
 
+def _model_z_bledu(blad):
+    """Model, ktory Google wymienia w tresci 429 ("for model X"), albo ""."""
+
+    m = re.search(
+        r"(?:for model|model:)\s*['\"]?(gemini-[\w.\-]+)", str(blad or "")
+    )
+    return m.group(1) if m else ""
+
+
+def _zapamietaj_przekierowanie(model, naprawde):
+    """
+    v480z: Google odpowiada na `model` innym modelem (8.10.2026:
+    gemini-3.7-flash -> 3.8-flash, gemini-3.5-flash -> 3.6-flash). Obie
+    nazwy dziela wtedy jeden limit, wiec liczymy je jako jeden model.
+    """
+
+    model = str(model or "").split("/")[-1]
+    naprawde = str(naprawde or "").split("/")[-1]
+
+    if not model or not naprawde or naprawde == model:
+        return
+
+    if not naprawde.startswith("gemini-"):
+        return
+
+    stan = _stan_modeli()
+    przekierowania = stan.setdefault("przekierowania", {})
+
+    if przekierowania.get(model) == naprawde:
+        return
+
+    przekierowania[model] = naprawde
+    _zapisz_stan_modeli(stan)
+    log(
+        "GEMINI",
+        "Model " + model + " jest przekierowany na " + naprawde
+        + " — ten sam limit, liczę je jako jeden."
+    )
+
+
 def _sprawdz_model(client, model):
-    """ok / limit / zajety / brak — co ten model odpowiada temu kluczowi."""
+    """
+    (ok / limit / zajety / brak, blad, model, ktory naprawde odpowiedzial).
+
+    v480aa: nic nie zapisuje — sprawdzenia ida rownolegle (patrz
+    _drabinka_modeli), a stan zapisuje potem jeden watek.
+    """
 
     try:
-        client.interactions.create(
+        odp = client.interactions.create(
             model=model,
             input="Odpowiedz jednym słowem: ok"
         )
-        return "ok", ""
+        return "ok", "", getattr(odp, "model", None)
     except Exception as e:
         blad = str(e)
 
+    naprawde = _model_z_bledu(blad)
+
     if _gemini_przeciazony(blad):
-        return "zajety", blad
+        return "zajety", blad, naprawde
 
     if _to_limit(blad):
-        return ("brak" if _poza_darmowa_wersja(blad) else "limit"), blad
+        return ("brak" if _poza_darmowa_wersja(blad) else "limit"), blad, naprawde
 
-    return "brak", blad
+    return "brak", blad, naprawde
 
 
 def _polnoc_pacyfik_po(teraz):
@@ -13660,7 +19532,9 @@ def _polnoc_pacyfik_po(teraz):
         d += timedelta(days=(6 - d.weekday()) % 7)
         return d + timedelta(weeks=ktora - 1)
 
-    utc = datetime.utcfromtimestamp(teraz)
+    # v451: utcfromtimestamp() jest przestarzale od Pythona 3.12 —
+    # Termux pokazywal DeprecationWarning przy kazdym liczeniu polnocy.
+    utc = datetime.fromtimestamp(teraz, timezone.utc).replace(tzinfo=None)
 
     def _przesuniecie(chwila_utc):
         rok = chwila_utc.year
@@ -13673,6 +19547,234 @@ def _polnoc_pacyfik_po(teraz):
     polnoc_utc = polnoc_lok - timedelta(hours=_przesuniecie(polnoc_lok + timedelta(hours=8)))
 
     return (polnoc_utc - datetime(1970, 1, 1)).total_seconds()
+
+
+def _limit_dzienny(blad):
+    """Czy ten 429 to limit na DZIEN (odnawia sie o polnocy PT)."""
+
+    tekst = str(blad or "")
+
+    return bool(
+        re.search(r"PerDay", tekst)
+        or re.search(r"per\s+day", tekst, re.IGNORECASE)
+        or re.search(r"daily", tekst, re.IGNORECASE)
+    )
+
+
+def _ile_na_dzien(blad):
+    """Ile zapytan na dzien ma ten model wedlug tresci 429 (0 = nie wiadomo)."""
+
+    m = re.search(
+        r"limit\W{0,5}(\d+)\s*requests?\s*per\s*day",
+        str(blad or ""), re.IGNORECASE
+    )
+
+    return int(m.group(1)) if m else 0
+
+
+def _sekundy_ponowienia(blad):
+    """Po ilu sekundach Google kaze sprobowac (0 = nie podal)."""
+
+    m = re.search(
+        r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
+        str(blad or ""), re.IGNORECASE
+    )
+
+    return float(m.group(1) or m.group(2)) if m else 0.0
+
+
+# v455: model, ktorego dzienny limit nie starcza na jedno zadanie, nie
+# wchodzi do drabinki — inaczej kazdego dnia pierwsze dwa zadania
+# przepadaja w polowie (gemini-3.8-flash: 20 zapytan/dzien przy 25
+# wywolaniach na zadanie, bieg 2026-09-27 20:18).
+_MODEL_ZA_MALY_NA_ZADANIE = GEMINI_MAX_TOOL_CALLS + 5
+
+_powiedziane_o_malym_limicie = set()
+
+
+def _zapamietaj_limit_dzienny(model, blad):
+    ile = _ile_na_dzien(blad)
+
+    if not ile:
+        return
+
+    stan = _stan_modeli()
+    stan.setdefault("limity_dzienne", {})[str(model)] = ile
+    _zapisz_stan_modeli(stan)
+
+
+def _dzien_pt(teraz=None):
+    """Znacznik doby kalifornijskiej (wtedy Google odnawia limity dzienne)."""
+
+    teraz = time.time() if teraz is None else teraz
+
+    return str(int(_polnoc_pacyfik_po(teraz) // 86400))
+
+
+# Para, ktora wlasnie pracuje — zeby _gemini_create moglo liczyc jej
+# zapytania bez przekazywania klucza przez wszystkie wywolania.
+_para_w_uzyciu = [None, None]
+
+
+def _policz_zapytanie(klucz=None, model=None):
+    """Jedno zapytanie do Gemini wiecej dla tej pary w tej dobie PT."""
+
+    klucz = klucz if klucz is not None else _para_w_uzyciu[0]
+    model = model if model is not None else _para_w_uzyciu[1]
+
+    if not klucz or not model:
+        return
+
+    try:
+        stan = _stan_modeli()
+        dzis = _dzien_pt()
+        uzycie = stan.setdefault("uzycie", {})
+
+        # Zostaje tylko dzisiejsza doba — stare wpisy nie sa nikomu
+        # potrzebne.
+        for stary in [d for d in uzycie if d != dzis]:
+            uzycie.pop(stary, None)
+
+        para = str(klucz) + "|" + str(model)
+        uzycie.setdefault(dzis, {})[para] = int(
+            uzycie.get(dzis, {}).get(para, 0)
+        ) + 1
+        _zapisz_stan_modeli(stan)
+    except Exception:
+        pass
+
+
+def _zapytan_dzis(klucz, model, stan=None):
+    stan = _stan_modeli() if stan is None else stan
+
+    try:
+        return int(
+            (stan.get("uzycie") or {}).get(_dzien_pt(), {}).get(
+                str(klucz) + "|" + str(model), 0
+            )
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _zostalo_na_zadanie(klucz, model, stan=None):
+    """
+    Czy na tej parze zostalo dzis dosc zapytan na jedno zadanie. True
+    takze wtedy, gdy limitu dziennego modelu nie znamy.
+    """
+
+    stan = _stan_modeli() if stan is None else stan
+    ile = (stan.get("limity_dzienne") or {}).get(str(model))
+
+    try:
+        ile = int(ile) if ile else 0
+    except (TypeError, ValueError):
+        return True
+
+    if not ile:
+        return True
+
+    zostalo = ile - _zapytan_dzis(klucz, model, stan)
+
+    if zostalo < GEMINI_MAX_TOOL_CALLS + 2:
+        log(
+            "GEMINI",
+            "Model " + str(model) + " (klucz " + str(klucz) + "): zostało "
+            + str(max(zostalo, 0)) + " z " + str(ile) + " zapytań na dziś "
+            "— za mało na całe zadanie, pomijam do jutra."
+        )
+        return False
+
+    return True
+
+
+def _wyczerpany_dzis(klucz, model, blad):
+    """Po 429 dziennym: licznik tej pary staje na limicie (co najmniej)."""
+
+    ile = _ile_na_dzien(blad)
+
+    if not ile:
+        return
+
+    try:
+        stan = _stan_modeli()
+        para = str(klucz) + "|" + str(model)
+        dzis = _dzien_pt()
+        uzycie = stan.setdefault("uzycie", {}).setdefault(dzis, {})
+        uzycie[para] = max(int(uzycie.get(para, 0)), ile)
+        _zapisz_stan_modeli(stan)
+    except Exception:
+        pass
+
+
+def _kolejnosc_modeli(drabinka, stan):
+    """
+    Modele w kolejnosci, w jakiej maja sens dla TEGO programu.
+
+    v456: drabinka z v449 szla po samej randze (najnowsze, pro > flash
+    > flash-lite). Biegi 2026-09-27 20:18 i 20:49: gemini-3.8-flash i
+    gemini-3.7-flash maja w darmowej wersji po 20 zapytan na dzien —
+    kazdy z nich zjadl jedno zadanie i padl w polowie. Zadanie to do 25
+    wywolan, wiec liczy sie najpierw limit, potem ranga:
+      1. modele ze ZNANYM limitem, ktory starcza na zadanie (po randze),
+      2. modele o nieznanym limicie — flash-lite przed flash przed pro,
+         bo w darmowej wersji limity rosna w te strone,
+      3. modele za male — wcale (patrz _model_za_maly).
+    """
+
+    limity = stan.get("limity_dzienne") or {}
+
+    def _znany_ok(m):
+        try:
+            return int(limity.get(str(m)) or 0) >= _MODEL_ZA_MALY_NA_ZADANIE
+        except (TypeError, ValueError):
+            return False
+
+    def _wariant(m):
+        n = str(m).lower()
+        if "flash-lite" in n:
+            return 0
+        if "flash" in n:
+            return 1
+        return 2
+
+    # v480z: nazwa przekierowana na model, ktory juz jest w drabince,
+    # to ten sam model i ten sam limit — zostaje tylko prawdziwa nazwa.
+    _przekierowania = stan.get("przekierowania") or {}
+    drabinka = [
+        m for m in drabinka
+        if _przekierowania.get(str(m)) not in drabinka
+    ]
+
+    znane = [m for m in drabinka if _znany_ok(m)]
+    nieznane = [
+        m for m in drabinka
+        if str(m) not in limity and m not in znane
+    ]
+    nieznane.sort(key=_wariant)
+
+    return znane + nieznane
+
+
+def _model_za_maly(model, stan=None):
+    stan = _stan_modeli() if stan is None else stan
+    ile = (stan.get("limity_dzienne") or {}).get(str(model))
+
+    try:
+        za_maly = bool(ile) and int(ile) < _MODEL_ZA_MALY_NA_ZADANIE
+    except (TypeError, ValueError):
+        return False
+
+    if za_maly and str(model) not in _powiedziane_o_malym_limicie:
+        _powiedziane_o_malym_limicie.add(str(model))
+        log(
+            "GEMINI",
+            "Model " + str(model) + " ma " + str(ile) + " zapytań na "
+            "dzień w darmowej wersji — za mało na jedno zadanie ("
+            + str(GEMINI_MAX_TOOL_CALLS) + " wywołań); pomijam go."
+        )
+
+    return za_maly
 
 
 def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
@@ -13688,8 +19790,22 @@ def _czas_odnowienia(blad, poprzedni_odstep=0.0, teraz=None):
     teraz = time.time() if teraz is None else teraz
     tekst = str(blad or "")
 
-    if re.search(r"PerDay", tekst):
-        return _polnoc_pacyfik_po(teraz) + 60, "limit dzienny", 0.0
+    # v455: Google mowi to dzis po ludzku — "Rate limit exceeded for
+    # model gemini-3.8-flash (limit: 20 requests per day on Free Tier).
+    # Please retry in 29s" (bieg 2026-09-27 20:18). "PerDay" nie
+    # padalo, "retry in 29s" tak — wiec para wracala po 29 s do limitu,
+    # ktory odnawia sie o polnocy, i dwa zadania z rzedu padly w
+    # polowie roboty.
+    if _limit_dzienny(tekst):
+        return (
+            _polnoc_pacyfik_po(teraz) + 60,
+            "limit dzienny"
+            + (
+                " (" + str(_ile_na_dzien(tekst)) + " zapytań/dzień)"
+                if _ile_na_dzien(tekst) else ""
+            ),
+            0.0
+        )
 
     m = re.search(
         r"retry[_ ]?delay\W{0,5}(\d+(?:\.\d+)?)\s*s|retry in (\d+(?:\.\d+)?)\s*s",
@@ -13724,7 +19840,26 @@ def _odstaw_pare(klucz, model, blad, sekund=None, powod=None):
         do, powod, odstep = _czas_odnowienia(blad, poprzedni)
 
     stan["odstawione"][para] = {"do": do, "powod": powod, "odstep": odstep}
+
+    # v480z: 429 mowi o innym modelu niz pytany — to przekierowanie;
+    # limit wyczerpal sie tamtemu, wiec odstawiamy tez tamta pare.
+    _naprawde = _model_z_bledu(blad) if sekund is None else ""
+    if _naprawde and _naprawde != str(model):
+        stan["odstawione"][str(klucz) + "|" + _naprawde] = {
+            "do": do, "powod": powod, "odstep": odstep
+        }
+        stan.setdefault("przekierowania", {})[str(model)] = _naprawde
+
     _zapisz_stan_modeli(stan)
+
+    # v455: po zapisie odstawienia — ta funkcja czyta stan z pliku od
+    # nowa, wiec musi isc PO _zapisz_stan_modeli, inaczej jej wpis
+    # zostalby nadpisany.
+    if sekund is None:
+        for _m in [model] + ([_naprawde] if _naprawde and _naprawde != str(model) else []):
+            _zapamietaj_limit_dzienny(_m, blad)
+            if _limit_dzienny(blad):
+                _wyczerpany_dzis(klucz, _m, blad)
 
     log(
         "GEMINI",
@@ -13746,8 +19881,55 @@ def _para_odstawiona(klucz, model, teraz=None):
     return bool(info) and float(info.get("do") or 0) > teraz
 
 
+# v480aa: jedno sprawdzanie naraz — startuje w tle przy init_gemini(),
+# a pierwsze zadanie, gdyby przyszlo wczesniej, czeka na jego wynik.
+_drabinka_lock = _threading.Lock()
+
+
+def _drabinka_dzisiejsza():
+    """Dzisiejsza drabinka z pliku albo None, gdy dzis jeszcze nie sprawdzana."""
+
+    if _GEMINI_MODEL_WYMUSZONY:
+        return [_GEMINI_MODEL_WYMUSZONY]
+
+    stan = _stan_modeli()
+
+    if stan.get("dzien") == datetime.now().strftime("%Y-%m-%d") and stan.get("drabinka"):
+        return list(stan["drabinka"])
+
+    return None
+
+
 def _drabinka_modeli():
     """Modele od najlepszego. Raz dziennie sprawdzane, potem z pliku."""
+
+    # v480af: gdy modele wlasnie sprawdza watek w tle, zadanie nie czeka
+    # na niego. Bieg 2026-10-13 19:39: "TASK -> ..." i potem cisza —
+    # wykonawca stal na tej blokadzie, bo jedno sprawdzenie nie wracalo.
+    # Do czasu wyniku leci wczorajsza drabinka (albo model domyslny).
+    if not _drabinka_lock.acquire(blocking=False):
+        _tymczasowa = list(_stan_modeli().get("drabinka") or []) or [GEMINI_MODEL]
+        if not _drabinka_tymczasowa_powiedziana[0]:
+            _drabinka_tymczasowa_powiedziana[0] = True
+            log("GEMINI", "Modele jeszcze sprawdzam w tle — na razie: "
+                + " > ".join(_tymczasowa) + ".")
+        return _tymczasowa
+
+    try:
+        return _drabinka_modeli_bez_blokady()
+    finally:
+        _drabinka_lock.release()
+
+
+_drabinka_tymczasowa_powiedziana = [False]
+
+# v480af: tyle najdluzej czeka sie na sprawdzenie modeli. Klient ma limit
+# 60 s na zapytanie, ale bieg 2026-10-13 pokazal, ze sprawdzenie potrafi
+# nie wrocic wcale — wtedy model liczy sie jako chwilowo zajety.
+_DRABINKA_MAKS_S = 90
+
+
+def _drabinka_modeli_bez_blokady():
 
     if _GEMINI_MODEL_WYMUSZONY:
         return [_GEMINI_MODEL_WYMUSZONY]
@@ -13769,16 +19951,43 @@ def _drabinka_modeli():
 
     drabinka = []
 
-    for model in kandydaci:
+    # v480aa: wszystkie sprawdzenia naraz. Kazde to jedno zapytanie z
+    # limitem 60 s; po kolei 8 kandydatow potrafilo trzymac start
+    # programu kilka minut (uzytkownik: "dlugo Gemini sie laduje").
+    # v480af: osobne watki-demony zamiast puli — pula czekala na kazde
+    # sprawdzenie, takze na takie, ktore nigdy nie wracalo.
+    _wyniki = [None] * len(kandydaci)
 
-        wynik, blad = _sprawdz_model(client, model)
+    def _sprawdz_i_zapisz(i, m):
+        _wyniki[i] = _sprawdz_model(client, m)
+
+    _watki = [
+        _threading.Thread(target=_sprawdz_i_zapisz, args=(i, m), daemon=True)
+        for i, m in enumerate(kandydaci)
+    ]
+    for _w in _watki:
+        _w.start()
+    _koniec = time.time() + _DRABINKA_MAKS_S
+    for _w in _watki:
+        _w.join(max(0.0, _koniec - time.time()))
+
+    _wyniki = [
+        w if w is not None
+        else ("zajety", "brak odpowiedzi w " + str(_DRABINKA_MAKS_S) + " s", None)
+        for w in _wyniki
+    ]
+
+    for model, (wynik, blad, naprawde) in zip(kandydaci, _wyniki):
+
+        _zapamietaj_przekierowanie(model, naprawde)
 
         log("GEMINI", "Sprawdzam model " + model + ": " + {
             "ok": "odpowiada",
             "limit": "jest w darmowej wersji, limit chwilowo wyczerpany",
             "zajety": "jest, serwer chwilowo przeciążony",
             "brak": "niedostępny dla tego klucza",
-        }[wynik] + ".")
+        }[wynik] + ("" if wynik == "ok" else " (" + short(str(blad), 120) + ")")
+            + ".")
 
         if wynik == "brak":
             continue
@@ -13787,6 +19996,13 @@ def _drabinka_modeli():
 
         if wynik == "limit":
             _odstaw_pare(klucz, model, blad)
+        elif wynik == "zajety":
+            # v480ag: jak przy zadaniu (v462) — przeciazony jest model,
+            # wiec odstawiony na chwile na kazdym kluczu. Bieg 2026-10-13
+            # 19:50: na szczycie drabinki stanal przeciazony model i
+            # pierwsze zadanie traciloby na nim swoj jedyny przeskok.
+            for _k in list(gemini_clients.keys()):
+                _odstaw_pare(_k, model, blad, sekund=120, powod="serwer przeciążony")
 
     if not drabinka:
         drabinka = [GEMINI_MODEL]
@@ -13808,10 +20024,18 @@ def _wybierz_pare():
     odstawiona. None, gdy wszystko odstawione.
     """
 
-    for model in _drabinka_modeli():
+    _stan = _stan_modeli()
+
+    for model in _kolejnosc_modeli(_drabinka_modeli(), _stan):
+        if _model_za_maly(model, _stan):
+            continue
         for klucz, _ in load_gemini_keys():
             client = gemini_clients.get(klucz)
-            if client is not None and not _para_odstawiona(klucz, model):
+            if (
+                client is not None
+                and not _para_odstawiona(klucz, model)
+                and _zostalo_na_zadanie(klucz, model, _stan)
+            ):
                 return klucz, client, model
 
     return None
@@ -13874,9 +20098,18 @@ def init_gemini():
 
         try:
 
-            client = genai.Client(
-                api_key=key
-            )
+            # v462: limit 60 s na jedno zapytanie. Bieg 2026-09-28 18:28:
+            # serwer trzymal polaczenie 2-4 min, zanim oddal 503 —
+            # cztery takie proby to 11 minut stania calego programu.
+            try:
+                client = genai.Client(
+                    api_key=key,
+                    http_options=types.HttpOptions(timeout=60000)
+                )
+            except Exception:
+                client = genai.Client(
+                    api_key=key
+                )
 
             gemini_clients[
                 name
@@ -13897,10 +20130,17 @@ def init_gemini():
 
     if gemini_clients:
 
-        log(
-            "GEMINI",
-            "API OK — modele: " + " > ".join(_drabinka_modeli())
-        )
+        # v480aa: dzienne sprawdzanie modeli w tle — start programu na
+        # nie nie czeka.
+        _gotowa = _drabinka_dzisiejsza()
+
+        if _gotowa:
+            log("GEMINI", "API OK — modele: " + " > ".join(_gotowa))
+        else:
+            log("GEMINI", "API OK — modele sprawdzam w tle.")
+            _threading.Thread(
+                target=_drabinka_modeli, name="gemini-modele", daemon=True
+            ).start()
 
         return True
 
@@ -13910,23 +20150,6 @@ def init_gemini():
     )
 
     return False
-
-
-def get_gemini_client():
-
-    for name, _ in load_gemini_keys():
-
-        if key_disabled(name):
-            continue
-
-        client = gemini_clients.get(
-            name
-        )
-
-        if client is not None:
-            return name, client
-
-    return None, None
 
 
 # ============================================================
@@ -14201,7 +20424,8 @@ def _gemini_tools_legacy():
             "type": "function",
             "name": "chrome_open",
             "description": (
-                "Otwórz URL w istniejącej karcie Chrome. " + _OPIS_STRONY
+                "Otwórz adres http(s) w istniejącej karcie Chrome. "
+                + _OPIS_STRONY
             ),
             "parameters": {
                 "type": "object",
@@ -14259,9 +20483,49 @@ def _gemini_tools_legacy():
 
         {
             "type": "function",
+            "name": "chrome_upload_file",
+            "description": (
+                "Włóż plik do pola wyboru pliku na stronie (input type=file), "
+                "np. zdjęcie do ogłoszenia. path: plik w Termuxie albo na "
+                "/sdcard; nr: numer pola z listy strony albo selector CSS; "
+                "bez nich — pierwsze pole pliku. Wynik mówi, jakie pliki są "
+                "w polu. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "nr": {"type": "string"},
+                    "selector": {"type": "string"},
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "type": "function",
             "name": "chrome_back",
             "description": (
                 "Wstecz w karcie, jak przycisk w przeglądarce. " + _OPIS_STRONY
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string"},
+                    "contains": {"type": "string"}
+                }
+            }
+        },
+
+        {
+            "type": "function",
+            "name": "chrome_close",
+            "description": (
+                "Zamknij kartę Chrome (tab_id z chrome_tabs albo contains — "
+                "fragment adresu/tytułu). Karty w tle są zamrażane i nie "
+                "odpowiadają; kilka kart to porządek, kilkanaście to kłopot. "
+                "Wynik: która karta zamknięta i jakie zostały."
             ),
             "parameters": {
                 "type": "object",
@@ -14283,7 +20547,12 @@ def _gemini_tools_legacy():
                 "w przeglądarce, zadziała tak samo jak w konsoli "
                 "deweloperskiej. Użyj tego, gdy chrome_click/chrome_type "
                 "nie wystarczą (np. trzeba wywołać wewnętrzne API strony "
-                "bezpośrednio). Ten kod żyje tylko w karcie — zapisany "
+                "bezpośrednio). Do pól formularzy służy chrome_type: "
+                "przypisanie el.value = '…' nie wysyła zdarzeń klawiatury "
+                "i formularze w React/Vue (OLX, Useme) tego nie widzą — "
+                "pole wygląda na wypełnione, a „Dalej” nic nie robi. Kod "
+                "ma 10 s; await na coś, co nie nadchodzi, kończy się "
+                "timeoutem. Ten kod żyje tylko w karcie — zapisany "
                 "do pliku .js nie ma się gdzie uruchomić. Osobny "
                 "przypadek: navigator.clipboard.readText()/writeText() "
                 "prosi o zgodę w okienku, którego nikt tu nie kliknie, "
@@ -14517,6 +20786,28 @@ def _gemini_tools_legacy():
             }
         },
 
+        {
+            "type": "function",
+            "name": "android_look",
+            "description": (
+                "Gemini OGLĄDA ekran telefonu (zrzut) i opisuje, co widzi: "
+                "aplikację/stronę, widoczny tekst, przyciski, pola i linki z "
+                "przybliżonymi współrzędnymi (x, y) w pikselach ekranu, oraz "
+                "czy jest klawiatura, dialog, baner albo błąd. Używaj, gdy "
+                "android_state albo chrome_inspect nie pokazują tego, co jest "
+                "na ekranie (WebView, gra, obrazki, klawiatura zasłania czat), "
+                "albo gdy kliknięcia trafiają nie tam. question: na co "
+                "odpowiedzieć patrząc na ekran. Jedno wywołanie = jedno "
+                "zapytanie z dziennego limitu Gemini."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "path": {"type": "string"}
+                }
+            }
+        },
         {
             "type": "function",
             "name": "android_screenshot_ocr",
@@ -15189,7 +21480,1074 @@ def termux_ls(path="."):
         }
 
 
+# v480cz: plik .py, ktory sie nie kompiluje, nie zastepuje dzialajacego.
+# Bieg 2026-10-21: proposer_small.py konczyl sie na `xp = X.reshape(B`
+# (SyntaxError przed wykonaniem czegokolwiek) — urwany kod zajal miejsce
+# pliku. Nowy plik zapisujemy jak dotad (nie ma czego chronic); istniejacy
+# i kompilujacy sie zostaje, a zespol dostaje dokladny blad.
+def _zepsuty_zastepuje_dzialajacy(p, nowa_tresc):
+    try:
+        p = Path(p)
+        if p.suffix.lower() != ".py" or not p.is_file():
+            return None
+        try:
+            compile(str(nowa_tresc or ""), str(p), "exec")
+            return None
+        except SyntaxError as e:
+            blad = (
+                "linia " + str(e.lineno or "?") + ": "
+                + str(e.msg or "błąd składni")
+                + (" — " + str(e.text).strip()[:120] if e.text else "")
+            )
+        except Exception:
+            return None
+        try:
+            compile(
+                p.read_text(encoding="utf-8", errors="replace"),
+                str(p), "exec"
+            )
+        except Exception:
+            return None
+        return blad
+    except Exception:
+        return None
+
+
 def termux_write_file(path, content, append=False):
+    _za_uzytk = _pisze_za_uzytkownika(Path(str(path or "")).name)
+    if _za_uzytk:
+        log("PROGRAM", _za_uzytk)
+        return {"ok": False, "error": "PLIK_UZYTKOWNIKA", "message": _za_uzytk}
+    # v480hs: sciezka pusta albo wskazujaca katalog — powiedz, co poprawic
+    # (bieg 2026-10-28 08:36: samo "[Errno 21] Is a directory").
+    try:
+        _p = _resolve_home_relative_path(str(path or "~"))
+        if not str(path or "").strip() or _p.is_dir():
+            _kat = _sciezka_od_domu(str(_p))
+            return {"ok": False, "error": "SCIEZKA_TO_KATALOG",
+                    "message": ("Nie zapisałem: ścieżka " + json.dumps(str(path or ""), ensure_ascii=False)
+                                + " wskazuje katalog " + _kat + ", a nie plik. Podaj w polu "
+                                "\"path\" pełną ścieżkę pliku, np. " + _kat.rstrip("/") + "/nazwa.md.")}
+    except Exception:
+        pass
+    wynik = _termux_write_file(path, content, append)
+    try:
+        if isinstance(wynik, dict) and not append:
+            _sprawdz_skladnie_kodu_autora(wynik)
+            if wynik.get("compile_error"):
+                wynik = _autor_poprawia_skladnie(path, content, wynik)
+    except Exception as e:
+        log("PROGRAM", "Poprawka składni przez autora nie poszła: " + str(e))
+    return wynik
+
+
+# v480fi: uzytkownik (2026-10-25): "nie od razu do MAIN-a, bo MAIN, jak mu
+# wyslemy blad, sam bedzie poprawial i mysli, ze druzyna nic nie robi".
+# Gdy plik .py napisany przez kogos z zespolu (np. Bartka) nie kompiluje
+# sie, blad idzie od razu do autora; jego poprawke program naklada i
+# sprawdza znowu. MAIN dostaje wynik: kto poprawil i ze sie kompiluje,
+# albo — po kilku probach — ostatni blad.
+_RUND_POPRAWEK_AUTORA = 3  # v480ie: juz nie limit — patrz _bez_postepu()
+
+
+def _bez_postepu(historia, blad, odp):
+    """
+    v480ie: uzytkownik 2026-10-29 ("nie mialo byc 3 rundy, mialo miec
+    swobode"): autor poprawia swoj plik tak dlugo, jak jest postep —
+    jak przy URUCHOM (v480gi), bez stalej liczby rund. Koniec, gdy ta
+    sama odpowiedz autora dala ten sam blad co w poprzedniej rundzie
+    (nic sie juz nie zmienia). Odpowiedz bez kodu i bez poprawki to
+    autor oddajacy glos — tez koniec.
+    """
+    tekst = str(odp or "")
+    if "```" not in tekst and not extract_search_replace_blocks(tekst) \
+            and not re.search(r"(?im)^\s*(?:<{3,}|>{3,}|={3,}|ZNAJD|SEARCH|ZAMIE|REPLACE)", tekst):
+        return True
+    klucz = (re.sub(r"\s+", " ", str(blad or "")).strip()[-400:],
+             _klucz_tresci("\n".join(re.findall(r"```[^\n]*\n(.*?)```", tekst, re.DOTALL)) or tekst))
+    if historia and historia[-1] == klucz:
+        return True
+    historia.append(klucz)
+    return False
+
+
+# v480id: tresci (sha1 bez bialych znakow na koncach linii), ktore
+# program juz polozyl pod dana sciezka. Plik, ktory zespol potem usunal,
+# nie wraca z bloku o tej samej tresci — to cytat starej wersji, nie
+# nowy plik (bieg 2026-10-29 17:05: Tomek usunal
+# restore_tfm_from_backup.py, a jego stara wersja wrocala z kazdej
+# kolejnej odpowiedzi).
+_tresc_juz_zapisana = {}
+
+
+def _klucz_tresci(kod):
+    return hashlib.sha1("\n".join(l.rstrip() for l in str(kod or "").strip().splitlines())
+                        .encode("utf-8", "replace")).hexdigest()
+
+
+def _zapamietaj_zapis(p, kod):
+    try:
+        _tresc_juz_zapisana.setdefault(os.path.realpath(str(p)), set()).add(_klucz_tresci(kod))
+    except Exception:
+        pass
+
+
+def _usuniety_ta_sama_tresc(p, kod):
+    try:
+        return (not Path(p).exists()
+                and _klucz_tresci(kod) in _tresc_juz_zapisana.get(os.path.realpath(str(p)), ()))
+    except Exception:
+        return False
+
+
+def _zapisz_poprawke_autora(path, kod):
+    """v480ft: cala poprawiona wersja od autora prosto na dysk (z kopia
+    w .kopie/); zwraca blad py_compile albo ""."""
+    p = _resolve_home_relative_path(path)
+    try:
+        if p.is_file():
+            k = p.parent / ".kopie" / (p.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+            k.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(p), str(k))
+    except Exception:
+        pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(str(kod).rstrip("\n") + "\n", encoding="utf-8")
+    _zapamietaj_zapis(p, kod)
+    try:
+        _track_project_path(p)
+        _record_python_written_file(str(p))
+    except Exception:
+        pass
+    return _py_compile_blad(p) if p.suffix.lower() == ".py" else ""
+
+
+def _py_compile_blad(sciezka):
+    """Blad py_compile pliku albo "" (tez gdy nie da sie sprawdzic)."""
+    # v480ft: compile() zamiast py_compile — ten sam blad, ale bez
+    # __pycache__/ w folderze druzyny po kazdym sprawdzeniu.
+    try:
+        r = subprocess.run([sys.executable, "-c",
+                            "import sys;compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec')",
+                            str(sciezka)],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode == 0:
+            return ""
+        out = r.stderr or r.stdout or "błąd składni"
+        k = out.rfind('File "<string>"')
+        if k >= 0:
+            out = out[out.find("\n", k) + 1:]
+        return out
+    except Exception:
+        return ""
+
+
+def _sprawdz_skladnie_kodu_autora(wynik):
+    """v480fi: plik, ktory program polozyl sam z kodu autora (written_by
+    python), nie przechodzil py_compile — sprawdzamy go tak samo."""
+    if wynik.get("written_by") != "python":
+        return
+    sciezka = str(wynik.get("path") or "")
+    if not sciezka.endswith(".py"):
+        return
+    blad = _py_compile_blad(sciezka)
+    if blad:
+        wynik["ok"] = False
+        wynik["compile_error"] = short(blad, 1500)
+        wynik["warning"] = (
+            "Zapisany, ale się nie kompiluje — błąd składni w miejscu z "
+            "compile_error."
+        )
+    else:
+        wynik["skladnia"] = "OK (program sprawdził py_compile)"
+
+
+def _znormalizuj_kod(t):
+    return "\n".join(l.rstrip() for l in str(t or "").strip().splitlines())
+
+
+def _autor_tresci(path, content):
+    """Rola z zespolu, ktorej kod (dla tego pliku) to dokladnie ta tresc."""
+    nazwa = Path(str(path or "")).name
+    _z_zapisu = str(_autor_pliku.get(nazwa) or "")
+    if _z_zapisu in _IMIE_AUTORA and _z_zapisu != "IGOR":
+        return _z_zapisu
+    cel = _znormalizuj_kod(content)
+    if not nazwa or not cel:
+        return ""
+    for wpis in reversed(_kod_autorow):
+        rola = str(wpis.get("rola") or "")
+        if rola in ("", "MAIN", "IGOR") or rola not in _IMIE_AUTORA:
+            continue
+        kod = _kod_z_wypowiedzi(wpis.get("tekst") or "", nazwa) or extract_code_block(
+            wpis.get("tekst") or "", nazwa)
+        if kod and _znormalizuj_kod(kod) == cel:
+            return rola
+    return ""
+
+
+_NAPRAWCZE_IMIONA = {
+    "ANIU": "CODE_FIXER", "ANIA": "CODE_FIXER", "ANI": "CODE_FIXER",
+    "PIOTRZE": "CODE_REVIEWER", "PIOTR": "CODE_REVIEWER", "PIOTRA": "CODE_REVIEWER",
+}
+_ZAWOLANIE_NAPRAWCZE_RE = re.compile(
+    r"(?:^[\s*_#>-]*|(?<=[.!?\u2026])[ \t]+)("
+    + "|".join(sorted(_NAPRAWCZE_IMIONA, key=len, reverse=True))
+    + r")\**\s*[:,]\**\s*(.+(?:\n(?![\s*_#>-]*(?:"
+    + "|".join(sorted(_NAPRAWCZE_IMIONA, key=len, reverse=True))
+    + r")\b).*)*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _koledzy_odpowiadaja_autorowi(rola, odp, sciezka):
+    """v480fi: autor poprawki zwrocil sie do kogos po imieniu (np. "Aniu:
+    ...") — ta osoba odpowiada od razu, a odpowiedz wraca do autora w
+    nastepnej rundzie (uzytkownik 2026-10-25: "moga sie komunikowac
+    z kims jeszcze, kto robi kod")."""
+    imie = _IMIE_AUTORA.get(rola, (rola, rola))[0]
+    teksty = []
+    zawolania = list(_zawolania(odp))
+    # Ania i Piotr (poprawki i przyczyny bledow) nie sa w zwyklym kanale
+    # zawolan narady — tu, przy poprawianiu kodu, mozna do nich napisac.
+    for m in _ZAWOLANIE_NAPRAWCZE_RE.finditer(str(odp or "")):
+        zawolania.append((_NAPRAWCZE_IMIONA[m.group(1).upper()], m.group(2).strip()))
+    for adresat, tresc in zawolania[:2]:
+        if adresat == rola or adresat not in _IMIE_AUTORA or not tresc.strip():
+            continue
+        wiad = (tresc if adresat in _ROLE_BEZ_CELU else
+                imie + " poprawia " + sciezka + ", który się nie kompiluje, "
+                "i pisze do Ciebie:\n" + tresc)
+        o = str(deepseek(adresat, wiad) or "")
+        if not o.strip():
+            continue
+        _zapamietaj_kod_autora(adresat, o)
+        # rozmowa juz sie odbyla — list nie czeka w skrzynce na nastepny krok
+        try:
+            _role_inbox[adresat] = [
+                (n, t) for n, t in _role_inbox.get(adresat, []) if t.strip() != tresc.strip()
+            ]
+        except Exception:
+            pass
+        teksty.append(_IMIE_AUTORA[adresat][0] + " odpowiada:\n" + o.strip())
+    return ("\n\n".join(teksty) + "\n\n") if teksty else ""
+
+
+def _autor_poprawia_skladnie(path, content, wynik):
+    rola = _autor_tresci(path, content)
+    if not rola:
+        return wynik
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    sciezka = _sciezka_od_domu(str(_resolve_home_relative_path(path)))
+    blad = str(wynik.get("compile_error") or "")
+    # v480hx: to, co lezy na dysku, jest jego — bez zdania "ktos zmienil"
+    _rola_poznala_plik(rola, _resolve_home_relative_path(path))
+    odpowiedzi_kolegow = ""
+    _historia = []
+    runda = 0
+    while True:
+        runda += 1
+        log("PROGRAM", sciezka + " od " + imie_d + " się nie kompiluje — błąd wraca "
+            "do autora (runda " + str(runda) + ").")
+        odp = str(deepseek(rola, (
+            odpowiedzi_kolegow
+            + "Twój kod zapisany w " + sciezka + " nie kompiluje się. py_compile:\n"
+            + short(blad, 1500) + "\n\nPopraw to miejsce: podaj poprawkę fragmentu "
+            "(który fragment i na co go zamienić) albo cały plik od nowa. Program "
+            "naniesie ją i od razu sprawdzi znowu. Możesz też zwrócić się do kogoś "
+            "z zespołu po imieniu — odpowie Ci od razu."
+        )) or "")
+        # tak samo jak _popraw_skladnie_u_autora (droga TASK): odpowiedz
+        # jest zwykla wypowiedzia autora — zespol i MAIN ja widza
+        _zapamietaj_kod_autora(rola, odp)
+        try:
+            _role_response_cache[rola] = odp
+            _role_response_step[rola] = _biezacy_krok
+            _collect_role_messages(rola, odp)
+            if rola == "ENGINEER":
+                globals()["_kod_bartka_teraz"] = odp
+        except Exception:
+            pass
+        _blad_przed = blad
+        odpowiedzi_kolegow = _koledzy_odpowiadaja_autorowi(rola, odp, sciezka)
+        r = apply_engineer_patch_to_project_file(path, odp)
+        if r.get("applied"):
+            ok = True
+        else:
+            kod = _kod_z_wypowiedzi(odp, Path(str(path)).name)
+            ok = False
+            if kod and kod.strip():
+                # v480ft: wprost, nie przez _termux_write_file — ta brala
+                # kod tego pliku z notatnika (stara, zepsuta wersje spod
+                # naglowka), wiec poprawka autora nie trafiala na dysk.
+                b2 = _zapisz_poprawke_autora(path, kod)
+                ok = not b2
+                if not ok:
+                    blad = b2
+            elif extract_search_replace_blocks(odp):
+                blad = str(r.get("reason") or blad)
+        # v480hs: noc 27/28.10 (druzyna 1, krok 9) — Bartek poprawil plik
+        # inna droga (pelna wersja polozona przez program w trakcie jego
+        # odpowiedzi), a runda 3 wyslala mu ten sam stary blad; dwa razy
+        # udowadnial, ze plik jest czysty. Rozstrzyga stan pliku na dysku.
+        if not ok:
+            try:
+                _p_dysk = _resolve_home_relative_path(path)
+                if _p_dysk.is_file():
+                    compile(_p_dysk.read_bytes(), str(_p_dysk), "exec")
+                    ok = True
+            except SyntaxError as e_dysk:
+                blad = (str(e_dysk.msg) + " (linia " + str(e_dysk.lineno) + "): "
+                        + str(e_dysk.text or "").strip())
+            except Exception:
+                pass
+        if ok:
+            log("PROGRAM", imie + " poprawił " + sciezka + " — kompiluje się.")
+            nowy = {k: v for k, v in wynik.items()
+                    if k not in ("compile_error", "warning", "ok")}
+            nowy["ok"] = True
+            nowy["skladnia"] = "OK (program sprawdził py_compile)"
+            nowy["poprawil_autor"] = (
+                "Plik od " + imie_d + " najpierw się nie kompilował; błąd poszedł "
+                "od razu do " + imie_d + ", który go poprawił (" + str(runda) + " "
+                + ("raz" if runda == 1 else "razy") + "). Teraz się kompiluje."
+            )
+            return nowy
+        if not odpowiedzi_kolegow and _bez_postepu(_historia, _blad_przed, odp):
+            break
+    wynik["poprawki_autora"] = (
+        imie + " dostał błąd od razu i poprawiał " + str(runda)
+        + (" raz" if runda == 1 else " razy") + ", ale plik nadal się nie kompiluje "
+        "(ostatnia poprawka nic już nie zmieniła albo " + imie + " oddał głos). "
+        "Ostatni błąd jest w compile_error."
+    )
+    wynik["compile_error"] = short(blad, 1500)
+    return wynik
+
+
+# v480fj: bieg 2026-10-25 10:09, druzyna 1, krok 4: MAIN poprosil Bartka
+# o caly nowy plik, Bartek oddal go (18 kB) ze sciezka i slowami "gotowy
+# do polozenia na dysk przez program", a MAIN przepisal te 18 kB 1:1 do
+# termux_write_file. Za pierwszym razem DeepSeek urwal sie na samym
+# mysleniu (szary tekst), dopiero ponowienie dalo odpowiedz; plik w logu
+# byl potem "kodem MAIN-a". Nowy plik autora ze sciezka program kladzie
+# sam, od razu po odpowiedzi — tak jak przy write_engineer_code_to — a
+# MAIN dostaje w miejscu kodu jedno zdanie, gdzie lezy i czy sie
+# kompiluje. Tylko nowe pliki: istniejacych nic tu nie nadpisuje.
+_SCIEZKA_KODU_RE = re.compile(
+    r"(?<![\w/.~-])((?:~|/data/data/com\.termux/files/home)/[\w./-]+\."
+    r"(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])"
+)
+
+
+_NAZWA_PLIKU_KODU = r"[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt)"
+
+
+def _nazwa_z_naglowka(linia):
+    """
+    v480fw: nazwa pliku z linii tuz nad blokiem — jedyna nazwa w tej
+    linii albo ta, od ktorej linia sie zaczyna. Bieg 2026-10-25 23:39,
+    krok 5: "**`eval_bpb.py`** — nowa wersja zgodna z `model.py`" mialo
+    dwie nazwy, wiec plik nie trafil na dysk, a MAIN widzial
+    "[model.py — 2730 znaków]" i uznal, ze program pomylil pliki.
+    """
+    linia = str(linia or "")
+    nazwy = re.findall(r"(?<![\w/.~$-])(" + _NAZWA_PLIKU_KODU + r")(?![\w-])", linia)
+    if len(set(nazwy)) == 1:
+        return nazwy[0]
+    return _nazwa_na_poczatku(linia)
+
+
+def _nazwa_na_poczatku(linia):
+    """Nazwa pliku, od ktorej zaczyna sie linia ("**`a.py`** — ...", "2) Plik: a.py")."""
+    m = re.match(r"[\s*_#>`(\[-]*(?:\d+[.)]\s*)?[\s*_`]*(?:[\w.-]*:\s*)?[\s*_`]*("
+                 + _NAZWA_PLIKU_KODU + r")(?![\w-])", str(linia or ""))
+    return m.group(1) if m else ""
+
+
+def _pliki_pod_naglowkami(text):
+    """
+    v480ft: [(nazwa, kod, folder)] — bloki, nad ktorymi (ostatnia
+    niepusta linia przed blokiem) stoi jedna gola nazwa pliku, np.
+    "**1) `download_corpus.py`** — nowy plik:". folder to ostatni
+    folder ~/.../ nazwany w prozie nad tym naglowkiem ("Pliki (wszystkie
+    w `~/MAIN_1/src/`):"), albo None.
+
+    Bieg 2026-10-25 22:35, krok 3: Bartek dal szesc nowych plikow
+    w ten sposob, zaden nie trafil na dysk, MAIN widzial "[… nie ma go
+    na dysku]", a zapis do katalogu ~/MAIN_1/src/ skonczyl sie bledem.
+    """
+    text = str(text or "")
+    out = []
+    widziane = set()
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", text, re.DOTALL):
+        przed = text[:m.start()]
+        k = przed.rfind("```")
+        linie = [l for l in (przed[k + 3:] if k >= 0 else przed).splitlines() if l.strip()]
+        if not linie or len(linie[-1]) > 160:
+            continue
+        nazwa = _nazwa_z_naglowka(linie[-1])
+        if not nazwa:
+            continue
+        kod = _wyrownaj_blok(m.group(2))
+        if (len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
+                or _obcy_jezyk_dla(nazwa, m.group(1), kod)
+                or re.search(r"^(?:<<<<<<<|=======\s*$|>>>>>>>|@@ |--- a/|\+\+\+ b/)", kod, re.M)):
+            continue
+        proza = re.sub(r"```.*?```", " ", przed, flags=re.DOTALL)
+        foldery = re.findall(r"(?<![\w/.~-])(~/[\w.-]+(?:/[\w.-]+)*)/(?![\w.-])", proza)
+        # v480gk: ten sam plik drugi raz w jednej wypowiedzi — liczy sie
+        # ostatnia wersja (szkic wyzej, plik koncowy nizej).
+        if nazwa in widziane:
+            out = [o for o in out if o[0] != nazwa]
+        widziane.add(nazwa)
+        out.append((nazwa, kod, foldery[-1] if foldery else None))
+    return out
+
+
+def _poloz_pliki_w_katalogu(katalog, team):
+    """
+    v480ft: MAIN wskazal do zapisu katalog. Kazdy plik podany przez
+    kogos z zespolu pod naglowkiem z sama nazwa (patrz
+    _pliki_pod_naglowkami) idzie do tego katalogu — przez
+    termux_write_file, wiec ze sprawdzeniem skladni i poprawka autora.
+    Zwraca (zapisane, juz_byly) — opisy do jednego zdania.
+    """
+    katalog = Path(katalog)
+    teksty = [("ENGINEER", (team or {}).get("engineer_full", ""))]
+    teksty += list(((team or {}).get("kod_full") or {}).items())
+    teksty += [(w.get("rola"), w.get("tekst")) for w in reversed(_kod_autorow[-8:])]
+    zapisane, byly, nazwy = [], [], set()
+    for rola, tekst in teksty:
+        for nazwa, kod, fold in _pliki_pod_naglowkami(tekst):
+            if nazwa in nazwy:
+                continue
+            try:
+                if fold and _resolve_home_relative_path(fold).resolve() != katalog.resolve():
+                    continue
+            except Exception:
+                continue
+            nazwy.add(nazwa)
+            p = katalog / nazwa
+            kto = _IMIE_AUTORA.get(rola, (rola, rola))[1]
+            if p.exists():
+                byly.append(nazwa + " (już był, " + str(p.stat().st_size) + " B)")
+                continue
+            if _siega_do_rywala("termux_write_file", {"path": str(p)}) or _code_target_rejection(str(p), kod):
+                continue
+            if not any(w.get("rola") == rola and w.get("tekst") == tekst for w in _kod_autorow[-8:]):
+                _zapamietaj_kod_autora(rola, tekst)
+            w = termux_write_file(str(p), kod)
+            if not isinstance(w, dict) or not p.exists():
+                continue
+            _zapamietaj_zapis(p, kod)
+            _autor_pliku[nazwa] = rola
+            if w.get("compile_error"):
+                stan = "nie kompiluje się: " + short(str(w["compile_error"]), 200)
+            else:
+                stan = "składnia OK" + (" po poprawce" if w.get("poprawil_autor") else "")
+            if not w.get("compile_error"):
+                try:
+                    _pr = _autor_poprawia_uruchomienie(rola, p)
+                except Exception:
+                    _pr = ""
+                if _pr:
+                    stan += "; " + _pr
+            zapisane.append(nazwa + " od " + kto + " (" + str(p.stat().st_size) + " B, " + stan + ")")
+    return zapisane, byly
+
+
+def _jak_uruchomic(p):
+    """
+    v480ft: krotko, jak uruchomic zapisany plik — z samego kodu, bez
+    zgadywania: komenda (python3/bash/node) i opcje z argparse albo
+    informacja, ze bierze argumenty z linii polecen. Uzytkownik
+    (2026-10-25): "MAIN powinien wiedziec, co jest uruchomione i jak".
+    """
+    try:
+        p = Path(p)
+        kod = p.read_text(encoding="utf-8", errors="replace")
+        sciezka = _sciezka_od_domu(str(p))
+        suf = p.suffix.lower()
+        if suf == ".py":
+            komenda = "python3 " + sciezka
+        elif suf == ".sh":
+            komenda = "bash " + sciezka
+        elif suf in (".js", ".mjs"):
+            komenda = "node " + sciezka
+        else:
+            return ""
+        opcje = []
+        for m in re.finditer(r"add_argument\(\s*['\"](-{1,2}[\w-]+|[A-Za-z_]\w*)['\"]", kod):
+            if m.group(1) not in opcje:
+                opcje.append(m.group(1))
+        if opcje:
+            komenda += " [" + " ".join(opcje[:10]) + (" …" if len(opcje) > 10 else "") + "]"
+        elif re.search(r"\bsys\.argv\[|\$1\b|\$\{1|process\.argv\[", kod):
+            komenda += " <argumenty>"
+        return komenda
+    except Exception:
+        return ""
+
+
+def _pliki_w_folderze(folder, nazwa, limit=3000):
+    """Pliki o tej nazwie w folderze (bez .git, venv, __pycache__, node_modules)."""
+    out = []
+    try:
+        n = 0
+        for root, dirs, files in os.walk(str(folder)):
+            dirs[:] = [d for d in dirs if not d.startswith(".")
+                       and d not in ("__pycache__", "node_modules", "venv", "site-packages")]
+            n += len(files)
+            if nazwa in files:
+                out.append(Path(root) / nazwa)
+            if n > limit:
+                break
+    except Exception:
+        pass
+    return out
+
+
+def _naniesc_poprawke_autora(rola, odp, foldery):
+    """
+    v480ft: poprawka fragmentu (SZUKAJ/ZAMIEN, patch, STARY/NOWY) od
+    autora pliku idzie na jego plik od razu — z kopia, sprawdzeniem
+    skladni i cofnieciem, gdy nie przejdzie (apply_engineer_patch_to_
+    project_file). Uzytkownik (2026-10-25): "swobodnie poprawiac", "nie
+    pisac calego kodu od nowa i przepisywac go ciagle", "ta osoba, co
+    pisze i poprawia". Tylko plik, ktorego autorem jest ta osoba; reszte
+    dalej kladzie MAIN przez write_engineer_code_to.
+    Zwraca zdania dla MAIN-a.
+    """
+    if not extract_search_replace_blocks(odp):
+        return []
+    kandydaci = []
+    for m in _SCIEZKA_KODU_RE.finditer(odp):
+        try:
+            p = _resolve_home_relative_path(m.group(1).rstrip("."))
+        except Exception:
+            continue
+        if p.is_file() and _autor_pliku.get(p.name) == rola and p not in kandydaci:
+            kandydaci.append(p)
+    for nazwa, kto in list(_autor_pliku.items()):
+        if kto != rola or not nazwa or not re.search(r"(?<![\w-])" + re.escape(nazwa) + r"(?![\w-])", odp):
+            continue
+        for f in foldery:
+            for p in _pliki_w_folderze(f, nazwa):
+                if p not in kandydaci:
+                    kandydaci.append(p)
+    imie_d = _IMIE_AUTORA.get(rola, (rola, rola))[1]
+    powod = ""
+    for p in kandydaci[:6]:
+        if _siega_do_rywala("termux_write_file", {"path": str(p)}):
+            continue
+        w = apply_engineer_patch_to_project_file(str(p), odp)
+        if w.get("applied"):
+            _record_python_written_file(w["path"])
+            sciezka = _sciezka_od_domu(str(p))
+            log("PROGRAM", "Poprawka " + imie_d + " naniesiona od razu na " + sciezka
+                + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B).")
+            return ["[Program od razu naniósł poprawkę " + imie_d + " na jego plik " + sciezka
+                    + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
+                    + "kopia: .kopie/" + Path(w["backup"]).name + "). Plik jest gotowy do uruchomienia"
+                    + (": " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
+        powod = powod or str(w.get("reason") or "")
+    # Poprawka nie weszla — wraca do autora (v480ie: dopoki jest postep), zanim
+    # cokolwiek dostanie MAIN; autor moze zajrzec do pliku PODGLĄDEM.
+    runda = 0
+    if kandydaci and powod and not _siega_do_rywala("termux_write_file", {"path": str(kandydaci[0])}):
+        p = kandydaci[0]
+        sciezka = _sciezka_od_domu(str(p))
+        _historia = []
+        while True:
+            runda += 1
+            log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + " nie weszła — wraca do autora (runda "
+                + str(runda) + ").")
+            odp2 = str(deepseek(rola, (
+                "Twoja poprawka do " + sciezka + " nie weszła: " + short(powod, 800)
+                + "\n\nZajrzyj do pliku (np. PODGLĄD: grep -n \"…\" " + sciezka
+                + " albo PODGLĄD: sed -n 'od,dop' " + sciezka + ") i podaj poprawkę z fragmentem "
+                "skopiowanym 1:1 z pliku. Program naniesie ją od razu."
+            )) or "")
+            _zapamietaj_kod_autora(rola, odp2)
+            w = apply_engineer_patch_to_project_file(str(p), odp2)
+            if w.get("applied"):
+                _record_python_written_file(w["path"])
+                log("PROGRAM", "Poprawka " + imie_d + " naniesiona na " + sciezka + " po " + str(runda) + ". próbie.")
+                return ["[Program naniósł poprawkę " + imie_d + " na jego plik " + sciezka
+                        + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
+                        + "za " + str(runda + 1) + ". razem, kopia: .kopie/" + Path(w["backup"]).name + ")"
+                        + (". Uruchomienie: " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
+            _powod_przed = powod
+            powod = str(w.get("reason") or powod)
+            if _bez_postepu(_historia, _powod_przed, odp2):
+                break
+    if kandydaci and powod:
+        return ["[Poprawki " + imie_d + " nie dało się nanieść na " + _sciezka_od_domu(str(kandydaci[0]))
+                + " (autor próbował " + str(runda + 1) + " razy): " + short(powod, 300)
+                + " Plik jest bez zmian.]"]
+    return []
+
+
+_PROBA_URUCHOMIENIA_S = 30
+
+
+def _proba_uruchomienia(p):
+    """
+    v480ft: krotkie uruchomienie nowego pliku .py, zanim dostanie go MAIN.
+    Uzytkownik (2026-10-25): "przed MAIN-em moze go puscic na chwile
+    program i zwrocic kod bledu", "mieli 3 proby".
+
+    Jak najmniej skutkow ubocznych: plik z argparse -> "--help" (kod
+    modulu + parser, bez wlasciwej pracy); plik z `if __name__ ==
+    "__main__"` -> sam import (kod modulu, bez main); inaczej zwykle
+    uruchomienie, przerwane po _PROBA_URUCHOMIENIA_S s. Katalog roboczy
+    = folder pliku, wiec importy sasiednich plikow dzialaja.
+    Zwraca (stan, komenda, wyjscie): stan "ok" / "blad" / "czas" / None.
+    """
+    p = Path(p)
+    if p.suffix.lower() != ".py" or not p.is_file():
+        return None, "", ""
+    try:
+        kod = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None, "", ""
+    sc = _sciezka_od_domu(str(p))
+    if "add_argument(" in kod or "ArgumentParser(" in kod:
+        argv = [sys.executable, str(p), "--help"]
+        komenda = "python3 " + sc + " --help"
+    elif re.search(r"__name__\s*==\s*['\"]__main__['\"]", kod):
+        argv = [sys.executable, "-c",
+                "import importlib.util,sys;sys.path.insert(0,sys.argv[1]);"
+                "s=importlib.util.spec_from_file_location('_proba',sys.argv[2]);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)",
+                str(p.parent), str(p)]
+        komenda = "import " + sc + " (bez main)"
+    else:
+        argv = [sys.executable, str(p)]
+        komenda = "python3 " + sc
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1")
+    try:
+        pr = subprocess.Popen(argv, cwd=str(p.parent), stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                              text=True, errors="replace", env=env, start_new_session=True)
+    except Exception as e:
+        return None, komenda, str(e)
+    try:
+        out, _ = pr.communicate(timeout=_PROBA_URUCHOMIENIA_S)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pr.pid, signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            out, _ = pr.communicate(timeout=5)
+        except Exception:
+            out = ""
+        return "czas", komenda, str(out or "")[-1500:]
+    out = str(out or "")
+    if pr.returncode == 0:
+        return "ok", komenda, out[-800:]
+    # v480id: kod wyjscia bez wyjatku Pythona to zakonczenie zamierzone
+    # przez sam skrypt (sys.exit z komunikatem, np. "brak kopii — sprawdz
+    # recznie"), nie blad w kodzie. Bieg 2026-10-29 17:05 (druzyna 1):
+    # skrypt Tomka konczyl sie "Sprawdz recznie: ls ...", program trzy
+    # razy odsylal to Tomkowi jako blad i za kazdym razem kladl jego blok
+    # znowu jako plik — Tomek: "to bledne kolo".
+    if pr.returncode > 0 and "Traceback (most recent call last)" not in out:
+        return "wyjscie", komenda, "kod wyjścia " + str(pr.returncode) + "\n" + out[-800:]
+    return "blad", komenda, "kod wyjścia " + str(pr.returncode) + "\n" + out[-2500:]
+
+
+def _autor_poprawia_uruchomienie(rola, p):
+    """
+    v480ft: blad z krotkiego uruchomienia wraca do autora — do
+    _RUND_POPRAWEK_AUTORA razy, tak jak blad skladni. Brak biblioteki
+    (ModuleNotFoundError dla modulu, ktorego nie ma obok) nie jest
+    bledem w kodzie — idzie do MAIN-a jako fakt (pip install).
+    Zwraca krotki opis do zdania dla MAIN-a.
+    """
+    stan, komenda, wyj = _proba_uruchomienia(p)
+    if stan is None:
+        return ""
+    if stan == "ok":
+        return "próba uruchomienia (" + komenda + ") OK"
+    if stan == "czas":
+        return ("próba uruchomienia (" + komenda + ") działała ponad "
+                + str(_PROBA_URUCHOMIENIA_S) + " s bez błędu — przerwałem ją")
+    if stan == "wyjscie":
+        _ost = [l for l in str(wyj).strip().splitlines()[1:] if l.strip()]
+        return ("próba uruchomienia (" + komenda + ") skończyła się bez wyjątku, "
+                "skrypt sam zakończył pracę (" + str(wyj).split("\n", 1)[0]
+                + (", ostatnia linia: " + short(_ost[-1], 200) if _ost else "") + ")")
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    sciezka = _sciezka_od_domu(str(p))
+    odpowiedzi_kolegow = ""
+    _historia = []
+    runda = 0
+    while True:
+        runda += 1
+        brak = re.search(r"ModuleNotFoundError: No module named '([\w.]+)'", wyj)
+        if brak and not _pliki_w_folderze(p.parent, brak.group(1).split(".")[0] + ".py"):
+            return ("próba uruchomienia (" + komenda + "): brakuje biblioteki "
+                    + brak.group(1) + " — trzeba ją zainstalować (pip install); dalej próba nie doszła")
+        log("PROGRAM", sciezka + " od " + imie_d + " wyłożył się przy próbie uruchomienia — "
+            "błąd wraca do autora (runda " + str(runda) + ").")
+        odp = str(deepseek(rola, (
+            odpowiedzi_kolegow
+            + "Twój plik " + sciezka + " kompiluje się, ale krótka próba uruchomienia ("
+            + komenda + ") kończy się błędem:\n" + short(wyj, 2000)
+            + "\n\nPopraw to miejsce: podaj poprawkę fragmentu (który fragment i na co go "
+            "zamienić) albo cały plik od nowa. Program naniesie ją i od razu uruchomi "
+            "znowu. Możesz też zwrócić się do kogoś z zespołu po imieniu — odpowie Ci od razu."
+        )) or "")
+        _zapamietaj_kod_autora(rola, odp)
+        try:
+            _role_response_cache[rola] = odp
+            _role_response_step[rola] = _biezacy_krok
+            _collect_role_messages(rola, odp)
+            if rola == "ENGINEER":
+                globals()["_kod_bartka_teraz"] = odp
+        except Exception:
+            pass
+        odpowiedzi_kolegow = _koledzy_odpowiadaja_autorowi(rola, odp, sciezka)
+        if not odpowiedzi_kolegow and _bez_postepu(_historia, wyj, odp):
+            break
+        r = apply_engineer_patch_to_project_file(str(p), odp)
+        if not r.get("applied"):
+            kod = _kod_z_wypowiedzi(odp, p.name)
+            if kod and kod.strip() and not extract_search_replace_blocks(odp):
+                b2 = _zapisz_poprawke_autora(str(p), kod)
+                if b2:
+                    wyj = "błąd składni po poprawce: " + b2
+                    continue
+            else:
+                wyj = str(r.get("reason") or "Nie było poprawki do naniesienia.") + "\n\nPoprzedni błąd:\n" + short(wyj, 1500)
+                continue
+        stan, komenda, wyj = _proba_uruchomienia(p)
+        if stan in ("ok", "czas", "wyjscie", None):
+            log("PROGRAM", imie + " poprawił " + sciezka + " — próba uruchomienia przechodzi.")
+            return ("próba uruchomienia (" + komenda + ") OK po poprawce " + imie_d
+                    + " (" + str(runda) + " " + ("raz" if runda == 1 else "razy") + ")")
+    return ("próba uruchomienia (" + komenda + ") nadal kończy się błędem po "
+            + str(runda) + " " + ("poprawce" if runda == 1 else "poprawkach") + " " + imie_d
+            + " (ostatnia nic już nie zmieniła albo autor oddał głos): "
+            + short(wyj.strip().splitlines()[-1] if wyj.strip() else wyj, 300))
+
+
+def _jak_skonczyl_proces(kod):
+    """v480fv: kod ujemny to sygnal, nie blad w programie. Bieg
+    2026-10-25 23:19: MAIN sam zatrzymal fetcher (kill, kod -15), a
+    program mowil "przerwal sie z bledem"."""
+    try:
+        k = int(kod)
+    except (TypeError, ValueError):
+        return "przerwał się z błędem (kod " + str(kod) + ")"
+    if k == -15:
+        return "został zatrzymany sygnałem SIGTERM (kod -15 — ktoś go zakończył, np. kill)"
+    if k == -9:
+        return ("został zabity sygnałem SIGKILL (kod -9 — kill -9 albo system przy braku "
+                "pamięci)")
+    if k < 0:
+        return "został zatrzymany sygnałem " + str(-k) + " (kod " + str(k) + ")"
+    return "przerwał się z błędem (kod " + str(k) + ")"
+
+
+_zapis_dla_maina = {}
+
+
+def _dla_maina_z_zapisem(rola, tekst):
+    """
+    v480ft: glos z narady na poczatku kroku idzie do MAIN-a tak samo
+    jak odpowiedz na ASK — nowy plik zapisany od razu, reszta kodu jedna
+    linia. Tylko wypowiedz z TEGO kroku (stara "wczesniej" nie kladzie
+    plikow, ktore zespol mogl celowo usunac); wynik zapamietany, zeby
+    ponowne skladanie promptu nie zapisywalo drugi raz.
+    """
+    tekst = str(tekst or "")
+    if "```" not in tekst or _role_response_step.get(rola) != _biezacy_krok:
+        return _kod_na_jedna_linie(tekst)
+    # v480fw: krok tej roli mogla ustawic pozniejsza odpowiedz (ASK), a
+    # glos z narady jest starszy. Bieg 2026-10-25 23:40, krok 5: stary
+    # glos Bartka polozyl po raz drugi pliki sprzed nowej wersji (data/
+    # clean.py obok nowego clean.py). Kod musi byc w ostatniej
+    # odpowiedzi tej roli.
+    def _bloki(t):
+        return {_znormalizuj_kod(_wyrownaj_blok(b))
+                for b in re.findall(r"```[^\n`]*\n(.*?)```", str(t or ""), re.DOTALL)}
+    _ostatnia = _bloki(_role_response_cache.get(rola))
+    if _ostatnia and any(len(k) >= 40 and k not in _ostatnia for k in _bloki(tekst)):
+        return _kod_na_jedna_linie(tekst)
+    klucz = (rola, _biezacy_krok, hash(tekst))
+    if klucz not in _zapis_dla_maina:
+        if len(_zapis_dla_maina) > 60:
+            _zapis_dla_maina.clear()
+        try:
+            _zapis_dla_maina[klucz] = _poloz_nowy_plik_autora(
+                rola, tekst, _main_task_for_team)
+        except Exception as e:
+            log("PROGRAM", "Nie zapisałem od razu plików z wypowiedzi " + str(rola) + ": " + str(e))
+            _zapis_dla_maina[klucz] = _kod_na_jedna_linie(tekst)
+    return _zapis_dla_maina[klucz]
+
+
+def _wstaw_zdanie_za_blok(odp, kod, zdanie):
+    """Blok z tym kodem w odpowiedzi zamieniony zdaniem (albo zdanie na koncu)."""
+    for mb in re.finditer(r"```[^\n`]*\n(.*?)```", odp, re.DOTALL):
+        if _wyrownaj_blok(mb.group(1)).strip() == str(kod or "").strip():
+            return odp[:mb.start()] + zdanie + odp[mb.end():]
+    return odp.rstrip() + "\n\n" + zdanie
+
+
+_SKROT_W_KODZIE_RE = re.compile(
+    r"^\s*(?:#|//)\s*(?:\.\.\.|…)|^\s*(?:\.\.\.|…)\s*$|reszta (?:bez zmian|jak (?:było|wcześniej))"
+    r"|(?:bez zmian|unchanged)\s*(?:\.\.\.|…)?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _caly_plik_zamiast(stary, nowy):
+    """
+    v480fw: czy nowy tekst to cala nowa wersja pliku (a nie wycinek):
+    inny niz stary, bez "# ... reszta bez zmian", nie krotszy niz
+    polowa starego.
+    """
+    stary, nowy = str(stary or "").strip(), str(nowy or "").strip()
+    if not nowy or _znormalizuj_kod(nowy) == _znormalizuj_kod(stary):
+        return False
+    if _SKROT_W_KODZIE_RE.search(nowy):
+        return False
+    return len(nowy) >= 0.5 * len(stary)
+
+
+def _zastap_plik_autora(rola, p, kod, folder):
+    """
+    v480fw: pelna nowa wersja pliku, ktory juz lezy w folderze druzyny
+    (albo w folderze z pytania MAIN-a), od razu na dysk — poprzednia
+    w .kopie/. Nie kompiluje sie -> blad do autora (3 rundy), a gdy
+    dalej nie, wraca poprzednia wersja. Zwraca zdanie dla MAIN-a albo "".
+    """
+    p = Path(p)
+    if folder is None or not kod or _code_target_rejection(str(p), kod) or _blok_to_komenda(kod, str(p)):
+        return ""
+    try:
+        if not p.resolve().is_relative_to(Path(folder).resolve()) or not p.is_file():
+            return ""
+        stary = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    if not _caly_plik_zamiast(stary, kod):
+        return ""
+    imie_d = _IMIE_AUTORA.get(rola, (rola, rola))[1]
+    sciezka = _sciezka_od_domu(str(p))
+    _autor_pliku[p.name] = rola
+    blad = _zapisz_poprawke_autora(p, kod)
+    if not blad:
+        _rola_poznala_plik(rola, p)
+    stan = "składnia OK"
+    if blad:
+        w = _autor_poprawia_skladnie(p, kod, {"ok": False, "path": str(p), "compile_error": blad})
+        if w.get("compile_error"):
+            try:
+                p.write_text(stary, encoding="utf-8")
+            except Exception:
+                pass
+            log("PROGRAM", "Nowa wersja " + sciezka + " od " + imie_d
+                + " się nie kompiluje — została poprzednia.")
+            return ("[Nowa wersja " + sciezka + " od " + imie_d + " nie kompiluje się nawet po "
+                    "poprawkach autora: " + short(str(w["compile_error"]), 300)
+                    + " — na dysku została poprzednia wersja.]")
+        stan = "składnia OK po poprawce " + imie_d
+    log("PROGRAM", "Nowa pełna wersja od " + imie_d + " zastąpiła " + sciezka + " (" + stan + ").")
+    _jak = _jak_uruchomic(p)
+    return ("[Program od razu zastąpił " + sciezka + " nową pełną wersją od " + imie_d + " ("
+            + str(p.stat().st_size) + " B, " + stan + "{proba:" + str(p) + "}; poprzednia wersja "
+            "leży w " + _sciezka_od_domu(str(p.parent / ".kopie")) + "/). Kod jest w pliku — "
+            + ("uruchomienie: " + _jak + "; " if _jak else "można go uruchomić; ")
+            + "całość pokaże termux_read_file.]")
+
+
+def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
+    """Zwraca odpowiedz dla MAIN-a (kod zastapiony zdaniem) albo odp."""
+    odp = str(odp or "")
+    # v480fp-fr: uzytkownik (2026-10-25): MAIN nie dostaje calego kodu od
+    # nikogo z zespolu — "jest napisane, ze kod jest w pliku", mozna go
+    # uruchomic, a blad skladni wraca do autora (do 3 rund, jak u Bartka).
+    # v480ir: Piotr i Ania odpowiadaja MAIN-owi przez ASK (v480io) — ich
+    # nowy plik tez idzie na dysk. Bieg 2026-10-30 17:16 (druzyna 1): Piotr
+    # dwa razy dal _diag_plc.py ze sciezka nad blokiem, a URUCHOM pisal
+    # "No such file" — program pomijal pliki rol spoza _ROLE_DO_ROZMOWY.
+    if rola not in _ROLE_DO_ROZMOWY and rola not in (
+            "PROGRESS_ESTIMATOR", "CODE_REVIEWER", "CODE_FIXER"):
+        return odp
+    if "```" not in odp:
+        _pop = _naniesc_poprawke_autora(rola, odp, [f for f in (
+            _folder_druzyny(_DRUZYNA) if _DRUZYNA else None,) if f])
+        return (odp.rstrip() + "\n\n" + "\n".join(_pop)) if _pop else odp
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    # Autor musi byc w notatniku, zeby zapis wzial jego kod 1:1 i zeby
+    # blad skladni wrocil do niego (Ela odpowiada poza narada).
+    if not any(w.get("rola") == rola and w.get("tekst") == odp for w in _kod_autorow[-6:]):
+        _zapamietaj_kod_autora(rola, odp)
+    sciezki = []
+    for m in _SCIEZKA_KODU_RE.finditer(odp + "\n" + str(pytanie or "")):
+        s = m.group(1).rstrip(".")
+        if s not in sciezki:
+            sciezki.append(s)
+    # v480fn: bieg 2026-10-25 18:46 — Bartek podpisal bloki samymi nazwami
+    # ("# core.py - ..."), a folder byl tylko w pytaniu MAIN-a ("~/MAIN_1/").
+    # Gola nazwa liczy sie, gdy blok sam mowi, ze jest tym plikiem; folder
+    # to folder druzyny albo jedyny folder ~/... z pytania.
+    _folder = None
+    if _DRUZYNA:
+        _folder = _folder_druzyny(_DRUZYNA)
+    else:
+        _foldery = set(re.findall(r"(?<![\w/.~-])(~/[\w.-]+(?:/[\w.-]+)*)/(?![\w.-])",
+                                  str(pytanie or "")))
+        if len(_foldery) == 1:
+            _folder = _resolve_home_relative_path(_foldery.pop())
+    _podpisane = set()
+    if _folder is not None:
+        for m in re.finditer(r"(?<![\w/.~-])([\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])", odp):
+            nazwa = m.group(1)
+            if (nazwa not in _podpisane and not any(x.endswith("/" + nazwa) for x in sciezki)
+                    and _blok_podpisany(odp, nazwa)):
+                _podpisane.add(nazwa)
+                sciezki.append(str(Path(_folder) / nazwa))
+        # v480fr: sciezka wzgledna w naglowku tuz nad blokiem
+        # ("## Skrypt: `scripts/d0_prepare_data.py`") — w folderze
+        # druzyny / z pytania. Bieg 2026-10-25 22:06: skrypt Kamila
+        # (7,7 tys. znakow) szedl do MAIN-a w calosci.
+        for m in re.finditer(r"(?<![\w/.~$-])((?:[\w-]+/)+[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])", odp):
+            wzgl = m.group(1)
+            cel = str(Path(_folder) / wzgl)
+            if cel in sciezki or any(x.endswith("/" + wzgl) for x in sciezki):
+                continue
+            if _blok_dokladnie_dla(odp, wzgl):
+                _podpisane.add(Path(wzgl).name)
+                sciezki.append(cel)
+    # v480ft: gola nazwa w naglowku tuz nad blokiem — w folderze nazwanym
+    # nad nim w prozie (w rywalizacji tylko wewnatrz folderu druzyny),
+    # inaczej w folderze druzyny / z pytania.
+    _z_naglowka = {}
+    _zapisane_teraz = []
+    for nazwa, kod_n, fold in _pliki_pod_naglowkami(odp):
+        if nazwa in _podpisane or any(Path(x).name == nazwa for x in sciezki):
+            continue
+        baza = None
+        if fold:
+            try:
+                fp = _resolve_home_relative_path(fold)
+                if not _DRUZYNA or fp.resolve().is_relative_to(
+                        Path(_folder_druzyny(_DRUZYNA)).resolve()):
+                    baza = fp
+            except Exception:
+                baza = None
+        if baza is None:
+            baza = _folder
+        if baza is None:
+            continue
+        # Plik o tej nazwie juz lezy gdzies w tym folderze (np. src/model.py)
+        # — to ten plik, nie nowy obok. v480fw: gdy jest dokladnie jeden,
+        # pelna nowa wersja autora go zastepuje (patrz _caly_plik_zamiast);
+        # przy kilku takich plikach nie wiadomo ktory, wiec zostaja.
+        _jest = _pliki_w_folderze(_folder_druzyny(_DRUZYNA) if _DRUZYNA else baza, nazwa)
+        if len(_jest) > 1:
+            continue
+        cel = str(_jest[0]) if _jest else str(Path(baza) / nazwa)
+        _podpisane.add(nazwa)
+        _z_naglowka[cel] = kod_n
+        sciezki.append(cel)
+    for s in sciezki[:12]:
+        try:
+            p = _resolve_home_relative_path(s)
+            if _siega_do_rywala("termux_write_file", {"path": str(p)}):
+                continue
+            # v480gk: ostatni blok przypisany temu plikowi (nazwa nad nim
+            # albo podpis w nim) — wersja koncowa, nie szkic wyzej.
+            kod = _z_naglowka.get(s) or _blok_tego_pliku(odp, p.name)
+            # v480ig: blok-komenda (cd … && python3 -c "…", PODGLĄD:) nie
+            # jest trescia pliku, nawet gdy wymienia jego nazwe.
+            if kod and _blok_to_komenda(kod, str(p)):
+                kod = None
+            if p.exists():
+                # v480fw: autor dal nowa pelna wersje pliku, ktory juz lezy
+                # — bieg 2026-10-25 23:39: "eval_bpb.py — nowa wersja
+                # (nadpisuje stary plik)" przepadla, a stary plik zostal.
+                zdanie = _zastap_plik_autora(rola, p, kod, _folder)
+                if zdanie:
+                    _zapisane_teraz.append((p, "nie kompiluje" not in zdanie))
+                    odp = _wstaw_zdanie_za_blok(odp, kod, zdanie)
+                continue
+            if not kod and len(sciezki) == 1 and p.name not in _podpisane:
+                kod = _kod_z_wypowiedzi(odp, p.name)
+            if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
+                continue
+            if _usuniety_ta_sama_tresc(p, kod):
+                log("PROGRAM", _sciezka_od_domu(str(p)) + " od " + imie_d + ": tę samą treść "
+                    "program już kładł, a potem plik usunięto — nie kładę go znowu.")
+                continue
+            w = termux_write_file(str(p), kod)
+            _zapamietaj_zapis(p, kod)
+            if not isinstance(w, dict) or not p.exists():
+                continue
+            sciezka = _sciezka_od_domu(str(p))
+            if w.get("compile_error"):
+                stan = "ale się nie kompiluje: " + short(str(w["compile_error"]), 400)
+            else:
+                stan = "składnia OK" + (" po poprawce " + imie_d if w.get("poprawil_autor") else "")
+            _jak = _jak_uruchomic(p)
+            zdanie = ("[Program od razu zapisał ten plik " + imie_d + " w " + sciezka + " ("
+                      + str(p.stat().st_size) + " B, " + stan + "{proba:" + str(p) + "}). Kod jest w pliku — "
+                      + ("uruchomienie: " + _jak + "; " if _jak else "można go uruchomić; ")
+                      + "całość pokaże termux_read_file.]")
+            _zapisane_teraz.append((p, not w.get("compile_error")))
+            _autor_pliku[p.name] = rola
+            _rola_poznala_plik(rola, p)
+            log("PROGRAM", "Nowy plik od " + imie_d + " zapisany od razu: " + sciezka + " (" + stan[:60] + ").")
+            na_dysku = p.read_text(encoding="utf-8", errors="replace").strip()
+            blok = None
+            if na_dysku == kod.strip():
+                for mb in re.finditer(r"```[^\n`]*\n(.*?)```", odp, re.DOTALL):
+                    if _wyrownaj_blok(mb.group(1)).strip() == kod.strip():
+                        blok = mb
+                        break
+            if blok:
+                odp = odp[:blok.start()] + zdanie + odp[blok.end():]
+            else:
+                odp = odp.rstrip() + "\n\n" + zdanie
+        except Exception as e:
+            log("PROGRAM", "Nie zapisałem od razu pliku " + imie_d + " " + s + ": " + str(e))
+    # v480ft: krotka proba uruchomienia kazdego nowego pliku — po zapisie
+    # WSZYSTKICH (importy sasiednich plikow), blad do autora (3 rundy).
+    for p, kompiluje in _zapisane_teraz:
+        opis = ""
+        if kompiluje:
+            try:
+                opis = _autor_poprawia_uruchomienie(rola, p)
+            except Exception as e:
+                log("PROGRAM", "Próba uruchomienia " + p.name + " nie wyszła: " + str(e))
+        odp = odp.replace("{proba:" + str(p) + "}", ("; " + opis) if opis else "")
+    # v480ft: poprawka fragmentu od autora pliku — od razu na jego plik.
+    _foldery_pop = []
+    for f in [_folder] + [fd for _n, _k, fd in _pliki_pod_naglowkami(odp) if fd]:
+        try:
+            f = _resolve_home_relative_path(f) if isinstance(f, str) else f
+        except Exception:
+            continue
+        if f is not None and f not in _foldery_pop:
+            _foldery_pop.append(f)
+    _pop = _naniesc_poprawke_autora(rola, odp, _foldery_pop)
+    if _pop:
+        odp = odp.rstrip() + "\n\n" + "\n".join(_pop)
+    # v480fr: reszta kodu (fragmenty, poprawki, pliki, ktore juz leza)
+    # idzie do MAIN-a jedna linia, jak glosy z poczatku kroku; pelna
+    # wypowiedz autora zostaje w jego rozmowie i w notatniku autorow,
+    # skad program kladzie kod 1:1, gdy MAIN zleci zapis.
+    return _kod_na_jedna_linie(odp)
+
+
+def _termux_write_file(path, content, append=False):
     """
     append (opcjonalny, domyślnie False — zachowuje dotychczasowe
     zachowanie): False = nadpisz cały plik (jak zawsze); True =
@@ -15252,7 +22610,12 @@ def termux_write_file(path, content, append=False):
         except Exception:
             _is_custom_tool = False
 
-        if (_code_suffix or _has_shebang) and not _is_custom_tool:
+        # v461: w RUN pisze MAIN (DeepSeek) — to kod zespolu, nie Gemini.
+        if (
+            (_code_suffix or _has_shebang)
+            and not _is_custom_tool
+            and not _wykonuje_main
+        ):
 
             # Gemini siega po zapis kodu. Podzial rol zostaje: kod
             # pisze Bartek, na dysk kladzie go Python, Gemini
@@ -15291,6 +22654,17 @@ def termux_write_file(path, content, append=False):
             # kodu — jesli kod jest w jego zadaniu, to jest CZYJAS
             # kopia, i nie ma powodu przedkladac kopii nad oryginal.
             _kod, _z_pamieci = _tresc_napisana_dla(p)
+
+            # v480ig: pamietany blok z sama komenda (PODGLĄD/URUCHOM,
+            # cd/grep) nie jest trescia pliku; a dzialajacego pliku .py
+            # nie zastepuje tresc, ktora sie nie kompiluje.
+            if _kod and _blok_to_komenda(_kod, str(p)):
+                _kod = None
+            _zly_zast = _zepsuty_zastepuje_dzialajacy(p, _kod) if _kod else None
+            if _zly_zast:
+                log("GEMINI", "Nie podmieniam " + p.name + " pamiętanym blokiem — "
+                    "on się nie kompiluje (" + _zly_zast + "), a plik na dysku działa.")
+                _kod = None
 
             _blokada = (
                 _code_target_rejection(str(p), _kod) if _kod else None
@@ -15473,6 +22847,41 @@ def termux_write_file(path, content, append=False):
 
         else:
 
+            _zly = _zepsuty_zastepuje_dzialajacy(p, data)
+            if _zly:
+                _msg = (
+                    "Nie nadpisałem " + p.name + " — nowa treść się nie "
+                    "kompiluje (" + _zly + "), a plik na dysku działa, "
+                    "więc zostaje. Wygląda na urwany albo niepełny kod: "
+                    "autor (Bartek, Ania albo MAIN w RUN) musi podać "
+                    "cały plik albo poprawkę fragmentu."
+                )
+                log("GEMINI", _msg)
+                return {
+                    "ok": False,
+                    "error": "KOD_NIE_KOMPILUJE_SIE",
+                    "path": str(p),
+                    "compile_error": _zly,
+                    "message": _msg
+                }
+
+            # v480y: zanim nadpiszemy plik wyraznie mniejsza trescia,
+            # odkladamy poprzednia obok (jedna kopia na plik). Bieg
+            # 2026-10-12 23:57: MAIN zapisal sekcje do 186 KB pliku z
+            # notatkami bez append i zostalo 2,9 KB; najswiezsza kopia
+            # zespolu byla sprzed 4 godzin — 24 sekcje przepadly.
+            _poprzednia = None
+            if (
+                previous_size is not None
+                and previous_size > 200
+                and len(data.encode("utf-8")) < previous_size * 0.5
+            ):
+                try:
+                    _poprzednia = p.with_name(p.name + ".przed_nadpisaniem")
+                    shutil.copy2(str(p), str(_poprzednia))
+                except Exception:
+                    _poprzednia = None
+
             p.write_text(
                 data,
                 encoding="utf-8"
@@ -15482,6 +22891,21 @@ def termux_write_file(path, content, append=False):
 
         _track_project_path(p)
         _zapamietaj_gdzie(p)
+
+        if _wykonuje_main and (_code_suffix or _has_shebang):
+            # v480fj: MAIN przepisal 1:1 kod kogos z zespolu — autorem
+            # zostaje ten ktos (bieg 2026-10-25 10:22: kod Bartka byl
+            # w logu "kodem MAIN-a").
+            _autor_pliku.pop(p.name, None)
+            _kto = "" if append else _autor_tresci(p, data)
+            _kto = _kto if _kto and _kto != "MAIN" else "MAIN"
+            _autor_pliku[p.name] = _kto
+            _zapisz_autoryzacje_kodu(p, autor=_kto)
+            if _kto == "MAIN":
+                log("MAIN", "Kod MAIN-a zapisany: " + p.name + " (RUN).")
+            else:
+                log("MAIN", "MAIN zapisał 1:1 kod " + _IMIE_AUTORA.get(_kto, (_kto, _kto))[1]
+                    + ": " + p.name + " (RUN).")
 
         result = {
             "ok": True,
@@ -15539,6 +22963,10 @@ def termux_write_file(path, content, append=False):
                 "Nadpisany: miał " + str(previous_size) + " B, teraz ma "
                 + str(new_size) + " B."
             )
+            if _poprzednia is not None:
+                result["warning"] += (
+                    " Poprzednia treść leży w " + str(_poprzednia) + "."
+                )
 
         # Niespójność naprawiona: termux_patch_file od dawna
         # sprawdza py_compile po każdej edycji .py i zwraca
@@ -15575,9 +23003,15 @@ def termux_write_file(path, content, append=False):
                         1500
                     )
                     result["warning"] = (
-                        "Zapisany; py_compile zgłasza błąd "
-                        "(compile_error)."
+                        "Zapisany, ale się nie kompiluje — błąd składni "
+                        "w miejscu z compile_error. Popraw ten fragment "
+                        "(termux_patch_file) i program sprawdzi go znowu."
                     )
+                else:
+                    # v480fh: MAIN nie wiedzial, ze skladnia jest juz
+                    # sprawdzona, i sam puszczal py_compile (bieg
+                    # 2026-10-25 09:28 i 09:32, osobne akcje).
+                    result["skladnia"] = "OK (program sprawdził py_compile)"
 
             except Exception:
                 # py_compile samo w sobie niedostępne — nie
@@ -15682,21 +23116,147 @@ def _kto_pisze_do_logu(sciezka):
         return ""
 
 
+# v480dc: "Plik nie istnieje" z podpowiedzia. Bieg 2026-10-21 17:48,
+# krok 12: patch na ~/src/h2_tura2.py, a plik lezal w ~/MAIN_1/src/.
+# Uzytkownik: kazda pomylka ma dostac komunikat, co poszlo nie tak.
+# Najpierw to, co Python sam zapisal; potem plik o tej nazwie w domu
+# (bez ukrytych folderow i bez folderu drugiej druzyny).
+_POMIJANE_PRZY_SZUKANIU = {
+    "node_modules", "__pycache__", "storage", "venv", ".venv",
+    "site-packages",
+}
+
+
+def _czy_chodzilo_o(p):
+    try:
+        p = Path(str(p))
+        nazwa = p.name
+        if not nazwa:
+            return ""
+        trafienia = []
+        znany = _gdzie_zapisalismy.get(nazwa)
+        if znany and Path(znany).is_file() and str(Path(znany)) != str(p):
+            trafienia.append(str(znany))
+        if not trafienia:
+            dom = Path.home()
+            obca = (
+                {"MAIN_2"} if _DRUZYNA == "1"
+                else {"MAIN_1"} if _DRUZYNA == "2" else set()
+            )
+            przejrzane = 0
+            for korzen, katalogi, pliki in os.walk(str(dom)):
+                przejrzane += 1
+                glebokosc = len(Path(korzen).relative_to(dom).parts)
+                katalogi[:] = [
+                    k for k in katalogi
+                    if not k.startswith(".")
+                    and k not in _POMIJANE_PRZY_SZUKANIU
+                    and not (glebokosc == 0 and k in obca)
+                    and glebokosc < 5
+                ]
+                if nazwa in pliki:
+                    trafienia.append(str(Path(korzen) / nazwa))
+                    if len(trafienia) >= 3:
+                        break
+                if przejrzane > 3000:
+                    break
+        if not trafienia:
+            return ""
+        return (
+            "Plik o tej nazwie jest w: "
+            + ", ".join(_sciezka_od_domu(t) for t in trafienia)
+            + " — czy chodziło o tę ścieżkę?"
+        )
+    except Exception:
+        return ""
+
+
+# v480dd: przy chybionym 'search' — gdzie w pliku jest najblizszy
+# tekst. Bieg 2026-10-21 (druzyna 2): 8 chybionych poprawek, MAIN pisal
+# 'search' z pamieci i nie widzial, czym rozni sie od pliku.
+def _najblizszy_fragment(zrodlo, szukane):
+    try:
+        import difflib
+        linie = str(zrodlo or "").split("\n")
+        szuk = str(szukane or "").strip("\n").split("\n")
+        n = max(1, len(szuk))
+        if not linie or len(linie) > 20000:
+            return ""
+        wzor = "\n".join(l.strip() for l in szuk)
+        najlepszy = (0.0, 0)
+        # Kandydaci: poczatki okien, w ktorych pierwsze linie 'search'
+        # sa podobne do linii pliku (tanie quick_ratio po liniach) — pelne
+        # porownanie okna tylko dla najlepszych, zeby duzy plik nie
+        # stal dziesiatkami sekund na telefonie.
+        kotwice = [
+            (j, l.strip()) for j, l in enumerate(szuk) if l.strip()
+        ][:3]
+        punkty = {}
+        pliku = [l.strip() for l in linie]
+        for j, kl in kotwice:
+            sm1 = difflib.SequenceMatcher(None, kl, "", autojunk=False)
+            for i, fl in enumerate(pliku):
+                if not fl:
+                    continue
+                sm1.set_seq2(fl)
+                q = sm1.quick_ratio()
+                if q >= 0.5:
+                    start = i - j
+                    if 0 <= start <= max(0, len(linie) - n):
+                        punkty[start] = punkty.get(start, 0.0) + q
+        kandydaci = sorted(punkty, key=punkty.get, reverse=True)[:40]
+        if len(linie) <= 400:
+            kandydaci = range(0, max(1, len(linie) - n + 1))
+        for i in kandydaci:
+            okno = "\n".join(l.strip() for l in linie[i:i + n])
+            sm = difflib.SequenceMatcher(None, wzor, okno, autojunk=False)
+            if sm.real_quick_ratio() <= najlepszy[0]:
+                continue
+            if sm.quick_ratio() <= najlepszy[0]:
+                continue
+            r = sm.ratio()
+            if r > najlepszy[0]:
+                najlepszy = (r, i)
+        r, i = najlepszy
+        if r < 0.5:
+            return ""
+        szer = len(str(i + n))
+        fragment = "\n".join(
+            str(nr + 1).rjust(szer) + " | " + linie[nr]
+            for nr in range(i, min(len(linie), i + n))
+        )
+        return (
+            "Najbliższy tekst w pliku (linie " + str(i + 1) + "–"
+            + str(min(len(linie), i + n)) + ", zgodność "
+            + str(int(r * 100)) + "%; numery linii nie są częścią "
+            "pliku):\n" + fragment[:2000]
+        )
+    except Exception:
+        return ""
+
+
 def termux_read_file(path, max_bytes=20000):
     try:
         p = _resolve_home_relative_path(path)
 
         if not p.exists():
-            return {
+            _wynik = {
                 "ok": False,
-                "error": "Plik nie istnieje"
+                "error": "Plik nie istnieje: " + str(p)
             }
-
-        data = p.read_bytes()
+            _podp = _czy_chodzilo_o(p)
+            if _podp:
+                _wynik["podpowiedz"] = _podp
+            return _wynik
 
         limit = int(
             max_bytes or 20000
         )
+
+        # v480iu: tylko tyle, ile oddajemy (+1 bajt, zeby wiedziec, ze
+        # jest wiecej) — nie caly, choc wielki, plik do pamieci.
+        with open(p, "rb") as _f:
+            data = _f.read(limit + 1)
 
         truncated = len(data) > limit
 
@@ -16214,13 +23774,17 @@ def _reset_irreversible_memory():
 
 def _irreversible_kind(command):
     """Ktora czynnosc nieodwracalna to jest (albo None)."""
-
     text = str(command or "")
-
+    # v461: slowo "termux-sms-send" w notatce zapisywanej heredokiem
+    # to nie wyslanie SMS-a (bieg 2026-09-28 16:54: "POWTORZONA
+    # CZYNNOSC NIEODWRACALNA" przy `cat > research.md <<EOF`).
+    text = re.sub(
+        r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\s*(?=\n|$)",
+        " ", text, flags=re.DOTALL
+    )
     for marker in _IRREVERSIBLE_MARKERS:
-        if marker in text:
+        if re.search(r"(^|[;&|(`\s])" + re.escape(marker) + r"(\s|$)", text):
             return marker
-
     return None
 
 
@@ -16471,6 +24035,17 @@ AUTO_BACKGROUND_WAIT = 90
 # pid -> Popen, zeby dalo sie poczekac i poznac kod wyjscia.
 _procesy_w_tle = {}
 
+# v480s: grupy procesow, ktore przezyly zwykla komende termux_run, bo
+# cos w niej poszlo w tle ("nohup ... &"). {pgid: (komenda, start)}.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 19:52, krok 105).
+# Zespol puscil trening przez termux_run: "nohup python3 -u
+# rsi_core_min.py ... & echo PID=$!". Powloka skonczyla od razu, a
+# trening szedl dalej we wlasnej grupie (start_new_session) — ale
+# poza _procesy_w_tle, wiec przy zamknieciu programu nikt by go nie
+# zatrzymal, a uzytkownik chce, zeby zamkniecie konczylo wszystko.
+_grupy_z_komend = {}
+
 
 def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
     """
@@ -16507,6 +24082,15 @@ def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
         except Exception:
             # subprocess.TimeoutExpired albo cokolwiek innego —
             # traktujemy tak samo: proces nadal dziala.
+            return None
+
+        # v480dl: powloka skonczyla, ale jej dzieci (np. proot-distro
+        # login ... pip install) dalej pracuja — to nie jest koniec.
+        _reszta = max(0.0, budzet_s - (time.time() - start))
+        while _grupa_zyje(pid) and _reszta > 0:
+            time.sleep(1.0)
+            _reszta -= 1.0
+        if _grupa_zyje(pid):
             return None
 
         _procesy_w_tle.pop(pid, None)
@@ -16819,6 +24403,378 @@ _URUCHAMIANY_SKRYPT_RE = re.compile(
 )
 
 
+# v480cr: uzytkownik (2026-10-19) — druzyny "nie moga w ogole zamykac
+# programu". Komenda zespolu (albo skrypt, ktory ona uruchamia), ktora
+# trafilaby w sam program — agent.py ktorejkolwiek druzyny, jego
+# powloke albo Termuksa — nie rusza. Wlasne skrypty zespol zatrzymuje
+# dalej jak chce; liczy sie tylko, czy wzorzec trafia w program.
+_ZABIJAJACE_RE = re.compile(
+    r"\b(pkill|killall|kill)\b([^\n;|&)`]*)"
+)
+_PODSTAWIENIE_RE = re.compile(r"\$\(([^)]*)\)|`([^`]*)`")
+
+
+def _procesy_programu():
+    """[(pid, pgid, cmdline, comm)] — agent.py obu druzyn i nasi przodkowie."""
+    nazwa = os.path.basename(_SCIEZKA_PROGRAMU or "agent.py") or "agent.py"
+    przodkowie = _nasi_przodkowie()
+    wynik = []
+    try:
+        pidy = [int(d) for d in os.listdir("/proc") if d.isdigit()]
+    except Exception:
+        pidy = sorted(przodkowie)
+    for pid in pidy:
+        try:
+            with open("/proc/" + str(pid) + "/cmdline", "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            with open("/proc/" + str(pid) + "/comm", encoding="utf-8") as f:
+                comm = f.read().strip()
+        except Exception:
+            continue
+        nasz = pid in przodkowie or (
+            argv and "python" in os.path.basename(argv[0])
+            and any(os.path.basename(a) == nazwa for a in argv[1:3])
+        )
+        if not nasz:
+            continue
+        try:
+            pgid = os.getpgid(pid)
+        except Exception:
+            pgid = None
+        wynik.append((pid, pgid, " ".join(argv), comm))
+    return wynik
+
+
+def _trafia(wzorzec, tekst):
+    try:
+        return bool(re.search(wzorzec, tekst))
+    except re.error:
+        return wzorzec in tekst
+
+
+def _ofiary_wzorca(narzedzie, argumenty, procesy):
+    """Procesy programu, w ktore trafi pkill/pgrep/killall/pidof z tymi argumentami."""
+    try:
+        tokeny = shlex.split(argumenty)
+    except Exception:
+        tokeny = argumenty.split()
+    pelna = False
+    wzorce = []
+    pomin = False
+    for t in tokeny:
+        if pomin:
+            pomin = False
+            continue
+        if t.startswith("-") and len(t) > 1:
+            if narzedzie in ("pkill", "pgrep") and (
+                t == "--full" or ("f" in t[1:] and not t.startswith("--"))
+            ):
+                pelna = True
+            if t in ("-u", "-U", "-g", "-G", "-P", "-s", "-t", "--signal", "-o", "-n") and narzedzie != "killall":
+                pomin = True
+            continue
+        wzorce.append(t.strip("'\""))
+    if not wzorce:
+        return []
+    if narzedzie in ("pkill", "pgrep"):
+        wzorce = wzorce[:1]
+    trafione = []
+    for pid, _pgid, cmd, comm in procesy:
+        for w in wzorce:
+            if not w:
+                continue
+            if narzedzie in ("pkill", "pgrep"):
+                hit = _trafia(w, cmd if pelna else comm)
+            else:
+                hit = w in (comm, os.path.basename(cmd.split(" ")[0] if cmd else ""))
+            if hit:
+                trafione.append(pid)
+                break
+    return trafione
+
+
+def _pidy_z_podstawienia(tekst, procesy):
+    """$(cat plik), $(pgrep …), $(pidof …), $PPID w argumentach kill."""
+    pidy = set()
+    for m in _PODSTAWIENIE_RE.finditer(tekst):
+        wnetrze = (m.group(1) or m.group(2) or "").strip()
+        r = re.match(r"(pgrep|pidof)\b(.*)", wnetrze)
+        if r:
+            pidy.update(_ofiary_wzorca(
+                "pgrep" if r.group(1) == "pgrep" else "killall", r.group(2), procesy
+            ))
+            continue
+        r = re.match(r"cat\s+['\"]?([^\s'\"]+)", wnetrze)
+        if r:
+            try:
+                pidy.update(int(x) for x in re.findall(
+                    r"\d+", _resolve_home_relative_path(r.group(1)).read_text()[:200]
+                ))
+            except Exception:
+                pass
+    if re.search(r"\$\{?PPID\b", tekst):
+        pidy.add(os.getpid())
+    return pidy
+
+
+def _zatrzymalaby_program(command):
+    """
+    Zdanie do wyniku, gdy komenda (albo uruchamiany przez nia skrypt)
+    zatrzymalaby sam program — inaczej "". Nigdy nie rzuca.
+    """
+    try:
+        tekst = str(command or "")
+        tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
+        if not re.search(r"\b(?:pkill|killall|kill|force-stop|kill-all)\b|os\.kill", tekst):
+            return ""
+        procesy = _procesy_programu()
+        if not procesy:
+            return ""
+        pidy = {p[0] for p in procesy}
+        grupy = {p[1] for p in procesy if p[1]}
+        trafione = set()
+        if re.search(r"\bam\s+(?:force-stop|kill)\s+com\.termux\b|\bam\s+kill-all\b", tekst):
+            trafione.add(min(pidy))
+        if re.search(r"os\.kill(?:pg)?\(\s*os\.getppid\(\)", tekst):
+            trafione.add(os.getpid())
+        for m in _ZABIJAJACE_RE.finditer(tekst):
+            narzedzie, argumenty = m.group(1), m.group(2)
+            if narzedzie in ("pkill", "killall"):
+                trafione.update(_ofiary_wzorca(narzedzie, argumenty, procesy))
+                continue
+            # kill: pidy, -pgid, 0, -1, podstawienia
+            pelny = tekst[m.start():m.start() + 300].split("\n", 1)[0]
+            trafione.update(_pidy_z_podstawienia(pelny, procesy) & pidy)
+            cele = re.findall(r"(?<![\w$-])(-?\d+)\b", argumenty)
+            if cele and re.match(r"\s*-\d+\s", argumenty) and len(cele) > 1:
+                cele = cele[1:]  # pierwsze -N to sygnal
+            for c in cele:
+                n = int(c)
+                if n in pidy or (n < 0 and (-n in grupy or n == -1)) or n == 0 and (os.getpgrp() in grupy):
+                    trafione.add(n if n > 0 else min(pidy))
+        if not trafione:
+            return ""
+        opis = []
+        for pid, _g, cmd, comm in procesy:
+            if pid in trafione:
+                opis.append(short(cmd or comm, 60) + " (pid " + str(pid) + ")")
+        return (
+            "Nie uruchomiłem tej komendy — zatrzymałaby sam program: "
+            + "; ".join(opis[:3]) + ". Program zamyka tylko użytkownik."
+        )
+    except Exception:
+        return ""
+
+
+def _procesy_rywala():
+    """
+    v480dv: [(pid, pgid, cmdline, comm)] procesow drugiej druzyny — z
+    katalogiem roboczym albo sciezka w jej folderze. Sam agent.py
+    rywala chroni juz _zatrzymalaby_program.
+    """
+    if not _DRUZYNA:
+        return []
+    oni = _rywal()
+    dom = os.path.realpath(str(HOME))
+    foldery = [
+        os.path.join(dom, "MAIN_" + oni),
+        os.path.join(dom, "agent_druzyna" + oni),
+    ]
+    znaki = ("MAIN_" + oni, "agent_druzyna" + oni)
+    programu = {p[0] for p in _procesy_programu()}
+    wynik = []
+    try:
+        pidy = [int(d) for d in os.listdir("/proc") if d.isdigit()]
+    except Exception:
+        return []
+    for pid in pidy:
+        if pid in programu:
+            continue
+        try:
+            with open("/proc/" + str(pid) + "/cmdline", "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            with open("/proc/" + str(pid) + "/comm", encoding="utf-8") as f:
+                comm = f.read().strip()
+        except Exception:
+            continue
+        try:
+            cwd = os.path.realpath(os.readlink("/proc/" + str(pid) + "/cwd"))
+        except Exception:
+            cwd = ""
+        cmd = " ".join(argv)
+        if not (
+            any(cwd == k or cwd.startswith(k + os.sep) for k in foldery)
+            or any(re.search(r"(?<![\w])" + re.escape(z) + r"(?![\w])", cmd) for z in znaki)
+        ):
+            continue
+        try:
+            pgid = os.getpgid(pid)
+        except Exception:
+            pgid = None
+        wynik.append((pid, pgid, cmd, comm))
+    return wynik
+
+
+def _zabilaby_rywala(command):
+    """
+    v480dv: zdanie do wyniku, gdy kill/pkill/killall w komendzie (albo w
+    uruchamianym przez nia skrypcie) trafilby w proces drugiej druzyny —
+    inaczej "". Bieg 2026-10-24 02:24 (druzyna 1, krok 60): kill 24351
+    zatrzymal sprawdzanie druzyny 2 (cwd ~/MAIN_2). Nigdy nie rzuca.
+    """
+    try:
+        if not _DRUZYNA:
+            return ""
+        tekst = str(command or "")
+        tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
+        if not _ZABIJAJACE_RE.search(tekst):
+            return ""
+        procesy = _procesy_rywala()
+        if not procesy:
+            return ""
+        trafione = _trafione_procesy(tekst, procesy)
+        if not trafione:
+            return ""
+        opis = [
+            short(cmd or comm, 60) + " (pid " + str(pid) + ")"
+            for pid, _g, cmd, comm in procesy if pid in trafione
+        ]
+        my = _DRUZYNA
+        return (
+            "Nie uruchomiłem tej komendy — zatrzymałaby proces drużyny "
+            + _rywal() + " (pracuje w jej folderze): " + "; ".join(opis[:3])
+            + ". Procesy rywala zostają nietknięte. Żeby zatrzymać tylko "
+            "swoje, podaj pid własnego procesu (np. z termux_start albo "
+            "`pgrep -f nazwa` sprawdzonego przez `readlink /proc/PID/cwd` "
+            "— Wasze mają ~/MAIN_" + my + ") albo zawęź wzorzec pkill -f "
+            "do ścieżki w ~/MAIN_" + my + "."
+        )
+    except Exception:
+        return ""
+
+
+def _trafione_procesy(tekst, procesy):
+    """Pidy z listy procesy [(pid, pgid, cmd, comm)], w ktore trafilby
+    kill/pkill/killall z tekstu komendy."""
+    try:
+        pidy = {p[0] for p in procesy}
+        grupy = {p[1] for p in procesy if p[1]}
+        trafione = set()
+        for m in _ZABIJAJACE_RE.finditer(tekst):
+            narzedzie, argumenty = m.group(1), m.group(2)
+            if narzedzie in ("pkill", "killall"):
+                trafione.update(_ofiary_wzorca(narzedzie, argumenty, procesy))
+                continue
+            pelny = tekst[m.start():m.start() + 300].split("\n", 1)[0]
+            trafione.update(_pidy_z_podstawienia(pelny, procesy) & pidy)
+            cele = re.findall(r"(?<![\w$-])(-?\d+)\b", argumenty)
+            if cele and re.match(r"\s*-\d+\s", argumenty) and len(cele) > 1:
+                cele = cele[1:]  # pierwsze -N to sygnal
+            for c in cele:
+                n = int(c)
+                if n in pidy:
+                    trafione.add(n)
+                elif n == -1 or (n < 0 and -n in grupy):
+                    trafione.update(p[0] for p in procesy if n == -1 or p[1] == -n)
+        return trafione
+    except Exception:
+        return set()
+
+
+def _procesy_sedziego():
+    """v480ih: [(pid, pgid, cmd, comm)] procesow, w ktorych Sedzia liczy
+    teraz komende "sprawdz" ktorejs druzyny (grupa procesow sprawdzania)."""
+    wynik = []
+    try:
+        grupy = {}
+        for n in ("1", "2"):
+            st = read_json(_RYWALIZACJA_DIR / ("sprawdzanie_" + n + ".json"), {})
+            if isinstance(st, dict) and _zyje(st.get("pid")):
+                grupy[int(st["pid"])] = float(st.get("start") or time.time())
+        if not grupy:
+            return []
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            pid = int(d)
+            try:
+                pg = os.getpgid(pid)
+            except Exception:
+                continue
+            if pg not in grupy or not _zyje(pid):
+                continue
+            try:
+                with open("/proc/" + d + "/cmdline", "rb") as f:
+                    cmd = " ".join(a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a)
+                with open("/proc/" + d + "/comm", encoding="utf-8") as f:
+                    comm = f.read().strip()
+            except Exception:
+                continue
+            wynik.append((pid, pg, cmd, comm, grupy[pg]))
+    except Exception:
+        return []
+    return wynik
+
+
+def _zabilaby_sedziego(command):
+    """
+    v480ih: zdanie do wyniku, gdy kill/pkill w komendzie trafilby w
+    sprawdzanie Sedziego — inaczej "". Bieg 2026-10-29 19:37 (druzyna 1,
+    krok 83): Tomek zobaczyl trzy "eval_tfm.py best/tfm_ckpt.npz test",
+    uznal dwa mlodsze za duplikaty i zabil kill -9 — jeden z nich byl
+    sprawdzaniem Sedziego, ktory potem oglosil "nie wyszlo".
+    """
+    try:
+        if not _DRUZYNA:
+            return ""
+        tekst = str(command or "")
+        tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
+        if not _ZABIJAJACE_RE.search(tekst):
+            return ""
+        procesy = _procesy_sedziego()
+        if not procesy:
+            return ""
+        trafione = _trafione_procesy(tekst, [p[:4] for p in procesy])
+        if not trafione:
+            return ""
+        opis = [short(cmd or comm, 70) + " (pid " + str(pid) + ")"
+                for pid, _g, cmd, comm, _s in procesy if pid in trafione]
+        start = min(p[4] for p in procesy if p[0] in trafione)
+        zostalo = max(0, _SEDZIA_MAKS_S - (time.time() - start))
+        return (
+            "Nie uruchomiłem tej komendy — zatrzymałaby sprawdzanie Sędziego: "
+            + "; ".join(opis[:3]) + ". To Sędzia liczy teraz komendę \"sprawdz\" "
+            "z wynik.json — to nie jest duplikat Waszej pracy. Skończy się samo "
+            "(najpóźniej za " + _min_s(zostalo) + "), a wynik przyjdzie z oceną. "
+            "Żeby zwolnić procesor, zatrzymaj tylko własny proces (jego pid)."
+        )
+    except Exception:
+        return ""
+
+
+def _uciete_wlasnym_timeoutem(command, trwalo_s):
+    """
+    v480cx: zdanie, gdy komenda trwala tyle, ile `timeout N` w niej —
+    czyli najpewniej to on ja przerwal. Inaczej "".
+    """
+    try:
+        for m in re.finditer(
+            r"\btimeout\s+(?:-{1,2}[\w-]+(?:[=\s]\S+)?\s+)*(\d+(?:\.\d+)?)([smhd]?)\b",
+            str(command or "")
+        ):
+            n = float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+            if n >= 30 and n - 5 <= trwalo_s <= n + max(30, n * 0.02):
+                return (
+                    "Komenda trwała " + str(int(trwalo_s)) + " s, tyle co jej "
+                    "własne `timeout " + m.group(1) + m.group(2) + "` — najpewniej to "
+                    "on ją przerwał, zanim się skończyła (kod wyjścia za potokiem, "
+                    "np. `| tail`, tego nie pokazuje)."
+                )
+    except Exception:
+        pass
+    return ""
+
+
 def _tresc_uruchamianego_skryptu(command):
     """
     Zawartosc skryptu, ktory ta komenda uruchamia — albo "".
@@ -17084,6 +25040,14 @@ def _czas_cpu_grupy(pgid):
     zawsze wykonuje wnuk: powloka odpala `gradle`, `ffmpeg` albo
     `python`, a sama tylko czeka. Sam pid powiedzialby wiec "zero
     CPU" o kompilacji, ktora wlasnie grzeje telefon.
+
+    v480ao: do grupy doliczamy jej potomkow, takze w innych grupach.
+    Bieg 2026-10-14 16:30, krok 2: `timeout 900 python trening.py |
+    tail -10` — `timeout` przenosi siebie i trening do WLASNEJ grupy,
+    wiec liczylismy zero CPU i po 120 s ciszy (tail wypisuje dopiero
+    na koncu) uznalibysmy liczacy trening za stojacy. Liczymy tez
+    czas zakonczonych dzieci (cutime/cstime), zeby suma nie spadala,
+    gdy dziecko sie konczy.
     """
 
     if not pgid:
@@ -17094,7 +25058,7 @@ def _czas_cpu_grupy(pgid):
     except Exception:
         tiki = 100.0
 
-    razem = 0
+    procesy = {}
 
     try:
         for wpis in os.listdir("/proc"):
@@ -17121,20 +25085,31 @@ def _czas_cpu_grupy(pgid):
                 continue
 
             try:
-                # stat: 3. pole po nazwie to pgrp, 12. i 13. to
-                # utime i stime (liczac od zera w tej liscie).
-                if int(pola[2]) != int(pgid):
-                    continue
-
-                razem += int(pola[11]) + int(pola[12])
-
+                # stat (liczac od zera za nazwa): 1 ppid, 2 pgrp,
+                # 11-12 utime/stime, 13-14 cutime/cstime.
+                procesy[int(wpis)] = (
+                    int(pola[1]),
+                    int(pola[2]),
+                    int(pola[11]) + int(pola[12])
+                    + int(pola[13]) + int(pola[14]),
+                )
             except Exception:
                 continue
 
     except Exception:
         return 0.0
 
-    return razem / tiki
+    nasze = {pid for pid, (_, grupa, _) in procesy.items()
+             if grupa == int(pgid)}
+    dodane = True
+    while dodane:
+        dodane = False
+        for pid, (rodzic, _, _) in procesy.items():
+            if pid not in nasze and rodzic in nasze:
+                nasze.add(pid)
+                dodane = True
+
+    return sum(procesy[pid][2] for pid in nasze) / tiki
 
 
 def _kreci_sie_w_kolko(sciezka):
@@ -17308,7 +25283,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             ),
             stdout=wy,
             stderr=bl,
-            cwd=str(HOME),
+            cwd=_katalog_startu_komendy(command),
             stdin=subprocess.DEVNULL,
             # v293: wlasna grupa procesow. Dwa powody, oba realne:
             # umiemy dzieki temu policzyc CPU CALEJ roboty (wnuki
@@ -17322,6 +25297,15 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
         except Exception:
             pgid = None
 
+        # v480t: patrz _czekanie_na_proces_w_tle().
+        _w_tle_przed = (
+            _zywe_w_tle() if _tylko_czeka(command) else {}
+        )
+        _zdanie_o_czekaniu = ""
+        _nastepne_spojrzenie_w_tlo = time.time() + 5
+        # v480u: patrz nizej, przy time.sleep(krok).
+        _nastepna_kopia_logu = time.time() + 60
+
         # v294: pierwsze zdanie po dziesieciu sekundach, nie po
         # minucie — i dla KAZDEJ komendy, nie tylko dla dlugiej.
         # Patrz PODGLAD_OD_SEKUND.
@@ -17329,7 +25313,22 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
         # Stan "czy on cokolwiek robi" — patrz komentarz przy
         # SUFIT_CZASU.
-        ostatni_ruch = time.time()
+        # v480i: cisze liczymy zegarem, ktory stoi, gdy telefon spi.
+        #
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11, kroki 6,
+        # 10, 14, 16). `sleep 45; tail ...` ubite po 168 s z pustym
+        # wyjsciem, trening ubity po 149 s "ciszy". Meldunki "Leci"
+        # przychodzily co 15, 27, 93 s zamiast co kilka — telefon
+        # zasypial (wake-lock zdjety w kroku 3). Wtedy stoi wszystko:
+        # `sleep`, trening i my. Po przebudzeniu zegar scienny
+        # przeskakiwal o minuty i braklismy przespany czas za cisze.
+        # time.monotonic() na Linuksie/Androidzie nie biegnie w
+        # uspieniu — liczy tylko czas, w ktorym komenda mogla cos
+        # zrobic.
+        ostatni_ruch = time.monotonic()
+        _poprzedni_sciany = time.time()
+        _poprzedni_mono = ostatni_ruch
+        _przespane = 0.0
         ostatni_rozmiar = 0
         ostatni_cpu = 0.0
         nastepne_sprawdzenie_petli = time.time() + 1.0
@@ -17347,6 +25346,31 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 break
 
             teraz = time.time()
+            czuwa = time.monotonic()
+
+            if (
+                _w_tle_przed and not _zdanie_o_czekaniu
+                and teraz >= _nastepne_spojrzenie_w_tlo
+            ):
+                _nastepne_spojrzenie_w_tlo = teraz + 5
+                _zdanie_o_czekaniu = _czekanie_na_proces_w_tle(
+                    _w_tle_przed, pgid
+                )
+                if _zdanie_o_czekaniu:
+                    log("TERMUX", _zdanie_o_czekaniu)
+
+            _skok = (teraz - _poprzedni_sciany) - (czuwa - _poprzedni_mono)
+            _poprzedni_sciany = teraz
+            _poprzedni_mono = czuwa
+
+            if _skok > 5:
+                _przespane += _skok
+                log(
+                    "TERMUX",
+                    "Telefon spał przez ok. " + str(int(_skok))
+                    + " s — komenda wtedy stała razem z nim; tego czasu"
+                    " nie liczę jako ciszy."
+                )
 
             # --- czy cos sie ruszylo? ---
 
@@ -17359,9 +25383,9 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
             if rozmiar > ostatni_rozmiar:
                 ostatni_rozmiar = rozmiar
-                ostatni_ruch = teraz
+                ostatni_ruch = czuwa
 
-            elif (teraz - ostatni_ruch) > krok:
+            elif (czuwa - ostatni_ruch) > krok:
 
                 # Milczy — ale moze po prostu liczy. CPU sprawdzamy
                 # dopiero tutaj, zeby nie chodzic po /proc co
@@ -17370,18 +25394,26 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 if cpu > ostatni_cpu + 0.1:
                     ostatni_cpu = cpu
-                    ostatni_ruch = teraz
+                    ostatni_ruch = czuwa
 
             # --- kiedy przerywamy ---
 
-            if (teraz - ostatni_ruch) > limit:
+            if (czuwa - ostatni_ruch) > limit:
                 powod = "stoi"
                 szczegol = (
-                    "przez " + str(int(teraz - ostatni_ruch))
+                    "przez " + str(int(czuwa - ostatni_ruch))
                     + " s nic nie wypisał i nie zużył procesora"
+                    + (
+                        " (nie licząc ok. " + str(int(_przespane))
+                        + " s, gdy telefon spał)"
+                        if _przespane > 5 else ""
+                    )
                 )
 
-            elif teraz > sufit:
+            elif teraz > sufit and not getattr(_threading.current_thread(), "w_tle", False):
+                # v480gn: komenda, ktora juz liczy w tle, nie trzyma kroku —
+                # sufit (zeby krok nie stal caly dzien) jej nie dotyczy;
+                # bieg 2026-10-27 00:38: trening ubity po 2 h bez wyniku.
                 powod = "sufit"
                 szczegol = (
                     "pracował bez przerwy "
@@ -17446,6 +25478,15 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 _ile = int(teraz - started.timestamp())
 
+                # v480em: bieg 2026-10-24 19:50-20:05 — `sleep 900; cat ...`
+                # na wierzchu pisalo "Leci N min, nic jeszcze nie wypisal"
+                # co 15 s (60 linii w logu i w terminalu). Samo czekanie
+                # nic nie wypisuje, dopoki nie minie sleep — meldunek raz
+                # na minute, i mowi, na co czeka (uzytkownik 20:07: "czekanie
+                # i nic sie nie odzywa").
+                if _tylko_czeka(command):
+                    nastepny_podglad = teraz + max(PODGLAD_CO_SEKUND, 60)
+
                 _jak_dlugo = (
                     str(_ile) + " s"
                     if _ile < 120
@@ -17477,10 +25518,10 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 if na_czym and na_czym != ostatnio_powiedziane:
                     ostatnio_powiedziane = na_czym
-                    log("TERMUX", "Leci " + _jak_dlugo + ": " + na_czym)
+                    _log_leci("TERMUX", "Leci " + _jak_dlugo + ": " + na_czym)
 
                 elif _przybylo > 0:
-                    log(
+                    _log_leci(
                         "TERMUX",
                         "Leci " + _jak_dlugo + ": przybyło "
                         + _po_ludzku_rozmiar(_przybylo)
@@ -17488,24 +25529,102 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                         + (short(na_czym, 60) if na_czym else "cicho")
                     )
 
+                elif na_czym and (czuwa - ostatni_ruch) <= krok + 1:
+                    # v480ae: bez nowych linii, ale procesor pracuje —
+                    # ostatni_ruch odswieza czas CPU. Bylo "nic nowego
+                    # od 0 s" (bieg 2026-10-13 19:06, krok 32, 13 minut
+                    # liczenia).
+                    _log_leci(
+                        "TERMUX",
+                        "Leci " + _jak_dlugo + ": liczy, bez nowych "
+                        "linii (" + short(na_czym, 60) + ")"
+                    )
+
                 elif na_czym:
-                    log(
+                    _log_leci(
                         "TERMUX",
                         "Leci " + _jak_dlugo + ": nic nowego od "
-                        + str(int(teraz - ostatni_ruch)) + " s ("
+                        + str(int(czuwa - ostatni_ruch)) + " s ("
                         + short(na_czym, 60) + ")"
+                    )
+
+                elif _tylko_czeka(command):
+                    # v480em: patrz wyzej — mowimy, na co czeka.
+                    _sek_sp = _sekundy_spania(command) or 0
+                    _zywe_teraz = _zywe_w_tle() if _w_tle_przed else {}
+                    _na_co = [
+                        short(_w_tle_przed[k], 70) for k in _w_tle_przed
+                        if k in _zywe_teraz
+                    ]
+                    _log_leci(
+                        "TERMUX",
+                        "Czeka " + _jak_dlugo + " z "
+                        + str(int(_sek_sp // 60)) + " min (do "
+                        + datetime.fromtimestamp(
+                            started.timestamp() + _sek_sp).strftime("%H:%M")
+                        + ")"
+                        + ("; proces w tle, na który czeka, dalej działa: "
+                           + _na_co[0] + " — gdy się skończy, czekanie się "
+                           "skróci" if _na_co else "")
+                        + "."
                     )
 
                 else:
                     # Cisza tez jest informacja — i to wazna, bo
                     # wlasnie ona konczy sie przerwaniem.
-                    log(
+                    _log_leci(
                         "TERMUX",
                         "Leci " + _jak_dlugo + ", nic jeszcze nie "
                         "wypisał (" + short(command, 70) + ")"
                     )
 
+            # v480u: kopia logu na telefon takze W TRAKCIE dlugiej
+            # komendy, co minute. Uzytkownik (bieg 2026-10-11 21:29):
+            # logi "nie zapisuja sie na biezaco" — kopia w
+            # storage/shared/AEL-MINI odswiezala sie tylko miedzy
+            # krokami, wiec przy `sleep 1500` byla starsza o 25 minut.
+            if teraz >= _nastepna_kopia_logu:
+                _nastepna_kopia_logu = teraz + 60
+                try:
+                    skopiuj_przebieg_na_telefon()
+                except Exception:
+                    pass
+
             time.sleep(krok)
+
+        # v480s: patrz _grupy_z_komend. Wygasle grupy wypadaja od razu,
+        # zeby przy zamknieciu nie trafic w numer uzyty juz przez kogos
+        # innego.
+        for _stara in list(_grupy_z_komend):
+            try:
+                os.killpg(_stara, 0)
+            except Exception:
+                _grupy_z_komend.pop(_stara, None)
+
+        # v480dt: czekanie skrocone przez program — komenda tylko czekala
+        # (bez `&` i bez kill), wiec to, co z niej zostalo w grupie (np.
+        # prawdziwy `sleep`), jest resztka. Konczymy ja, zamiast zostawiac
+        # w tle, gdzie pozniej przerwalaby nastepne czekanie.
+        if _zdanie_o_czekaniu and pgid and pgid != os.getpgrp():
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
+
+        # v480ep: tylko gdy czekanie nie bylo skrocone (wtedy grupe
+        # wlasnie zabilismy) i grupa zyje jeszcze chwile po powloce.
+        # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-24 19:20, krok 90):
+        # "sleep 1500; tail …" skrocone, bo proces w tle sie skonczyl —
+        # zabita grupa jeszcze nie zniknela i MAIN dostal zbedne
+        # "Komenda puszczona w tło (sleep 1500; …) już nie działa,
+        # trwała ok. 1 s … nie widzi pliku".
+        if pgid and pgid != os.getpgrp() and not _zdanie_o_czekaniu:
+            time.sleep(0.3)
+            try:
+                os.killpg(pgid, 0)
+                _grupy_z_komend[pgid] = (short(command, 300), time.time())
+            except Exception:
+                pass
 
         wy.flush()
         bl.flush()
@@ -17525,13 +25644,36 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 + str(proces.returncode) + "."
             )
 
+        # v480cx: bieg 2026-10-20 (druzyna 2, 07:12, 15:51, 20:33) —
+        # `timeout 3600 python … | tail -15` ucinal trening po 2 z 5 epok,
+        # a wynik mowil "kod wyjscia 0" (potok gubi kod 124). Gdy komenda
+        # trwala tyle, ile jej wlasny `timeout`, mowimy to jednym zdaniem.
+        _uciete = _uciete_wlasnym_timeoutem(
+            command, (datetime.now() - started).total_seconds()
+        )
+        if _uciete:
+            _zdanie_o_czekaniu = (
+                (_zdanie_o_czekaniu + "\n") if _zdanie_o_czekaniu else ""
+            ) + _uciete
+
         return {
             "ok": proces.returncode == 0,
             "returncode": proces.returncode,
-            "stdout": short(stdout, 6000),
+            "stdout": (
+                short(stdout, 6000 - len(_zdanie_o_czekaniu) - 2).rstrip("\n")
+                + "\n" + _zdanie_o_czekaniu + "\n"
+                if _zdanie_o_czekaniu else short(stdout, 6000)
+            ),
             "stderr": short(stderr, 6000),
             "command": command,
-            "timeout": limit,
+            # v477b: bylo "timeout": 120. Bieg 2026-10-11 rano: MAIN
+            # czekal na 10 epok treningu (~18 min) kawalkami `sleep 60`
+            # / `sleep 90` w osobnych turach, bo kazdy wynik mowil
+            # "timeout: 120". To nie jest limit dlugosci komendy, tylko
+            # limit ciszy (v293) — komenda, ktora pracuje albo spi
+            # zamierzenie (v477), moze trwac do SUFIT_CZASU.
+            "limit_ciszy_s": limit,
+            "maks_czas_s": SUFIT_CZASU,
             "duration_s": round(
                 (datetime.now() - started).total_seconds(), 1
             )
@@ -17616,6 +25758,47 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                 os.unlink(_plik_skryptu)
             except Exception:
                 pass
+
+
+_SLEEP_RE = re.compile(
+    r"(?:^|[\s;&|(])sleep\s+(\d+(?:\.\d+)?)([smh]?)(?=$|[\s;&|)])"
+)
+
+
+def _sekundy_spania(command):
+    """v477: suma `sleep N` (N, Ns, Nm, Nh) w komendzie, w sekundach."""
+    razem = 0.0
+    for liczba, jednostka in _SLEEP_RE.findall(str(command or "")):
+        razem += float(liczba) * {"": 1, "s": 1, "m": 60, "h": 3600}[jednostka]
+    return int(min(razem, SUFIT_CZASU))
+
+
+# v480: `timeout N polecenie` — agent sam mowi, ile to moze trwac.
+_TIMEOUT_CMD_RE = re.compile(
+    r"(?:^|[\s;&|(])timeout\s+(?:-[a-zA-Z]+(?:\s+[A-Z0-9]+)?\s+|--[\w-]+(?:=\S+)?\s+)*"
+    r"(\d+(?:\.\d+)?)([smhd]?)(?=\s)"
+)
+
+
+def _sekundy_timeoutu(command):
+    """
+    v480: najwiekszy `timeout N` w komendzie, w sekundach (0, gdy nie
+    ma).
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-11 11:07, krok 67).
+    `timeout 300 python3 faza24_wildchat.py fetch` pobieral dane z
+    sieci: czekal na serwer, ktory odpowiadal HTTP 429 i kazal
+    zwolnic. Nic nie wypisywal i prawie nie liczyl, wiec po 120 s
+    ciszy program go przerwal — choc komenda sama mowila, ze moze
+    trwac 300 s i sama sie po nich zakonczy.
+    """
+    najwiecej = 0.0
+    for liczba, jednostka in _TIMEOUT_CMD_RE.findall(str(command or "")):
+        najwiecej = max(
+            najwiecej,
+            float(liczba) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[jednostka]
+        )
+    return int(min(najwiecej, SUFIT_CZASU))
 
 
 def _to_dluga_robota(command):
@@ -17993,9 +26176,161 @@ def _gemini_pisze_kod(command_str):
     return None
 
 
+_INPUT_TEXT_RE = re.compile(
+    r"^\s*adb(?:\s+-s\s+\S+)?\s+shell\s+input\s+text\s+(.+?)\s*$"
+)
+
+
+def _zamiast_input_text(command_str):
+    """
+    Gdy komenda to SAMO `adb shell input text <tekst>` z tekstem, ktorego
+    `input text` nie przeniesie (znaki spoza ASCII albo spacje pisane
+    %s), wpisujemy go przez schowek. None = to nie ten przypadek.
+    """
+
+    if "&&" in command_str or ";" in command_str or "|" in command_str:
+        return None
+
+    m = _INPUT_TEXT_RE.match(command_str)
+
+    if not m:
+        return None
+
+    try:
+        czesci = shlex.split(m.group(1))
+    except ValueError:
+        return None
+
+    tekst = re.sub(r" {2,}", " ", " ".join(czesci).replace("%s", " "))
+
+    if not tekst.strip():
+        return None
+
+    if tekst.isascii() and "%s" not in m.group(1):
+        return None
+
+    schowek = execute_shell(
+        "termux-clipboard-set " + shlex.quote(tekst), timeout=20
+    )
+
+    if not schowek.get("ok"):
+        return None
+
+    wklej = execute_shell("adb shell input keyevent 279", timeout=20)
+
+    return {
+        "ok": bool(wklej.get("ok")),
+        "returncode": wklej.get("returncode"),
+        "stdout": "",
+        "stderr": str(wklej.get("stderr") or ""),
+        "command": command_str,
+        "wpisane_przez_schowek": (
+            "`input text` gubi polskie znaki, więc tekst („"
+            + short(tekst, 80) + "”) poszedł przez schowek "
+            "(termux-clipboard-set + KEYCODE_PASTE) do pola, które ma "
+            "kursor. Co jest w polu, pokaże android_state."
+        ),
+        "duration_s": round(
+            float(schowek.get("duration_s") or 0)
+            + float(wklej.get("duration_s") or 0), 1
+        )
+    }
+
+
+# v480cz: program wklejony przez Gemini w sama komende. Bieg 2026-10-21
+# 17:11, krok 1: Gemini napisal i puscil wlasna petle treningowa w
+# `python3 -c '...'` (kilkanascie linii) — kod, ktorego nikt z zespolu
+# nie napisal, tylko ominiety zapis do pliku. Jednolinijkowce (szybkie
+# sprawdzenie, import, policzenie) zostaja; dluzszy program przechodzi,
+# gdy padl w wypowiedzi kogos z zespolu.
+_INLINE_C_RE = re.compile(
+    r"\b(?:python3?|node|bash|sh)\s+-c\s+(?P<q>['\"])(?P<kod>.*?)(?<!\\)(?P=q)",
+    re.S
+)
+_INLINE_HEREDOC_RE = re.compile(
+    r"\b(?:python3?|node)\b[^\n<|;&]*<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)[^\n]*\n"
+    r"(?P<kod>.*?)\n\s*(?P=tag)\s*(?:\n|$)",
+    re.S
+)
+_INLINE_MIN_LINII = 6
+
+
+def _gemini_program_w_komendzie(command_str):
+    """Tresc dluzszego programu wklejonego w komende, ktorego nie
+    napisal zespol — inaczej None."""
+    tekst = str(command_str or "")
+    for rx in (_INLINE_C_RE, _INLINE_HEREDOC_RE):
+        for m in rx.finditer(tekst):
+            kod = m.group("kod")
+            linie = [l for l in kod.splitlines() if l.strip()]
+            if len(linie) < _INLINE_MIN_LINII:
+                continue
+            if _kopia_kodu_zespolu(kod):
+                continue
+            return kod
+    return None
+
+
+def _katalog_startu_komendy(command):
+    """
+    v480ik: katalog, w ktorym powloka startuje komende — katalog z
+    pierwszego "cd X" na jej poczatku (inaczej ~). Komenda
+    "cd ~/MAIN_1 && nohup python3 x.py > x.log 2>&1 & disown; sleep 5;
+    tail x.log": "&" puszcza w tlo cala liste z "cd", wiec "tail" szedl
+    w ~ i dostawal "No such file". Bieg 2026-10-29 21:37 (druzyna 1):
+    Tomek trzy razy z rzedu nie widzial swojego evo_attention.log.
+    """
+    try:
+        m = re.match(r"\s*cd\s+([\"']?)([^\s;&|\"']+)\1\s*(?:&&|;)", str(command or ""))
+        if m:
+            d = str(_resolve_home_relative_path(m.group(2)))
+            if os.path.isdir(d):
+                return d
+    except Exception:
+        pass
+    return str(HOME)
+
+
 def termux_run(command):
     try:
         command_str = str(command or "")
+
+        # v480di: tylko prawdziwy zapis DO tego pliku. Bieg 2026-10-21
+        # 23:22 (druzyna 2): `ls ...OD_UZYTKOWNIKA.txt; cat ... 2>&1`
+        # dostalo odmowe, bo w komendzie byl ">" z "2>&1".
+        _za_uzytk = _pisze_za_uzytkownika(command_str)
+        if _za_uzytk and _ZAPIS_DO_PLIKU_UZYTKOWNIKA_RE.search(command_str):
+            log("PROGRAM", _za_uzytk)
+            return {
+                "ok": False,
+                "error": "PLIK_UZYTKOWNIKA",
+                "command": command_str,
+                "message": _za_uzytk,
+                "duration_s": 0.0
+            }
+
+        _program = _zatrzymalaby_program(command_str)
+        if _program:
+            log("PROGRAM", _program + " Komenda: " + short(command_str, 200))
+            return {
+                "ok": False,
+                "error": "ZATRZYMALABY_PROGRAM",
+                "command": command_str,
+                "message": _program,
+                "duration_s": 0.0
+            }
+
+        # v480dv: patrz _zabilaby_rywala(); v480ih: _zabilaby_sedziego().
+        _rywala = _zabilaby_rywala(command_str) or _zabilaby_sedziego(command_str)
+        if _rywala:
+            log("RYWALIZACJA", _rywala + " Komenda: " + short(command_str, 200))
+            return {
+                "ok": False,
+                "error": "PROCES_RYWALA",
+                "command": command_str,
+                "message": _rywala,
+                "duration_s": 0.0
+            }
 
         # v354: zapis kodu przez cat/tee przechodzi te sama kontrole
         # autorstwa, co termux_write_file — patrz _gemini_pisze_kod().
@@ -18006,11 +26341,55 @@ def termux_run(command):
         #   _gemini_zmienia_cudzy_kod — zmienia w miejscu plik z
         #                               kodem, ktorego nikt nie
         #                               autoryzowal (sed -i itp.)
-        _tworzy = _gemini_pisze_kod(command_str)
-        _pisze_kod = (
-            _tworzy
-            or _gemini_zmienia_cudzy_kod(command_str)
-        )
+        # v461: w RUN komende pisze MAIN (DeepSeek) — jego heredoc z
+        # kodem to kod zespolu; zapisujemy autora i puszczamy dalej.
+        # v480hu: komende URUCHOM napisala rola zespolu — to jej kod, jak
+        # RUN MAIN-a. Bieg 2026-10-28 12:45 (druzyna 2): Bartek trzy razy
+        # dostal "nie mam dowodu, ze ten plik zawiera autoryzowany kod"
+        # na wlasne `sed -i` w plikach druzyny.
+        _rola_uruchamia = getattr(_zespol_uruchamia, "rola", None)
+        if _wykonuje_main or _rola_uruchamia:
+            _tworzy = None
+            _pisze_kod = None
+            try:
+                for _sciezka_m, _tresc_m in _pliki_pisane_komenda(command_str):
+                    _pm = _resolve_home_relative_path(_sciezka_m)
+                    if (
+                        _pm.suffix.lower() in _KOD_SUFIKSY
+                        or str(_tresc_m or "").lstrip().startswith("#!")
+                    ):
+                        _autor_pliku[_pm.name] = (
+                            _rola_uruchamia if _rola_uruchamia in _IMIE_AUTORA else "MAIN")
+            except Exception:
+                pass
+        else:
+            _tworzy = _gemini_pisze_kod(command_str)
+            _pisze_kod = (
+                _tworzy
+                or _gemini_zmienia_cudzy_kod(command_str)
+            )
+
+        if not _wykonuje_main and not _rola_uruchamia and not _pisze_kod:
+            _program_inline = _gemini_program_w_komendzie(command_str)
+            if _program_inline:
+                _ile = len([l for l in _program_inline.splitlines() if l.strip()])
+                _msg = (
+                    "Nie uruchomiłem tej komendy — ma w sobie program ("
+                    + str(_ile) + " linii), którego nie ma w "
+                    "wypowiedziach zespołu. Kod pisze zespół: niech "
+                    "Bartek albo Ania napisze go w swojej wypowiedzi "
+                    "(wtedy kładę go do pliku i uruchamiam), albo MAIN "
+                    "w RUN. Krótkie jednolinijkowe sprawdzenia "
+                    "przechodzą normalnie."
+                )
+                log("GEMINI", _msg)
+                return {
+                    "ok": False,
+                    "error": "BRAK_KODU_DO_ZAPISU",
+                    "command": command_str,
+                    "message": _msg,
+                    "duration_s": 0.0
+                }
 
         if _pisze_kod:
 
@@ -18075,6 +26454,36 @@ def termux_run(command):
         # Otwieranie strony, ktora juz wisi w Chrome, tylko mnozy
         # karty — patrz _przelacz_na_karte(). Zamiast tego wyciagamy
         # na wierzch te, ktora jest.
+        # v457: `adb shell uiautomator dump` na tym telefonie nie tylko
+        # ginie (kod 137, v445) — zrywa tez polaczenie uiautomator2, z
+        # ktorego zyja android_state/android_click/android_swipe. Bieg
+        # 2026-09-27 21:19: dump w kroku 6, a w kroku 14 android_swipe
+        # "urzadzenie nie odpowiedzialo w 20 s". Nie uruchamiamy go.
+        if "uiautomator dump" in command_str:
+            return {
+                "ok": False,
+                "error": "uiautomator_dump",
+                "command": command_str,
+                "na_tym_telefonie": (
+                    "`uiautomator dump` jest tu ubijany (kod 137) i zrywa "
+                    "połączenie, z którego korzystają android_state i "
+                    "android_click. Drzewo ekranu — teksty, opisy, czy "
+                    "klikalne, położenie — daje android_state; nie "
+                    "uruchomiłem tej komendy."
+                ),
+                "duration_s": 0.0
+            }
+
+        # v457: `adb shell input text` gubi polskie znaki (i wymaga %s
+        # za spacje). Bieg 2026-09-27 21:19, krok 8: tytul "Excel%s i%s
+        # Google%s Sheets" wszedl bez ogonkow, po czym wykonanie samo
+        # przeszlo na schowek. Robimy to od razu: termux-clipboard-set
+        # + KEYCODE_PASTE (279) w skupionym polu.
+        _przez_schowek = _zamiast_input_text(command_str)
+
+        if _przez_schowek is not None:
+            return _przez_schowek
+
         if "termux-open-url" in command_str:
 
             _adres = _ADRES_W_KOMENDZIE_RE.search(command_str)
@@ -18194,7 +26603,12 @@ def termux_run(command):
         # Ctrl+O, wyjdz Ctrl+X". To jest dobra instrukcja DLA
         # CZLOWIEKA i zla dla nas — a my mamy tresc tej komendy przed
         # uruchomieniem, wiec nie musimy tracic na nia calego kroku.
-        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(command_str)
+        # v480ai: bez tresci heredoc — bieg 2026-10-13 22:41: linia
+        # "top 150 per dlugosc" w tekscie dopisywanym do pliku zamienila
+        # cala komende zapisu na `top -b -n 1`, a zapis przepadl.
+        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(
+            _bez_heredocow(command_str)
+        )
 
         if _dla_czlowieka:
 
@@ -18297,6 +26711,40 @@ def termux_run(command):
                     _zgubiony[0] + " szukane nie tam, gdzie leży — "
                     "jest w " + _zgubiony[1] + "."
                 )
+
+        # v480dn: powloka nie domknela cudzyslowu. Bieg 2026-10-22 09:39
+        # (druzyna 1, krok 525, dwa razy): sam blad basha nie mowil, co
+        # poprawic, a w komendzie siedzialy resztki argumentow narzedzia
+        # (\", \"limit_ciszy_s\": 60) — cudzyslow zamykajacy komende byl
+        # w JSON-ie poescapowany i komenda polknela reszte argumentow.
+        if isinstance(result, dict) and "unexpected EOF while looking for matching" in (
+            str(result.get("stdout") or "") + str(result.get("stderr") or "")
+        ):
+            _rada = (
+                "Powłoka nie znalazła pary dla cudzysłowu w komendzie "
+                "(otwarty \" albo ' bez zamknięcia), więc ta część się "
+                "nie wykonała."
+            )
+            _resztki = re.search(
+                r'"\s*,\s*"(limit_ciszy_s|maks_czas_s|workdir|path|timeout)"\s*:',
+                command_str
+            )
+            if _resztki:
+                _rada += (
+                    " Na końcu komendy są resztki argumentów narzędzia "
+                    "(\", \"" + _resztki.group(1) + "\": …) — w JSON-ie "
+                    "cudzysłów kończący komendę był poescapowany (\\\"), "
+                    "więc komenda połknęła resztę argumentów. Zamknij "
+                    "\"command\" zwykłym cudzysłowem przed \"" + _resztki.group(1)
+                    + "\"."
+                )
+            _rada += (
+                " Prościej: dłuższy program zapisz przez termux_write_file "
+                "do pliku i uruchom plik (np. python3 plik.py) — wtedy "
+                "cudzysłowy nie muszą przechodzić przez powłokę."
+            )
+            result["podpowiedz"] = _rada
+            log("TERMUX", _rada)
 
         # v324: "termux-am" bez gniazda Termuksa nie uruchomi niczego.
         #
@@ -18573,6 +27021,62 @@ def termux_run(command):
         }
 
 
+# v480el (uzytkownik 2026-10-24 18:07: "jak uruchamia te same procesy bez
+# edycji pliku, bez sensu, trzeba mu komunikat dac"). Ta sama komenda w tle:
+# - gdy jeszcze dziala — druga kopia nie startuje (pisalyby do tych samych
+#   plikow), rola dostaje pid, od kiedy i jak zaczac od nowa;
+# - gdy juz sie skonczyla, a od jej startu nie zmienil sie zaden plik
+#   z kodem (.py/.sh/.yaml/.cfg/.toml) w katalogu roboczym — startuje, ale z uwaga,
+#   ze wynik bedzie prawdopodobnie taki sam i jaki byl kod wyjscia.
+_uruchomienia_w_tle = {}
+_PLIKI_KODU = (".py", ".sh", ".yaml", ".yml", ".cfg", ".toml")
+
+
+def _powtorka_w_tle(command, cwd):
+    try:
+        for pid, proc in list(_procesy_w_tle.items()):
+            if getattr(proc, "args", None) == command and proc.poll() is None:
+                start = _uruchomienia_w_tle.get(command, (None,))[0]
+                return {
+                    "ok": False,
+                    "error": "TEN_SAM_PROCES_JUZ_DZIALA",
+                    "pid": pid,
+                    "message": (
+                        "Nie uruchomiłem: dokładnie ta sama komenda już działa "
+                        "w tle (pid " + str(pid)
+                        + (", od " + datetime.fromtimestamp(start).strftime("%H:%M")
+                           if start else "")
+                        + ") — druga kopia pisałaby do tych samych plików. Jej "
+                        "wynik zobaczysz, gdy się skończy. Jeśli chcesz puścić "
+                        "ją od nowa (np. po zmianie kodu), najpierw zatrzymaj tę "
+                        "(termux_stop_process z pid " + str(pid) + ")."
+                    ),
+                }
+        poprzednie = _uruchomienia_w_tle.get(command)
+        if not poprzednie:
+            return None
+        start, proc = poprzednie
+        kod = proc.poll()
+        if kod is None:
+            return None
+        katalog = Path(cwd or os.path.expanduser("~"))
+        for plik in katalog.iterdir():
+            if plik.suffix in _PLIKI_KODU and plik.stat().st_mtime > start:
+                return None
+        return {
+            "uwaga": (
+                "Ta sama komenda była już uruchomiona o "
+                + datetime.fromtimestamp(start).strftime("%H:%M")
+                + " i skończyła się z kodem " + str(kod) + ", a od tego czasu "
+                "w " + str(katalog) + " nie zmienił się żaden plik z kodem "
+                "(.py, .sh, .yaml ...). Wynik będzie prawdopodobnie taki sam "
+                "jak wtedy."
+            )
+        }
+    except Exception:
+        return None
+
+
 def termux_run_background(
     command,
     workdir=None,
@@ -18594,9 +27098,50 @@ def termux_run_background(
         if fake_tool:
             return _fake_tool_invocation_error(fake_tool)
 
+        _program = _zatrzymalaby_program(command)
+        if _program:
+            # "log" jest nizej zmienna lokalna (plik logu) — stad globals().
+            globals()["log"]("PROGRAM", _program + " Komenda: " + short(command, 200))
+            return {
+                "ok": False,
+                "error": "ZATRZYMALABY_PROGRAM",
+                "command": command,
+                "message": _program
+            }
+
+        # v480dv: patrz _zabilaby_rywala().
+        _rywala = _zabilaby_rywala(command) or _zabilaby_sedziego(command)
+        if _rywala:
+            globals()["log"]("RYWALIZACJA", _rywala + " Komenda: " + short(command, 200))
+            return {
+                "ok": False,
+                "error": "PROCES_RYWALA",
+                "command": command,
+                "message": _rywala
+            }
+
+        if not _wykonuje_main:
+            _program_inline = _gemini_program_w_komendzie(command)
+            if _program_inline:
+                _msg = (
+                    "Nie uruchomiłem tej komendy w tle — ma w sobie "
+                    "program, którego nie ma w wypowiedziach zespołu. "
+                    "Kod pisze zespół (Bartek albo Ania w wypowiedzi, "
+                    "albo MAIN w RUN); potem uruchamiam plik."
+                )
+                globals()["log"]("GEMINI", _msg)
+                return {
+                    "ok": False,
+                    "error": "BRAK_KODU_DO_ZAPISU",
+                    "command": command,
+                    "message": _msg
+                }
+
         if (
             _looks_like_delete_command(command)
             and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
+            and not _usuwa_tylko_wlasne_katalogi(command)
+            and not _usuwa_wlasny_plik_tymczasowy(command)
         ):
 
             if not _confirm_destructive_action(
@@ -18684,26 +27229,43 @@ def termux_run_background(
         # chodzi, bo tam podajemy bash jawnie. Ta sama komenda raz
         # dziala, raz nie, zaleznie od tego, czy poszla w tlo —
         # i nikt nie ma jak zgadnac dlaczego.
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            executable=_SHELL_EXECUTABLE,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=open(
-                log,
-                "a",
-                encoding="utf-8"
-            ),
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
+        # v451: uchwyt do logu otwieramy na czas uruchomienia i
+        # zamykamy u siebie — dziecko ma wlasna kopie deskryptora.
+        # Dotad kazde uruchomienie w tle zostawialo w agencie jeden
+        # otwarty plik na zawsze.
+        # v480el: patrz _powtorka_w_tle().
+        _powt = _powtorka_w_tle(command, cwd)
+        if _powt and _powt.get("ok") is False:
+            return _powt
+
+        _log_fh = open(log, "a", encoding="utf-8")
+
+        try:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                executable=_SHELL_EXECUTABLE,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=_log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
+        finally:
+            try:
+                _log_fh.close()
+            except Exception:
+                pass
 
         # v226: trzymamy uchwyt do procesu, zeby dalo sie na niego
         # POCZEKAC i poznac jego kod wyjscia — patrz
         # _poczekaj_na_komende_w_tle(). Sam pid tego nie da: os.kill(pid, 0)
         # mowi tylko "zyje/nie zyje", nigdy "skonczyl sie bledem".
         _procesy_w_tle[proc.pid] = proc
+        try:
+            proc._ael_cwd = str(cwd or "")  # v480ep: _plik_z_przekierowania
+        except Exception:
+            pass
 
         # v327: zeby dalo sie odpowiedziec na pytanie "log jest
         # pusty, czy to juz koniec?" — patrz _kto_pisze_do_logu().
@@ -18727,6 +27289,10 @@ def termux_run_background(
             "workdir": cwd,
             "log_file": str(log)
         }
+
+        _uruchomienia_w_tle[command] = (time.time(), proc)
+        if _powt and _powt.get("uwaga"):
+            bg_result["bez_zmian"] = _powt["uwaga"]
 
         quoting_warning = _detect_single_quoted_shell_variable(command)
 
@@ -18820,6 +27386,19 @@ def termux_check_process(pid):
         }
 
     except ProcessLookupError:
+        # v480dl: sam proces skonczyl, ale jego dzieci z tej samej grupy
+        # (np. pip w proot-distro) moga dalej pracowac.
+        if _grupa_zyje(pid):
+            return {
+                "ok": True,
+                "running": True,
+                "pid": pid,
+                "note": (
+                    "Proces " + str(pid) + " już się skończył, ale "
+                    "uruchomione przez niego procesy dalej pracują "
+                    "(ta sama grupa procesów)."
+                )
+            }
         return {
             "ok": True,
             "running": False,
@@ -18846,10 +27425,15 @@ def termux_stop_process(pid):
 
         pid = int(pid)
 
-        os.kill(
-            pid,
-            15
-        )
+        # v480dl: proces z termux_run_background ma wlasna grupe — gasimy
+        # cala, inaczej jego dzieci (np. pip w proot-distro) pracuja dalej.
+        if pid in _procesy_w_tle and _grupa_zyje(pid):
+            os.killpg(pid, 15)
+        else:
+            os.kill(
+                pid,
+                15
+            )
 
         return {
             "ok": True,
@@ -19123,10 +27707,14 @@ def termux_patch_file(path, search, replace):
     target = _resolve_home_relative_path(path)
 
     if not target.exists():
-        return {
+        _wynik = {
             "ok": False,
             "error": "Plik nie istnieje: " + str(target)
         }
+        _podp = _czy_chodzilo_o(target)
+        if _podp:
+            _wynik["podpowiedz"] = _podp
+        return _wynik
 
     # v432b: autorstwo takze przy poprawce fragmentu. Bieg 2026-09-24
     # 20:54, krok 1: MAIN opisal slowami, jak ma wygladac app.py, a
@@ -19134,13 +27722,26 @@ def termux_patch_file(path, search, replace):
     # jedynym narzedziem zapisu bez tej zasady. Zmiana w pliku z kodem
     # przechodzi tylko wtedy, gdy jej tresc padla w wypowiedzi kogos z
     # zespolu (to samo sprawdzenie, co kopia kodu w zleceniu).
+    # v476: w RUN zmiane pisze MAIN — kod zespolu, tak jak przy
+    # termux_write_file i termux_run od v461. Bieg 2026-10-11 00:13,
+    # krok 29 (i 2026-10-10 23:03, krok 19): patch MAIN-a odrzucony,
+    # krok pozniej ta sama zmiana przeszla przez termux_run z Pythonem
+    # w heredocu — strata kroku, nic wiecej.
     if (
         target.suffix.lower() in _KOD_SUFIKSY
+        and not _wykonuje_main
         and not _kopia_kodu_zespolu(str(replace if replace is not None else ""))
     ):
+        # v480cz: bylo "w wypowiedziach zespolu nie ma tego fragmentu"
+        # — MAIN (bieg 2026-10-21 17:11, krok 2) czytal to jako "patch
+        # celowal w nieistniejacy fragment pliku" i nie wiedzial, kto ma
+        # poprawke napisac.
         _msg = (
-            "Nie naniosłem zmiany w " + target.name + " — w wypowiedziach "
-            "zespołu nie ma tego fragmentu."
+            "Nie naniosłem zmiany w " + target.name + " — tę poprawkę "
+            "wymyśliło wykonanie, a kod pisze zespół. Plik jest bez "
+            "zmian. Poprawkę może napisać Bartek albo Ania w swojej "
+            "wypowiedzi (wtedy ją nanoszę), albo MAIN w RUN przez "
+            "termux_patch_file."
         )
         log("GEMINI", _msg)
         return {
@@ -19173,7 +27774,7 @@ def termux_patch_file(path, search, replace):
     occurrences = source.count(search)
 
     if occurrences == 0:
-        return {
+        _wynik = {
             "ok": False,
             "error": (
                 "Fragment 'search' nie występuje w pliku dokładnie "
@@ -19181,6 +27782,10 @@ def termux_patch_file(path, search, replace):
                 "zgadzać co do znaku)."
             )
         }
+        _blisko = _najblizszy_fragment(source, search)
+        if _blisko:
+            _wynik["najblizszy_fragment"] = _blisko
+        return _wynik
 
     if occurrences > 1:
         return {
@@ -19193,13 +27798,15 @@ def termux_patch_file(path, search, replace):
             )
         }
 
-    backup_path = target.with_name(
+    # v480ft: kopia w ukrytym .kopie/ obok pliku (porzadek w folderze).
+    backup_path = target.parent / ".kopie" / (
         target.name
         + ".bak_"
         + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
 
     try:
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
         backup_path.write_text(source, encoding="utf-8")
     except Exception as e:
         return {
@@ -19218,11 +27825,14 @@ def termux_patch_file(path, search, replace):
             "backup": str(backup_path)
         }
 
+    _skladnia_ok = False
     if target.suffix == ".py":
 
         try:
             compile_check = subprocess.run(
-                [sys.executable, "-m", "py_compile", str(target)],
+                [sys.executable, "-c",
+                 "import sys;compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec')",
+                 str(target)],
                 capture_output=True,
                 text=True,
                 timeout=20
@@ -19236,14 +27846,17 @@ def termux_patch_file(path, search, replace):
                     "ok": False,
                     "rolled_back": True,
                     "error": (
-                        "py_compile nie przeszedł po patchu — "
-                        "przywrócono poprzednią wersję pliku."
+                        "Po tej zmianie plik się nie kompiluje (błąd "
+                        "składni w compile_error), więc przywróciłem "
+                        "poprzednią wersję — plik jest taki jak przed "
+                        "patchem. Popraw fragment i wyślij patch jeszcze raz."
                     ),
                     "compile_error": short(
                         compile_check.stderr, 1500
                     ),
                     "backup": str(backup_path)
                 }
+            _skladnia_ok = True
 
         except Exception:
             # py_compile samo w sobie niedostępne — nie blokuj
@@ -19253,13 +27866,16 @@ def termux_patch_file(path, search, replace):
     _track_project_path(target)
     _zapamietaj_gdzie(target)
 
-    return {
+    _wynik_patcha = {
         "ok": True,
         "path": str(target),
         "backup": str(backup_path),
         "bytes_before": len(source.encode("utf-8")),
         "bytes_after": len(new_source.encode("utf-8"))
     }
+    if _skladnia_ok:
+        _wynik_patcha["skladnia"] = "OK (program sprawdził py_compile)"
+    return _wynik_patcha
 
 
 def ask_deepseek_hint(question):
@@ -19595,6 +28211,295 @@ def _bez_ostrzezen_pythona(result):
     return {k: v for k, v in result.items() if k not in _OSTRZEZENIA_PYTHONA}
 
 
+# ============================================================
+# CZEKANIE NA ZMIANE (v479)
+# ============================================================
+#
+# Bieg 2026-10-11 09:10: trening w tle, epoka ~350 s. MAIN sprawdzal
+# go komenda `sleep 90 && tail log && ls ckpt` — i dwa razy z rzedu
+# dostal slowo w slowo ten sam wynik. Kazde takie sprawdzenie to tura
+# MAIN-a i wiadomosc do DeepSeeka, ktora nic nie wnosi.
+#
+# Gdy komenda tylko czeka i czyta (sleep + tail/cat/ls/ps/grep...) i
+# jej wynik jest taki sam jak przy poprzednim takim samym sprawdzeniu,
+# program powtarza ja sam, az wynik sie zmieni — i dopiero wtedy
+# oddaje go MAIN-owi. Najdluzej CZEKANIE_NA_ZMIANE_S naraz.
+CZEKANIE_NA_ZMIANE_S = int(
+    os.environ.get("CZEKANIE_NA_ZMIANE_S", "900")
+)
+
+
+def _procesy_od_plikow(komenda):
+    """
+    v479b: procesy, ktorych linia polecen ma w sobie nazwe pliku z tej
+    komendy (faza19b_seed42.log -> "faza19b_seed42"), jako
+    {pid: "pid czas_dzialania polecenie"}. Tak program widzi, czy
+    sprawdzany trening jeszcze zyje — bez pytania MAIN-a.
+    """
+    tokeny = set()
+    for slowo in re.findall(r"[\w.~/-]+\.\w{2,5}\b", str(komenda)):
+        rdzen = os.path.basename(slowo).split(".")[0]
+        if len(rdzen) >= 4:
+            tokeny.add(rdzen)
+    if not tokeny:
+        return {}
+    try:
+        wyj = subprocess.run(
+            ["ps", "-eo", "pid,etime,args"],
+            capture_output=True, text=True, timeout=10
+        ).stdout
+    except Exception:
+        return {}
+    wynik = {}
+    for linia in wyj.splitlines()[1:]:
+        if "agent.py" in linia or " ps -eo" in linia:
+            continue
+        if any(t in linia for t in tokeny):
+            czesci = linia.split(None, 1)
+            if czesci and czesci[0].isdigit():
+                wynik[czesci[0]] = " ".join(linia.split())[:200]
+    return wynik
+
+_SAMO_CZYTANIE = {
+    "sleep", "cd", "tail", "head", "cat", "ls", "ps", "grep", "egrep",
+    "echo", "wc", "date", "stat", "du", "df", "pgrep", "test", "[",
+    "true", "uptime", "free", "nproc", "pidof", "sort", "uniq", "cut",
+    "awk", "sed", "tr", "printf", "find", "jq", "top",
+}
+
+_ostatnie_sprawdzenie = {}
+
+
+def _tylko_czeka_i_czyta(command):
+    """Komenda z `sleep`, ktorej kazdy czlon tylko czyta."""
+    if not _sekundy_spania(command):
+        return False
+    _bez_null = re.sub(r"\d*>>?\s*/dev/null", "", str(command))
+    if re.search(r">[^&]|\bsed\s+-i|\bfind\b.*-(?:delete|exec)", _bez_null):
+        return False
+    for czlon in _czlony_komendy(command):
+        try:
+            slowa = shlex.split(czlon)
+        except ValueError:
+            return False
+        if not slowa:
+            continue
+        if os.path.basename(slowa[0]) not in _SAMO_CZYTANIE:
+            return False
+    return True
+
+
+_ostatni_odczyt = {}
+
+
+def _uwaga_ten_sam_odczyt(name, args, result):
+    """v480el: MAIN sprawdza (bez sleep) to samo, co chwile temu, i dostaje
+    ten sam wynik. Bieg 2026-10-24 17:41-18:05: na zmiane "Czekam" i
+    "Sprawdzam bezposrednio stan" — co minute ten sam cat/ps. Wynik idzie
+    jak byl, z jednym zdaniem, ze od poprzedniego razu nic sie nie zmienilo."""
+    try:
+        if (
+            name != "termux_run" or not _wykonuje_main
+            or not isinstance(result, dict) or result.get("ok") is not True
+        ):
+            return result
+        komenda = str((args or {}).get("command") or "")
+        if _sekundy_spania(komenda):
+            return result
+        for czlon in _czlony_komendy(komenda):
+            slowa = shlex.split(czlon)
+            if slowa and os.path.basename(slowa[0]) not in _SAMO_CZYTANIE:
+                return result
+        # Czas z ps (etime) zmienia sie co sekunde — nie liczy sie do
+        # porownania; inne liczby (postep, wyniki) tak.
+        klucz = re.sub(r"\d+", "#", komenda)
+        tekst = re.sub(r"\b(?:\d+-)?\d{1,2}:\d{2}(?::\d{2})?\b", "#",
+                       str(result.get("stdout") or "")
+                       + str(result.get("stderr") or ""))
+        teraz = time.time()
+        poprzedni = _ostatni_odczyt.get(klucz)
+        _ostatni_odczyt[klucz] = (tekst, teraz if not poprzedni or poprzedni[0] != tekst else poprzedni[1])
+        if poprzedni and poprzedni[0] == tekst and tekst.strip():
+            # v480hm: bez godziny i bez pouczenia (zespol dostawal to jako
+            # "bez_zmian: … od 19:03 … program poda samo …")
+            result["bez_zmian"] = (
+                "Ten sam wynik co przy tym samym sprawdzeniu "
+                + _temu(poprzedni[1]) + " — nic się nie zmieniło."
+            )
+    except Exception:
+        pass
+    return result
+
+
+def _czekaj_az_sie_zmieni(name, args, result):
+    if (
+        name != "termux_run"
+        or not _wykonuje_main
+        or not isinstance(result, dict)
+        or result.get("ok") is not True
+    ):
+        return result
+
+    komenda = str((args or {}).get("command") or "")
+
+    if not _tylko_czeka_i_czyta(komenda):
+        return result
+
+    # Ta sama komenda z innym `sleep N` / `tail -N` to to samo
+    # sprawdzenie.
+    klucz = re.sub(r"\d+", "#", komenda)
+    wynik = str(result.get("stdout") or "") + str(result.get("stderr") or "")
+
+    if _ostatnie_sprawdzenie.get(klucz) != wynik:
+        _ostatnie_sprawdzenie[klucz] = wynik
+        return result
+
+    # v480ei: bieg 2026-10-24 17:24 — czekanie skonczylo sie wczesniej,
+    # bo proces, na ktory czekalo, sie zakonczyl; wynik byl taki sam jak
+    # z rownoleglego czekania w tle, wiec program powtarzal komende
+    # (z pelnym sleep) do 15 min, a MAIN stal. Gdy proces juz sie skonczyl,
+    # wynik sie nie zmieni — oddajemy go od razu.
+    if "skończone wcześniej, bo proces w tle" in wynik:
+        return result
+
+    start = time.time()
+    razy = 0
+    procesy_na_starcie = _procesy_od_plikow(komenda)
+    skonczone = []
+
+    log(
+        "TERMUX",
+        "Wynik taki sam jak przy poprzednim sprawdzeniu — sprawdzam "
+        "dalej sam, aż coś się zmieni (najdłużej "
+        + str(CZEKANIE_NA_ZMIANE_S // 60) + " min)."
+    )
+
+    while time.time() - start < CZEKANIE_NA_ZMIANE_S:
+
+        nowy = _dispatch_tool_inner(name, args)
+        razy += 1
+
+        if not isinstance(nowy, dict):
+            return result
+
+        tekst = str(nowy.get("stdout") or "") + str(nowy.get("stderr") or "")
+
+        if nowy.get("ok") is not True or tekst != wynik:
+            result = nowy
+            break
+
+        # Proces, na ktory czekamy, skonczyl sie — wynik juz sie nie
+        # zmieni, wiec MAIN ma sie o tym dowiedziec teraz.
+        _teraz = _procesy_od_plikow(komenda)
+        skonczone = [
+            procesy_na_starcie[pid] for pid in procesy_na_starcie
+            if pid not in _teraz
+        ]
+        if skonczone:
+            result = nowy
+            break
+
+    _ostatnie_sprawdzenie[klucz] = (
+        str(result.get("stdout") or "") + str(result.get("stderr") or "")
+    )
+
+    _czekal = int(time.time() - start)
+    result["czekalem_na_zmiane_s"] = _czekal
+    result["sprawdzen_bez_zmiany"] = razy
+    result["co_sie_dzialo"] = (
+        "Ta sama komenda dała ten sam wynik co poprzednio, więc "
+        "powtarzałem ją sam przez " + str(_czekal) + " s ("
+        + str(razy) + " razy). "
+        + (
+            "Przerwałem, bo zakończył się proces: "
+            + "; ".join(skonczone) + "."
+            if skonczone else
+            "Wynik się zmienił." if _czekal < CZEKANIE_NA_ZMIANE_S
+            else "Wynik dalej ten sam po " + str(CZEKANIE_NA_ZMIANE_S // 60)
+            + " min."
+        )
+    )
+    _procesy = _procesy_od_plikow(komenda)
+    if _procesy or procesy_na_starcie:
+        result["procesy_teraz"] = list(_procesy.values()) or "żaden z wcześniej działających"
+
+    log(
+        "TERMUX",
+        "Po " + str(_czekal) + " s i " + str(razy)
+        + " sprawdzeniach — oddaję wynik MAIN-owi."
+    )
+
+    return result
+
+
+# v480at: ekran telefonu i Chrome sa jedne dla obu druzyn rywalizacji.
+# Druzyna, ktora zaczela na nich pracowac, trzyma je, dopoki ich uzywa,
+# i jeszcze _EKRAN_TRZYMAJ_S po ostatniej czynnosci — zeby ciag
+# klikniec jednej druzyny nie przeplatal sie z klikaniem drugiej.
+# Druga czeka najwyzej _EKRAN_CZEKAJ_S. Blokada to flock na wspolnym
+# pliku, wiec znika sama, gdy proces padnie.
+_EKRAN_TRZYMAJ_S = 60
+_EKRAN_CZEKAJ_S = 300
+_ekran = {"plik": None, "ostatnio": 0.0, "watek": None}
+_ekran_lock = _threading.Lock()
+
+
+def _puszczaj_ekran():
+    import fcntl
+    while True:
+        time.sleep(5)
+        with _ekran_lock:
+            if _ekran["plik"] is None:
+                continue
+            if time.time() - _ekran["ostatnio"] < _EKRAN_TRZYMAJ_S:
+                continue
+            try:
+                fcntl.flock(_ekran["plik"], fcntl.LOCK_UN)
+                _ekran["plik"].close()
+            except Exception:
+                pass
+            _ekran["plik"] = None
+
+
+def _wez_ekran(name):
+    if not _DRUZYNA or not str(name or "").startswith(("android_", "chrome_")):
+        return
+    try:
+        import fcntl
+    except Exception:
+        return
+    with _ekran_lock:
+        _ekran["ostatnio"] = time.time()
+        if _ekran["plik"] is not None:
+            return
+        try:
+            HOME.joinpath("RYWALIZACJA").mkdir(parents=True, exist_ok=True)
+            plik = open(HOME / "RYWALIZACJA" / "ekran.lock", "a+")
+        except Exception:
+            return
+        start = time.time()
+        powiedziane = False
+        while True:
+            try:
+                fcntl.flock(plik, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if not powiedziane:
+                    powiedziane = True
+                    log("RYWALIZACJA", "Ekran i Chrome używa teraz druga drużyna — czekam, "
+                        "aż skończy (najwyżej " + str(_EKRAN_CZEKAJ_S // 60) + " min).")
+                if time.time() - start > _EKRAN_CZEKAJ_S:
+                    log("RYWALIZACJA", "Druga drużyna trzyma ekran za długo — idę dalej.")
+                    plik.close()
+                    return
+                time.sleep(2)
+        _ekran["plik"] = plik
+        _ekran["ostatnio"] = time.time()
+        if _ekran["watek"] is None:
+            _ekran["watek"] = _threading.Thread(target=_puszczaj_ekran, name="ekran", daemon=True)
+            _ekran["watek"].start()
+
+
 def dispatch_tool(
     name,
     args
@@ -19613,15 +28518,48 @@ def dispatch_tool(
 
     started = datetime.now()
 
+    # v463: ostatnie narzedzie — patrz _pisanie_do_wlasnego_terminala().
+    globals()["_poprzednie_narzedzie"] = str(globals().get("_ostatnie_narzedzie") or "")
+    globals()["_ostatnie_narzedzie"] = str(name or "")
+
+    _uwaga_o_karcie[0] = None
+
+    # v480at: w rywalizacji ekranu i Chrome uzywa naraz jedna druzyna.
+    _wez_ekran(name)
+
     result = _dispatch_tool_inner(
         name,
         args
     )
 
+    result = _czekaj_az_sie_zmieni(name, args, result)
+    result = _uwaga_ten_sam_odczyt(name, args, result)
+    if str(name or "").startswith("termux_"):
+        result = _ukryj_rywala_w_wyniku(result)  # v480eq
+
     duration_s = round(
         (datetime.now() - started).total_seconds(),
         2
     )
+
+    if isinstance(result, dict) and _uwaga_o_karcie[0]:
+        result.setdefault("karta", _uwaga_o_karcie[0])
+
+    # v473: bieg 2026-10-04 12:24, krok 26 — chrome_open zwrocil karte
+    # 71B4… (strona juz byla otwarta, wiec tylko na nia przelaczyl), a
+    # zaraz potem dwa chrome_execute_js bez tab_id poszly w karte
+    # 0920… z /pl/login/ — te, ktora find_tab() zapamietal wczesniej.
+    # Formularz "nie istnial", MAIN wypelnial go od nowa w kroku 27.
+    # Karta, ktora narzedzie Chrome zwraca, jest ta, na ktorej teraz
+    # pracujemy.
+    if (
+        isinstance(result, dict)
+        and str(name or "").startswith("chrome_")
+        and name != "chrome_close"
+        and result.get("ok") is True
+        and result.get("tab_id")
+    ):
+        _ostatnio_aktywna_karta[0] = str(result.get("tab_id"))
 
     if isinstance(result, dict):
 
@@ -19654,7 +28592,7 @@ def dispatch_tool(
                 )
 
                 log(
-                    "GEMINI",
+                    "MAIN" if _wykonuje_main else "GEMINI",
                     "Wykryto sygnaturę błędu w treści wyniku mimo "
                     "ok=true: '" + signature + "' (narzędzie: "
                     + name + ")"
@@ -19706,13 +28644,278 @@ _TOOL_NAME_ALIASES = {
     "android_start_app": "android_launch_app",
     "android_run_new_window": "android_run_in_new_window",
     "android_new_window": "android_run_in_new_window",
+    # v470: bieg 2026-10-03, krok 16 — MAIN wolal chrome_screenshot.
+    # Zrzut ekranu z Chrome na wierzchu to zrzut Androida.
+    "chrome_screenshot": "android_screenshot",
 }
+
+
+# v480dq: co jest rzecza rywala. Druzyny nie moga zagladac do siebie
+# nawzajem: ~/MAIN_<rywal>, jego katalog agenta, jego kopia w AEL-MINI,
+# jego tablica u Sedziego, pelne oceny Sedziego i archiwa rywalizacji.
+def _rzeczy_rywala_re():
+    oni = _rywal()
+    rdzen = (
+        r"(?:MAIN_" + oni + r"(?![0-9])"
+        r"|MAIN_[*?\[{]"
+        r"|agent_druzyna" + oni + r"(?![0-9])"
+        r"|agent_druzyna[*?\[{]"
+        r"|druzyna_" + oni + r"(?:/|\.json|\b)"
+        r"|druzyna_[*?\[{]"
+        r"|archiwum_rywalizacji"
+        r"|RYWALIZACJA/(?:ocena_sedziego|oceny|ostrzezenia|dyskwalifikacja))"
+    )
+    # v480ds: tylko jako sciezka — po "/" (~/MAIN_2, /home/.../MAIN_2)
+    # albo jako osobne slowo na poczatku argumentu (cd MAIN_2). Samo
+    # slowo w zdaniu ("MAIN_2 zamkniety") to nie siegniecie do folderu.
+    return (
+        re.compile(r"(?<=/)" + rdzen),
+        re.compile(r"(?:^|(?<=[\s;&|(<>=]))" + rdzen + r"(?=/|\s|$|[;&|)])"),
+    )
+
+
+def _sciezka_rywala(p):
+    """Dopasowanie, gdy sciezka (argument narzedzia) wskazuje rzecz rywala."""
+    po_ukosniku, slowo = _rzeczy_rywala_re()
+    t = str(p or "").strip()
+    return po_ukosniku.search(t) or slowo.search(t)
+
+
+# v480gg: tekst w cudzyslowie po echo/printf to tekst, nawet gdy ma w
+# sobie "->", ";" albo "|" (bieg 2026-10-26 18:35: notatka w printf z
+# "L1 -> L2" i "nie dotykamy ~/MAIN_2" zablokowana jako folder rywala).
+_ECHO_RE = re.compile(
+    r"\b(?:echo|printf)\b(?:'[^'\n]*'|\"(?:[^\"\\\n]|\\.)*\"|[^\n;&|>'\"])*")
+_W_CUDZYSLOWIE_RE = re.compile(r"'[^'\n]*'|\"(?:[^\"\\\n]|\\.)*\"")
+
+
+def _komenda_siega_do_rywala(cmd):
+    """Dopasowanie, gdy komenda siega do rzeczy rywala jako do sciezki.
+
+    v480ds: bez tekstu po echo/printf (notatki o zasadach, naglowki), a
+    gole slowo liczy sie tylko poza cudzyslowem. Ścieżka po "/" liczy
+    sie takze w cudzyslowie (cat "~/MAIN_2/x").
+    """
+    po_ukosniku, slowo = _rzeczy_rywala_re()
+    bez_echo = _ECHO_RE.sub(" ", str(cmd or ""))
+    return (
+        po_ukosniku.search(bez_echo)
+        or slowo.search(_W_CUDZYSLOWIE_RE.sub(" ", bez_echo))
+    )
+
+
+_PROC_PID_RE = re.compile(r"/proc/")
+
+
+def _podglada_proces_rywala(cmd):
+    """
+    v480eq: komenda czyta /proc/<pid> (cwd, cmdline, environ, fd …)
+    procesu drugiej druzyny — zwraca opis, inaczej "".
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-24 20:50, druzyna 1,
+    krok 106). MAIN zobaczyl w ps trzy obce procesy i zrobil "for p in
+    19077 19121 19647; do ls -l /proc/$p/cwd; cat /proc/$p/cmdline" —
+    dostal ~/MAIN_2 i nazwy skryptow rywala (sprawdz_v19.py,
+    test_zabojca_act.py), czyli to, czego w rywalizacji nie wolno widziec.
+    """
+    tekst = str(cmd or "")
+    if not _PROC_PID_RE.search(tekst):
+        return ""
+    procesy = _procesy_rywala()
+    if not procesy:
+        return ""
+    pidy = {p[0] for p in procesy}
+    trafione = sorted({int(n) for n in re.findall(r"(?<![\w.])(\d{2,7})(?![\w.])", tekst)} & pidy)
+    if not trafione:
+        return ""
+    return ", ".join(str(t) for t in trafione[:5])
+
+
+def _zuzycie_procesow(procesy, kto):
+    """v480il: jedna linia o tym, ile telefonu zajmuja te procesy — bez nazw."""
+    try:
+        tik = os.sysconf("SC_CLK_TCK") or 100
+        strona = os.sysconf("SC_PAGE_SIZE") or 4096
+        with open("/proc/uptime") as f:
+            uptime = float(f.read().split()[0])
+        cpu = rss = 0.0
+        najdl = 0.0
+        n = 0
+        for p in procesy:
+            pid = p[0]
+            try:
+                with open("/proc/" + str(pid) + "/stat") as f:
+                    pola = f.read().rsplit(")", 1)[-1].split()
+                if pola[0] in ("Z", "X"):
+                    continue
+                czas_cpu = (int(pola[11]) + int(pola[12])) / tik
+                zyje = max(1.0, uptime - int(pola[19]) / tik)
+                with open("/proc/" + str(pid) + "/statm") as f:
+                    rss += int(f.read().split()[1]) * strona
+                cpu += 100.0 * czas_cpu / zyje
+                najdl = max(najdl, zyje)
+                n += 1
+            except Exception:
+                continue
+        if not n:
+            return ""
+        ram = (str(round(rss / 2**30, 1)).replace(".", ",") + " GB") if rss >= 2**30 else (str(int(rss / 2**20)) + " MB")
+        return ("[" + kto + ": " + str(n) + (" proces" if n == 1 else " procesy" if n < 5 else " procesów")
+                + ", CPU " + str(int(round(cpu))) + "%, RAM " + ram
+                + ", najdłuższy działa " + _min_s(najdl) + " — nazwy ukryte, nic z nimi nie zrobicie]")
+    except Exception:
+        return ""
+
+
+def _ukryj_rywala_w_wyniku(result):
+    """
+    v480eq: w wyniku komendy linie o procesach i plikach drugiej druzyny
+    (ps z jej pid, sciezka do jej folderu, jej linia polecen) zastepuje
+    jedna informacja, czyje to jest. Druzyna wie wtedy, ze to nie jej
+    i nie musi tego sprawdzac — a nazw skryptow rywala nie widzi.
+    """
+    if not _DRUZYNA or not isinstance(result, dict):
+        return result
+    try:
+        pola = [k for k in ("stdout", "stderr", "output") if isinstance(result.get(k), str) and result.get(k)]
+        if not pola:
+            return result
+        procesy = None
+        po_ukosniku, _slowo = _rzeczy_rywala_re()
+        notka = "[proces albo plik drużyny " + _rywal() + " — ukryty; to nie Wasze, nie trzeba tego sprawdzać]"
+        # v480il: uzytkownik 2026-10-30 — druzyna widzi, ile telefonu zajmuje
+        # rywal (liczba procesow, CPU, RAM, czas), bez nazw i argumentow;
+        # tylko w wyniku wlasnej komendy (ps/top), jedna linia zamiast notki.
+        _podsum = None
+        _sedzia = {}
+        try:
+            _sedzia = {str(p[0]): p for p in _procesy_sedziego()}
+        except Exception:
+            _sedzia = {}
+        for k in pola:
+            linie = result[k].split("\n")
+            zmiana = False
+            for i, l in enumerate(linie):
+                if not l.strip():
+                    continue
+                ukryj = bool(po_ukosniku.search(l))
+                _proc = False
+                if procesy is None:
+                    procesy = _procesy_rywala()
+                    pidy = {str(p[0]) for p in procesy}
+                    cmdy = [p[2].strip() for p in procesy if len(p[2].strip()) >= 8]
+                pierwsze = l.split(None, 1)[0] if l.split() else ""
+                if procesy and (pierwsze in pidy or any(c in l for c in cmdy)):
+                    ukryj = _proc = True
+                elif procesy and ukryj and (l.split()[1:2] and l.split()[1] in pidy):
+                    _proc = True  # ps aux: pid w drugiej kolumnie
+                if ukryj:
+                    if _proc:
+                        if _podsum is None:
+                            _podsum = _zuzycie_procesow(procesy, "drużyna " + _rywal())
+                        linie[i] = _podsum or notka
+                    else:
+                        linie[i] = notka
+                    zmiana = True
+                elif _sedzia:
+                    _pid = pierwsze if pierwsze in _sedzia else (
+                        l.split()[1] if len(l.split()) > 1 and l.split()[1] in _sedzia else "")
+                    if _pid and "Sędzia" not in l:
+                        linie[i] = l + "   ← to sprawdzanie Sędziego (liczy Wasz \"sprawdz\")"
+                        zmiana = True
+            if zmiana:
+                # kolejne identyczne notki jako jedna linia
+                wynik = []
+                for l in linie:
+                    if (l == notka or (_podsum and l == _podsum)) and wynik and wynik[-1] == l:
+                        continue
+                    if _podsum and l == _podsum and _podsum in wynik:
+                        continue
+                    wynik.append(l)
+                result[k] = "\n".join(wynik)
+    except Exception:
+        pass
+    return result
+
+
+def _siega_do_rywala(name, args):
+    """Komunikat odmowy, gdy narzedzie siega do rzeczy rywala; inaczej ""."""
+    if not _DRUZYNA or not isinstance(args, dict):
+        return ""
+    if not (str(name).startswith("termux_") or name == "android_run_in_new_window"):
+        return ""
+    _pidy = _podglada_proces_rywala(args.get("command")) if args.get("command") else ""
+    if _pidy:
+        return (
+            "Nie wykonałem — komenda czyta /proc procesu drużyny "
+            + _rywal() + " (pid " + _pidy + "). Procesy z jej folderu to "
+            "nie Wasze: nie trzeba ich sprawdzać, a ich szczegóły (folder, "
+            "linia poleceń, pliki) to podglądanie rywala. Swoje procesy "
+            "sprawdzajcie po pid, który dostaliście przy uruchomieniu, "
+            "albo w ps po nazwie Waszego skryptu."
+        )
+    m = None
+    for k in ("path", "workdir", "cwd", "src", "dst", "source", "target"):
+        if args.get(k):
+            m = m or _sciezka_rywala(args.get(k))
+    if args.get("command"):
+        m = m or _komenda_siega_do_rywala(args.get("command"))
+    if m:
+        return (
+            "Nie wykonałem — to sięga do rzeczy drużyny " + _rywal()
+            + " („" + m.group(0) + "”). W rywalizacji nie wolno "
+            "brać ani podglądać jej kodu, plików ani pomysłów; za to "
+            "grozi dyskwalifikacja (ogólnodostępne biblioteki i "
+            "programy są wspólne). Pracujcie w ~/MAIN_" + _DRUZYNA
+            + ". Jeśli chodziło o Wasz plik, podajcie ścieżkę w swoim "
+            "folderze. Sama nazwa w notatce czy w echo nie jest "
+            "blokowana — tylko ścieżka, do której komenda sięga."
+        )
+    return ""
+
+
+# v480dv: flagi narzedzi przychodza czasem jako napis. Bieg 2026-10-23/24
+# (druzyna 2, krok 146, 08:34): MAIN w DSML dal append="false" jako tekst,
+# bool("false") == True, nowy JSON dokleil sie do starego wynik.json
+# ("Extra data") i Sedzia przez 20 min nie liczyl wyniku.
+_FLAGI_NARZEDZI = frozenset((
+    "append", "enter", "background", "reinstall", "overwrite", "force",
+    "recursive", "replace_all", "new_tab", "clear", "submit",
+))
+_PRAWDA = frozenset(("true", "1", "tak", "yes", "t", "y", "prawda", "on"))
+_FALSZ = frozenset((
+    "false", "0", "nie", "no", "f", "n", "falsz", "fałsz", "off", "",
+    "null", "none",
+))
+
+
+def _jako_flaga(v):
+    """v480dv: "false"/"0"/"nie" -> False, "true"/"1"/"tak" -> True."""
+    if isinstance(v, str):
+        n = v.strip().strip("\"'").lower()
+        if n in _PRAWDA:
+            return True
+        if n in _FALSZ:
+            return False
+    return v
 
 
 def _dispatch_tool_inner(
     name,
     args
 ):
+
+    # v480hs: patrz _adb_offline — kiedy ktos ostatnio uzyl telefonu.
+    if str(name or "").startswith(("android_", "chrome_")):
+        _adb_uzyty_o[0] = time.time()
+
+    if isinstance(args, dict) and any(
+        k in _FLAGI_NARZEDZI and isinstance(v, str) for k, v in args.items()
+    ):
+        args = {
+            k: (_jako_flaga(v) if k in _FLAGI_NARZEDZI else v)
+            for k, v in args.items()
+        }
 
     aliased = _TOOL_NAME_ALIASES.get(name)
 
@@ -19730,6 +28933,23 @@ def _dispatch_tool_inner(
         name = aliased
 
     try:
+
+        # v480dq: folder rywala jest zamkniety (uzytkownik 2026-10-22:
+        # "nie mogą od siebie kopiować pomysłów").
+        # v480du: patrz _za_duzo_watkow() — jedno zdanie, robota idzie.
+        _o_watkach = _za_duzo_watkow(name, args)
+        if _o_watkach:
+            log("RYWALIZACJA", _o_watkach)
+            _pending_team_warnings.append(_o_watkach)
+
+        _do_rywala = _siega_do_rywala(name, args)
+        if _do_rywala:
+            log("RYWALIZACJA", _do_rywala)
+            return {
+                "ok": False,
+                "error": "FOLDER_RYWALA",
+                "message": _do_rywala,
+            }
 
         # ====================================================
         # TERMUX
@@ -19749,7 +28969,7 @@ def _dispatch_tool_inner(
             return termux_write_file(
                 args.get("path"),
                 args.get("content", ""),
-                bool(args.get("append", False))
+                bool(_jako_flaga(args.get("append", False)))
             )
 
         if name == "termux_read_file":
@@ -20137,6 +29357,9 @@ def _dispatch_tool_inner(
 
         # Gemini: android_screenshot_ocr
         # Python: android_screenshot_ocr
+        if name == "android_look":
+            return _call_tool_function(android_look, args)
+
         if name == "android_screenshot_ocr":
 
             fn = globals().get(
@@ -20420,9 +29643,16 @@ def _dispatch_tool_inner(
                 args
             )
 
+        if name == "chrome_upload_file":
+            return _call_tool_function(chrome_upload_file, args)
+
         if name == "chrome_back":
 
             return _call_tool_function(chrome_back, args)
+
+        if name == "chrome_close":
+
+            return _call_tool_function(chrome_close, args)
 
         if name == "chrome_execute_js":
 
@@ -20469,6 +29699,24 @@ def _dispatch_tool_inner(
         # ====================================================
         # NIEZNANE
         # ====================================================
+
+        # v480db: nazwa akcji MAIN-a wpisana jako narzedzie w RUN. Bieg
+        # 2026-10-21 18:17, druzyna 2, krok 21: {"tool": "ASK", ...}
+        # dostalo samo "Nieznane narzędzie: ASK".
+        _akcja = str(name or "").strip().upper()
+        if _akcja in (
+            "ASK", "ASK_DALEJ", "TASK", "RUN", "DONE", "FAILED",
+            "NEED_USER_LOGIN",
+        ):
+            return {
+                "ok": False,
+                "error": "Nieznane narzędzie: " + str(name),
+                "podpowiedz": (
+                    _akcja + " to osobna akcja (\"type\": \"" + _akcja
+                    + "\"), nie narzędzie w RUN — wyślij ją jako "
+                    "osobną decyzję."
+                )
+            }
 
         return {
             "ok": False,
@@ -20823,9 +30071,19 @@ def _czego_brakuje_do_uruchomienia(sciezka, kod):
 
     try:
 
+        # v480x: obok skryptu moga lezec jego wlasne moduly
+        # (hyp_gen.py importuje hyp_dedup.py z tego samego katalogu).
+        # Python uruchamiajacy skrypt widzi jego katalog, wiec
+        # sprawdzamy z tym samym katalogiem na sciezce.
+        _katalog = os.path.dirname(
+            os.path.abspath(os.path.expanduser(str(sciezka)))
+        )
+
         wynik = execute_shell(
             "python -c "
             + shlex.quote(
+                "import sys\n"
+                "sys.path.insert(0, " + repr(_katalog) + ")\n"
                 "import importlib.util as u\n"
                 "for n in " + repr(nazwy) + ":\n"
                 "    print(n) if u.find_spec(n) is None else None\n"
@@ -20908,7 +30166,16 @@ def _shell_failure_is_just_missing_file(tool_name, result):
     ]
 
     if not stderr_lines:
-        return False
+        # v480fc: "ls x 2>&1" — blad trafia do stdout; kod wyjscia pochodzi
+        # z ostatniej komendy, wiec patrzymy na ostatnie linie stdout z
+        # "No such file" (bieg 2026-10-25 08:22: zwykle "czy plik juz jest?"
+        # skonczylo sie jako RUN_TOOL_ERROR).
+        stdout_lines = [
+            line.strip()
+            for line in str(result.get("stdout") or "").splitlines()
+            if line.strip()
+        ]
+        return any(_NO_SUCH_FILE_RE.search(line) for line in stdout_lines[-3:])
 
     return all(_NO_SUCH_FILE_RE.search(line) for line in stderr_lines)
 
@@ -21572,29 +30839,29 @@ def _zapamietaj_cel(cel, stan, akcja):
 
         if jedno and sama_obserwacja:
             czym = (
-                "To samo sprawdzenie poszlo " + str(ile)
-                + " raz z rzedu"
+                "To samo sprawdzenie poszło " + str(ile)
+                + ". raz z rzędu"
             )
         elif jedno:
             czym = (
-                "Ta sama operacja poszla " + str(ile) + " raz z rzedu"
+                "Ta sama operacja poszła " + str(ile) + ". raz z rzędu"
             )
         elif sama_obserwacja:
             czym = (
-                str(ile) + " sprawdzen pod rzad ("
+                str(ile) + " sprawdzeń pod rząd ("
                 + ", ".join(nazwy[:4]) + ")"
             )
         else:
             czym = (
-                str(ile) + " roznych operacji pod rzad ("
+                str(ile) + " różnych operacji pod rząd ("
                 + ", ".join(nazwy[:4]) + ")"
             )
 
         return sygnal, (
-            czym + " wokol tego samego celu (" + str(cel) + "), a "
-            "jego stan ani drgnal. Nie przerywam Ci pracy — mowie "
-            "tylko, co widac. Sam zdecyduj, czy czekasz dalej, "
-            "zagladasz gdzie indziej, czy idziesz inna droga."
+            # v480gt: sam fakt, z polskimi znakami, bez "Nie przerywam
+            # Ci pracy… Sam zdecyduj" (brzmialo jak pouczenie).
+            czym + " wokół tego samego celu (" + str(cel) + "), a "
+            "jego stan się nie zmienił."
         )
 
     return None, None
@@ -21877,6 +31144,19 @@ def _brak_to_odpowiedz(name, args, result):
     if name == "chrome_type" and result.get("pola"):
         return True
 
+    # v452: kod JS nie oddal wyniku — strona stoi, praca idzie dalej.
+    if name == "chrome_execute_js" and result.get("skrypt_nie_skonczyl_sie"):
+        return True
+
+    # v457: uiautomator dump nie uruchomiony — fakt, praca idzie dalej.
+    if str(name).startswith("termux_run") and blad == "uiautomator_dump":
+        return True
+
+    # v452: chrome_open dostal nie-adres (file://, sciezke do PNG) —
+    # bieg 2026-09-26 14:04, krok 7.
+    if name == "chrome_open" and result.get("nie_adres_http"):
+        return True
+
     # v442: strona "nie znaleziona" — z widokiem, dokad z niej przejsc.
     if name == "chrome_open" and blad == "page_not_found":
         return True
@@ -21928,7 +31208,11 @@ def _brak_to_odpowiedz(name, args, result):
 
 
 # v447: odstepy miedzy ponowieniami, gdy Gemini jest chwilowo przeciazony.
-_GEMINI_PRZECIAZONY_PONOW_S = (5, 10)
+# v461: jedna ponowka — bieg 2026-09-28 16:46: trzy proby po ~100 s
+# to 6 minut stania na jednym zadaniu.
+# v462: zero ponowek w tej samej parze — przy przeciazeniu zadanie
+# idzie od razu na inny model (patrz _odstaw_model_wszedzie).
+_GEMINI_PRZECIAZONY_PONOW_S = ()
 
 
 def _gemini_przeciazony(blad):
@@ -21942,6 +31226,11 @@ def _gemini_przeciazony(blad):
         or "UNAVAILABLE" in tekst
         or "high demand" in tekst
         or "overloaded" in tekst.lower()
+        # v462: limit czasu klienta (60 s) to ten sam przypadek —
+        # serwer nie odpowiada.
+        or "timeout" in tekst.lower()
+        or "timed out" in tekst.lower()
+        or "504" in tekst
     )
 
 
@@ -21959,12 +31248,61 @@ def _gemini_create(client, **kwargs):
     zmian, bo tam czekanie nie pomaga.
     """
 
-    for proba, przerwa in enumerate(_GEMINI_PRZECIAZONY_PONOW_S + (None,)):
+    # v455: 429 z limitem NA MINUTE tez sie ponawia — te sama wiadomosc,
+    # po tylu sekundach, ile Google podal (do 90 s), najwyzej dwa razy.
+    # Zadne narzedzie nie uruchamia sie przy tym drugi raz: ponawiamy
+    # WYSLANIE wynikow, ktore nie doszlo. Limit dzienny idzie w gore od
+    # razu — czekanie 29 s na polnoc nie ma sensu.
+    _ponowien_429 = 0
+    # v480gh: bieg 2026-10-26 19:00 — wykonawca uruchomil run_all.sh
+    # (WYNIK 3.585351), a odeslanie wyniku do Gemini padlo na "[Errno 7]
+    # No address associated with hostname"; cale zadanie skonczylo sie
+    # GEMINI_EXECUTOR_ERROR. Blad sieci: czekamy, az siec wroci (albo
+    # chwile, gdy juz jest), i ponawiamy TO SAMO wyslanie — nic nie
+    # uruchamia sie drugi raz.
+    _ponowien_sieci = 0
+    _przerwy = list(_GEMINI_PRZECIAZONY_PONOW_S + (None,))
+    proba = 0
+
+    while True:
+
+        przerwa = _przerwy[min(proba, len(_przerwy) - 1)]
+
+        _policz_zapytanie()
 
         try:
             return client.interactions.create(**kwargs)
 
         except Exception as e:
+
+            if _wyglada_na_blad_sieci(e) and not _to_limit(e) and _ponowien_sieci < 3:
+                _ponowien_sieci += 1
+                if not _czekaj_na_internet("Gemini", e):
+                    time.sleep(5 * _ponowien_sieci)
+                log(
+                    "GEMINI",
+                    "Połączenie z Gemini zerwane (" + short(str(e), 120)
+                    + ") — ponawiam to samo wysłanie (" + str(_ponowien_sieci)
+                    + "/3), nic nie uruchamia się drugi raz."
+                )
+                continue
+
+            if (
+                _to_limit(e)
+                and not _limit_dzienny(e)
+                and _ponowien_429 < 2
+                and 0 < _sekundy_ponowienia(e) <= 90
+            ):
+                _ponowien_429 += 1
+                _czekaj = _sekundy_ponowienia(e) + 1
+                log(
+                    "GEMINI",
+                    "Limit na minutę (429) — ponawiam tę samą wiadomość "
+                    "za " + str(int(_czekaj)) + " s (" + str(_ponowien_429)
+                    + "/2), nic nie uruchamia się drugi raz."
+                )
+                time.sleep(_czekaj)
+                continue
 
             if przerwa is None or not _gemini_przeciazony(e):
                 raise
@@ -21977,6 +31315,7 @@ def _gemini_create(client, **kwargs):
             )
 
             time.sleep(przerwa)
+            proba += 1
 
 
 def _raport_po_limicie(client, model, interaction, interaction_id, tools):
@@ -21998,15 +31337,15 @@ def _raport_po_limicie(client, model, interaction, interaction_id, tools):
     """
 
     if interaction is None:
-        return ""
+        return "", None
 
     wywolania = _wywolania_w_interakcji(interaction)
 
     if not wywolania:
-        return _tekst_interakcji(interaction).strip()
+        return _tekst_interakcji(interaction).strip(), interaction
 
     if not interaction_id:
-        return ""
+        return "", None
 
     odpowiedzi = [
         _odpowiedz_narzedzia(
@@ -22025,18 +31364,252 @@ def _raport_po_limicie(client, model, interaction, interaction_id, tools):
         for call in wywolania
     ]
 
+    # v452: bez narzedzi — po limicie Gemini moze juz tylko napisac
+    # raport, a rozmowa zostaje domknieta i nadaje sie do ciagniecia
+    # w nastepnym zadaniu.
     try:
         ostatnia = _gemini_create(client,
             model=model,
             input=odpowiedzi,
-            previous_interaction_id=interaction_id,
-            tools=tools
+            previous_interaction_id=interaction_id
         )
     except Exception as e:
         log("GEMINI", "Raport po limicie: " + short(str(e), 200))
-        return ""
+        return "", None
 
-    return _tekst_interakcji(ostatnia).strip()
+    return (
+        _tekst_interakcji(ostatnia).strip(),
+        None if _wywolania_w_interakcji(ostatnia) else ostatnia
+    )
+
+
+# ============================================================
+# PAMIEC WYKONAWCY NA CALY CEL (v452)
+# ============================================================
+#
+# Do v451 kazde zadanie bylo NOWA rozmowa z Gemini: w 14 z 76 zadan
+# pierwszym ruchem bylo chrome_tabs ("gdzie ja jestem?"), a MAIN
+# przepisywal do kazdego zadania stan strony, numer karty i to, co juz
+# bylo probowane (biegi 2026-09-25 16:15, 2026-09-26 14:04 i 14:53).
+#
+# Interactions API przechowuje rozmowy po stronie Google (darmowa
+# wersja: 1 dzien, platna: 55 dni) i pozwala je ciagnac przez
+# previous_interaction_id — z niejawnym cache'em historii, czyli
+# taniej niz wysylac ja od nowa. Wiec jeden cel = jedna rozmowa
+# wykonawcy: kolejne zadanie idzie jako kolejna wiadomosc w tej samej
+# rozmowie, a zasady pracy (8 punktow) ida raz, na jej poczatku.
+#
+# Rozmowe ciagniemy tylko wtedy, gdy:
+#   - to ten sam cel, ta sama para klucz+model (rozmowa nalezy do
+#     klucza, na innym jej nie ma),
+#   - ostatnia wiadomosc jest mlodsza niz _GEMINI_PAMIEC_GODZIN,
+#   - kontekst nie urosl ponad GEMINI_PAMIEC_TOKENY (limit na minute
+#     w darmowej wersji liczy tokeny wejscia, takze te z cache'u),
+#   - ostatnia interakcja jest DOMKNIETA: kazde wywolanie narzedzia
+#     dostalo wynik. Po bledzie narzedzia zamykamy runde jedna
+#     wiadomoscia bez narzedzi (_domknij_runde) — Gemini pisze, co o
+#     tym mysli, a MAIN dostaje te slowa razem ze sladem.
+# Gdy Google nie zna juz tej rozmowy (wygasla), zadanie idzie od nowa
+# z pelnym promptem. GEMINI_PAMIEC=0 wylacza calosc.
+
+GEMINI_PAMIEC = os.environ.get("GEMINI_PAMIEC", "1").strip().lower() not in (
+    "0", "nie", "off", "false"
+)
+
+GEMINI_PAMIEC_TOKENY = int(os.environ.get("GEMINI_PAMIEC_TOKENY", "80000"))
+
+_GEMINI_PAMIEC_GODZIN = 20
+
+
+_GEMINI_PAMIEC_ZADAN = 12
+
+
+def _pamiec_wykonawcy():
+    stan = read_json(GEMINI_STATE_FILE, {})
+    return stan if isinstance(stan, dict) else {}
+
+
+def _pamiec_wykonawcy_dla(klucz, model):
+    """
+    interaction_id domknietej rozmowy z tego celu na tej parze
+    klucz+model, gdy da sie ja ciagnac dalej — inaczej None.
+    """
+
+    if not GEMINI_PAMIEC:
+        return None
+
+    stan = _pamiec_wykonawcy()
+    ident = str(stan.get("interaction_id") or "")
+
+    if not ident:
+        return None
+
+    if stan.get("cel") != _odcisk_tresci(str(_current_goal_text or "")):
+        return None
+
+    if stan.get("klucz") != str(klucz) or stan.get("model") != str(model):
+        return None
+
+    try:
+        if time.time() - float(stan.get("czas") or 0) > _GEMINI_PAMIEC_GODZIN * 3600:
+            return None
+        if int(stan.get("zadan") or 0) >= _GEMINI_PAMIEC_ZADAN:
+            log("GEMINI", "Rozmowa wykonawcy ciągnie się od " + str(stan.get("zadan"))
+                + " zadań — zaczynam nową (serwer ma limit długości łańcucha).")
+            return None
+        if int(stan.get("tokeny") or 0) > GEMINI_PAMIEC_TOKENY:
+            log(
+                "GEMINI",
+                "Rozmowa wykonawcy urosla do " + str(stan.get("tokeny"))
+                + " tokenow kontekstu — zaczynam nowa (limit "
+                + str(GEMINI_PAMIEC_TOKENY) + ")."
+            )
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    return ident
+
+
+def _tokeny_kontekstu(interaction):
+    """Ile tokenow wejscia mial ostatni obrot — czyli ile wazy historia."""
+
+    uzycie = getattr(interaction, "usage", None)
+
+    for pole in ("total_input_tokens", "total_tokens"):
+        try:
+            wartosc = int(getattr(uzycie, pole, None) or 0)
+        except (TypeError, ValueError):
+            wartosc = 0
+        if wartosc:
+            return wartosc
+
+    return 0
+
+
+def _zapamietaj_rozmowe_wykonawcy(task_id, klucz, model, interaction, interaction_id):
+    """
+    Zapisuje DOMKNIETA interakcje jako punkt, od ktorego pojdzie
+    nastepne zadanie. Wolane tylko tam, gdzie kazde wywolanie
+    narzedzia dostalo juz wynik.
+    """
+
+    if not interaction_id:
+        return
+
+    # v480hq: ile zadan ciagnie ta sama rozmowa — serwer ma limit
+    # glebokosci lancucha ("ancestor chain exceeds maximum validation depth")
+    _st = _pamiec_wykonawcy()
+    _zadan = (int(_st.get("zadan") or 0) + 1) if _st.get("interaction_id") else 1
+
+    write_json(
+        GEMINI_STATE_FILE,
+        {
+            "zadan": _zadan,
+            "task_id": task_id,
+            "interaction_id": interaction_id,
+            "cel": _odcisk_tresci(str(_current_goal_text or "")),
+            "klucz": str(klucz),
+            "model": str(model),
+            "tokeny": _tokeny_kontekstu(interaction),
+            "czas": time.time(),
+            "updated": datetime.now().isoformat()
+        }
+    )
+
+
+def _za_dlugi_lancuch(blad):
+    t = str(blad or "").lower()
+    return "ancestor chain" in t or "maximum validation depth" in t
+
+
+def _zapomnij_rozmowe_wykonawcy():
+    try:
+        write_json(GEMINI_STATE_FILE, {})
+    except Exception:
+        pass
+
+
+def _stan_zadania_tekstem(slad, odpowiedzi):
+    """v480hq: co juz zrobiono w tym zadaniu — gdy rozmowa idzie od nowa."""
+    linie = []
+    try:
+        for t in (slad or [])[-20:]:
+            if isinstance(t, dict):
+                linie.append("- " + str(t.get("tool") or t.get("name") or "?") + ": "
+                             + ("OK" if t.get("ok", True) else "błąd"))
+        wyn = []
+        for o in odpowiedzi or []:
+            if isinstance(o, dict):
+                _t = " ".join(str(x.get("text") or "") for x in (o.get("result") or []) if isinstance(x, dict))
+                wyn.append("- " + str(o.get("name") or "?") + ": " + short(_t, 1500))
+    except Exception:
+        wyn = []
+    return ("Ta rozmowa zaczęła się od nowa, bo poprzednia była za długa. W tym zadaniu "
+            "zrobiłeś już:\n" + ("\n".join(linie) or "- (nic)")
+            + ("\n\nOstatnie wyniki narzędzi:\n" + "\n".join(wyn) if wyn else "")
+            + "\n\nCiągnij zadanie dalej od tego miejsca.")
+
+
+def _rozmowa_wykonawcy_wygasla(blad):
+    """Czy serwer nie zna juz interakcji, ktora chcielismy ciagnac."""
+
+    tekst = str(blad or "").lower()
+
+    return (
+        _za_dlugi_lancuch(blad)
+        or "previous_interaction" in tekst
+        or "not found" in tekst
+        or "404" in tekst
+        or "no longer" in tekst
+        or "expired" in tekst
+        or ("interaction" in tekst and "invalid" in tekst)
+    )
+
+
+def _domknij_runde(client, model, interaction_id, odpowiedzi, bez_wyniku, powod):
+    """
+    Zamyka runde po przerwaniu zadania: wywolania, ktore nie dostaly
+    wyniku, dostaja fakt o przerwaniu, i idzie jedna wiadomosc BEZ
+    narzedzi — Gemini moze tylko napisac, co o tym mysli.
+
+    Zwraca (tekst, domknieta interakcja albo None).
+    """
+
+    if not interaction_id:
+        return "", None
+
+    wszystkie = list(odpowiedzi)
+
+    for call in bez_wyniku:
+        wszystkie.append(
+            _odpowiedz_narzedzia(
+                call,
+                str(getattr(call, "name", "") or "?").split(":")[-1],
+                {"ok": False, "error": "PRZERWANE", "message": powod}
+            )
+        )
+
+    if not wszystkie:
+        return "", None
+
+    try:
+        ostatnia = _gemini_create(
+            client,
+            model=model,
+            input=wszystkie,
+            previous_interaction_id=interaction_id
+        )
+    except Exception as e:
+        log("GEMINI", "Domkniecie rundy: " + short(str(e), 200))
+        return "", None
+
+    tekst = _tekst_interakcji(ostatnia).strip()
+
+    if _wywolania_w_interakcji(ostatnia):
+        return tekst, None
+
+    return tekst, ostatnia
 
 
 def _stan_telefonu_dla_wykonawcy():
@@ -22063,7 +31636,7 @@ def _stan_telefonu_dla_wykonawcy():
         pass
 
     try:
-        karty = chrome_tabs()
+        karty = chrome_tabs(budz=False)
     except Exception:
         karty = []
 
@@ -22128,7 +31701,8 @@ def gemini_execute_task(task_id, task, success_condition=''):
         return {
             "ok": False,
             "status": "NO_GEMINI_CLIENT",
-            "error": "Nie ma czym tego wykonać."
+            "error": "Brak klucza Gemini — zadanie nie poszło.",
+            "message": "RUN wykonuje akcje bez Gemini."
         }
 
     # v449: najwyzszy stopien drabinki modeli, ktory ma teraz limit.
@@ -22156,7 +31730,13 @@ def gemini_execute_task(task_id, task, success_condition=''):
 
     key_name, client, _model = _para
 
-    log("GEMINI", "model: " + _model + " (klucz " + key_name + ")")
+    _para_w_uzyciu[0], _para_w_uzyciu[1] = key_name, _model
+
+    log(
+        "GEMINI",
+        "model: " + _model + " (klucz " + key_name + ", dziś "
+        + str(_zapytan_dzis(key_name, _model)) + " zapytań)"
+    )
     zapisz_zdarzenie("gemini_model", model=_model, klucz=key_name)
 
     # ========================================================
@@ -22288,6 +31868,29 @@ def gemini_execute_task(task_id, task, success_condition=''):
     if _stan_telefonu:
         _stan_telefonu += "\n\n"
 
+    # v452: ciagniemy rozmowe z poprzednich zadan tego celu — zasady
+    # juz w niej sa, idzie samo zadanie.
+    _poprzednia_rozmowa = _pamiec_wykonawcy_dla(key_name, _model)
+
+    prompt_kontynuacji = f"""
+Nowe zadanie w tej samej robocie — zasady pracy jak dotąd. To, co
+zrobiłeś i zobaczyłeś w poprzednich zadaniach, masz w tej rozmowie.
+
+{_stan_telefonu}WARUNEK SUKCESU:
+{success_condition}
+
+TASK ID:
+{task_id}
+
+TASK:
+{task}
+
+Na koniec napisz zwyczajnie, jak koledze z zespołu: co zrobiłeś, co
+z tego wyszło, co się nie udało i jak to teraz wygląda. Powiedz
+wprost, czy warunek sukcesu jest spełniony, a jeśli coś zostało do
+zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
+"""
+
     prompt = f"""
 Jesteś wykonawcą autonomicznego agenta. DeepSeek to mózg, Ty
 wykonujesz REALNIE jego zadania dostępnymi narzędziami (Termux,
@@ -22331,6 +31934,10 @@ Jak się tu pracuje:
 8. Do usuwania plików i katalogów służy termux_delete: pokazuje
    operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
    operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
+
+CEL, do którego zmierza cały zespół (Twoje zadania to jego kolejne
+kroki):
+{short(str(_current_goal_text or ""), 1200)}
 
 {_stan_telefonu}WARUNEK SUKCESU:
 {success_condition}
@@ -22386,14 +31993,40 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
     collected_confirmed_texts = []
 
     try:
-        interaction = _gemini_create(client,
-            model=_model,
-            input=prompt,
-            tools=gemini_tools(_task_haystack)
-        )
+        if _poprzednia_rozmowa:
 
-        # Klucz odpowiedzial — jesli byl odstawiony, wraca.
-        mark_key_ok(key_name)
+            log(
+                "GEMINI",
+                "pamięć: ciągnę rozmowę wykonawcy z tego celu ("
+                + str(_pamiec_wykonawcy().get("tokeny") or 0)
+                + " tokenów kontekstu)."
+            )
+
+            try:
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=prompt_kontynuacji,
+                    previous_interaction_id=_poprzednia_rozmowa,
+                    tools=gemini_tools(_task_haystack)
+                )
+            except Exception as e:
+                if not _rozmowa_wykonawcy_wygasla(e):
+                    raise
+                log(
+                    "GEMINI",
+                    "pamięć: serwer nie zna już tej rozmowy ("
+                    + short(str(e), 120) + ") — zaczynam nową."
+                )
+                _poprzednia_rozmowa = None
+
+        if not _poprzednia_rozmowa:
+            interaction = _gemini_create(client,
+                model=_model,
+                input=prompt,
+                tools=gemini_tools(_task_haystack)
+            )
+
+        # Para klucz+model odpowiedziala — jesli byla odstawiona, wraca.
         _para_dziala(key_name, _model)
 
         interaction_id = getattr(
@@ -22401,16 +32034,6 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             "id",
             None
         )
-
-        if interaction_id:
-            write_json(
-                GEMINI_STATE_FILE,
-                {
-                    "task_id": task_id,
-                    "interaction_id": interaction_id,
-                    "updated": datetime.now().isoformat()
-                }
-            )
 
         tool_calls = 0
 
@@ -22591,6 +32214,12 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # wykonywanie TASK-a sie skonczylo. Czy cel zostal
                 # osiagniety, rozstrzyga MAIN — na podstawie
                 # raportu, sladu narzedzi i "dowodow" ponizej.
+                # v452: kazde wywolanie ma wynik, Gemini skonczylo
+                # tekstem — od tej interakcji pojdzie nastepne zadanie.
+                _zapamietaj_rozmowe_wykonawcy(
+                    task_id, key_name, _model, interaction, interaction_id
+                )
+
                 return {
                     "ok": True,
                     "status": "TASK_EXECUTION_FINISHED",
@@ -22892,10 +32521,29 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 else:
 
                     try:
-                        result = dispatch_tool(
-                            name,
-                            args
-                        )
+                        # v480gn: bieg 2026-10-26/27, druzyna 1 — wykonawca
+                        # TASK trzymal trening na wierzchu 28 min, 60 min i
+                        # 2 h (az do sufitu), a caly bieg stal. Dluga komenda
+                        # liczy dalej w tle tak jak RUN MAIN-a; wykonawca
+                        # konczy zadanie raportem, MAIN dostaje karte W TLE.
+                        if name == "termux_run" and str(args.get("command") or "").strip():
+                            _juz = _juz_liczy_w_tle(args.get("command"))
+                            if _juz:
+                                result = {"ok": True, "status": "JUZ_LICZY_W_TLE", "message": _juz}
+                            else:
+                                result, _w_tlo = _wykonaj_z_przejsciem_w_tlo(name, args, [])
+                                if _w_tlo:
+                                    result["message"] = (
+                                        "Komenda liczy dłużej niż " + _min_s(_W_TLE_PO_S)
+                                        + ", więc liczy dalej w tle — nic jej nie przerwał. "
+                                        "Nie czekaj na nią i nie uruchamiaj jej drugi raz: "
+                                        "wynik dostanie MAIN, gdy się skończy. Zakończ zadanie "
+                                        "raportem, co zrobione, a co jeszcze liczy w tle.")
+                        else:
+                            result = dispatch_tool(
+                                name,
+                                args
+                            )
 
                     except Exception as e:
 
@@ -23010,13 +32658,24 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
 
                 if _identical_streak >= GEMINI_IDENTICAL_CALL_STOP:
 
+                    # v451: ten straznik od v371 NICZEGO nie przerywa —
+                    # oddaje wynik z uwaga i konczy sama runde. Log
+                    # mowil "przerywam… nie pale reszty limitu", a
+                    # limit szedl dalej; w sladzie dla MAIN-a rosly
+                    # kolejne "4 razy", "5 razy"… — zostaje ostatnia.
                     log(
                         "GEMINI",
-                        "przerywam: " + str(name) + " zwrocilo "
+                        "straznik: " + str(name) + " zwrocilo "
                         + str(_identical_streak) + " razy pod rzad "
-                        "DOKLADNIE ten sam wynik. To czekanie, nie "
-                        "praca — nie pale na to reszty limitu."
+                        "DOKLADNIE ten sam wynik — to czekanie, nie "
+                        "praca. Mowie to wykonawcy przy tym wyniku; "
+                        "co dalej, decyduje on."
                     )
+
+                    collected_warnings[:] = [
+                        w for w in collected_warnings
+                        if not str(w).startswith("gemini [petla_czekania]: ")
+                    ]
 
                     collected_warnings.append(
                         "gemini [petla_czekania]: " + str(name)
@@ -23036,15 +32695,11 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         result = dict(result)
                         result["polling_guard"] = True
                         result["uwaga"] = (
-                            "To samo wywolanie z tymi samymi "
-                            "argumentami dalo ten sam wynik "
-                            + str(_identical_streak) + " raz z rzedu. "
-                            "Nie przerywam Ci pracy — mowie tylko, ze "
-                            "to jest czekanie, a nie postep, i ze "
-                            "reszta limitu narzedzi na tym kroku "
-                            "zostaje nietknieta. Sam zdecyduj, czy "
-                            "czekasz dalej, zagladasz gdzie indziej, "
-                            "czy idziesz inna droga."
+                            "To samo wywołanie z tymi samymi "
+                            "argumentami dało ten sam wynik "
+                            + str(_identical_streak) + ". raz z rzędu — "
+                            "stan się nie zmienia. Limit narzędzi na "
+                            "ten krok zostaje nietknięty."
                         )
 
                     responses.append(
@@ -23159,7 +32814,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         str((args or {}).get("command") or "")
                         if str(name).startswith("termux_run")
                         and isinstance(args, dict) else ""
-                    )
+                    ),
+                    # v480fm: patrz _gdzie_pracowala()
+                    "zablokowane": _zablokowane_przez_program(result),
                 })
 
                 # Patrz komentarz przy _decision_asks_for_contact_info()
@@ -23282,6 +32939,25 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         else ""
                     )
 
+                    # v452: runda nie zostaje otwarta. Wynik tego
+                    # wywolania i fakt o przerwaniu dla pozostalych ida
+                    # do Gemini bez narzedzi; jego slowa o tym bledzie
+                    # trafiaja do MAIN-a, a rozmowa nadaje sie do
+                    # ciagniecia w nastepnym zadaniu.
+                    _idx = function_calls.index(call)
+                    _slowa, _domknieta = _domknij_runde(
+                        client, _model, interaction_id,
+                        responses + [_odpowiedz_narzedzia(call, name, result)],
+                        function_calls[_idx + 1:],
+                        "zadanie przerwane po błędzie narzędzia " + str(name)
+                    )
+
+                    if _domknieta is not None:
+                        _zapamietaj_rozmowe_wykonawcy(
+                            task_id, key_name, _model, _domknieta,
+                            getattr(_domknieta, "id", None)
+                        )
+
                     error_report = {
                         "task_id": task_id,
                         "status": "GEMINI_TOOL_ERROR",
@@ -23291,6 +32967,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         "tool": name,
                         "arguments": args,
                         "tool_result": result,
+                        **({"report": short(_slowa, RESULT_LIMIT)} if _slowa else {}),
                         # v429: bez "Narzedzie zakonczylo sie bledem." —
                         # to nic nie mowi; zostaje tylko podpowiedz przy
                         # grep/test z kodem 1, gdy jest.
@@ -23414,12 +33091,31 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     )
                 }
 
-            interaction = _gemini_create(client,
-                model=_model,
-                input=responses,
-                previous_interaction_id=interaction_id,
-                tools=gemini_tools(_task_haystack)
-            )
+            try:
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=responses,
+                    previous_interaction_id=interaction_id,
+                    tools=gemini_tools(_task_haystack)
+                )
+            except Exception as _e_gl:
+                # v480hq: bieg 2026-10-27 20:51 — "Conversation ancestor
+                # chain exceeds maximum validation depth": rozmowa
+                # wykonawcy (ciagnieta przez kolejne zadania) byla za
+                # dluga i krok przepadl jako GEMINI_EXECUTOR_ERROR. Pamiec
+                # wykonawcy idzie od zera, a to zadanie leci dalej w nowej
+                # rozmowie: to samo zlecenie + co juz zrobiono + ostatnie
+                # wyniki tekstem.
+                if not _za_dlugi_lancuch(_e_gl):
+                    raise
+                log("GEMINI", "Rozmowa wykonawcy za długa (" + short(str(_e_gl), 100)
+                    + ") — zaczynam nową z tym samym zadaniem i tym, co już zrobione.")
+                _zapomnij_rozmowe_wykonawcy()
+                interaction = _gemini_create(client,
+                    model=_model,
+                    input=prompt + "\n\n" + _stan_zadania_tekstem(collected_tool_trace, responses),
+                    tools=gemini_tools(_task_haystack)
+                )
 
             new_id = getattr(
                 interaction,
@@ -23430,23 +33126,20 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             if new_id:
                 interaction_id = new_id
 
-                write_json(
-                    GEMINI_STATE_FILE,
-                    {
-                        "task_id": task_id,
-                        "interaction_id": interaction_id,
-                        "updated": datetime.now().isoformat()
-                    }
-                )
-
         # ====================================================
         # LIMIT NARZĘDZI
         # ====================================================
 
-        _raport = _raport_po_limicie(
+        _raport, _domknieta = _raport_po_limicie(
             client, _model, interaction, interaction_id,
             gemini_tools(_task_haystack)
         )
+
+        if _domknieta is not None:
+            _zapamietaj_rozmowe_wykonawcy(
+                task_id, key_name, _model, _domknieta,
+                getattr(_domknieta, "id", None)
+            )
 
         return {
             "ok": False,
@@ -23494,12 +33187,21 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
             if _limit:
                 _odstaw_pare(key_name, _model, error_text)
             else:
-                _odstaw_pare(
-                    key_name, _model, error_text,
-                    sekund=120, powod="serwer przeciążony"
-                )
+                # v462: przeciazony jest MODEL, nie klucz — ten sam
+                # model na drugim kluczu dal 503 po kolejnych 4 min.
+                for _k in list(gemini_clients.keys()):
+                    _odstaw_pare(
+                        _k, _model, error_text,
+                        sekund=120, powod="serwer przeciążony"
+                    )
 
-            if tool_calls == 0 and _wybierz_pare() is not None:
+            _przeskoki = globals().setdefault("_przeskoki_zadan", {})
+            if (
+                tool_calls == 0
+                and _wybierz_pare() is not None
+                and _przeskoki.get(task_id, 0) < 1
+            ):
+                _przeskoki[task_id] = _przeskoki.get(task_id, 0) + 1
 
                 log(
                     "GEMINI",
@@ -23513,8 +33215,40 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     success_condition
                 )
 
-            if _wybierz_pare() is None:
+            _nastepna = _wybierz_pare()
+
+            if _nastepna is None:
                 gemini_disabled = True
+
+            # v456: MAIN czytal surowe "limit: 20 requests per day" jako
+            # "wykonawca na dzis skonczony" i zlecal robote uzytkownikowi
+            # (bieg 2026-09-27 20:49, krok 3) — a program mial jeszcze
+            # inne modele. Idzie fakt: na czym pojdzie nastepne zadanie.
+            if _nastepna is not None:
+                _co_dalej = (
+                    "Limit dotyczy tylko modelu " + str(_model)
+                    + " na kluczu " + str(key_name)
+                    + "; następne zadanie pójdzie na " + str(_nastepna[2])
+                    + " (klucz " + str(_nastepna[0]) + ")."
+                )
+            else:
+                _najbl = _najblizsze_odnowienie()
+                _co_dalej = (
+                    "Wszystkie modele wykonawcy mają teraz wyczerpany limit"
+                    + (
+                        " — najbliższy wraca o "
+                        + datetime.fromtimestamp(_najbl[0]).strftime("%H:%M")
+                        + " (" + _najbl[2] + ")"
+                        if _najbl else ""
+                    )
+                    + "; program czeka sam i wraca, gdy limit się odnowi."
+                )
+            if not _limit:
+                _co_dalej = (
+                    "Wykonawca nie odpowiedział (" + str(_model)
+                    + "). RUN wykonuje akcje bez Gemini."
+                    + (" " + _co_dalej if _co_dalej else "")
+                )
 
             return {
                 "ok": False,
@@ -23527,8 +33261,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 "model": _model,
                 "error": short(
                     error_text,
-                    3000
+                    600
                 ),
+                "message": _co_dalej,
                 "tool_calls": tool_calls,
                 "tool_warnings": collected_warnings,
                 "tool_trace": collected_tool_trace,
@@ -23670,7 +33405,8 @@ def _checklist_record_result(task_id, result):
         # _dowody_z_wykonania). Weryfikacja warunku sukcesu dziala
         # dokladnie jak przedtem.
         if result.get("status") in (
-            "TASK_EXECUTION_FINISHED", "COMPLETED"
+            "TASK_EXECUTION_FINISHED", "COMPLETED",
+            "RUN_FINISHED", "RUN_TOOL_ERROR"
         ):
             verified, evidence = _verify_success_condition_evidence(
                 item.get("success_condition", ""),
@@ -24444,70 +34180,24 @@ def run_next_task():
 
         result["generic_failure_streak"] = generic_streak
 
+        # v454: same fakty — ile razy ta czynnosc juz padla. Co z tym
+        # zrobic, decyduje MAIN; agent.py nie lata sie sam.
         if attempt_count >= TOOL_REPEAT_LIMIT:
-
-            log(
-                "MAIN",
-                "To samo narzędzie zawiodło "
-                + str(attempt_count)
-                + "x z tymi samymi argumentami -> "
-                "CODE_REVIEWER / CODE_FIXER"
-            )
-
-            review = review_code({
-                "task_id": result.get("task_id"),
-                "tool": result.get("tool"),
-                "arguments": result.get("arguments"),
-                "tool_result": result.get("tool_result"),
-                "interaction_id": result.get("interaction_id"),
-                "attempt_count": attempt_count
-            })
-
-            result["code_review"] = review
-
-            log_event(
-                "code_review_triggered",
-                {
-                    "tool": result.get("tool"),
-                    "attempt_count": attempt_count,
-                    "patch_applied": (
-                        review.get("patch_result", {}).get("applied")
-                        if isinstance(review, dict) else None
-                    )
-                }
-            )
-
-        else:
-
             result["hint"] = (
-                "To próba nr " + str(attempt_count) + " tej "
-                "dokładnej czynności (to samo narzędzie + te same "
-                "argumenty). MAIN: spróbuj innego podejścia w "
-                "zwykłym TASKu. Dopiero po " + str(TOOL_REPEAT_LIMIT)
-                + ". identycznej porażce agent automatycznie "
-                "konsultuje CODE_REVIEWERA."
+                "To samo wywołanie (narzędzie + te same argumenty) "
+                "zawiodło już " + str(attempt_count) + " razy."
             )
 
-            if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
-
-                result["hint"] += (
-                    " DODATKOWO: narzędzie '" + str(result.get("tool"))
-                    + "' zawiodło już " + str(generic_streak) + "x z "
-                    "rzędu w tym celu — za każdym razem z INNYMI "
-                    "argumentami (dlatego to NIE jest jeszcze "
-                    "automatyczna eskalacja do CODE_REVIEWERA powyżej). "
-                    "Jeśli ta robota wymaga prawdziwej logiki "
-                    "(parsowanie, dopasowywanie danych, obsługa "
-                    "wariantów), zamiast kolejnej komendy powłoki "
-                    "opłaca się napisać własne narzędzie: zwykły plik "
-                    ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME "
-                    "(nazwa), TOOL_DESCRIPTION (co robi), "
-                    "TOOL_PARAMETERS (JSON Schema, jak przy "
-                    "pozostałych narzędziach) i funkcją run(...) "
-                    "zwracającą słownik. Python wczytuje taki plik "
-                    "sam, raz na krok, bez restartu — od tej chwili "
-                    "jest na liście narzędzi jak każde inne."
-                )
+        if generic_streak >= GENERIC_TOOL_FAILURE_STREAK_LIMIT:
+            result["hint"] = (
+                (result.get("hint", "") + " ").strip() + " Narzędzie "
+                + str(result.get("tool")) + " zawiodło " + str(generic_streak)
+                + " razy z rzędu w tym celu, za każdym razem z innymi "
+                "argumentami. Zespół może dopisać własne narzędzie: plik "
+                ".py w " + str(CUSTOM_TOOLS_DIR) + " z TOOL_NAME, "
+                "TOOL_DESCRIPTION, TOOL_PARAMETERS (JSON Schema) i run(...) "
+                "zwracającym słownik — program wczytuje go sam, co krok."
+            ).strip()
 
     elif result.get("ok"):
 
@@ -24629,50 +34319,6 @@ def run_next_task():
 # ============================================================
 # DEEPSEEK TEAM
 # ============================================================
-
-
-def extract_function_source(source, function_name):
-    """
-    Wyciąga kod jednej funkcji top-level po nazwie — od
-    'def <nazwa>(' do kolejnego 'def '/'class ' na poziomie
-    wcięcia 0. Plik nie ma klas i funkcje top-level nie są
-    zagnieżdżane w sobie na tym poziomie, więc to wystarczy —
-    dzięki temu CODE_REVIEWER dostaje RZECZYWIŚCIE potrzebny
-    fragment zamiast przypadkowej końcówki pliku (poprzednio
-    source[-16000:] — dla pliku >120KB to ostatnie ~12%; błąd w
-    execute_shell() czy termux_run(), które leżą znacznie
-    wcześniej w pliku, w ogóle nie trafiał do CODE_REVIEWERA).
-    """
-
-    if not function_name:
-        return ""
-
-    pattern = re.compile(
-        r"^def "
-        + re.escape(str(function_name))
-        + r"\(",
-        re.MULTILINE
-    )
-
-    match = pattern.search(source)
-
-    if not match:
-        return ""
-
-    start = match.start()
-
-    next_def = re.search(
-        r"^(?:def |class )",
-        source[match.end():],
-        re.MULTILINE
-    )
-
-    if next_def:
-        end = match.end() + next_def.start()
-    else:
-        end = len(source)
-
-    return source[start:end].rstrip()
 
 
 # Shebang mowi o jezyku pliku dokladniej niz znacznik po ```.
@@ -25021,7 +34667,37 @@ def _nazwa_nad_blokiem(text, start, sciezka):
     if koniec_poprzedniego >= 0:
         przed = przed[koniec_poprzedniego + 3:]
 
-    return nazwa in przed[-400:]
+    przed = przed[-400:]
+
+    # v480fo: nad blokiem liczy sie NAJBLIZSZA nazwa pliku tego rodzaju.
+    # Bieg 2026-10-25 19:42: wstep Bartka wymienial wszystkie piec plikow
+    # (prepare.py, tokenizer.py, model.py...), a pierwszy blok poszedl do
+    # kazdego z nich, choc tuz nad nim stalo "### src/prepare.py".
+    sufiks = Path(nazwa).suffix.lower()
+    if sufiks:
+        najblizsza = _najblizsza_nazwa(przed, sufiks)
+        if najblizsza:
+            return najblizsza == nazwa
+
+    return nazwa in przed
+
+
+def _najblizsza_nazwa(przed, sufiks):
+    """
+    Nazwa pliku z tym sufiksem, ktora podpisuje blok: ta, od ktorej
+    zaczyna sie linia tuz nad nim (v480fw: "**`eval_bpb.py`** — zgodna
+    z `model.py`" to eval_bpb.py), inaczej ostatnia w tekscie nad nim.
+    """
+    linie = [l for l in str(przed or "").splitlines() if l.strip()]
+    if linie:
+        z_naglowka = _nazwa_z_naglowka(linie[-1])
+        if z_naglowka and Path(z_naglowka).suffix.lower() == sufiks:
+            return z_naglowka
+    nazwy = [
+        n for n in re.findall(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+)(?![\w-])", str(przed or ""))
+        if Path(n).suffix.lower() == sufiks
+    ]
+    return nazwy[-1] if nazwy else ""
 
 
 # v427: linia tuz nad blokiem zapowiada kawalek poprawki.
@@ -25048,11 +34724,27 @@ def _blok_poprawki(text, start):
 
     ostatnia = linie[-1]
 
+    # v480fw: naglowek zaczynajacy sie od nazwy pliku ("**`eval_bpb.py`**
+    # — nowa wersja ...") zapowiada caly plik, nie kawalek poprawki.
+    if (_nazwa_na_poczatku(ostatnia) and not _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
+            and not re.search(r"fragment|linij|linie|blok|kawał", ostatnia, re.IGNORECASE)):
+        return False
+
     return bool(
         _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
         or _STARY_FRAGMENT_RE.search(ostatnia)
         or _NOWY_FRAGMENT_RE.search(ostatnia)
+        or _POPRAWKA_FRAGMENTU_RE.search(ostatnia)
     )
+
+
+# v480hz: "**Fix (1 min, poprawka fragmentu w `trening_aux_1_3m.py`):**" nad
+# sama funkcja — bieg 2026-10-28 19:13 (druzyna 2, krok 462): program zapisal
+# te 283 B jako caly plik trening_aux_1_3m.py.
+_POPRAWKA_FRAGMENTU_RE = re.compile(
+    r"poprawk\w*\s+(?:tego\s+)?fragment|fragment\w*\s+(?:w|do|pliku|kodu)\b|"
+    r"podmie[nń]\w*\s+(?:fragment|funkcj|lini)|zamie[nń]\w*\s+(?:fragment|funkcj|lini)",
+    re.IGNORECASE)
 
 
 def _obcy_jezyk_dla(sciezka, znacznik, kod):
@@ -25414,6 +35106,11 @@ def _task_is_simple_run(task_text, success_condition, written_path):
     if _zadanie_mowi_o_czyms_jeszcze(text, written_path):
         return None
 
+    # v480hx: zadanie mowi o flagach, ale nie da sie z niego wyczytac, z
+    # jakimi uruchomic — niech przeczyta je wykonawca, nie zgadujemy.
+    if _FLAGI_W_TEKSCIE_RE.search(str(task_text or "")) and _argumenty_z_zadania(task_text, written_path) is None:
+        return None
+
     try:
         if not written_path.exists():
             return None
@@ -25691,6 +35388,1636 @@ def _uruchom_jako_usluge(path, command, powod):
     }
 
 
+# ============================================================
+# RUN — MAIN WYKONUJE SAM, PYTHON JEST REKAMI (v459)
+# ============================================================
+#
+# Uzytkownik: "czy lepiej, jak MAIN bedzie sam wykonywal? dalo by sie
+# tak napisac program, by Python z wszystkim sobie radzil sam, przez
+# MAIN-a?". Da sie — i to nie zamiast Gemini, tylko obok.
+#
+# MAIN (DeepSeek) rozumuje lepiej niz Gemini flash-lite i widzi caly
+# cel, ale kazda jego wiadomosc to 6-60 s i jedna z ~90 na godzine na
+# konto. Gemini jest szybszy na pojedynczym wywolaniu, ale gubi sie na
+# stronach i ma limity. Wiec MAIN dostaje wybor: RUN = lista do
+# _RUN_MAX_AKCJI akcji, wykonana tu, od razu, tymi samymi narzedziami
+# co u Gemini (dispatch_tool), z pelnymi wynikami z powrotem — w tym
+# numerowana lista elementow strony, po ktorej klika chrome_click(nr).
+# TASK zostaje dla dluzszej roboty. Bez klucza Gemini program dziala
+# dalej — przez RUN.
+
+_RUN_MAX_AKCJI = int(os.environ.get("RUN_MAX_AKCJI", "12"))
+
+
+# v480ed: dlugie czekanie nie trzyma MAIN-a (uzytkownik 2026-10-24
+# 14:13, "zrob ja"). Bieg 2026-10-24 16:00: MAIN puscil `sleep 900; cat
+# ...` i caly zespol stal kwadrans.
+#
+# v480eh (uzytkownik 2026-10-24 17:15: "to nie jest poukladane ... popraw,
+# poukladaj"): jedna lista rzeczy w tle zamiast jednego miejsca. Bieg
+# 2026-10-24 17:09-17:13 (v480ef): `sleep 240; cat ...` stalo 2 min na
+# wierzchu, zanim poszlo w tlo; MAIN od razu puscil drugie `sleep 100; cat
+# ...` na to samo — ono lecialo na wierzchu (miejsce w tle bylo zajete) i
+# znow trzymalo MAIN-a, a w logu przeplataly sie dwa strumienie "Leci".
+# Teraz:
+# - komenda, ktora tylko czeka (sleep od _CZEKANIE_W_TLE_OD_S), od razu
+#   idzie w tlo; gdy w tle juz cos leci, nowe czekanie czeka na tamto
+#   (najdluzej swoj sleep) i potem wykonuje reszte bez sleep — tez w tle,
+#   MAIN nie stoi;
+# - inna komenda MAIN-a, ktora liczy dluzej niz _W_TLE_PO_S, przechodzi
+#   w tlo i liczy dalej;
+# - w tle moze lezec kilka rzeczy naraz; kazda ma swoja karte na gorze
+#   wiadomosci MAIN-a (pelna raz, potem jedna linia) i swoj wynik, gdy
+#   sie skonczy;
+# - to, co leci w tle, nie pisze "Leci ..." do logu (log mowi raz: poszlo
+#   w tlo, i raz: skonczone).
+_CZEKANIE_W_TLE_OD_S = 60
+_W_TLE_PO_S = int(os.environ.get("MAIN_W_TLE_PO_S", "120"))
+_w_tle = []
+_w_tle_lock = _threading.RLock()  # v480he: _procesy_z_procentem czyta _w_tle także spod tej blokady
+_w_tle_licznik = [0]
+_BEZ_SLEEP_RE = re.compile(
+    r"(?<![\w-])sleep\s+\d+(?:\.\d+)?[smh]?(?=$|[\s;&|)])"
+)
+
+
+def _log_leci(zrodlo, tekst):
+    """v480eh: meldunki "Leci ..." tylko z komend na wierzchu."""
+    if getattr(_threading.current_thread(), "cichy", False):
+        return
+    log(zrodlo, tekst)
+
+
+def _bez_sleep(cmd):
+    """v480ee: komenda czekania bez sleep — to, co ma sie stac po nim."""
+    reszta = _BEZ_SLEEP_RE.sub("", str(cmd or ""))
+    reszta = re.sub(r"^[\s;&|]+", "", reszta).strip()
+    # v480fa: "cd X && sleep 60; tail" -> "cd X && tail", nie "cd X && ; tail"
+    reszta = re.sub(r"(&&|\|\||;)\s*(?:;|&&)\s*", r"\1 ", reszta)
+    reszta = re.sub(r"\s*(?:&&|;)\s*$", "", reszta).strip()
+    return reszta or str(cmd or "")
+
+
+def _min_s(sek):
+    """v480gy: czas po ludzku, w pelnych minutach (uzytkownik 2026-10-27:
+    "te minuty sa zle napisane" — "4 min 46 s", "3 min 58 s" to szum dla
+    kogos, kto nie ma zegarka): "<1 min", "5 min", "1 h 20 min"."""
+    sek = max(0, int(sek))
+    if sek < 60:
+        return "<1 min"
+    m = (sek + 30) // 60
+    if m < 60:
+        return str(m) + " min"
+    return str(m // 60) + " h" + ((" " + str(m % 60) + " min") if m % 60 else "")
+
+
+def _w_tle_zywe():
+    with _w_tle_lock:
+        return [r for r in _w_tle if r["watek"].is_alive()]
+
+
+def _w_tle_niedostarczone():
+    """v480ee: cos w tle juz sie skonczylo, a MAIN nie dostal wyniku."""
+    with _w_tle_lock:
+        return [
+            r for r in _w_tle
+            if r.get("wynik") is not None and not r.get("dostarczony")
+        ]
+
+
+def _rzecz_w_tle(rodzaj, komenda, sekundy, pominiete, czeka_na=None):
+    _w_tle_licznik[0] += 1
+    return {
+        "nr": _w_tle_licznik[0], "rodzaj": rodzaj, "komenda": komenda,
+        "start": time.time(), "sekundy": sekundy, "wynik": None,
+        "koniec": None, "dostarczony": False, "pokazany": False,
+        "pominiete": list(pominiete or []), "czeka_na": list(czeka_na or []),
+        "w_tle": False, "watek": None,
+    }
+
+
+def _uruchom_rzecz(rzecz, praca, cichy):
+    def _cel():
+        try:
+            wynik = praca()
+        except Exception as e:
+            wynik = {"ok": False, "error": str(e), "error_type": type(e).__name__}
+        if isinstance(wynik, dict):
+            wynik = _ukryj_rywala_w_wyniku(_bez_ostrzezen_pythona(wynik))
+        with _w_tle_lock:
+            rzecz["wynik"] = wynik
+            rzecz["koniec"] = time.time()
+            w_tle = rzecz["w_tle"]
+        if w_tle and rzecz.get("autor") and not rzecz.get("anulowane"):
+            # v480gl: komenda roli zespolu skonczona w tle — wynik do autora
+            try:
+                _role_inbox.setdefault(rzecz["autor"], []).append((
+                    "Program",
+                    "Twoja komenda puszczona " + _temu(rzecz["start"]) + " skończyła się w tle:\n"
+                    + _opis_dla_zespolu(rzecz["komenda"], rzecz.get("cwd") or "~", wynik)))
+            except Exception:
+                pass
+        if w_tle and not rzecz.get("anulowane"):
+            try:
+                log("MAIN", "W tle skończone (" + short(rzecz["komenda"], 80)
+                    + "): " + short(json.dumps(
+                        wynik, ensure_ascii=False, default=str), 500))
+            except Exception:
+                pass
+
+    watek = _threading.Thread(target=_cel, daemon=True)
+    watek.cichy = cichy
+    rzecz["watek"] = watek
+    watek.start()
+    return watek
+
+
+def _do_listy_w_tle(rzecz):
+    rzecz["w_tle"] = True
+    rzecz["watek"].cichy = True
+    rzecz["watek"].w_tle = True
+    _w_tle.append(rzecz)
+
+
+_PLIK_W_KOMENDZIE_RE = re.compile(r"(?:~|/data/data|\$HOME)[^\s;&|'\"<>()]+")
+
+
+_CZYTANIE_PLIKU_RE = re.compile(
+    r"\b(?:cat|tail|head|wc|ls|stat|du|grep)\b([^;&|<>()]*)")
+
+
+def _pliki_czekania(cmd, z_procesami=True):
+    """v480ei: pliki, ktore czekanie czyta po sleep (cat/tail/head ...).
+
+    v480gu: bieg 2026-10-27 11:08 — "cd ~/MAIN_1 && ... cat tfm_med.log;
+    ps -p 19272" dawalo tylko {~/MAIN_1} (sam folder z cd), tak samo jak
+    czekanie na stary trening (tfm.log, ps -p 6420), wiec nowe czekanie
+    MAIN-a odrzucono jako "to samo". Folder z cd nie jest plikiem;
+    wzgledne nazwy po cat/tail/... licza sie wzgledem niego, a ps -p PID
+    jako osobny proces."""
+    c = _bez_sleep(cmd)
+    wynik = set()
+    katalogi = set()
+    katalog = None
+    for m in re.finditer(r"\bcd\s+([^\s;&|]+)", c):
+        katalogi.add(m.group(1))
+        katalog = katalog or m.group(1)
+    for sc in _PLIK_W_KOMENDZIE_RE.findall(c):
+        if sc not in katalogi:
+            wynik.add(sc)
+    for m in _CZYTANIE_PLIKU_RE.finditer(c):
+        for tok in m.group(1).split():
+            if (tok.startswith(("-", "'", '"', "~", "/", "$")) or "*" in tok
+                    or not re.search(r"[./]", tok) or tok.isdigit()):
+                continue
+            wynik.add((katalog.rstrip("/") + "/" if katalog else "") + tok)
+    if z_procesami:
+        for pid in re.findall(r"\bps\s+(?:-\w+\s+)*-p\s+(\d+)", c):
+            wynik.add("pid:" + pid)
+    return wynik
+
+
+def _to_samo_czekanie_w_tle(cmd):
+    """v480fo: nazwa zmieniona — ta sama nazwa co _to_samo_czekanie(nazwa,
+    argumenty) wyzej nadpisywala tamta i wykonanie TASK padalo
+    (bieg 2026-10-25 19:42: "takes 1 positional argument but 2 were given").
+    v480ek: zywe czekanie w tle, ktore czyta te same pliki co `cmd`.
+
+    Bieg 2026-10-24 17:36-17:39: MAIN konczyl prawie kazdy RUN nowym
+    `sleep 300; cat <te same logi>`, choc takie czekanie juz lecialo. W tle
+    staly trzy czekania na to samo, skonczyly sie razem i MAIN dostal trzy
+    karty z tym samym wynikiem."""
+    nowe = _pliki_czekania(cmd)
+    if not nowe:
+        return None
+    for r in _w_tle_zywe():
+        if r["rodzaj"] == "czekanie" and nowe <= _pliki_czekania(r["komenda"]):
+            return r
+    return None
+
+
+def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
+    """v480ed/eh: czekanie idzie w tlo od razu. Gdy w tle juz cos leci,
+    czeka na to (najdluzej `sekundy`) i potem wykonuje reszte bez sleep."""
+    cmd = str(args.get("command") or "")
+    tamto = _to_samo_czekanie_w_tle(cmd)
+    if tamto:
+        return {
+            "ok": True,
+            "status": "JUZ_CZEKA_W_TLE",
+            "command": cmd,
+            "message": (
+                "Drugiego czekania nie puściłem: czekanie puszczone "
+                + _temu(tamto["start"]) + " już czyta te same pliki; wynik "
+                "najpóźniej za " + _min_s(max(0, tamto["start"] + (tamto.get("sekundy") or 0) - time.time()))
+                + " (wcześniej, jeśli proces się skończy). Jego wynik przyjdzie "
+                "sam na górze Twojej wiadomości."
+                + ((" Akcji po nim w tym RUN (" + ", ".join(pominiete)
+                    + ") nie wykonałem — mogą zależeć od wyniku; wyślij je, "
+                    "gdy przyjdzie.") if pominiete else "")
+            ),
+        }
+    zywe = _w_tle_zywe()
+    rzecz = _rzecz_w_tle("czekanie", cmd, sekundy, pominiete,
+                         [r["nr"] for r in zywe])
+    if zywe:
+        def praca():
+            koniec = time.time() + sekundy
+            for r in zywe:
+                r["watek"].join(timeout=max(0.0, koniec - time.time()))
+            wynik = dispatch_tool(name, dict(args, command=_BEZ_SLEEP_RE.sub("true", cmd)))
+            if isinstance(wynik, dict):
+                zostalo = [r for r in zywe if r["watek"].is_alive()]
+                wynik["czekanie"] = (
+                    "Czekało " + _min_s(time.time() - rzecz["start"]) + " "
+                    + ("na to, co już leciało w tle, aż się skończyło"
+                       if not zostalo else
+                       "— minął czas z tej komendy, a to, co już leciało w "
+                       "tle, trwa dalej")
+                    + "; potem program wykonał resztę bez sleep."
+                )
+            return wynik
+    else:
+        def praca():
+            return dispatch_tool(name, args)
+    with _w_tle_lock:
+        _uruchom_rzecz(rzecz, praca, True)
+        _do_listy_w_tle(rzecz)
+    return {
+        "ok": True,
+        "status": "CZEKA_W_TLE",
+        "command": cmd,
+        "message": "Czekanie poszło w tle — opis jest w sekcji „Dalej w tle”.",
+    }
+
+
+# v480en: najmniej tyle czeka MAIN, zanim obudzi go sam przyrost w logach.
+_BUDZ_PO_PRZYROSCIE_S = int(os.environ.get("MAIN_BUDZ_PO_PRZYROSCIE_S", "180"))
+
+
+def _rozmiary_plikow(pliki):
+    wynik = {}
+    for p in pliki:
+        try:
+            sciezka = os.path.expanduser(p.replace("$HOME", "~"))
+            wynik[p] = os.path.getsize(sciezka)
+        except Exception:
+            wynik[p] = None
+    return wynik
+
+
+_w_tle_postep = []
+
+# v480eq: odstep budzenia samym przyrostem w logach. Uzytkownik 2026-10-24
+# 20:52 ("czy to nie beznadziejny spam ... z tym czasem"): druzyna 1 od
+# 20:35 do 20:45 co 3 min dostawala "POSTĘP W TLE", a MAIN za kazdym razem
+# tylko wysylal to samo czekanie — jedna wiadomosc do DeepSeeka co 3 min
+# bez zadnej decyzji. Teraz kazde takie pobudzenie, po ktorym MAIN znowu
+# nic nowego nie zrobil, podwaja odstep (3 -> 6 -> 12 -> 24 min); koniec
+# czegos w tle albo nowa robota MAIN-a wraca do 3 min.
+_odstep_przyrostu = [_BUDZ_PO_PRZYROSCIE_S]
+_ODSTEP_PRZYROSTU_MAX_S = 1440
+
+
+def _procent_z_logu(plik, komenda=None, cwd=None, start=None):
+    """v480gz: procent postepu procesu z jego logu (None, gdy nie wiadomo)."""
+    try:
+        _, linie = _ogon_logu(plik)
+        m = re.match(r"(\d+)%", _postep_z_logu(plik, linie, start, komenda, cwd))
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _bledy_w_logu(plik):
+    try:
+        _, linie = _ogon_logu(plik)
+        return sum(1 for l in linie if _BLAD_W_LOGU_RE.search(l))
+    except Exception:
+        return 0
+
+
+def _procesy_z_procentem(procesy=None):
+    """v480gz: {realpath logu: stan} dla procesow w tle, ktorych postep
+    znamy w procentach."""
+    if procesy is None:
+        procesy = _zywe_w_tle()
+    sledzone = {}
+    for (_rodz, _id), _kom in procesy.items():
+        try:
+            if _rodz == "p":
+                _lp, _st = _log_procesu_w_tle(_id)
+                try:
+                    _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
+                except Exception:
+                    _cwd = None
+                _pz = _plik_z_przekierowania(_kom, _cwd)
+            else:
+                _lp, _st, _cwd = "", (_grupy_z_komend.get(_id) or (None, None))[1], _cwd_z_komendy(_kom)
+                _pz = _plik_z_przekierowania(_kom)
+            for _plik in [x for x in (_pz, _lp) if x]:
+                _pr = _procent_z_logu(_plik, _kom, _cwd, _st)
+                if _pr is not None:
+                    sledzone[os.path.realpath(_plik)] = {
+                        "kom": _kom, "cwd": _cwd, "start": _st,
+                        "kamien": _pr // 25, "bledy": _bledy_w_logu(_plik),
+                        "plik": _plik}
+                    break
+        except Exception:
+            pass
+    # v480he: komenda roli albo MAIN-a, ktora po 2 min poszla w tlo jako
+    # watek (URUCHOM Bartka: "python3 -u m1.py > m1.log") — nie ma jej
+    # w _procesy_w_tle ani w grupach, a tez liczy z procentem. Bieg
+    # 2026-10-27 14:37: Bartek pilnowal m1.log, a program go nie widzial.
+    try:
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") == "czekanie":
+                continue
+            _kom = str(r.get("komenda") or "")
+            _cwd = _cwd_rzeczy(r)
+            _pz = _plik_z_przekierowania(_kom, _cwd)
+            if not _pz or os.path.realpath(_pz) in sledzone:
+                continue
+            _pr = _procent_z_logu(_pz, _kom, _cwd, r.get("start"))
+            if _pr is not None:
+                sledzone[os.path.realpath(_pz)] = {
+                    "kom": _kom, "cwd": _cwd, "start": r.get("start"),
+                    "kamien": _pr // 25, "bledy": _bledy_w_logu(_pz), "plik": _pz}
+    except Exception:
+        pass
+    return sledzone
+
+
+def _logi_liczace_w_tle():
+    """v480he: {realpath logu: stan} wszystkiego, co liczy w tle i pisze
+    do pliku (procesy, grupy, komendy-watki) — takze bez procentu."""
+    wynik = {}
+    try:
+        for (_rodz, _id), _kom in _zywe_w_tle().items():
+            _cwd = None
+            if _rodz == "p":
+                try:
+                    _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
+                except Exception:
+                    pass
+            _cwd = _cwd or _cwd_z_komendy(_kom)
+            _pz = _plik_z_przekierowania(_kom, _cwd)
+            if _pz:
+                _st = (_grupy_z_komend.get(_id) or (None, None))[1] if _rodz == "g" else None
+                wynik[os.path.realpath(_pz)] = {"kom": _kom, "cwd": _cwd, "start": _st, "plik": _pz}
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") == "czekanie":
+                continue
+            _kom = str(r.get("komenda") or "")
+            _cwd = _cwd_rzeczy(r)
+            _pz = _plik_z_przekierowania(_kom, _cwd)
+            if _pz:
+                wynik[os.path.realpath(_pz)] = {"kom": _kom, "cwd": _cwd, "start": r.get("start"), "plik": _pz}
+    except Exception:
+        pass
+    return wynik
+
+
+def _cwd_rzeczy(r):
+    try:
+        if r.get("cwd"):
+            _d = str(_resolve_home_relative_path(str(r["cwd"])))
+            if os.path.isdir(_d):
+                return _d
+    except Exception:
+        pass
+    return _cwd_z_komendy(r.get("komenda"))
+
+
+def _cwd_z_komendy(kom):
+    """Katalog z ostatniego "cd X" w komendzie (None, gdy go nie ma)."""
+    try:
+        _cd = re.findall(r"\bcd\s+[\"']?([^\s;&|\"']+)", str(kom))
+        if _cd:
+            _d = str(_resolve_home_relative_path(_cd[-1]))
+            return _d if os.path.isdir(_d) else None
+    except Exception:
+        pass
+    return None
+
+
+def _sciezka_real(x):
+    try:
+        return os.path.realpath(os.path.expanduser(str(x).replace("$HOME", str(HOME))))
+    except Exception:
+        return str(x)
+
+
+def _czekanie_na_postep(r, sledzone=None):
+    """v480gz: czekanie MAIN-a, ktore czyta tylko logi procesow z procentem
+    — program trzyma je do kolejnych 25%, konca procesu albo bledu."""
+    if r.get("rodzaj") != "czekanie":
+        return False
+    if sledzone is None:
+        sledzone = _procesy_z_procentem()
+    if not sledzone:
+        return False
+    # wystarczy, ze czyta log takiego procesu — inne pliki (np. model,
+    # ktory proces zapisze na koncu) i tak przyjda z jego koncem
+    _pl = _pliki_czekania(r["komenda"], z_procesami=False)
+    return any(_sciezka_real(x) in sledzone for x in _pl)
+
+
+def _bezczynnie_czekaj():
+    """v480eo: MAIN w calym RUN nie zrobil nic nowego (tylko czekanie na to,
+    co juz leci w tle, albo to samo sprawdzenie z tym samym wynikiem), wiec
+    program nie pyta go od razu znowu, tylko czeka, az cos sie wydarzy.
+
+    Uzytkownik 2026-10-24 20:19: "chodzilo mi, zeby mogl dzialac jeszcze,
+    jak cos pusci". Dlatego kazde czekanie idzie w tlo i MAIN od razu ma
+    glos (v480el trzymal go przy RUN zaczynajacym sie od czekania — to
+    cofniete). Pusto kreci sie tylko wtedy, gdy sam nic nie robi; wtedy
+    program budzi go, gdy:
+    - skonczy sie cos z listy w tle albo proces w tle,
+    - w plikach, ktore czytaja czekania z listy, przybyly nowe wyniki (nie
+      wczesniej niz po _BUDZ_PO_PRZYROSCIE_S) — wtedy dostaje swiezy
+      odczyt jako "postep",
+    - minie najdalszy czas czekan z listy (najdluzej 30 min).
+    Miedzy tymi chwilami nie ma zapytan do DeepSeeka; program patrzy sam
+    co 5 s na telefonie."""
+    zywe = _w_tle_zywe()
+    procesy = _zywe_w_tle()
+    if not zywe and not procesy:
+        return
+    czekania = [r for r in zywe if r["rodzaj"] == "czekanie"]
+    pliki = set()
+    for r in czekania:
+        pliki |= _pliki_czekania(r["komenda"], z_procesami=False)
+    # v480fd: dlugi proces w tle bez czekania — budzimy tez przyrostem w
+    # jego wlasnym logu (wczesniej tylko pliki czytane przez czekania, wiec
+    # sam trening budzil MAIN-a dopiero po 30 min).
+    for (_rodz, _id), _kom in procesy.items():
+        try:
+            if _rodz == "p":
+                _lp, _ = _log_procesu_w_tle(_id)
+                if _lp:
+                    pliki.add(_lp)
+                try:
+                    _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
+                except Exception:
+                    _cwd = None
+                _pz = _plik_z_przekierowania(_kom, _cwd)
+            else:
+                _pz = _plik_z_przekierowania(_kom)
+            if _pz:
+                pliki.add(_pz)
+        except Exception:
+            pass
+    # v480gz: procesy z postepem w procentach (log + "z ilu") — MAIN-a
+    # budzi ich koniec, blad w logu albo kolejne 25% (czesciowy wynik), a
+    # nie kazdy przyrost logu ani koniec jego wlasnego czekania na ten log
+    # (uzytkownik 2026-10-27: "nie mozna mu wyslac wyniku dopiero, jak sie
+    # skonczy, nawet w czesci?" — MAIN co 4 min puszczal to samo czekanie).
+    sledzone = _procesy_z_procentem(procesy)
+
+    def _trzymane(r):
+        return _czekanie_na_postep(r, sledzone)
+
+    t0 = time.time()
+    koniec = t0 + (3600 if sledzone else 1800)
+    for r in zywe:
+        if _trzymane(r):
+            r["trzymane"] = True
+    _wolne = [r for r in zywe if not _trzymane(r)]
+    if _wolne:
+        koniec = min(koniec, max(
+            r["start"] + (r.get("sekundy") or 0) for r in _wolne
+        ) + 5)
+        koniec = max(koniec, t0 + 60)
+    _do_przyrostu = set(p for p in pliki if _sciezka_real(p) not in sledzone)
+    # v480hb: glos co _GLOS_CO_S (uzytkownik wybral 1 min) — MAIN dostaje
+    # wtedy jedna linie (postep + zespol), nie pelny stan.
+    _koniec_pelny = koniec
+    koniec = min(koniec, t0 + _GLOS_CO_S)
+    rozmiary0 = _rozmiary_plikow(_do_przyrostu)
+    log("MAIN", "MAIN nic nowego nie zrobił — program czeka, aż coś się "
+        "wydarzy w tle (najdłużej do " + _hhmm(koniec) + "), zamiast pytać "
+        "go od razu znowu.")
+    powod = "czas"
+    kamien_tekst = ""
+    nastepny_meldunek = t0 + 60
+    nastepny_postep = t0 + 15
+    while time.time() < koniec:
+        if zywe and any(not r["watek"].is_alive() and not _trzymane(r) for r in zywe):
+            powod = "koniec_tla"
+            break
+        if procesy:
+            teraz_zywe = _zywe_w_tle()
+            if any(k not in teraz_zywe for k in procesy):
+                powod = "koniec_procesu"
+                break
+        if sledzone and time.time() >= nastepny_postep:
+            nastepny_postep += 15
+            for _rp, _s in sledzone.items():
+                _pr = _procent_z_logu(_s["plik"], _s["kom"], _s["cwd"], _s["start"])
+                if _bledy_w_logu(_s["plik"]) > _s["bledy"]:
+                    powod = "blad"
+                    kamien_tekst = _nazwa_w_tle(_s["kom"])
+                    break
+                if _pr is not None and _pr // 25 > _s["kamien"]:
+                    powod = "kamien"
+                    kamien_tekst = _nazwa_w_tle(_s["kom"]) + " doszedł do " + str(_pr) + "%"
+                    break
+            if powod in ("blad", "kamien"):
+                break
+        if _do_przyrostu and time.time() - t0 >= _odstep_przyrostu[0]:
+            if _rozmiary_plikow(_do_przyrostu) != rozmiary0:
+                powod = "przybylo"
+                break
+        if time.time() >= nastepny_meldunek:
+            nastepny_meldunek += 60
+            log("TERMUX", "Czeka " + _min_s(time.time() - t0) + " (najdłużej "
+                "do " + _hhmm(koniec) + "); obudzi MAIN-a, gdy coś w tle się "
+                "skończy albo w logach przybędzie wyników.")
+        time.sleep(5)
+    czekal = _min_s(time.time() - t0)
+    if powod == "czas" and time.time() < _koniec_pelny - 1:
+        # minela minuta, nic sie nie wydarzylo — czekania dalej trzymane
+        log("MAIN", "Minęła " + czekal + " czekania bez zmian — MAIN dostaje głos (jedna linia).")
+        return
+    if powod == "przybylo":
+        _odstep_przyrostu[0] = min(_ODSTEP_PRZYROSTU_MAX_S, _odstep_przyrostu[0] * 2)
+    else:
+        _odstep_przyrostu[0] = _BUDZ_PO_PRZYROSCIE_S
+    # v480gz: czekania MAIN-a trzymane do kamienia/konca — swiezy odczyt
+    # teraz, zeby wynik byl aktualny, a nie sprzed kilkunastu minut.
+    with _w_tle_lock:
+        _wszystkie = list(_w_tle)
+    for r in _wszystkie:
+        if r.get("trzymane") and not r["watek"].is_alive() and not r.get("dostarczony"):
+            r["trzymane"] = False
+            try:
+                r["wynik"] = dispatch_tool("termux_run", {
+                    "command": _BEZ_SLEEP_RE.sub("true", r["komenda"])})
+                r["koniec"] = time.time()
+            except Exception:
+                pass
+    if powod in ("kamien", "blad"):
+        _wynik_do_decyzji[0] = True
+    zdanie = {
+        "kamien": "częściowy wynik — " + kamien_tekst,
+        "blad": "w logu " + kamien_tekst + " pojawił się błąd",
+        "koniec_tla": "coś z tego, co leciało w tle, się skończyło",
+        "koniec_procesu": "proces w tle się skończył",
+        "przybylo": "proces dalej działa, ale w jego logach przybyły nowe wyniki",
+        "czas": ("minął czas czekań z tła" if czekania else
+                 "minęło " + czekal + " bez zmian, a proces w tle dalej działa "
+                 "(jego stan jest niżej)"),
+    }[powod]
+    # v480fd: to, co MAIN czytal przed czekaniem, jest juz nieswieze —
+    # raport z tla ma pokazac pelny stan, nie skracac go.
+    _ostatni_run_maina["komendy"] = []
+    _ostatni_run_maina["wyjscie"] = ""
+    if powod in ("czas", "przybylo") and procesy:
+        # v480fd: przy dlugim procesie MAIN zawsze dostaje jego stan z czasem
+        # trwania, takze gdy ostatnia linia logu sie nie zmienila.
+        try:
+            _tlo_ostatnio_widziane.clear()
+        except Exception:
+            pass
+    log("MAIN", "Czekanie bez pracy skończone po " + czekal + ": " + zdanie + ".")
+    tekst = "Program czekał " + czekal + ": " + zdanie + "."
+    if powod == "przybylo" and czekania:
+        try:
+            odczyt = dispatch_tool("termux_run", {
+                "command": _BEZ_SLEEP_RE.sub("true", czekania[0]["komenda"])
+            })
+            # v480ha: tylko to, czego MAIN jeszcze nie widzial
+            tekst += (
+                "\nŚwieży odczyt Twojego czekania:\n"
+                + _opis_wyniku_czekania(_wynik_tylko_nowe(odczyt, _bez_sleep(czekania[0]["komenda"])))
+            )
+        except Exception:
+            pass
+        tekst += (
+            "\nNastępny taki odczyt najwcześniej za "
+            + str(_odstep_przyrostu[0] // 60) + " min; koniec procesu albo "
+            "czekania przyjdzie od razu."
+        )
+    elif powod in ("przybylo", "czas") and procesy:
+        # v480fd: sam proces, bez czekania — stan idzie w raporcie z tla
+        tekst += (
+            " Następna taka wiadomość najwcześniej za "
+            + str(max(1, _odstep_przyrostu[0] // 60)) + " min, gdy w logu "
+            "przybędzie wyników (najpóźniej po 30 min); koniec procesu "
+            "przyjdzie od razu."
+        )
+    # v480fc: przy koncu czekania/procesu karta wyniku (W TLE SKOŃCZONE /
+    # "Proces w tle ... skończył") i tak przychodzi w tej samej wiadomosci
+    # — osobna karta POSTĘP tylko to zapowiadala (bieg 2026-10-25 08:23).
+    if powod in ("koniec_tla", "koniec_procesu"):
+        return
+    if powod in ("kamien", "blad"):
+        # v480gz: stan procesu (procent, koncowka) jest w "Dalej w tle",
+        # a odczyt czekania w "Skonczone w tle" — tu tylko jedno zdanie
+        _ost = ("Następny częściowy wynik przy kolejnych 25%; koniec procesu "
+                "albo błąd w logu przyjdą od razu.") if powod == "kamien" else ""
+        with _w_tle_lock:
+            _w_tle_postep.append("• Program czekał " + czekal + ": " + zdanie + ". " + _ost)
+        return
+    with _w_tle_lock:
+        _w_tle_postep.append("• " + tekst)
+
+
+def _wykonaj_po_skonczonym(name, args):
+    """v480ee: nowe czekanie, gdy to, co bylo w tle, juz sie skonczylo, a
+    MAIN nie widzial wyniku (bieg 2026-10-24 16:28: nowe `sleep 600` czekalo
+    10 min na proces, ktory juz sie skonczyl). Wykonuje reszte od razu."""
+    cmd = str(args.get("command") or "")
+    try:
+        wynik = dispatch_tool(name, dict(args, command=_BEZ_SLEEP_RE.sub("true", cmd)))
+    except Exception as e:
+        wynik = {"ok": False, "error": str(e)}
+    if not isinstance(wynik, dict):
+        wynik = {"ok": True, "wynik": wynik}
+    wynik["czekanie"] = (
+        "To, na co czekałeś, już się skończyło w tle, więc program tej "
+        "komendy nie czekał — od razu wykonał jej resztę bez sleep. Wynik "
+        "tamtego jest na górze tej wiadomości."
+    )
+    # v480ey: ten sam odczyt co w karcie "W TLE SKOŃCZONE" nie idzie drugi
+    # raz (bieg 2026-10-24 21:51: caly log treningu dwa razy w jednej
+    # wiadomosci).
+    try:
+        nowe = [l.strip() for l in str(wynik.get("stdout") or "").splitlines() if l.strip()]
+        znane = set()
+        for r in _w_tle_niedostarczone():
+            w = r.get("wynik")
+            if isinstance(w, dict):
+                znane.update(l.strip() for l in str(w.get("stdout") or "").splitlines() if l.strip())
+        if nowe and znane and sum(l in znane for l in nowe) >= 0.9 * len(nowe):
+            wynik["stdout"] = ""
+            wynik["czekanie"] = (
+                "To, na co czekałeś, już się skończyło w tle, więc program od "
+                "razu wykonał resztę tej komendy bez sleep. Wyszło to samo, co "
+                "w sekcji „Skończone w tle” wyżej, więc tu "
+                "tego nie powtarzam."
+            )
+    except Exception:
+        pass
+    return wynik
+
+
+def _rdzen_komendy(cmd):
+    """v480gn: komenda bez "cd X &&", "export A=B &&" i zmiennych A=B na
+    poczatku — "cd ~/MAIN_1 && OMP_NUM_THREADS=4 python3 tcn.py" i
+    "cd ~/MAIN_1 && python3 tcn.py" to ta sama robota."""
+    c = _bez_sleep(str(cmd or "")).strip()
+    for _ in range(10):
+        c2 = re.sub(r"^(?:cd\s+\S+|export(?:\s+\w+=\S*)+)\s*(?:&&|;)\s*", "", c)
+        c2 = re.sub(r"^\w+=\S*\s+", "", c2)
+        if c2 == c:
+            break
+        c = c2
+    return re.sub(r"\s+", " ", c).strip()
+
+
+def _juz_liczy_w_tle(cmd):
+    """v480gn: ta sama robota juz liczy w tle — opis dla tego, kto chce ja
+    puscic drugi raz (bieg 2026-10-26 22:44: wykonawca TASK puscil
+    tcn.py, ktory Bartek trenowal juz w tle; dwa treningi po 2 h)."""
+    rdzen = _rdzen_komendy(cmd)
+    if not rdzen:
+        return ""
+    for r in _w_tle_zywe():
+        if r.get("rodzaj") == "komenda" and _rdzen_komendy(r.get("komenda")) == rdzen:
+            kto = ("Komenda " + r["autor_dop"]) if r.get("autor_dop") else "Ta komenda"
+            return (kto + " (" + short(rdzen, 120) + ") liczy już w tle od "
+                    + _min_s(time.time() - r["start"]) + " — nie puściłem jej drugi raz, żeby dwie kopie "
+                    "nie dzieliły procesora. Wynik przyjdzie sam, gdy się skończy.")
+    return ""
+
+
+def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete):
+    """v480ef: komenda MAIN-a, ktora liczy dluzej niz _W_TLE_PO_S, liczy
+    dalej w tle. Zwraca (wynik, czy_poszlo_w_tlo)."""
+    cmd = str(args.get("command") or "")
+    _juz = _juz_liczy_w_tle(cmd)
+    if _juz:
+        return {"ok": True, "status": "JUZ_LICZY_W_TLE", "command": cmd, "message": _juz}, False
+    rzecz = _rzecz_w_tle("komenda", cmd, 0, pominiete)
+    watek = _uruchom_rzecz(rzecz, lambda: dispatch_tool(name, args), False)
+    watek.join(timeout=_W_TLE_PO_S)
+    with _w_tle_lock:
+        if rzecz["wynik"] is not None:
+            return rzecz["wynik"], False
+        _do_listy_w_tle(rzecz)
+    log("MAIN", "Komenda liczy dłużej niż " + _min_s(_W_TLE_PO_S)
+        + " — liczy dalej w tle, MAIN dostaje głos: " + short(cmd, 200))
+    return {
+        "ok": True,
+        "status": "LECI_W_TLE",
+        "command": cmd,
+        "message": "Komenda liczy dalej w tle — opis jest w sekcji „Dalej w tle”.",
+    }, True
+
+
+def _opis_wyniku_czekania(w):
+    """v480ee: wynik komendy jak w terminalu, nie jako JSON."""
+    if not isinstance(w, dict):
+        return short(str(w), 4000)
+    czesci = []
+    out = str(w.get("stdout") or "").rstrip("\n")
+    err = str(w.get("stderr") or "").rstrip("\n")
+    if out:
+        czesci.append(short(out, 3500))
+    if err:
+        czesci.append("stderr:\n" + short(err, 800))
+    # v480ew: "kod wyjścia: 0" przy udanym odczycie nic nie mowi
+    if "returncode" in w and w.get("returncode") not in (0, "0"):
+        czesci.append(_opis_kodu_wyjscia(w.get("returncode")))
+    if w.get("czekanie"):
+        czesci.append(str(w["czekanie"]))
+    # v480go: JSON z polami programu tylko wtedy, gdy nie ma nic innego
+    # (uzytkownik 2026-10-27: "kod wyjścia: -15" i pod nim jeszcze
+    # {"ok": false, "returncode": -15, "limit_ciszy_s": …} — szum).
+    if not czesci or (not w.get("ok", True) and not (out or err or "returncode" in w)):
+        reszta = {k: v for k, v in w.items()
+                  if k not in ("stdout", "stderr", "command", "czekanie")
+                  and k not in _POLA_BEZ_ZNACZENIA}
+        # v480hm: {"returncode": 0} bez wyjscia (np. komenda konczaca sie
+        # "&", ktora tylko puscila cos w tlo) — Bartek dostawal sam JSON
+        if set(reszta) <= {"ok", "returncode"} and reszta.get("returncode") in (0, "0", None):
+            czesci.append("(skończone bez błędu, nic nie wypisało)")
+        else:
+            czesci.append(str(reszta.get("message") or reszta.get("co_sie_stalo") or reszta.get("error") or "")
+                          or short(json.dumps(reszta, ensure_ascii=False, default=str), 1500))
+    return "\n".join(czesci)
+
+
+_SYGNALY = {9: "SIGKILL", 15: "SIGTERM", 2: "SIGINT", 1: "SIGHUP", 6: "SIGABRT", 11: "SIGSEGV"}
+
+
+def _opis_kodu_wyjscia(kod):
+    """v480go: ujemny kod to sygnal, nie blad programu."""
+    try:
+        k = int(kod)
+    except Exception:
+        return "kod wyjścia: " + str(kod)
+    if k < 0 or k in (128 + 9, 128 + 15):
+        nr = -k if k < 0 else k - 128
+        if nr in (9, 15, 2, 1):
+            return ("zatrzymane sygnałem " + _SYGNALY.get(nr, str(nr))
+                    + (" (kill/pkill, brak pamięci albo program)" if nr == 9
+                       else " (kill/pkill albo program)") + " — to nie wyjątek w kodzie")
+        return "przerwane sygnałem " + _SYGNALY.get(nr, str(nr))
+    return "kod wyjścia: " + str(k)
+
+
+def _temu(t):
+    """v480gq: DeepSeek nie zna biezacej godziny — zamiast "z 10:13" mowimy,
+    ile temu (uzytkownik 2026-10-27: "on moze te godziny nie liczyc")."""
+    sek = max(0, int(time.time() - (t or time.time())))
+    return "przed chwilą" if sek < 60 else _min_s(sek) + " temu"
+
+
+def _hhmm(t, sek=False):
+    return datetime.fromtimestamp(t or time.time()).strftime(
+        "%H:%M:%S" if sek else "%H:%M")
+
+
+# v480gc: MAIN sprawdza to samo (np. tail tego samego logu co krok) i
+# dostawal za kazdym razem cale wyjscie od nowa. Uzytkownik 2026-10-26:
+# "bez sensu mu wysylac ciagle to samo, mozna mu od cos tylko". Dla tej
+# samej komendy program pamieta poprzednie wyjscie, ktore MAIN dostal, i
+# przy kolejnym pokazuje tylko linie nowe; reszta to jedna linia, ile
+# bylo jak poprzednio. Nowa rozmowa MAIN-a dostaje znow wszystko.
+_main_widzial = {"rozmowa": None, "komendy": {}}
+
+
+def _main_rozmowa_teraz():
+    try:
+        _s = sessions.get("MAIN")
+        return str(getattr(_s, "chat_session_id", None) or "")
+    except Exception:
+        return ""
+
+
+def _klucz_komendy_maina(cmd):
+    """v480gy: klucz to pliki, ktore komenda czyta — "tail -16 x.log" i
+    "tail -20 x.log; ls y" to dla MAIN-a to samo sprawdzenie (bieg
+    2026-10-27 11:50: ten sam log 16 linii w czterech wiadomosciach)."""
+    try:
+        pliki = _pliki_czekania(cmd, z_procesami=False)
+    except Exception:
+        pliki = set()
+    if pliki:
+        return "pliki:" + " ".join(sorted(pliki))
+    return re.sub(r"\s+", " ", _bez_sleep(cmd)).strip()
+
+
+def _tylko_nowe_dla_maina(cmd, wyj):
+    """Wyjscie komendy bez linii, ktore MAIN dostal przy poprzednim
+    takim samym sprawdzeniu w tej rozmowie."""
+    klucz = _klucz_komendy_maina(cmd)
+    if not klucz or not wyj:
+        return wyj
+    rozmowa = _main_rozmowa_teraz()
+    if _main_widzial["rozmowa"] != rozmowa:
+        _main_widzial["rozmowa"] = rozmowa
+        _main_widzial["komendy"] = {}
+    kom = _main_widzial["komendy"]
+    stare = kom.pop(klucz, None)
+    # v480gy: inne sprawdzenie czytajace choc jeden z tych samych plikow
+    # tez sie liczy (tail -16 x.log vs tail -20 x.log; ls y.npz)
+    if klucz.startswith("pliki:"):
+        _moje = set(klucz[6:].split(" "))
+        for _k, _v in list(kom.items()):
+            if _k.startswith("pliki:") and _moje & set(_k[6:].split(" ")):
+                if stare is None:
+                    stare = {"linie": set(_v["linie"]), "t": _v.get("t"), "czas": _v.get("czas")}
+                else:
+                    stare = {"linie": set(stare["linie"]) | set(_v["linie"]),
+                             "t": max(stare.get("t") or 0, _v.get("t") or 0), "czas": stare.get("czas")}
+    linie = str(wyj).split("\n")
+    wynik_txt = _tylko_nowe_tekst(linie, stare) if stare else wyj
+    # zapamietane tylko to, co MAIN naprawde zobaczyl (dlugie wyjscie
+    # jest dalej ucinane) plus to, co mial juz wczesniej
+    widac = set(l.strip() for l in wynik_txt[:2500].split("\n") if l.strip())
+    # v480hc: bieg 2026-10-27 14:31 — tail -20 po tail -10 tego samego
+    # logu pokazal MAIN-owi naglowek logu jako "nowy", bo pamiec trzymala
+    # tylko linie z ostatniego (krotszego) odczytu. Zostaje wszystko, co
+    # MAIN juz widzial.
+    _widzial = set(l.strip() for l in linie if l.strip() and l.strip() in widac)
+    if stare:
+        _widzial |= set(stare["linie"])
+    if len(_widzial) > 4000:
+        _widzial = set(l.strip() for l in linie if l.strip())
+    kom[klucz] = {"linie": _widzial, "czas": _hhmm(time.time()), "t": time.time()}
+    while len(kom) > 60:
+        kom.pop(next(iter(kom)))
+    return wynik_txt
+
+
+def _tylko_nowe_tekst(linie, stare):
+    widziane = stare["linie"]
+    nowe = [l for l in linie if l.strip() and l.strip() not in widziane]
+    if not nowe:
+        return ("(to samo co przy tym samym sprawdzeniu " + _temu(stare.get("t"))
+                + " — nic nowego, " + str(len(linie)) + " linii bez zmian)")
+    stare_ile = sum(1 for l in linie if l.strip() and l.strip() in widziane)
+    if stare_ile < 3:
+        return "\n".join(linie)
+    wynik, run = [], []
+
+    def _zamknij():
+        if len(run) == 1:
+            wynik.extend(run)
+        elif run:
+            wynik.append("… (" + str(len(run)) + " linii jak " + _temu(stare.get("t")) + ")")
+        del run[:]
+
+    # naglowek nad nowa linia zostaje, zeby bylo wiadomo, czego dotyczy
+    naglowki, ost = set(), None
+    for i, l in enumerate(linie):
+        st = l.strip()
+        if not st:
+            continue
+        _nagl = st.startswith(("=", "#", "---")) or st.endswith(":")
+        if st not in widziane:
+            # v480gy: nowa linia, ktora sama jest naglowkiem, nie ciagnie
+            # poprzedniego naglowka
+            if ost is not None and not _nagl:
+                naglowki.add(ost)
+            if _nagl:
+                ost = None
+        elif _nagl:
+            ost = i
+    for i, l in enumerate(linie):
+        st = l.strip()
+        if not st:
+            continue
+        if st not in widziane or i in naglowki:
+            _zamknij()
+            wynik.append(l)
+            continue
+        run.append(l)
+    _zamknij()
+    return ("(pokazuję tylko to, co nowe od tego samego sprawdzenia "
+            + _temu(stare.get("t")) + ")\n" + "\n".join(wynik))
+
+
+def _wynik_tylko_nowe(w, cmd):
+    if not isinstance(w, dict) or not w.get("stdout"):
+        return w
+    w = dict(w)
+    w["stdout"] = _tylko_nowe_dla_maina(cmd, str(w["stdout"]).rstrip("\n"))
+    return w
+
+
+def _karta_wyniku(r):
+    czekanie = r["rodzaj"] == "czekanie"
+    trwalo = int((r.get("koniec") or time.time()) - r["start"])
+    kom = _bez_sleep(r["komenda"]) if czekanie else r["komenda"]
+    # v480gy: naglowek jedna linia, potem sam wynik (bez ═══ i "Wynik:").
+    return (
+        "• " + ("Czekanie" if czekanie else "Komenda")
+        + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+        + (" skończone po " if czekanie else " skończona po ") + _min_s(trwalo) + ": " + _komenda_jedna_linia(kom, 160) + "\n"
+        + _opis_wyniku_czekania(_wynik_tylko_nowe(r["wynik"], kom))
+    )
+
+
+_wyjasnienie_tla_bylo = [False]
+
+# v480fc: co MAIN wykonal w ostatnim RUN (komendy i ich wyjscie) — zeby
+# nie powtarzac mu na gorze/dole wiadomosci tego, co sam przed chwila
+# przeczytal (bieg 2026-10-25 08:29: "W tle dalej czekanie (ta sama
+# komenda)" na gorze i "ostatnia linia: loss=0.9213" pod jego tail-em).
+_ostatni_run_maina = {"komendy": [], "wyjscie": "", "krok": -1}
+
+
+def _ostatni_run():
+    """v480fc: dane ostatniego RUN tylko w kroku zaraz po nim."""
+    try:
+        if int(_ostatni_run_maina.get("krok", -1)) >= int(_biezacy_krok) - 1:
+            return _ostatni_run_maina
+    except Exception:
+        pass
+    return {"komendy": [], "wyjscie": ""}
+
+
+def _ta_sama_komenda(a, b):
+    """v480fc: dwie komendy robia praktycznie to samo (bez sleep)."""
+    ta = set(_bez_sleep(a).split())
+    tb = set(_bez_sleep(b).split())
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / float(len(ta | tb)) >= 0.7
+
+
+_zespol_przypomniany = set()
+_nowe_tlo_zasiane = [False]
+# v480gu: rozmowy MAIN-a (chat_session_id), ktore dostaly juz pelny
+# _CZAS_DLA_ZESPOLU — dalej idzie _CZAS_DLA_ZESPOLU_KROTKO.
+_zespol_pelny_tekst_w = set()
+
+
+def _klucze_tla():
+    """v480gt: co teraz leci w tle (czekania/komendy i procesy)."""
+    k = set()
+    try:
+        for r in _w_tle_zywe():
+            k.add(("w", r.get("nr")))
+        for pid, pr in list(_procesy_w_tle.items()):
+            if pr.poll() is None or _grupa_zyje(pid):
+                k.add(("p", pid))
+        for g in list(_grupy_z_komend):
+            k.add(("g", g))
+    except Exception:
+        pass
+    return k
+
+
+def _nowe_tlo_dla_maina():
+    """v480ib: klucze rzeczy, ktore od ostatniej wiadomosci MAIN-a zaczely
+    liczyc w tle (komendy po 2 min, procesy, grupy) — bez czekan z sleep.
+    Kazda rzecz liczy sie jako nowa tylko raz."""
+    k = set()
+    try:
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") != "czekanie":
+                k.add(("w", r.get("nr")))
+        for pid, pr in list(_procesy_w_tle.items()):
+            if pr.poll() is None or _grupa_zyje(pid):
+                k.add(("p", pid))
+        for g in list(_grupy_z_komend):
+            k.add(("g", g))
+    except Exception:
+        pass
+    nowe = k - _zespol_przypomniany
+    _zespol_przypomniany.update(k)
+    if not _nowe_tlo_zasiane[0]:
+        # pierwsze wywolanie (start, przeladowanie): to, co juz liczy,
+        # nie jest "wlasnie uruchomione"
+        _nowe_tlo_zasiane[0] = True
+        return set()
+    return nowe
+
+
+def _karta_startu(r, teraz):
+    czekanie = r["rodzaj"] == "czekanie"
+    minelo = int(teraz - r["start"])
+    # v480gy: jedna linia na rzecz, jak procesy — co, i kiedy wynik.
+    if czekanie:
+        do = _min_s(max(0, r["start"] + (r.get("sekundy") or 0) - teraz))
+        linie = [
+            "• Czekanie: " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+            + (" — wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie."
+               if _czekanie_na_postep(r) else
+               " — wynik najpóźniej za " + do
+               + ("; czeka, aż skończy się to, co już leci w tle." if r.get("czeka_na")
+                  else "; wcześniej, gdy proces się skończy."))
+        ]
+    else:
+        linie = [
+            "• Komenda" + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+            + ": " + _komenda_jedna_linia(r["komenda"], 140)
+            + " — liczy dłużej niż " + _min_s(_W_TLE_PO_S) + ", więc liczy "
+            "dalej w tle; pliki, które zapisuje, mogą być jeszcze niepełne."
+        ]
+    # v480ev: pelne wyjasnienie raz na uruchomienie programu (v480gy:
+    # krotsze — reszte mowi naglowek sekcji).
+    if not _wyjasnienie_tla_bylo[0]:
+        _wyjasnienie_tla_bylo[0] = True
+        linie.append(
+            "  Gdy w RUN nie zrobisz nic nowego, program poczeka, aż w tle coś "
+            "się wydarzy (koniec albo nowe wyniki w logach), i wtedy się odezwie."
+        )
+    if r.get("pominiete"):
+        linie.append(
+            "Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
+            + " — mogą zależeć od wyniku, więc wyślij je, gdy przyjdzie."
+        )
+    return "\n".join(linie)
+
+
+def _czekanie_blok(czesci=None):
+    """v480ed/eh: karty tego, co leci w tle (pelna raz, potem linia), i
+    wyniki tego, co sie skonczylo (kazdy raz). v480gw: gdy podano slownik
+    `czesci`, wpisuje do niego osobno "skonczone" i "trwa"."""
+    teraz = time.time()
+    karty, linie, trwa = [], [], []
+    widziane = {}
+    with _w_tle_lock:
+        trwa.extend(_w_tle_postep)
+        del _w_tle_postep[:]
+        for r in list(_w_tle):
+            # v480hb: czekanie trzymane do kolejnych 25% / konca procesu —
+            # dopoki proces z procentem liczy, pokazujemy je jako trwajace
+            if r.get("wynik") is not None and r.get("trzymane"):
+                if _czekanie_na_postep(r):
+                    linie.append(
+                        "• Czekanie: " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+                        + " — wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie.")
+                    continue
+                r["trzymane"] = False
+            if r.get("wynik") is not None:
+                if not r.get("dostarczony"):
+                    r["dostarczony"] = True
+                    # v480ek: ten sam wynik drugi raz to jedna linia.
+                    _w = r["wynik"] if isinstance(r["wynik"], dict) else {}
+                    _klucz = str(_w.get("stdout") or "") + str(_w.get("stderr") or "")
+                    if _klucz and _klucz in widziane:
+                        karty.append(
+                            "• Czekanie skończone — wynik taki sam jak "
+                            + widziane[_klucz] + "."
+                        )
+                    else:
+                        if _klucz:
+                            widziane[_klucz] = (
+                                ("czekanie" if r["rodzaj"] == "czekanie" else "komenda")
+                                + " wyżej"
+                            )
+                        karty.append(_karta_wyniku(r))
+                _w_tle.remove(r)
+            elif not r.get("pokazany"):
+                r["pokazany"] = True
+
+                trwa.append(_karta_startu(r, teraz))
+            else:
+                co = "czekanie" if r["rodzaj"] == "czekanie" else "komenda"
+                # v480fc: DeepSeek nie czuje uplywu czasu miedzy wiadomosciami
+                # — mowimy wprost, ile jeszcze zostalo do wyniku.
+                _zostalo = ""
+                if _czekanie_na_postep(r):
+                    _zostalo = ", wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie"
+                elif r["rodzaj"] == "czekanie" and r.get("sekundy"):
+                    _ile = r["start"] + float(r["sekundy"]) - teraz
+                    if _ile > 5:
+                        _zostalo = ", wynik najpóźniej za " + _min_s(_ile)
+                _to_samo = any(_ta_sama_komenda(r["komenda"], k)
+                               for k in _ostatni_run()["komendy"])
+                # v480gb: MAIN zrobil to samo sprawdzenie wprost i ma jego
+                # wynik w tej wiadomosci — czekanie na nie oddaloby ten sam
+                # wynik drugi raz, wiec znika (uzytkownik 2026-10-26: "to
+                # samo sprawdzenie, które przed chwilą zrobiliście" obok
+                # wyniku tego sprawdzenia to szum). Koniec procesu albo nowe
+                # wyniki w logu i tak obudza MAIN-a.
+                if _to_samo and r["rodzaj"] == "czekanie":
+                    r["anulowane"] = True
+                    _w_tle.remove(r)
+                    continue
+                linie.append(
+                    "• " + co.capitalize() + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+                    + ": " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+                    + " — " + (_zostalo.lstrip(", ") if _zostalo else "trwa " + _min_s(teraz - r["start"])) + "."
+                )
+    if linie:
+        trwa.append("\n".join(linie))
+    if isinstance(czesci, dict):
+        czesci["skonczone"] = "\n\n".join(karty)
+        czesci["trwa"] = "\n\n".join(trwa)
+    return ("\n\n".join(karty + trwa) + "\n\n") if (karty or trwa) else ""
+
+
+def _czekanie_czesci():
+    """v480gw: to samo co _czekanie_blok, ale osobno (skonczone, trwa):
+    wyniki z tla ida w wiadomosci MAIN-a przed jego krokiem, a to, co
+    dalej leci (karty startu, postep, linie "W tle dalej"), po nim."""
+    _czekanie_blok(_czesci := {})
+    return (_czesci.get("skonczone", ""), _czesci.get("trwa", ""))
+
+
+def _wykonaj_akcje_maina(decision, step):
+    """Wykonuje akcje z decyzji RUN po kolei; zatrzymuje sie na bledzie."""
+
+    akcje = decision.get("actions")
+    if akcje is None:
+        akcje = decision.get("akcje")
+    if isinstance(akcje, dict):
+        akcje = [akcje]
+    if not isinstance(akcje, list) or not akcje:
+        return {
+            "ok": False,
+            "status": "RUN_BEZ_AKCJI",
+            "executed_by": "main_run",
+            "message": "RUN bez listy actions — nic nie wykonałem.",
+            "tool_calls": 0, "tool_trace": [], "tool_warnings": [],
+            "confirmed_texts": [], "wyniki_run": []
+        }
+
+    trace, wyniki, warnings = [], [], []
+    ok_all, status, pominiete = True, "RUN_FINISHED", 0
+
+    globals()["_wykonuje_main"] = True
+
+    _nic_nowego = True
+
+    for i, akcja in enumerate(akcje[:_RUN_MAX_AKCJI]):
+
+        if not isinstance(akcja, dict):
+            continue
+
+        name = str(
+            akcja.get("tool") or akcja.get("narzedzie") or akcja.get("name") or ""
+        ).split(":")[-1].strip()
+
+        args = akcja.get("args")
+        if args is None:
+            args = akcja.get("arguments", akcja.get("argumenty", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+
+        if not name:
+            continue
+
+        log("MAIN", "RUN #" + str(i + 1) + ": " + name)
+        zapisz_zdarzenie("narzedzie", nazwa=name, argumenty=args)
+
+        _cmd_akcji = str(args.get("command") or "") if name == "termux_run" else ""
+        _sek_akcji = (
+            _sekundy_spania(_cmd_akcji)
+            if _cmd_akcji and _tylko_czeka(_cmd_akcji) else 0
+        )
+        _do_tla = False
+
+        if akcja.get("_uciete"):
+            # v480dt: patrz _oznacz_uciete_akcje().
+            log("MAIN", akcja["_uciete"])
+            result = {
+                "ok": False,
+                "error": "UCIETA_AKCJA",
+                "message": akcja["_uciete"],
+            }
+        elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S and (
+            _w_tle_niedostarczone() and not _w_tle_zywe()
+        ):
+            # v480ee: patrz _wykonaj_po_skonczonym().
+            result = _wykonaj_po_skonczonym(name, args)
+        elif _sek_akcji >= _CZEKANIE_W_TLE_OD_S:
+            # v480ed/eh: patrz _pusc_czekanie_w_tle(). Akcje po czekaniu
+            # nie ruszaja — zalezaly od jego wyniku, ktorego jeszcze nie ma.
+            _po = [
+                str(a.get("tool") or a.get("name") or "?")
+                for a in akcje[i + 1:_RUN_MAX_AKCJI] if isinstance(a, dict)
+            ]
+            result = _pusc_czekanie_w_tle(name, args, _sek_akcji, _po)
+            _do_tla = True
+        elif name == "termux_run" and _cmd_akcji:
+            # v480ef: patrz _wykonaj_z_przejsciem_w_tlo().
+            _po = [
+                str(a.get("tool") or a.get("name") or "?")
+                for a in akcje[i + 1:_RUN_MAX_AKCJI] if isinstance(a, dict)
+            ]
+            result, _do_tla = _wykonaj_z_przejsciem_w_tlo(name, args, _po)
+        else:
+            try:
+                result = dispatch_tool(name, args)
+            except Exception as e:
+                result = {"ok": False, "error": str(e), "error_type": type(e).__name__}
+
+        if isinstance(result, dict):
+            result = _bez_ostrzezen_pythona(result)
+            for _v in result.values():
+                if isinstance(_v, str):
+                    _znane_dodaj(_v)
+
+        _zapisz_uruchomienie(name, args, result)
+
+        log(
+            "MAIN",
+            "wynik: " + short(json.dumps(result, ensure_ascii=False, default=str), 1000)
+        )
+
+        zapisz_zdarzenie(
+            "wynik", nazwa=name,
+            ok=bool(result.get("ok", True) if isinstance(result, dict) else True),
+            wynik=result
+        )
+
+        trace.append({
+            "tool": name,
+            "ok": result.get("ok") if isinstance(result, dict) else None,
+            "evidence": _short_tool_evidence(result),
+            "cel_akcji": _cel_akcji_narzedzia(name, args, result),
+            "komenda": (
+                str(args.get("command") or "")
+                if name.startswith("termux_run") else ""
+            ),
+            "zablokowane": _zablokowane_przez_program(result),
+        })
+
+        wyniki.append({"tool": name, "args": args, "wynik": result})
+
+        # v480eo: patrz _bezczynnie_czekaj().
+        if not (isinstance(result, dict) and (
+            result.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE")
+            or result.get("bez_zmian")
+            or (name == "termux_check_process" and result.get("running") is True)
+            # v480gz: nowe czekanie na log procesu z procentem — program i
+            # tak odda wynik przy kolejnych 25%, koncu albo bledzie
+            or (result.get("status") == "CZEKA_W_TLE" and _czekanie_na_postep(
+                {"rodzaj": "czekanie", "komenda": str((args or {}).get("command") or "")}))
+        )):
+            _nic_nowego = False
+
+        if _do_tla:
+            pominiete = len(akcje[i + 1:_RUN_MAX_AKCJI])
+            break
+
+        padlo = isinstance(result, dict) and result.get("ok") is False
+
+        if padlo and (
+            _shell_failure_is_just_missing_file(name, result)
+            or _brak_to_odpowiedz(name, args, result)
+        ):
+            padlo = False
+
+        if padlo:
+            ok_all, status = False, "RUN_TOOL_ERROR"
+            pominiete = len(akcje) - (i + 1)
+            break
+
+    globals()["_wykonuje_main"] = False
+
+    # v480fc: patrz _ostatni_run_maina
+    _ostatni_run_maina["komendy"] = [
+        str((w.get("args") or {}).get("command") or "")
+        for w in wyniki
+        if str(w.get("tool") or "").startswith("termux_run")
+        and isinstance(w.get("wynik"), dict)
+        and w["wynik"].get("status") not in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE")
+    ]
+    try:
+        _ostatni_run_maina["krok"] = int(_biezacy_krok)
+    except Exception:
+        _ostatni_run_maina["krok"] = -1
+    _ostatni_run_maina["wyjscie"] = "\n".join(
+        str(w["wynik"].get("stdout") or "") + "\n" + str(w["wynik"].get("stderr") or "")
+        for w in wyniki if isinstance(w.get("wynik"), dict)
+    )
+
+    if len(akcje) > _RUN_MAX_AKCJI and status == "RUN_FINISHED":
+        warnings.append(
+            "RUN miał " + str(len(akcje)) + " akcji; wykonałem "
+            + str(_RUN_MAX_AKCJI) + " (limit na jedno RUN)."
+        )
+        pominiete = len(akcje) - _RUN_MAX_AKCJI
+
+    _run_bez_nowego[0] = bool(_nic_nowego and wyniki)
+    if _nic_nowego and wyniki:
+        try:
+            _bezczynnie_czekaj()
+        except Exception:
+            pass
+    elif wyniki:
+        _odstep_przyrostu[0] = _BUDZ_PO_PRZYROSCIE_S  # v480eq: zrobil cos nowego
+
+    wynik = {
+        "ok": ok_all,
+        "status": status,
+        "executed_by": "main_run",
+        "tool_calls": len(wyniki),
+        "tool_trace": trace,
+        "wyniki_run": wyniki,
+        "tool_warnings": warnings,
+        "confirmed_texts": [],
+        "pominiete_akcje": pominiete,
+        # v480et: krok, w ktorym tylko czekano / sprawdzano to samo — Ela
+        # dostaje takie kroki jako jedna linie (patrz _recent_task_summaries).
+        "tylko_czekanie": bool(wyniki) and all(
+            isinstance(w.get("wynik"), dict) and (
+                w["wynik"].get("status") in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE")
+                or w["wynik"].get("bez_zmian")
+                or (w.get("tool") == "termux_check_process"
+                    and w["wynik"].get("running") is True)
+            )
+            for w in wyniki
+        ),
+        "dowody": _dowody_z_wykonania(trace, warnings),
+        "report": (
+            # v460: z powodem MAIN-a — Ela widziala tylko "MAIN wykonal
+            # 4 z 4 akcji" i nie wiedziala, o co w tych akcjach szlo.
+            (short(str(decision.get("reason") or ""), 240) + " — "
+             if decision.get("reason") else "")
+            + "wykonano " + str(len(wyniki)) + " z " + str(len(akcje))
+            + " akcji" + (" — zatrzymano na błędzie " + str(wyniki[-1]["tool"])
+                          if status == "RUN_TOOL_ERROR" and wyniki else "")
+            + "."
+        )
+    }
+
+    _run_id = (
+        "run_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_"
+        + uuid.uuid4().hex[:6]
+    )
+
+    try:
+        write_json(
+            RESULTS_DIR / (_run_id + ".json"),
+            dict(wynik, task=str(decision.get("reason") or ""))
+        )
+        write_json(LAST_RESULT_FILE, wynik)
+    except Exception:
+        pass
+
+    # v460: RUN liczy sie jak zadanie — dowody z narzedzi ida do
+    # checklisty, z ktorej czerpia Ela (_co_narzedzia_naprawde_zrobily)
+    # i verify_final ("czy cokolwiek realnie zadzialalo").
+    try:
+        _checklist_add(_run_id, "RUN: " + str(decision.get("reason") or ""), "")
+        _checklist_record_result(_run_id, wynik)
+    except Exception:
+        pass
+
+    try:
+        skopiuj_przebieg_na_telefon()
+    except Exception:
+        pass
+
+    return wynik
+
+
+# v480eu: pola wyniku, ktore MAIN-owi nic nie mowia (ustawienia programu,
+# czas wykonania). Uzytkownik 2026-10-24 21:24 ("a te logi sa mu
+# potrzebne?"): w wyniku termux_run komenda szla drugi raz (juz byla w
+# naglowku akcji), do tego limit_ciszy_s, maks_czas_s, duration_s, a
+# stdout jako jedna linia JSON z "\n" zamiast nowych linii.
+_POLA_BEZ_ZNACZENIA = frozenset(("limit_ciszy_s", "maks_czas_s", "duration_s"))
+
+
+def _bez_sleep_na_poczatku(cmd):
+    """v480ey: "sleep 420; x" i "true; x" (reszta czekania) to ta sama komenda."""
+    return re.sub(r"^\s*(?:sleep\s+\d+|true)\s*(?:;|&&)\s*", "", str(cmd or "")).strip()
+
+
+_NAZWY_POL = {
+    "bytes": "zapisane bajty", "pid": "proces", "log_file": "log",
+    "exists": "istnieje", "size": "rozmiar", "message": "komunikat",
+    "error": "błąd", "status": "stan", "workdir": "folder",
+}
+
+
+def _wynik_dla_maina(wynik, args, limit):
+    """Wynik akcji czytelnie: bez powtorzonej komendy i pol programu,
+    stdout/stderr jako zwykly tekst."""
+    if not isinstance(wynik, dict):
+        return short(json.dumps(wynik, ensure_ascii=False, default=str), limit)
+    args = args if isinstance(args, dict) else {}
+    reszta = {}
+    for k, v in wynik.items():
+        if k in _POLA_BEZ_ZNACZENIA or k in ("stdout", "stderr"):
+            continue
+        if k in ("command", "workdir", "path") and v == args.get(k):
+            continue
+        if k == "path" and args.get("path") and Path(str(v)).name == Path(str(args.get("path"))).name:
+            continue
+        if k == "command" and _bez_sleep_na_poczatku(v) == _bez_sleep_na_poczatku(args.get("command")):
+            continue
+        reszta[k] = v
+    # v480go: {"ok": true, "returncode": 0} nic MAIN-owi nie mowi
+    if reszta.get("ok") is True and reszta.get("returncode") in (0, None):
+        reszta = {k: v for k, v in reszta.items() if k not in ("ok", "returncode")}
+    kod_linia = ""
+    if "returncode" in reszta and reszta.get("returncode") not in (0, None):
+        kod_linia = _opis_kodu_wyjscia(reszta["returncode"])
+    if "returncode" in reszta:
+        reszta = {k: v for k, v in reszta.items() if k not in ("ok", "returncode")}
+    # v480gx: bieg 2026-10-27 11:23 — MAIN dostawal {"command": "… && true
+    # && …", "czekanie": "To, na co czekałeś…"} i {"bytes": 681}. Notka o
+    # czekaniu idzie zdaniem (bez komendy przepisanej przez program), a
+    # proste pola jako "pole: wartość", po jednym w linii.
+    _notka = ""
+    if reszta.get("czekanie"):
+        _notka = str(reszta.pop("czekanie"))
+        reszta.pop("command", None)
+    if reszta.get("bez_zmian"):
+        _notka = (_notka + "\n" if _notka else "") + str(reszta.pop("bez_zmian"))
+    _linie_pol = []
+    if "ok" in reszta and isinstance(reszta["ok"], bool):
+        if reszta.pop("ok") is False:
+            _linie_pol.append("nie udało się")
+    for k, v in list(reszta.items()):
+        if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 2000:
+            if isinstance(v, str) and v.startswith(str(HOME)):
+                v = _sciezka_od_domu(v)
+            _linie_pol.append(_NAZWY_POL.get(k, k) + ": " + str(v))
+            reszta.pop(k)
+    out = "\n".join(
+        ([_notka] if _notka else []) + _linie_pol
+        + ([json.dumps(reszta, ensure_ascii=False, default=str)] if reszta else []))
+    wyj = str(wynik.get("stdout") or "").rstrip("\n")
+    bl = str(wynik.get("stderr") or "").rstrip("\n")
+    zostalo = max(300, limit - len(out))
+    if wyj and bl:
+        zostalo_wyj = max(200, zostalo * 2 // 3)
+        bl = short(bl, max(150, zostalo - zostalo_wyj))
+        wyj = short(wyj, zostalo_wyj)
+    elif wyj:
+        wyj = short(wyj, zostalo)
+    elif bl:
+        bl = short(bl, zostalo)
+    tekst = (
+        out
+        + ("\n" + wyj if wyj else ("\n(nic nie wypisało)"
+                                  if "stdout" in wynik and not bl and not wynik.get("czekanie") else ""))
+        + ("\nstderr:\n" + bl if bl else "")
+        + ("\n" + kod_linia if kod_linia else "")
+    )
+    return tekst.lstrip("\n")
+
+
+def _komenda_jedna_linia(kom, limit=240):
+    """v480gp: komenda w zdaniu — pierwsza linia, a gdy jest ich wiecej,
+    ile jeszcze; bez lamania zdania."""
+    linie = str(kom or "").strip().split("\n")
+    pierwsza = linie[0]
+    if len(linie) > 1:
+        pierwsza += " … (+" + str(len(linie) - 1) + " linii)"
+    return short(pierwsza, limit)
+
+
+def _naglowek_akcji(tool, args):
+    """v480go: akcja jedna linia — komenda jak w terminalu; tresc, ktora MAIN
+    sam wlasnie napisal (heredoc, zapis pliku), nie wraca do niego drugi raz."""
+    args = args if isinstance(args, dict) else {}
+    kom = args.get("command")
+    if isinstance(kom, str) and kom.strip():
+        return str(tool) + ": " + _komenda_jedna_linia(kom, 240)
+    _a = {k: (("[" + str(len(v)) + " znaków]") if isinstance(v, str) and len(v) > 200 else v)
+          for k, v in args.items()}
+    return str(tool) + " " + short(json.dumps(_a, ensure_ascii=False, default=str), 300)
+
+
+def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
+    """Pelne wyniki akcji RUN dla MAIN-a — to on na nich pracuje."""
+
+    wyniki = (last_result or {}).get("wyniki_run") or []
+    czesci = []
+    ile = 0
+
+    # v468: gdy calosc nie miesci sie w limicie, kazdy wynik dostaje
+    # rowna czesc, ale ZADEN nie wypada — bieg 2026-09-30, krok 67:
+    # "wynik ostatnich akcji jest uciety" i MAIN powtarzal zapis.
+    if wyniki:
+        _pelne = sum(
+            len(json.dumps(w.get("wynik"), ensure_ascii=False, default=str)) + 400
+            for w in wyniki
+        )
+        if _pelne > razem:
+            na_akcje = max(700, min(na_akcje, (razem - 300 * len(wyniki)) // len(wyniki)))
+
+    for i, w in enumerate(wyniki):
+        _wynik = w.get("wynik")
+        # v460: "snapshot" (lista kart) powtarzal sie w kazdym wyniku
+        # i zjadal miejsce, przez co "strona" (tekst + elementy) po
+        # chrome_open byla ucieta — MAIN dokladal chrome_inspect po
+        # kazdym chrome_open. Karty MAIN dostaje osobno.
+        if isinstance(_wynik, dict) and "snapshot" in _wynik:
+            _wynik = {k: v for k, v in _wynik.items() if k != "snapshot"}
+        # v480gc: tylko to, co nowe od tego samego sprawdzenia; policzone
+        # raz na wynik, zeby ponowne skladanie wiadomosci nie zjadlo linii.
+        if "_dla_maina" not in w:
+            _args = w.get("args") if isinstance(w.get("args"), dict) else {}
+            _kom = _args.get("command") or (
+                str(w.get("tool")) + " " + json.dumps(_args, ensure_ascii=False, sort_keys=True, default=str))
+            try:
+                w["_dla_maina"] = _wynik_tylko_nowe(_wynik, _kom)
+            except Exception:
+                w["_dla_maina"] = _wynik
+        tekst = (
+            str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args"))
+            + "\n" + _wynik_dla_maina(w["_dla_maina"], w.get("args"), na_akcje)
+        )
+        # v480gf: komenda czekania stala drugi raz — w ramce "W TLE" na
+        # gorze i tu z JSON-em "opis jest na gorze" (uzytkownik 2026-10-26:
+        # "dwa razy to samo"). Tu zostaje jedna linia.
+        if isinstance(_wynik, dict) and _wynik.get("status") == "CZEKA_W_TLE":
+            tekst = (str(i + 1) + ". " + str(w.get("tool"))
+                     + " — poszło w tle jako czekanie (karta w sekcji „Dalej w tle”).")
+        elif isinstance(_wynik, dict) and _wynik.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
+            tekst = (str(i + 1) + ". " + str(w.get("tool")) + " — "
+                     + str(_wynik.get("message") or "to samo czekanie już leci w tle."))
+        ile += len(tekst)
+        if ile > razem:
+            czesci.append("(dalsze wyniki pominięte — za długie)")
+            break
+        czesci.append(tekst)
+
+    if not czesci:
+        return ""
+
+    pominiete = int(last_result.get("pominiete_akcje") or 0)
+    # v480ew: czekanie w tle samo mowi, ktorych akcji nie wykonalo i czemu
+    try:
+        _ost = (wyniki[-1].get("wynik") or {}) if wyniki else {}
+        if isinstance(_ost, dict) and _ost.get("status") in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE"):
+            pominiete = 0
+    except Exception:
+        pass
+
+    return (
+        "Wyniki akcji RUN:\n" + "\n\n".join(czesci)
+        + ("\nNie wykonałem " + str(pominiete) + " kolejnych akcji." if pominiete else "")
+    )
+
+
+# v480hx: bieg 2026-10-28 16:23 (druzyna 2, krok 385): MAIN zlecil "Uruchom
+# --dry-run (~1 min), NIE uruchamiaj pelnego", a program uruchomil sam plik
+# bez argumentow — ruszyl pelny trening obok drugiego (swap). Argumenty
+# biore z zadania: z komendy z nazwa pliku albo z "uruchom --flaga ...".
+_FLAGI_W_TEKSCIE_RE = re.compile(r"(?<![\w-])--[A-Za-z][\w-]*")
+
+
+def _flagi_bez_wartosci(kod):
+    return set(re.findall(
+        r"add_argument\(\s*['\"](--[\w-]+)['\"][^)]*action\s*=\s*['\"]store_(?:true|false)['\"]",
+        str(kod or "")))
+
+
+def _argumenty_z_zadania(task_text, path):
+    """Lista argumentow dla pliku z tresci zadania; None — zadanie nie mowi."""
+    tekst = str(task_text or "")
+    nazwa = re.escape(Path(str(path)).name)
+    m = None
+    for m in re.finditer(r"(?:python3?|bash|sh)\s+(?:-u\s+)?\S*" + nazwa
+                         + r"((?:[ \t]+(?![|;&>]|2>)[^\s|;&>`]+)*)", tekst):
+        pass
+    if m is not None:
+        try:
+            return shlex.split(m.group(1))
+        except Exception:
+            return m.group(1).split()
+    try:
+        bez_wartosci = _flagi_bez_wartosci(Path(str(path)).read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        bez_wartosci = set()
+    wynik = None
+    for m in re.finditer(r"(?<![\w-])(?:[Uu]ruchom\w*|[Oo]dpal\w*|[Rr]un)\b[ \t]+(--[A-Za-z][^\n]*)", tekst):
+        tokeny = m.group(1).replace(",", " ").split()
+        args = []
+        i = 0
+        while i < len(tokeny):
+            t = tokeny[i]
+            if not t.startswith("--"):
+                break
+            flaga = t.split("=", 1)[0].rstrip(").;:")
+            args.append(t.rstrip(").;:") if "=" in t else flaga)
+            if "=" not in t and flaga not in bez_wartosci and i + 1 < len(tokeny):
+                nast = tokeny[i + 1]
+                if not nast.startswith(("-", "(")) and re.fullmatch(r"[\w./~:-]+", nast.rstrip(").;:")) \
+                        and (bez_wartosci or re.match(r"[\d./~]", nast)):
+                    args.append(nast.rstrip(").;:"))
+                    i += 1
+            if t.endswith((")", ".", ";", ":")):
+                break
+            i += 1
+        if args:
+            wynik = args
+    return wynik
+
+
 def _run_script_directly(path, task_text):
     """
     Uruchamia zapisany skrypt przez to samo execute_shell, ktorego
@@ -25708,6 +37035,10 @@ def _run_script_directly(path, task_text):
     else:
         command = "bash " + shlex.quote(str(path))
 
+    _args = _argumenty_z_zadania(task_text, path)
+    if _args:
+        command += " " + " ".join(shlex.quote(a) for a in _args)
+
     # v294: zanim uruchomimy — sprawdzamy, czy ten program ma w ogole
     # koniec. Patrz _program_bez_konca(). Strumien nie ma i mial nie
     # miec; czekanie na jego wynik to czekanie na cos, co nie
@@ -25723,7 +37054,37 @@ def _run_script_directly(path, task_text):
     # mieszkaja strazniki dzwonienia, ktore od teraz czytaja takze
     # TRESC uruchamianego pliku (patrz _tresc_uruchamianego_skryptu).
     # Wczesniej ten skrot omijal je wszystkie.
-    shell_result = termux_run(command)
+    # v480hv: bieg 2026-10-28 13:45 (druzyna 2, krok 355) — trening
+    # uruchomiony ta droga liczyl 83 min na pierwszym planie: MAIN i caly
+    # zespol stali, a w logu 300 linii "Leci N min". Jak RUN MAIN-a i
+    # TASK Gemini (v480gn): po _W_TLE_PO_S liczy dalej w tle, MAIN
+    # dostaje karte W TLE i wynik, gdy sie skonczy.
+    try:
+        shell_result, _w_tle = _wykonaj_z_przejsciem_w_tlo("termux_run", {"command": command}, [])
+    except Exception as e:
+        log("MAIN", "Przejście w tło nie wyszło (" + str(e) + ") — liczę na pierwszym planie.")
+        shell_result, _w_tle = termux_run(command), False
+    if _w_tle or (isinstance(shell_result, dict)
+                  and shell_result.get("status") in ("LECI_W_TLE", "JUZ_LICZY_W_TLE")):
+        _msg = str(shell_result.get("message") or "")
+        if shell_result.get("status") == "LECI_W_TLE":
+            _msg = (path.name + " liczy dłużej niż " + _min_s(_W_TLE_PO_S)
+                    + " — liczy dalej w tle; wynik przyjdzie sam, gdy się skończy "
+                    "(sekcja „Dalej w tle”).")
+        return {
+            "ok": True,
+            "status": "COMPLETED",
+            "key": "python",
+            "executed_by": "python",
+            "tool": None,
+            "tool_result": None,
+            "shell_result": shell_result,
+            "report": _msg,
+            "tool_calls": 1,
+            "tool_trace": [{"tool": "termux_run (Python)", "ok": True, "evidence": short(_msg, 400)}],
+            "tool_warnings": [],
+            "confirmed_texts": [],
+        }
 
     ok = bool(shell_result.get("ok"))
 
@@ -25895,6 +37256,18 @@ def _pliki_kodu_bez_autora(task_text, team):
         ):
             continue
 
+        # v480fo: "src/prepare.py" po "cd ~/MAIN_1" to ~/MAIN_1/src/prepare.py,
+        # nie ~/src/prepare.py (jak v480aw przy uruchamianiu). Bieg
+        # 2026-10-25 19:42: piec plikow Bartka poszlo do ~/src/, a w
+        # ~/MAIN_1 nie bylo zadnego.
+        if not sciezka.startswith(("~", "/", "$")):
+            _cd = re.findall(r"\bcd\s+([~/][^\s;&|]*)", _tekst[:m.start()])
+            if _cd:
+                sciezka = _cd[-1].rstrip("/") + "/" + sciezka
+
+        if sciezka in out:
+            continue
+
         try:
             p = _resolve_home_relative_path(sciezka)
         except Exception:
@@ -25921,6 +37294,56 @@ def _pliki_kodu_bez_autora(task_text, team):
     ]
 
 
+def _blok_to_komenda(kod, sciezka):
+    """v480hx: blok z sama komenda powloki ("cd ~/MAIN_2 && setsid python3
+    -u k4_iteracja3.py ... &") to nie tresc pliku .py, choc ma jego nazwe.
+    Bieg 2026-10-28 16:21 (druzyna 2, krok 385): Bartek po probach dal
+    MAIN-owi komende w bloku, program wzial ja za nowa wersje
+    k4_iteracja3.py i nadpisal 17 kB kodu 112 bajtami."""
+    try:
+        if Path(str(sciezka or "").split("/")[-1]).suffix.lower() in (".sh", ".bash", "") :
+            return False
+        kod = str(kod or "").strip()
+        try:
+            compile(kod, "x.py", "exec")
+            return False
+        except SyntaxError:
+            pass
+        linie = [l.strip() for l in kod.splitlines() if l.strip() and not l.strip().startswith("#")]
+        if not linie:
+            return False
+        # v480ig: komenda z wpisanym w nia skryptem (python3 -c "...",
+        # heredoc) ma wiele linii, ktore nie sa komendami. Bieg 2026-10-29
+        # 16:03 (druzyna 2, krok 33): Tomek dal "cd ~/MAIN_2 && python3 -c
+        # \"<60 linii patcha>\"", a program zapisal to jako k4_autoloop_v3.py
+        # w miejsce dzialajacej petli. Pierwsza linia jest komenda, calosc
+        # nie jest Pythonem — to komenda.
+        pierwsza = linie[0]
+        if (
+            _LINIA_POWLOKI_RE.match(pierwsza)
+            and not re.match(r"^[\w.]+\s*(?:=|\(|\[|\.|:)", pierwsza)
+            and (re.search(r"(?:python3?\s+-c\s+[\"']|<<-?\s*['\"]?\w+)", pierwsza)
+                 or "&&" in pierwsza or "|" in pierwsza or ";" in pierwsza)
+        ):
+            return True
+        if len(linie) > 12:
+            return False
+        return all(_LINIA_POWLOKI_RE.match(l) for l in linie)
+    except Exception:
+        return False
+
+
+# v480ig: linia moze zaczynac sie od "PODGLĄD:" / "URUCHOM:" — to tez
+# komenda, nie kod pliku. Bieg 2026-10-29 16:53 (druzyna 1, krok 56):
+# Tomek dal w bloku "PODGLĄD: cd ~/MAIN_1; grep ... evolved/tfm_bpe_med.py",
+# a zapis tfm_bpe_med.py wzial ten blok jako "kod Tomka" i nadpisal trener.
+_LINIA_POWLOKI_RE = re.compile(
+    r"^(?:\*\*)?(?:(?:PODGL[AĄ]D|URUCHOM)\s*:\s*(?:\*\*)?\s*`?)?"
+    r"(?:\$\s*)?(?:[A-Z_][A-Z0-9_]*=\S*\s+)*(?:cd|python3?|bash|sh|nohup|setsid|"
+    r"timeout|time|export|env|pip3?|pkg|ls|cat|tail|head|grep|sed|wc|kill|pkill|ps|"
+    r"mkdir|cp|mv|rm|echo|curl|wget|tar|unzip|chmod|sleep|watch|nice|taskset)\b")
+
+
 def _blok_dokladnie_dla(text, sciezka):
     """
     v429: blok, ktory autor jednoznacznie przypisal temu plikowi —
@@ -25929,7 +37352,12 @@ def _blok_dokladnie_dla(text, sciezka):
     ktory jest ktory.
     """
 
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL):
+    # v480gk: od konca — ostatni blok tego pliku to wersja koncowa autora.
+    # Bieg 2026-10-26 19:24: Bartek pisal na glos szkice ("# ~/MAIN_1/
+    # check.py" z "from baselines import main, load_text, ...") i dopiero
+    # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
+    # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
+    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))):
 
         kod = _wyrownaj_blok(m.group(2))
 
@@ -25937,6 +37365,9 @@ def _blok_dokladnie_dla(text, sciezka):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        if not z_heredoca and _blok_to_komenda(kod, sciezka):
+            continue
 
         if z_heredoca:
             return _wyrownaj_blok(z_heredoca)
@@ -25961,7 +37392,12 @@ def _blok_podpisany(text, sciezka):
     server.py nad soba (bieg 2026-09-21 21:01).
     """
 
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL):
+    # v480gk: od konca — ostatni blok tego pliku to wersja koncowa autora.
+    # Bieg 2026-10-26 19:24: Bartek pisal na glos szkice ("# ~/MAIN_1/
+    # check.py" z "from baselines import main, load_text, ...") i dopiero
+    # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
+    # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
+    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))):
 
         kod = _wyrownaj_blok(m.group(2))
 
@@ -25969,6 +37405,9 @@ def _blok_podpisany(text, sciezka):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
+
+        if not z_heredoca and _blok_to_komenda(kod, sciezka):
+            continue
 
         if z_heredoca:
             return _wyrownaj_blok(z_heredoca)
@@ -25982,6 +37421,61 @@ def _blok_podpisany(text, sciezka):
     return None
 
 
+def _blok_tego_pliku(text, sciezka):
+    """v480gk: blok podpisany tym plikiem albo z jego nazwa tuz nad nim —
+    z dwoch kandydatow ten, ktory stoi w wypowiedzi pozniej (wersja
+    koncowa autora, nie szkic wyzej)."""
+    a = _blok_podpisany(text, sciezka)
+    b = _blok_dokladnie_dla(text, sciezka)
+    if a and b and a != b:
+        t = str(text or "")
+        wynik = a if t.rfind(a.strip()[:200]) > t.rfind(b.strip()[:200]) else b
+    else:
+        wynik = a or b
+    return _kod_zamiast_wyniku(text, sciezka, wynik)
+
+
+def _kod_zamiast_wyniku(text, sciezka, wybrany):
+    """v480hs2: bieg 2026-10-28 12:43 (druzyna 2, krok 325) — pod
+    naglowkiem patch_fix_literals.py Bartek dal kod, potem "URUCHOM:
+    python3 patch_fix_literals.py" i blok "Oczekiwane po patchu" (sam
+    wydruk). Program wzial ostatni blok — wydruk — za plik, plik sie nie
+    kompilowal, a Bartek trzy rundy myslal, ze to "infrastruktura
+    nadpisuje plik outputem". Dla pliku .py blok, ktory sie nie
+    kompiluje, ustepuje ostatniemu blokowi tego pliku, ktory sie
+    kompiluje."""
+    try:
+        nazwa = str(sciezka or "").split("/")[-1].strip()
+        if not wybrany or Path(nazwa).suffix.lower() != ".py":
+            return wybrany
+        try:
+            compile(str(wybrany), nazwa, "exec")
+            return wybrany
+        except SyntaxError:
+            pass
+        tekst = str(text or "")
+        lepszy = None
+        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)```", tekst, re.DOTALL):
+            kod = _wyrownaj_blok(m.group(2))
+            if not kod.strip() or kod.strip() == str(wybrany).strip():
+                continue
+            przed = tekst[:m.start()]
+            przed = przed[przed.rfind("```") + 3:] if "```" in przed else przed
+            tag = m.group(1) or ""
+            nalezy = (nazwa in tag or _podpis_w_naglowku(kod, sciezka)
+                      or _najblizsza_nazwa(przed[-400:], ".py") == nazwa)
+            if not nalezy:
+                continue
+            try:
+                compile(kod, nazwa, "exec")
+            except SyntaxError:
+                continue
+            lepszy = kod
+        return lepszy or wybrany
+    except Exception:
+        return wybrany
+
+
 def _kod_z_wypowiedzi(text, sciezka):
     """
     v430: kod tego pliku z jednej wypowiedzi. Blok, ktory sam mowi, ze
@@ -25991,17 +37485,48 @@ def _kod_z_wypowiedzi(text, sciezka):
     od "# probe.sh — read-only diagnoza" (1271 B).
     """
 
-    kod = _blok_podpisany(text, sciezka)
+    kod = _blok_tego_pliku(text, sciezka)
 
     if kod:
         return kod
 
     kod = extract_code_block(text or "", sciezka)
 
-    if kod and _podpisany_innym(kod, sciezka):
+    if kod and (_podpisany_innym(kod, sciezka) or _blok_to_komenda(kod, sciezka)):
         return None
 
+    # v480fo: blok wybrany po jezyku stoi pod naglowkiem INNEGO pliku
+    # ("### `src/prepare.py`") — to nie ten plik. Bieg 2026-10-25 19:09:
+    # Bartek dal piec plikow .py pod naglowkami, a do wszystkich pieciu
+    # szedl pierwszy blok (prepare.py). Bierzemy blok spod naglowka
+    # tego pliku, a gdy go nie ma — nic.
+    if kod and _nad_blokiem_inny_plik(text, kod, sciezka):
+        return _blok_dokladnie_dla(text, sciezka)
+
     return kod
+
+
+def _nad_blokiem_inny_plik(text, kod, sciezka):
+    """v480fo: najblizsza nazwa pliku tego rodzaju nad blokiem z `kod`
+    to inny plik niz `sciezka`."""
+
+    nazwa = str(sciezka or "").split("/")[-1].strip()
+    sufiks = Path(nazwa).suffix.lower()
+
+    if not nazwa or not sufiks:
+        return False
+
+    tekst = str(text or "")
+
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", tekst, re.DOTALL):
+        if _wyrownaj_blok(m.group(2)).strip() != str(kod).strip():
+            continue
+        przed = tekst[:m.start()]
+        przed = przed[przed.rfind("```") + 3:] if "```" in przed else przed
+        najblizsza = _najblizsza_nazwa(przed[-400:], sufiks)
+        return bool(najblizsza) and najblizsza != nazwa
+
+    return False
 
 
 def _podpisany_innym(kod, sciezka):
@@ -26053,6 +37578,72 @@ def _podpis_w_naglowku(kod, sciezka):
     )
 
 
+# v480da: kod autora, ktory sie nie kompiluje, wraca do autora od razu,
+# w tym samym kroku — z linia bledu i okolica. Uzytkownik (2026-10-21):
+# ulatwic zespolowi pisanie kodu. Dotad zly kod ladowal na dysku, krok
+# szedl na uruchomienie i przeglad Piotra, a autor widzial blad dopiero
+# przy nastepnej konsultacji. Raz na zapis; bez odpowiedzi albo gdy
+# poprawka dalej sie nie kompiluje, wszystko idzie jak dotad.
+_AUTORZY_DO_POPRAWKI = (
+    "ENGINEER", "CODE_FIXER", "CRITIC", "PLANNER", "CODE_REVIEWER",
+)
+
+
+def _popraw_skladnie_u_autora(target_path, kod, team, step):
+    try:
+        target_path = Path(target_path)
+        if target_path.suffix.lower() != ".py":
+            return None
+        try:
+            compile(str(kod or ""), target_path.name, "exec")
+            return None
+        except SyntaxError as e:
+            linia = int(e.lineno or 0)
+            blad = "linia " + str(linia or "?") + ": " + str(e.msg or "")
+        autor = _czyja_kopia(kod)
+        if autor not in _AUTORZY_DO_POPRAWKI:
+            autor = "ENGINEER"
+        okolica = ""
+        if linia:
+            okolica, _od, _do = _okolica_linii(str(kod), linia)
+        log(
+            "MAIN",
+            "Kod " + target_path.name + " się nie kompiluje (" + blad
+            + ") — proszę " + _IMIE_AUTORA.get(autor, (autor, autor))[1]
+            + " o poprawkę, zanim trafi na dysk."
+        )
+        odp = deepseek(
+            autor,
+            "Kod do " + target_path.name + " się nie kompiluje ("
+            + blad + "), więc jeszcze go nie zapisałem."
+            + ("\n\n" + okolica if okolica else "")
+            + "\n\nNapisz cały plik " + target_path.name
+            + " jeszcze raz, w jednym bloku kodu."
+        )
+        if not str(odp or "").strip():
+            return None
+        _zapamietaj_kod_autora(autor, odp)
+        _role_response_cache[autor] = odp
+        _role_response_step[autor] = step
+        _collect_role_messages(autor, odp)
+        if autor == "ENGINEER":
+            team["engineer_full"] = odp
+            globals()["_kod_bartka_teraz"] = odp
+        nowy = _kod_z_wypowiedzi(odp, str(target_path))
+        if not nowy:
+            return None
+        try:
+            compile(nowy, target_path.name, "exec")
+        except SyntaxError:
+            log("MAIN", target_path.name + ": poprawka też się nie kompiluje.")
+            return None
+        log("MAIN", target_path.name + ": poprawiony kod się kompiluje.")
+        return nowy
+    except Exception as e:
+        log("MAIN", "Poprawka składni u autora nie wyszła: " + str(e))
+        return None
+
+
 def _zlec_kod_bartkowi(task_text, pliki, team, step):
     """
     v429: Bartek dostaje zlecenie MAIN-a jego wlasnymi slowami — bez
@@ -26060,14 +37651,56 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     przypisal (nazwa nad blokiem, heredoc), Python kladzie od razu.
     """
 
+    # v480hs: katalog jako cel zapisu to "nowe pliki w ~/MAIN_1/", a nie
+    # "Zadanie tworzy MAIN_1" (noc 27/28.10, 15 razy) ani pusta nazwa.
+    def _opis_celow(lista):
+        _o = []
+        for x in lista:
+            try:
+                if str(x).rstrip().endswith(("/", "\\")) or _resolve_home_relative_path(x).is_dir():
+                    _o.append("nowe pliki w " + _sciezka_od_domu(str(_resolve_home_relative_path(x))).rstrip("/") + "/")
+                    continue
+            except Exception:
+                pass
+            _o.append(Path(x).name)
+        return ", ".join(_o) or "nowe pliki"
+    _opis_zlecenia = _opis_celow(pliki)
     log(
         "MAIN",
-        "Zadanie tworzy " + ", ".join(Path(x).name for x in pliki)
-        + ", a nikt z zespołu nie napisał do nich kodu — najpierw "
+        "Zadanie tworzy " + _opis_zlecenia
+        + ", a nikt z zespołu nie napisał do tego kodu — najpierw "
         "Bartek, potem wykonanie."
     )
 
-    odp = deepseek("ENGINEER", task_text)
+    # v452: jeden fakt przed zleceniem — kto je wykonuje i co z jego
+    # odpowiedzi trafi na dysk. Bez tego Bartek czytal zadanie jako
+    # polecenie dla siebie i pytal "kto to robi?" (bieg 2026-09-25
+    # 16:15, krok 10).
+    # v480fw: katalog to nie plik. Bieg 2026-10-25 23:30: MAIN dal
+    # write_engineer_code_to "~/MAIN_1", Bartek napisal piec plikow
+    # (~/MAIN_1/fetch.py, …), a program probowal zapisac je jako plik
+    # "MAIN_1" (Errno 21) i krok przepadl.
+    def _katalog(x):
+        try:
+            return str(x).rstrip().endswith(("/", "\\")) or _resolve_home_relative_path(x).is_dir()
+        except Exception:
+            return False
+    _kat = [x for x in pliki if _katalog(x)]
+    pliki = [x for x in pliki if not _katalog(x)]
+    _co = []
+    if pliki:
+        _co.append("Do " + ", ".join(Path(x).name for x in pliki)
+                   + " nikt z zespołu nie napisał jeszcze kodu")
+    if _kat:
+        _co.append("pliki z kodem mają leżeć w " + ", ".join(_sciezka_od_domu(str(_resolve_home_relative_path(x))) for x in _kat)
+                   + " — każdy plik w osobnym bloku, z pełną ścieżką tuż nad nim")
+    odp = deepseek(
+        "ENGINEER",
+        "MAIN zlecił programowi poniższe zadanie. "
+        + (("; ".join(_co)[:1].upper() + "; ".join(_co)[1:] + ". ") if _co else "")
+        + "Program położy na dysk to, co napiszesz, i je uruchomi.\n\n"
+        + task_text
+    )
 
     if not str(odp or "").strip():
         return []
@@ -26093,12 +37726,33 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         if _code_target_rejection(str(p), kod):
             continue
 
+        # v480hx: dzialajacego pliku nie zastepuje tekst, ktory sie nie
+        # kompiluje (krok 385 druzyny 2: komenda zamiast 17 kB kodu).
+        _zly = _zepsuty_zastepuje_dzialajacy(p, kod)
+        if _zly:
+            log("MAIN", "Nie nadpisałem " + p.name + " — blok z odpowiedzi się nie "
+                "kompiluje (" + _zly + "), a plik na dysku działa, więc zostaje.")
+            polozone.append(p.name + " (" + str(p.stat().st_size) + " B)")
+            continue
+
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(kod, encoding="utf-8")
+            _zapamietaj_zapis(p, kod)
         except Exception as e:
             log("MAIN", "Nie położyłem " + p.name + ": " + str(e))
             continue
+
+        # v480fo: blad skladni idzie do Bartka, jak przy kazdym pliku
+        # zespolu (v480fi) — wczesniej ten zapis omijal sprawdzenie.
+        try:
+            w = {"ok": True, "path": str(p), "written_by": "python"}
+            _sprawdz_skladnie_kodu_autora(w)
+            if w.get("compile_error"):
+                _autor_poprawia_skladnie(str(p), kod, w)
+        except Exception as e:
+            log("PROGRAM", "Poprawka składni przez autora nie poszła: " + str(e))
+        kod = p.read_text(encoding="utf-8", errors="replace")
 
         _zapisz_autoryzacje_kodu(p, "ENGINEER")
         _zapamietaj_gdzie(p)
@@ -26106,11 +37760,21 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
         _autor_pliku[p.name] = "ENGINEER"
         polozone.append(p.name + " (" + str(len(kod.encode("utf-8"))) + " B)")
 
+    # v480fw: reszta nowych plikow z odpowiedzi (pelna sciezka albo nazwa
+    # pod naglowkiem) — od razu, ze sprawdzeniem i proba uruchomienia.
+    try:
+        _dla_maina = _poloz_nowy_plik_autora("ENGINEER", odp, task_text)
+        for m in re.finditer(r"\[Program od razu zapisał ten plik \S+ w (\S+) \((\d+) B", _dla_maina):
+            _n = Path(m.group(1)).name
+            if not any(y.startswith(_n + " ") for y in polozone):
+                polozone.append(_n + " (" + m.group(2) + " B)")
+    except Exception as e:
+        log("PROGRAM", "Nie zapisałem nowych plików Bartka: " + str(e))
     nie = [Path(x).name for x in pliki if not any(y.startswith(Path(x).name + " ") for y in polozone)]
 
     _pending_team_warnings.append(
-        "Zadanie tworzyło " + ", ".join(Path(x).name for x in pliki)
-        + ", do których nikt nie napisał kodu; Bartek dostał to zlecenie."
+        "Zadanie tworzyło " + _opis_zlecenia
+        + ", do czego nikt nie napisał kodu; Bartek dostał to zlecenie."
         + (" Położone z jego odpowiedzi: " + ", ".join(polozone) + "." if polozone else "")
         + (" Bez kodu przypisanego do pliku: " + ", ".join(nie) + "." if nie else "")
     )
@@ -26173,12 +37837,32 @@ def _skrypt_do_uruchomienia_ktorego_nie_ma(task_text):
     ratowac i niczego nie nadpisujemy.
     """
 
-    for match in _URUCHOM_SKRYPT_RE.finditer(str(task_text or "")):
+    _tekst = str(task_text or "")
+
+    for match in _URUCHOM_SKRYPT_RE.finditer(_tekst):
 
         kandydat = (match.group(1) or "").strip()
 
         if not kandydat:
             continue
+
+        # v480aw: "cd ~/MAIN_2 && python curriculum_race.py" — nazwa
+        # wzgledna liczy sie od katalogu z ostatniego `cd` przed nia,
+        # nie od domu. Bieg 2026-10-14 19:15 (druzyna 2, krok 6): plik
+        # wyladowal w ~/curriculum_race.py zamiast w ~/MAIN_2.
+        if not kandydat.startswith(("~", "/")):
+            _cd = re.findall(r"\bcd\s+([~/][^\s;&|]*)", _tekst[:match.start()])
+            if _cd:
+                kandydat = _cd[-1].rstrip("/") + "/" + kandydat
+            # v480fy: w rywalizacji nazwa bez folderu to plik druzyny.
+            # Bieg 2026-10-26 00:19: eval_bpc.py lezal w ~/MAIN_1, a program
+            # polozyl drugi egzemplarz w ~/eval_bpc.py.
+            elif _DRUZYNA:
+                _fd = Path(_folder_druzyny(_DRUZYNA))
+                _jest = _pliki_w_folderze(_fd, Path(kandydat).name) if "/" not in kandydat else []
+                if _jest or (_fd / kandydat).exists():
+                    continue
+                kandydat = str(_fd / kandydat)
 
         try:
             if not _resolve_home_relative_path(kandydat).exists():
@@ -26289,6 +37973,15 @@ def _code_target_rejection(path, code_text):
     istnieje_z_danymi = bool(
         obecne.strip() and not _looks_like_code(obecne)
     )
+    # v480hu: plik z rozszerzeniem kodu (.py, .sh…) to plik kodu, nawet
+    # gdy przez pomylke wpadl do niego wydruk. Bieg 2026-10-28 12:43
+    # (druzyna 2): do patch_fix_literals.py trafil wydruk, a potem kazda
+    # poprawka Bartka byla odrzucana "ten plik trzyma dane" — trzy rundy.
+    if istnieje_z_danymi and Path(baza).suffix in (
+        ".py", ".sh", ".js", ".mjs", ".ts", ".c", ".h", ".cpp", ".hpp",
+        ".rs", ".go", ".java", ".kt",
+    ):
+        istnieje_z_danymi = False
 
     plik_danych = baza.endswith(_DATA_FILE_EXTENSIONS)
 
@@ -26738,6 +38431,12 @@ def _kod_na_jedna_linie(tekst):
         for f in _CODE_TARGET_FILENAME_RE.finditer(nad):
             nazwa = str(f.group(0)).strip().strip("`'\"").split("/")[-1]
 
+        # v480fw: nazwa, od ktorej zaczyna sie naglowek nad blokiem, ma
+        # pierwszenstwo przed nazwa wspomniana dalej w tej samej linii.
+        _nad_linie = [l for l in nad.splitlines() if l.strip()]
+        if _nad_linie and _nazwa_z_naglowka(_nad_linie[-1]):
+            nazwa = _nazwa_z_naglowka(_nad_linie[-1])
+
         opis = nazwa or jezyk or "kod"
 
         # v432: MAIN widzi, ze pliku o tej nazwie nie ma na dysku —
@@ -26750,6 +38449,7 @@ def _kod_na_jedna_linie(tekst):
                 _jest = (
                     nazwa in _gdzie_zapisalismy
                     or (HOME / nazwa).exists()
+                    or bool(_DRUZYNA and _pliki_w_folderze(_folder_druzyny(_DRUZYNA), nazwa))
                 )
             except Exception:
                 _jest = True
@@ -28043,7 +39743,13 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
 
         wystapienia = zmieniony.count(stary)
 
+        # v480ft: ta zmiana juz jest w pliku (autor naniosl ja od razu,
+        # a MAIN zlecil ten sam zapis) — nie blad "fragmentu nie ma".
+        if wystapienia == 0 and nowy.strip() and zmieniony.count(nowy) == 1:
+            continue
+
         if wystapienia == 0:
+            _blisko = _najblizszy_fragment(zmieniony, stary)
             return {
                 "applied": False,
                 "reason": (
@@ -28052,6 +39758,7 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
                     "albo skopiowany z pamięci, nie z pliku). Nic nie "
                     "zmieniono. Poproś o odczytanie pliku i skopiowanie "
                     "fragmentu 1:1."
+                    + ("\n" + _blisko if _blisko else "")
                 ),
             }
 
@@ -28087,11 +39794,14 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
             ),
         }
 
-    kopia = target.with_name(
+    # v480ft: kopie w ukrytym .kopie/ obok pliku — folder z kodem zostaje
+    # uporzadkowany (uzytkownik 2026-10-25: "w plikach najgorzej").
+    kopia = target.parent / ".kopie" / (
         target.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
 
     try:
+        kopia.parent.mkdir(parents=True, exist_ok=True)
         kopia.write_text(original, encoding="utf-8")
         target.write_text(zmieniony, encoding="utf-8")
     except Exception as e:
@@ -28099,7 +39809,7 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
 
     log(
         "MAIN",
-        "Poprawka Bartka naniesiona na " + target.name + " ("
+        "Poprawka naniesiona na " + target.name + " ("
         + str(naniesione) + " x SZUKAJ/ZAMIEŃ, "
         + str(len(original)) + " B -> " + str(len(zmieniony))
         + " B). Backup: " + kopia.name
@@ -28115,337 +39825,20 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
     }
 
 
-def apply_patch_from_fixer_text(fixer_text):
-    """
-    Parsuje blok SZUKAJ/ZAMIEŃ z odpowiedzi CODE_FIXERA i
-    NAPRAWDĘ nakłada go na agent.py:
-
-        1. backup z znacznikiem czasu (agent.py.bak_YYYYMMDD_HHMMSS),
-        2. dokładna, jednoznaczna podmiana tekstu (musi wystąpić
-           w pliku dokładnie raz — inaczej patch jest odrzucany),
-        3. python -m py_compile na wynikowym pliku,
-        4. jeżeli kompilacja się nie powiedzie — automatyczny
-           rollback z backupu.
-
-    To jest właśnie ten mechanizm, który wcześniej istniał
-    WYŁĄCZNIE jako punkty w CODE_FIXER_PROMPT ("1. backup,
-    2. patch, 3. py_compile, 4. rollback") — bez żadnego kodu,
-    który by to faktycznie robił. CODE_FIXER pisał, że to zrobi;
-    nic tego nie wykonywało.
-
-    WAŻNE OGRANICZENIE: modyfikuje plik NA DYSKU. Już uruchomiony
-    proces Pythona ma stary kod załadowany w pamięci i będzie go
-    używać do końca bieżącej sesji — nowa wersja zacznie
-    obowiązywać dopiero przy KOLEJNYM uruchomieniu agent.py. To
-    świadoma decyzja: bezpieczne, przewidywalne "napraw plik,
-    zrestartuj" jest dużo pewniejsze niż próba podmiany kodu
-    żywego procesu w trakcie działania (otwarte sesje ADB/CDP,
-    kolejka, stan Gemini).
-    """
-
-    match = re.search(
-        r"<<<<<<<\s*SZUKAJ\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>>\s*ZAMIEŃ",
-        fixer_text or "",
-        re.DOTALL
-    )
-
-    if not match:
-        return {
-            "applied": False,
-            "reason": (
-                "Nie znaleziono bloku <<<<<<< SZUKAJ / ======= / "
-                ">>>>>>> ZAMIEŃ w odpowiedzi CODE_FIXERA — patch "
-                "nienałożony."
-            )
-        }
-
-    old_block = match.group(1)
-    new_block = match.group(2)
-
-    target = Path(__file__)
-
-    try:
-        source = target.read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się odczytać pliku: " + str(e)
-        }
-
-    occurrences = source.count(old_block)
-
-    if occurrences == 0:
-        return {
-            "applied": False,
-            "reason": (
-                "Fragment SZUKAJ nie występuje w pliku dokładnie "
-                "(CODE_FIXER prawdopodobnie nie skopiował go "
-                "1:1, np. inne wcięcia)."
-            )
-        }
-
-    if occurrences > 1:
-        return {
-            "applied": False,
-            "reason": (
-                "Fragment SZUKAJ występuje w pliku "
-                + str(occurrences)
-                + " razy — patch odrzucony dla bezpieczeństwa "
-                "(musi być jednoznaczny)."
-            )
-        }
-
-    backup_path = target.with_name(
-        target.name
-        + ".bak_"
-        + datetime.now().strftime("%Y%m%d_%H%M%S")
-    )
-
-    try:
-        backup_path.write_text(
-            source,
-            encoding="utf-8"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się utworzyć backupu: " + str(e)
-        }
-
-    new_source = source.replace(old_block, new_block, 1)
-
-    try:
-        target.write_text(
-            new_source,
-            encoding="utf-8"
-        )
-    except Exception as e:
-        return {
-            "applied": False,
-            "reason": "Nie udało się zapisać patcha: " + str(e),
-            "backup": str(backup_path)
-        }
-
-    try:
-        compile_check = subprocess.run(
-            [sys.executable, "-m", "py_compile", str(target)],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-    except Exception as e:
-        compile_check = None
-        compile_error = str(e)
-    else:
-        compile_error = compile_check.stderr
-
-    compile_ok = bool(
-        compile_check is not None
-        and compile_check.returncode == 0
-    )
-
-    if not compile_ok:
-
-        # ROLLBACK — nigdy nie zostawiamy uszkodzonego pliku.
-        target.write_text(
-            source,
-            encoding="utf-8"
-        )
-
-        log(
-            "CODE_FIXER",
-            "py_compile nie przeszedł — rollback z "
-            + str(backup_path)
-        )
-
-        return {
-            "applied": False,
-            "rolled_back": True,
-            "reason": "py_compile nie przeszedł — przywrócono backup.",
-            "compile_error": short(compile_error or "", 2000),
-            "backup": str(backup_path)
-        }
-
-    log(
-        "CODE_FIXER",
-        "Patch nałożony i zweryfikowany (py_compile OK). "
-        "Backup: " + str(backup_path)
-        + " — zacznie obowiązywać po restarcie agenta."
-    )
-
-    log_event(
-        "patch_applied",
-        {
-            "backup": str(backup_path),
-            "old_block_preview": short(old_block, 300),
-            "new_block_preview": short(new_block, 300)
-        }
-    )
-
-    return {
-        "applied": True,
-        "backup": str(backup_path),
-        "note": (
-            "Plik na dysku jest naprawiony i przechodzi "
-            "py_compile. Bieżący, już uruchomiony proces nadal "
-            "działa na starym kodzie w pamięci — zrestartuj "
-            "agent.py, żeby poprawka zaczęła obowiązywać."
-        )
-    }
-
-
-def review_code(context=None):
-    """
-    CODE_REVIEWER analizuje RZECZYWIŚCIE relewantny fragment
-    agent.py (konkretne funkcje, nie przypadkową końcówkę pliku).
-    CODE_FIXER przygotowuje patch w formacie SZUKAJ/ZAMIEŃ, a
-    apply_patch_from_fixer_text() nakłada go naprawdę: backup ->
-    patch -> py_compile -> rollback przy błędzie.
-
-    `context` to słownik, najczęściej dokładnie ten error_report,
-    jaki gemini_execute_task() już i tak buduje przy
-    GEMINI_TOOL_ERROR: task_id, tool, arguments, tool_result,
-    interaction_id, attempt_count.
-    """
-
-    context = context or {}
-
-    try:
-
-        source = Path(__file__).read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-
-        tool = context.get("tool", "")
-
-        # Zawsze patrzymy na miejsca statystycznie najbardziej
-        # prawdopodobne przy błędach narzędzi Gemini, plus
-        # konkretną funkcję zgłoszonego narzędzia, jeśli istnieje
-        # pod tą samą nazwą w pliku.
-        candidate_names = [
-            tool,
-            "dispatch_tool",
-            "_dispatch_tool_inner",
-            "execute_shell",
-            "termux_run",
-        ]
-
-        code_context = []
-        seen = set()
-
-        for fn_name in candidate_names:
-
-            if not fn_name or fn_name in seen:
-                continue
-
-            seen.add(fn_name)
-
-            snippet = extract_function_source(
-                source,
-                fn_name
-            )
-
-            if snippet:
-                code_context.append(
-                    "### " + fn_name + "()\n\n" + snippet
-                )
-
-        if not code_context:
-            # Fallback — nic nie rozpoznaliśmy po nazwie,
-            # lepszy przypadkowy kontekst niż żaden.
-            code_context = [source[-16000:]]
-
-        joined_context = short(
-            "\n\n".join(code_context),
-            16000
-        )
-
-        # v349: Piotr dostaje fakty i kod, bez formatki.
-        #
-        # Bylo tu "Zwroc: PLIK / PROBLEM / DOKLADNE MIEJSCE / PRZYCZYNA
-        # / PROPONOWANA ZMIANA / RYZYKO / TEST" plus "Nie wykonuj
-        # zmian" — czyli formularz do wypelnienia i zakaz. Dokladnie
-        # to, czego pozbylismy sie wszedzie indziej; przetrwalo
-        # tylko dlatego, ze Piotr stoi poza glownym obiegiem.
-        #
-        # Zmian i tak nie wykonuje — nie ma czym. Poprawke nanosi
-        # Python z tego, co napisze Ania.
-        reviewer_message = f"""
-Ta sama czynność zawiodła {context.get('attempt_count', '?')} razy
-z rzędu.
-
-Narzędzie: {tool}
-Argumenty: {short(json.dumps(context.get('arguments', {}), ensure_ascii=False, default=str), 1500)}
-Co zwróciło: {short(json.dumps(context.get('tool_result', {}), ensure_ascii=False, default=str), 3000)}
-
-Plik: {Path(__file__)}
-
-{joined_context}
-"""
-
-        review = deepseek(
-            "CODE_REVIEWER",
-            _wspolne_dla_wolanego("CODE_REVIEWER") + reviewer_message
-        )
-
-        append_memory(
-            MEMORY_DIR / "code_reviewer.md",
-            datetime.now().isoformat(),
-            review
-        )
-
-        fixer_message = f"""
-MAIN potrzebuje przygotowania poprawki.
-
-ANALIZA CODE_REVIEWERA:
-{short(review, 9000)}
-
-KONTEKST BŁĘDU:
-{short(json.dumps(context, ensure_ascii=False, default=str), 3000)}
-
-Napisz patch. Gdy bezpiecznej poprawki nie ma, powiedz to.
-"""
-
-        fixer = deepseek(
-            "CODE_FIXER",
-            _wspolne_dla_wolanego("CODE_FIXER") + fixer_message
-        )
-
-        append_memory(
-            MEMORY_DIR / "code_fixer.md",
-            datetime.now().isoformat(),
-            fixer
-        )
-
-        patch_result = {
-            "applied": False,
-            "reason": "CODE_FIXER nie zaproponował patcha."
-        }
-
-        # v330: nie ma juz hasla do wklepania. Gdy Ania nie dala
-        # zadnej poprawki, po prostu nie bedzie z czego jej wyjac —
-        # extract_search_replace_blocks() zwroci pusto i
-        # apply_patch_from_fixer_text() powie to wprost. Haslo
-        # zostaje obslugiwane dla starszych sesji, ktore maja je
-        # jeszcze w historii.
-        patch_result = apply_patch_from_fixer_text(fixer)
-
-        return {
-            "review": short(review, 4000),
-            "fixer": short(fixer, 4000),
-            "patch_result": patch_result
-        }
-
-    except Exception as e:
-
-        return {
-            "error": str(e)
-        }
-
+# ============================================================
+# v454: BEZ LATANIA agent.py W TRAKCIE BIEGU
+# ============================================================
+#
+# Do v453 druga identyczna porazka narzedzia wolala Piotra i Anie do
+# PRZEGLADU SAMEGO agent.py: Ania pisala patch, Python nakladal go na
+# wlasny plik (backup, py_compile, rollback) i mial obowiazywac po
+# restarcie. To przeczylo dwom zasadom z jak_to_dziala.txt: "zmiana w
+# programie tylko z konkretnego problemu w logach" i "Python jest
+# rekami" — a kosztowalo dwie wiadomosci DeepSeeka i ryzyko, ze
+# program po restarcie wstanie inny, niz go zostawiono. Piotr i Ania
+# zostaja przy kodzie ZESPOLU (review_and_fix_project_file); MAIN
+# dostaje fakt o powtorzonej porazce i sam decyduje o innej drodze.
+# ============================================================
 
 
 # ============================================================
@@ -28794,7 +40187,7 @@ potrzebna jest kolejna akcja.
 # SZACOWANIE POSTĘPU CELU (PROGRESS_ESTIMATOR)
 # ============================================================
 
-def _recent_task_summaries(n=8):
+def _recent_task_summaries(n=8, dlugosc=300):
     """
     Czyta N ostatnio zakończonych zadań z RESULTS_DIR (już
     zapisywane tam przez run_next_task() niezależnie od tej
@@ -28818,6 +40211,7 @@ def _recent_task_summaries(n=8):
 
         summaries.append({
             "task_id": f.stem,
+            "tylko_czekanie": bool(data.get("tylko_czekanie")),
             "status": data.get("status"),
             "report": short(
                 str(
@@ -28826,7 +40220,7 @@ def _recent_task_summaries(n=8):
                     or data.get("error")
                     or ""
                 ),
-                300
+                dlugosc
             )
         })
 
@@ -28846,6 +40240,9 @@ _HUMAN_STATUS_LABELS = {
     "DONE_REJECTED_VERIFICATION_FAILED": "zgłoszony DONE odrzucony (brak dowodu)",
     "TASK_DUPLICATE_OF_VERIFIED_POINT": "powtórka już zweryfikowanego punktu",
     "TASK_ALREADY_SATISFIED_ON_DISK": "już spełnione na dysku",
+    # v460
+    "RUN_FINISHED": "MAIN wykonał sam",
+    "RUN_TOOL_ERROR": "MAIN wykonał sam, narzędzie padło",
 }
 
 
@@ -28855,11 +40252,21 @@ _HUMAN_STATUS_LABELS = {
 # Zamieniamy to na zwykłe, ponumerowane zdania — ta sama treść,
 # ludzka forma, zero dodatkowego zapytania do DeepSeeka (to czysto
 # formatowanie w Pythonie).
-def _human_task_summary_lines(summaries):
+def _human_task_summary_lines(summaries, dlugosc=140):
 
     lines = []
+    _czekan = 0
 
     for i, s in enumerate(summaries, 1):
+
+        # v480et: kroki samego czekania (bez nowego wyniku) jako jedna
+        # linia — Ela dostawala osiem "Czekam ~5 min…" z rzedu.
+        if s.get("tylko_czekanie"):
+            _czekan += 1
+            continue
+        if _czekan:
+            lines.append("(" + str(_czekan) + " krok(i) tylko czekania na to, co leci w tle)")
+            _czekan = 0
 
         label = _HUMAN_STATUS_LABELS.get(
             s.get("status"), str(s.get("status") or "nieznany status")
@@ -28870,9 +40277,12 @@ def _human_task_summary_lines(summaries):
         line = str(i) + ". " + label
 
         if report:
-            line += " — " + short(report, 140)
+            line += " — " + short(report, dlugosc)
 
         lines.append(line)
+
+    if _czekan:
+        lines.append("(" + str(_czekan) + " krok(i) tylko czekania na to, co leci w tle)")
 
     return "\n".join(lines)
 
@@ -29033,6 +40443,39 @@ def _co_narzedzia_naprawde_zrobily(ile=6):
     )
 
 
+def _sprawdzone_przez_program_dla_eli():
+    """v480dk: wynik potwierdzony komenda i ostatnia ocena Sedziego (rywalizacja)."""
+    if not _DRUZYNA:
+        return ""
+    czesci = []
+    try:
+        w = json.loads(
+            (HOME / "RYWALIZACJA" / ("druzyna_" + _DRUZYNA + ".json")).read_text(encoding="utf-8")
+        )
+        czesci.append(
+            "- wynik drużyny sprawdzony komendą (" + str(w.get("czas", "")) + "): "
+            + str(w.get("wynik")) + " — " + str(w.get("werdykt")) + "; opis: "
+            + short(str(w.get("opis") or ""), 500)
+        )
+    except Exception:
+        pass
+    try:
+        o = json.loads(
+            (HOME / "RYWALIZACJA" / "ocena_sedziego.json").read_text(encoding="utf-8")
+        )
+        mo = o.get("druzyna_" + _DRUZYNA) or {}
+        if mo:
+            czesci.append(
+                "- ostatnia ocena Sędziego (" + str(o.get("czas", "")) + "): "
+                + str(mo.get("procent")) + "% — " + short(str(mo.get("ocena") or ""), 700)
+            )
+    except Exception:
+        pass
+    if not czesci:
+        return ""
+    return "\nSprawdzone przez program:\n" + "\n".join(czesci) + "\n"
+
+
 def estimate_progress(goal, chrome_text=None, android_text=None, last_result=None):
     """
     Pyta PROGRESS_ESTIMATOR o procentową ocenę realizacji celu na
@@ -29046,7 +40489,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     zamiast tej funkcji odpytującej urządzenie po raz kolejny.
     """
 
-    summaries = _recent_task_summaries(8)
+    summaries = _recent_task_summaries(8, dlugosc=700)
 
     if not summaries:
         return None
@@ -29070,7 +40513,7 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     device_state_block = ""
 
     _resolved_chrome_text_for_progress = (
-        chrome_text if chrome_text is not None else chrome_summary()
+        chrome_text if chrome_text is not None else chrome_summary(budz=False)
     )
 
     # Bez last_result (nieprzekazywanego do tej funkcji) trzymamy tu
@@ -29118,10 +40561,25 @@ def estimate_progress(goal, chrome_text=None, android_text=None, last_result=Non
     # docstringami. Patrz bezwykonawcy.py.
     # v432: relacje z krokow i fakty, bez komentarza Pythona do nich
     # i bez listy punktow celu (patrz _checklist_summary_block).
+    # v480dk: Ela widziala tylko powody krokow uciete do 140 znakow
+    # ("......") i nazwy narzedzi — bez wynikow. Uzytkownik (2026-10-21):
+    # "Ela nie widzi realnych postępów". Teraz: dluzsze relacje, wynik
+    # ostatniego kroku i to, co program sam sprawdzil.
+    _ostatni_wynik = ""
+    try:
+        if isinstance(last_result, dict) and last_result:
+            _ostatni_wynik = (
+                "\nWynik ostatniego kroku:\n"
+                + _condense_last_result_for_team(last_result, 2000) + "\n"
+            )
+    except Exception:
+        _ostatni_wynik = ""
+    _sprawdzone = _sprawdzone_przez_program_dla_eli()
+
     prompt = f"""
-Gemini po kolejnych krokach:
-{_human_task_summary_lines(summaries)}
-{narzedzia_block}
+Kolejne kroki (co się wykonało):
+{_human_task_summary_lines(summaries, 600)}
+{_ostatni_wynik}{_sprawdzone}{"" if _sprawdzone else narzedzia_block}
 {device_state_block}"""
 
     raw = deepseek(
@@ -29134,8 +40592,12 @@ Gemini po kolejnych krokach:
     if not parsed or "percent" not in parsed:
         return None
 
+    # v451: "50%" albo "ok. 50" to tez liczba — int("50%") rzucal i
+    # pasek pokazywal 0.
+    _liczba = re.search(r"-?\d+(?:[.,]\d+)?", str(parsed.get("percent", 0)))
+
     try:
-        percent = int(parsed.get("percent", 0))
+        percent = int(float(_liczba.group().replace(",", "."))) if _liczba else 0
     except Exception:
         percent = 0
 
@@ -29423,16 +40885,15 @@ def _o_kogo_prosi_main(tekst):
 
     for m in _ADDRESS_RE.finditer(t):
         rola = _VOCATIVE_TO_ROLE.get(m.group(1).upper())
-        if rola and rola != "MAIN":
+        if rola and rola != "MAIN" and rola not in _ROLE_BEZ_CELU:
             kto.add(rola)
 
-    # 2. po tym, czego potrzeba
-    maly = t.lower()
-
-    for rola, slowa in _POTRZEBA_ROLI:
-        if any(w in maly for w in slowa):
-            kto.add(rola)
-
+    # v480ft: bez slow-kluczy (_POTRZEBA_ROLI). Bieg 2026-10-25 23:05,
+    # druzyna 1: MAIN napisal w uzasadnieniu RUN-a "trzeba miec czym
+    # mierzyc postęp", a program pytal Ele, choc nikt jej nie wolal —
+    # "postęp" bylo slowem-kluczem, nie prosba. Tak samo "ryzyko" budzilo
+    # Marka, a "pomysl" Wojtka. MAIN decyduje, do kogo pisze (uzytkownik
+    # 2026-10-25): ASK albo imie w zdaniu.
     return kto
 
 # ============================================================
@@ -29766,7 +41227,16 @@ def _condense_last_result_for_team(last_result, limit=2500):
             else ""
         )
 
-    parts = [
+    # v480gt: "Ostatni krok skończył się tak: RUN_FINISHED (udany)" szlo
+    # 167 razy w nocy 26/27.10 — przy zwyklym sukcesie to kod statusu bez
+    # informacji (wyniki sa nizej). Zostaje, gdy krok nie wyszedl albo
+    # status cos znaczy (ENGINEER_CODE_MISSING, TOOL_LIMIT …).
+    # v480gy: po RUN MAIN-a nigdy — kazda akcja sama mowi, co padlo
+    # ("RUN_TOOL_ERROR (nieudany)" przy ls brakujacego pliku).
+    parts = [] if (
+        (_status in ("RUN_FINISHED", "TASK_EXECUTION_FINISHED", "OK") and _ok is not False)
+        or last_result.get("executed_by") == "main_run"
+    ) else [
         "Ostatni krok skończył się tak: " + _status + _sufiks
     ]
 
@@ -29915,13 +41385,27 @@ def _condense_last_result_for_team(last_result, limit=2500):
         # powiedziec, CZYM ta tresc jest, nie mowiac czyja jest.
         # v432: "Gemini napisal:" zamiast "relacja z wykonania (opis
         # slowami, nie pomiar…)".
-        parts.append("Gemini napisał:\n" + short(str(report), 1200))
+        # v460: po RUN raport pisze Python (powod MAIN-a + ile akcji),
+        # nie Gemini.
+        if last_result.get("executed_by") == "main_run":
+            # v480gt: powod MAIN-a zespol ma juz w bloku "MAIN:" — tu
+            # zostaje tylko, ile akcji wykonal (bylo dwa razy to samo).
+            _ile = re.search(r"wykonano (\d+) z (\d+) akcji.*$", str(report), re.S)
+            # v480hn: "wykonano 1 z 1 akcji" nic roli nie mowi (wyniki sa
+            # nizej); zostaje tylko, gdy czegos nie wykonano
+            if not (_ile and _ile.group(1) == _ile.group(2) and not _ile.group(0)[len("wykonano " + _ile.group(1) + " z " + _ile.group(2) + " akcji"):].strip(" .")):
+                parts.append("MAIN wykonał sam (RUN): " + (_ile.group(0) if _ile else short(str(report), 300)))
+        else:
+            parts.append("Gemini napisał:\n" + short(str(report), 1200))
 
     tool_calls = last_result.get("tool_calls")
 
     # v429: gdy jest slad wywolan, liczba stoi w nim ("wywołań
     # narzędzi: N, nieudanych: M") — tu byla druga raz.
-    if tool_calls and not last_result.get("tool_trace"):
+    # v480ew: po RUN MAIN-a liczba stoi juz w "wykonano N z M akcji" i w
+    # liscie wynikow — trzecia linia z ta sama liczba to szum.
+    if (tool_calls and not last_result.get("tool_trace")
+            and last_result.get("executed_by") != "main_run"):
         parts.append("liczba wywołań narzędzi: " + str(tool_calls))
 
     # CO GEMINI FAKTYCZNIE WYWOŁAŁO — zapis zbierany przez Pythona,
@@ -29951,6 +41435,24 @@ def _condense_last_result_for_team(last_result, limit=2500):
     # stdout poprzedniego, udanego wywołania — po prostu nigdy nie
     # trafiał do zespołu.
     tool_trace = last_result.get("tool_trace")
+
+    # v480gt: po RUN MAIN-a zespol dostaje wyniki tak jak MAIN — komenda
+    # w jednej linii i jej wyjscie — zamiast "wywołań narzędzi: 4,
+    # nieudanych: 0 -> termux_run -> …; termux_write_file -> …".
+    if last_result.get("executed_by") == "main_run" and last_result.get("wyniki_run"):
+        _wr = [w for w in last_result.get("wyniki_run") or [] if isinstance(w, dict)]
+        _na = max(300, (limit - 400) // max(1, len(_wr)))
+        def _jedna_akcja(i, w):
+            _wy = w.get("wynik")
+            if isinstance(_wy, dict) and _wy.get("status") == "CZEKA_W_TLE":
+                return str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — poszło w tle jako czekanie."
+            if isinstance(_wy, dict) and _wy.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
+                return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — "
+                        + str(_wy.get("message") or "to samo już leci w tle."))
+            return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + "\n"
+                    + _wynik_dla_maina(_wy, w.get("args"), _na))
+        parts.append("\n\n".join(_jedna_akcja(i, w) for i, w in enumerate(_wr)))
+        tool_trace = None
 
     if isinstance(tool_trace, list) and tool_trace:
 
@@ -30223,6 +41725,7 @@ _ROLE_DISPLAY_NAME = {
     "ENGINEER": "Bartek",
     "BROWSER": "Ola",
     "WOJTEK": "Wojtek",
+    "IGOR": "Igor",
     "MAIN": "MAIN",
 }
 
@@ -30252,6 +41755,10 @@ _VOCATIVE_TO_ROLE = {
     # na tej liscie. Skutek: caly list, razem z checklista decyzji,
     # szedl do KAZDEGO kolegi jako wypowiedz do wszystkich.
     "MAIN": "MAIN", "MAINOWI": "MAIN", "MAINA": "MAIN",
+
+    # v480cn: do Igora tez mozna napisac po imieniu — patrz
+    # _collect_role_messages().
+    "IGORZE": "IGOR", "IGOR": "IGOR",
 }
 
 _WOLACZ = {
@@ -30502,6 +42009,27 @@ def _collect_role_messages(speaker_role, text):
             # przekazywać.
             continue
 
+        # v480cn: kto napisze do Igora po imieniu, ten dostaje jego
+        # odpowiedz. Igor dostaje tylko to, co do niego napisano —
+        # bez celu i bez reszty wypowiedzi — a odpowiedz wraca do
+        # skrzynki autora, jak od kazdego kolegi.
+        if adresat in _ROLE_BEZ_CELU:
+            if adresat in _nazwani or speaker_role in _ROLE_BEZ_CELU:
+                continue
+            _nazwani.add(adresat)
+            log(
+                "ZESPÓŁ",
+                _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role))
+                + " pisze do " + _ROLE_DISPLAY_NAME.get(adresat, adresat)
+                + ": " + short(tresc, 300)
+            )
+            _odp_igora = str(deepseek(adresat, tresc) or "").strip()
+            if _odp_igora:
+                _role_inbox.setdefault(speaker_role, []).append(
+                    (_ROLE_DISPLAY_NAME.get(adresat, adresat), _odp_igora)
+                )
+            continue
+
         # v387: jego akapit RAZEM z czescia wspolna.
         #
         # ZMIERZONE NA LOGACH: 690 razy skrzynka oddala komus sam
@@ -30559,6 +42087,27 @@ def _collect_role_messages(speaker_role, text):
         # dopiero wtedy, gdy zawolany sie ODEZWIE.
         _kto_mnie_zawolal.setdefault(adresat, set()).add(
             str(speaker_role)
+        )
+
+    # v480fp: odpowiedz wraca do tego, kto o nia prosil po imieniu,
+    # takze gdy odpowiadajacy nie powtorzy jego imienia — trafia do jego
+    # skrzynki i pytajacy moze na nia od razu odpowiedziec. Rozmowa
+    # konczy sie sama, gdy nikt juz do nikogo sie nie zwraca.
+    for _pytal in sorted(_kto_mnie_zawolal.get(speaker_role, set())):
+        if (
+            _pytal in _nazwani
+            or _pytal == speaker_role
+            or _pytal not in _ROLE_DO_ROZMOWY
+            or not str(text or "").strip()
+        ):
+            continue
+        _role_inbox.setdefault(_pytal, []).append(
+            (
+                _ROLE_DISPLAY_NAME.get(speaker_role, str(speaker_role)),
+                _kod_dla_tej_roli(
+                    _utnij_na_sekcji_wykonawcy(str(text)).strip(), _pytal
+                )
+            )
         )
 
     # v386: imie nie jest jedynym adresem — patrz _zapamietaj_watek().
@@ -32022,7 +43571,6 @@ def consult_team(
     # v432: bez "⚠️ UWAGA: narzedzie X zawiodlo Nx… Czas na inne
     # podejscie" i bez ramy "Przy okazji zauwazylem w narzedziach…".
     # Ostrzezenia z wykonania i tak ida w relacji z kroku.
-    tool_hint = ""
 
     # v435: fakty z _pending_team_warnings ida do MAIN-a (patrz
     # main_decide). Od v413 byly tu zbierane i wyrzucane — nie
@@ -32042,15 +43590,9 @@ def consult_team(
     # w OSTATNIM RAPORCIE i w surowym wyniku — checklista ma go nie
     # powtarzac po raz trzeci. Ona jest od tego, zeby nie zginely
     # punkty STARE.
-    _biezace_zadanie = (
-        last_result.get("task")
-        if isinstance(last_result, dict) else None
-    )
-
     # v432: bez listy punktow celu ("Z 8 punktow: 5 zrobily sie na
     # narzedziach…", "Do tych warto wrocic…") i bez "Tego juz
     # probowalismy…" — Python sam dzielil cel na punkty i je oceniał.
-    checklist_block = ""
 
     # Na wyraźną prośbę użytkownika (2026-08-27): reszta zespołu od
     # v116/v132 rozmawia po ludzku, ale sam OSTATNI RAPORT był
@@ -32280,11 +43822,19 @@ def consult_team(
     #
     # Kod zwiniety do jednej linii — to, co robil, widac w wyniku
     # ponizej; tu chodzi o to, O CO prosil MAIN.
+    # v480ha: "Co MAIN zrobił i dlaczego" zamiast drugiego "MAIN:" — pytanie
+    # MAIN-a do roli stoi nizej pod "MAIN:" i ma byc jedynym takim blokiem.
     main_decision_block = (
-        "\nMAIN:\n"
+        "\nCo MAIN zrobił i dlaczego:\n"
         + _main_decision_for_team
         + (
-            "\n\nTreść zlecenia:\n"
+            # v452: "Tresc zlecenia" Bartek czytal jako zlecenie dla
+            # siebie ("Nie mam narzedzi chrome_open", "nie mam
+            # terminala" — bieg 2026-09-25 16:15, krok 10) i odmawial
+            # kodu. Zlecenie wykonuje program; to jest fakt, ktory
+            # zmienia, jak sie je czyta.
+            "\n\nZlecenie MAIN-a dla programu (wykonuje je program, "
+            "nie zespół):\n"
             # Jednolinijkowa komenda JEST zleceniem ("cat ~/plik") — od v423
             # zostaje w tekscie. Zwijamy skrypty.
             + _kod_na_jedna_linie(str(_main_task_for_team))
@@ -32332,7 +43882,6 @@ def consult_team(
     # checklista przypomina o NIEDOKONCZONYCH punktach, a wypisywala
     # tez ten, ktory wlasnie padl i jest opisany dwie linijki nizej.
     # To ja tniemy — patrz _checklist_summary_block(skip_task).
-    report_body = readable_report or raw_report_material
 
     # v193: kazda rola dostaje TYLKO to, czego jeszcze nie widziala.
     # Bloki identyczne z poprzednim krokiem sa juz w historii jej
@@ -32553,11 +44102,11 @@ def consult_team(
             # Przez _only_if_new, więc mówimy to raz — ale plik żyje
             # do końca celu, więc nowe zdanie użytkownika dotrze
             # wtedy, gdy padnie.
-            _only_if_new(
-                role_name,
-                "uzytkownik_powiedzial",
-                _co_powiedzial_uzytkownik_block()
-            ),
+            # v480: te same zdania szly tez nizej, w "Uzytkownik:"
+            # (_team_context) — Kamil w biegu 2026-10-11 12:34 dostal je
+            # w jednej wiadomosci dwa razy. Zostaje tamten blok: idzie
+            # do kazdej roli raz na rozmowe (_jeszcze_niewyslane_zdania).
+            "",
             # v381: ile z celu jest naprawde zrobione — ta sama liczba,
             # ktora dostaje MAIN. Zespol tez ma prawo wiedziec, czy to,
             # co robi od kilku krokow, cokolwiek posuwa. Patrz
@@ -32599,7 +44148,7 @@ def consult_team(
         return "".join(p for p in pieces if p)
 
     _chrome_tekst = (
-        chrome_text if chrome_text is not None else chrome_summary()
+        chrome_text if chrome_text is not None else chrome_summary(budz=False)
     )
 
     chrome_block = (
@@ -32664,7 +44213,10 @@ def consult_team(
         # dostaje. Patrz _co_powiedzial_uzytkownik(): dotad te
         # zdania lezaly w pliku, z ktorego czytalismy wylacznie
         # numery telefonow.
-        _od_uzytkownika = _co_powiedzial_uzytkownik()
+        _od_uzytkownika = (
+            "" if role_name in _ROLE_TYLKO_PYTANIE
+            else _co_powiedzial_uzytkownik(role_name)
+        )
 
         if _od_uzytkownika:
             pieces.append(
@@ -34049,8 +45601,46 @@ def consult_team(
 # ============================================================
 
 _MAIN_ASK_ALLOWED_ROLES = (
-    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK"
+    "PLANNER", "RESEARCHER", "CRITIC", "BROWSER", "ENGINEER", "WOJTEK",
+    "IGOR", "PROGRESS_ESTIMATOR", "CODE_REVIEWER", "CODE_FIXER"
 )
+# v480ec: uzytkownik (2026-10-24 13:05) — Ela moze brac udzial w burzy
+# mozgow jak kazdy z zespolu, wiec MAIN moze ja zapytac (ask_role ELA).
+_MAIN_ASK_ALIASY = {"ELA": "PROGRESS_ESTIMATOR"}
+# v480fx: uzytkownik (2026-10-25): w opisie zespolu sa imiona, a w ask_role
+# byly nazwy rol (PLANNER, CRITIC...) — MAIN nie wiedzial, ze Bartek to
+# ENGINEER. Od teraz w prompcie ask_role to imiona; program przyjmuje
+# imie (tez w odmianie i z dopiskiem "Bartek (ENGINEER)") albo nazwe roli.
+_IMIE_NA_ROLE_ASK = {
+    "TOMEK": "PLANNER", "TOMKA": "PLANNER", "TOMKU": "PLANNER",
+    "KAMIL": "RESEARCHER", "KAMILA": "RESEARCHER", "KAMILU": "RESEARCHER",
+    "MAREK": "CRITIC", "MARKA": "CRITIC", "MARKU": "CRITIC",
+    "BARTEK": "ENGINEER", "BARTKA": "ENGINEER", "BARTKU": "ENGINEER",
+    "OLA": "BROWSER", "OLI": "BROWSER", "OLU": "BROWSER", "OLE": "BROWSER", "OLĘ": "BROWSER",
+    "WOJTEK": "WOJTEK", "WOJTKA": "WOJTEK", "WOJTKU": "WOJTEK",
+    "ELA": "PROGRESS_ESTIMATOR", "ELI": "PROGRESS_ESTIMATOR", "ELU": "PROGRESS_ESTIMATOR",
+    "ELE": "PROGRESS_ESTIMATOR", "ELĘ": "PROGRESS_ESTIMATOR",
+    "IGOR": "IGOR", "IGORA": "IGOR", "IGORZE": "IGOR",
+    # v480io: uzytkownik (2026-10-30): "wszystkich moze pytac, Anie i
+    # Piotra tez nie blokuj".
+    "PIOTR": "CODE_REVIEWER", "PIOTRA": "CODE_REVIEWER", "PIOTRZE": "CODE_REVIEWER",
+    "PIOTROWI": "CODE_REVIEWER",
+    "ANIA": "CODE_FIXER", "ANI": "CODE_FIXER", "ANIU": "CODE_FIXER",
+    "ANIĘ": "CODE_FIXER", "ANIE": "CODE_FIXER",
+}
+
+
+def _rola_ask(x):
+    """ask_role z decyzji MAIN-a -> nazwa roli w programie."""
+    t = str(x or "").strip().upper()
+    for kawalek in [t] + re.findall(r"[A-ZĄĆĘŁŃÓŚŹŻ_]+", t):
+        if kawalek in _MAIN_ASK_ALLOWED_ROLES:
+            return kawalek
+        if kawalek in _IMIE_NA_ROLE_ASK:
+            return _IMIE_NA_ROLE_ASK[kawalek]
+        if kawalek in _MAIN_ASK_ALIASY:
+            return _MAIN_ASK_ALIASY[kawalek]
+    return t
 
 
 def _main_human_line(decision, dtype):
@@ -34079,7 +45669,49 @@ def _main_human_line(decision, dtype):
         instructions = str(decision.get("instructions") or "").strip()
         return instructions or reason or "Potrzebna Twoja pomoc."
 
+    if dtype == "RUN":
+        akcje = decision.get("actions") or decision.get("akcje") or []
+        nazwy = [
+            str((a or {}).get("tool") or (a or {}).get("narzedzie") or "?")
+            for a in (akcje if isinstance(akcje, list) else [akcje])
+        ]
+        return (
+            "Wykonuję sam (" + str(len(nazwy)) + "): " + ", ".join(nazwy[:12])
+            + (" — " + reason if reason else "")
+        )
+
     return reason or (dtype or "(brak decyzji)")
+
+
+# v480dc: zly JSON — gdzie sie psuje. Uzytkownik (2026-10-21): kazda
+# pomylka zespolu ma dostac komunikat, co poszlo nie tak.
+def _gdzie_psuje_sie_json(tekst):
+    tekst = str(tekst or "")
+    # v480hs: odpowiedz w formacie DSML, ktorego program nie odczytal —
+    # powiedz to wprost i jak poprawic.
+    if "DSML" in tekst:
+        return (" — przyszła w formacie wywołań DSML (<｜DSML｜ …>), z którego "
+                "program nie odczytał decyzji; wyślij ją jako jeden obiekt JSON, "
+                "np. {\"type\": \"RUN\", \"reason\": \"...\", \"actions\": [...]} "
+                "albo {\"type\": \"ASK\", \"ask_role\": \"<imię>\", \"ask_question\": \"...\"}")
+    od = tekst.find("{")
+    do = tekst.rfind("}")
+    if od < 0:
+        return " (nie ma w niej obiektu {...})"
+    kawalek = tekst[od:do + 1] if do > od else tekst[od:]
+    try:
+        json.loads(kawalek)
+        return ""
+    except json.JSONDecodeError as e:
+        linia = kawalek.count("\n", 0, e.pos) + 1
+        wiersz = kawalek.split("\n")[linia - 1] if kawalek else ""
+        return (
+            " (linia " + str(linia) + " obiektu JSON, kolumna "
+            + str(e.colno) + ": "
+            + str(e.msg) + "; ta linia: " + short(wiersz.strip(), 120) + ")"
+        )
+    except Exception:
+        return ""
 
 
 def main_decide(
@@ -34122,7 +45754,7 @@ def main_decide(
     # zamiast MAIN pytającego urządzenie NIEZALEŻNIE o dokładnie to
     # samo, co PLANNER/CRITIC już przed chwilą dostali.
     _resolved_chrome_text = (
-        chrome_text if chrome_text is not None else chrome_summary()
+        chrome_text if chrome_text is not None else chrome_summary(budz=False)
     )
 
     chrome_block = (
@@ -34137,6 +45769,17 @@ def main_decide(
         android_text if android_text is not None else android_summary()
     )
 
+    # v461: po RUN z android_state MAIN ma juz ekran w wynikach —
+    # bieg 2026-09-28: blok "android" dla MAIN-a wazyl 55 tys. znakow.
+    _run_mial_ekran = (
+        isinstance(last_result, dict)
+        and last_result.get("executed_by") == "main_run"
+        and any(
+            (w or {}).get("tool") == "android_state"
+            for w in (last_result.get("wyniki_run") or [])
+        )
+    )
+
     android_block = (
         "\nNa ekranie telefonu jest teraz:\n"
         + short(
@@ -34144,6 +45787,7 @@ def main_decide(
             3500
         ) + "\n"
         if (_ekran_w_grze(last_result)
+            and not _run_mial_ekran
             and _odczyt_sie_udal(_resolved_android_text)) else ""
     )
 
@@ -34171,6 +45815,11 @@ def main_decide(
         _czesci = []
         for _odp in (asked_followup.get("odpowiedzi") or [asked_followup]):
             _kto_odp = _ROLE_DISPLAY_NAME.get(_odp['role'], _odp['role'])
+            # v454: odpowiedz koledze, nie MAIN-owi — widac, na co.
+            if _odp.get("na_slowa"):
+                _kto_odp += " (na słowa " + _ROLE_DISPLAY_NAME.get(
+                    _odp["na_slowa"], _odp["na_slowa"]
+                ) + ")"
             _czesci.append(
                 (_kto_odp + ":\n" + str(_odp['answer']).strip())
                 if str(_odp['answer'] or "").strip() else
@@ -34231,14 +45880,45 @@ def main_decide(
     #
     # code_review/checks/attempt_count dokładamy osobno — kondensator
     # ich nie zna, a to na nie wskazują wyjaśnienia statusów wyżej.
-    _facts = _condense_last_result_for_team(last_result, 3000)
+    # v459: po RUN MAIN pracuje na pelnych wynikach, nie na skrocie.
+    # v460: bez skrotu sladu i bez raportu (to jego wlasny powod) —
+    # w biegu 2026-09-27 22:59 kazdy wynik szedl do MAIN-a dwa razy.
+    if isinstance(last_result, dict) and last_result.get("executed_by") == "main_run":
+        _facts = _condense_last_result_for_team(
+            {
+                k: v for k, v in last_result.items()
+                # v480gu: bez wyniki_run — _wyniki_run_blok nizej daje je
+                # MAIN-owi raz (po v480gt szly dwa razy, raz jako JSON).
+                if k not in ("tool_trace", "report", "dowody", "wyniki_run")
+            },
+            3000
+        )
+        _blok_run = _wyniki_run_blok(last_result)
+        if _blok_run:
+            _facts += "\n" + _blok_run
+    else:
+        _facts = _condense_last_result_for_team(last_result, 3000)
+
+    # v465: po FAILED MAIN-a — co powiedzieli Tomek i Marek, w calosci.
+    if isinstance(last_result, dict) and last_result.get("glosy_zespolu"):
+        _facts += "\n" + str(last_result["glosy_zespolu"])
 
     # v435: fakty, ktore Python zebral w tym kroku (zapisy, odmowy,
     # poprawki Ani) — raz, do MAIN-a.
+    # v480gf: stan procesow w tle idzie obok ramki "W TLE", nie na dole
+    # pod wynikami (uzytkownik 2026-10-26: "nie poukładane").
+    _stan_tla = ""
+    _tlo_skonczone_procesy = ""
     if _pending_team_warnings:
-        _facts += "\n" + "\n".join(
-            str(w) for w in _pending_team_warnings[:8]
-        )
+        _wsz = [str(w) for w in _pending_team_warnings[:12]]
+        _tlo_w = [w for w in _wsz if w.startswith("• ") and w not in _linie_tla_skonczone]
+        _tlo_k = [w for w in _wsz if w in _linie_tla_skonczone]
+        _inne_w = [w for w in _wsz if w not in _tlo_w and w not in _tlo_k]
+        if _inne_w:
+            _facts += "\n" + "\n".join(_inne_w)
+        if _tlo_w:
+            _stan_tla = "\n".join(_tlo_w) + "\n\n"
+        _tlo_skonczone_procesy = "\n".join(_tlo_k)
         del _pending_team_warnings[:]
 
     if isinstance(last_result, dict):
@@ -34296,11 +45976,11 @@ def main_decide(
 
     for _rola, _wstep, _tekst in (
         ("PLANNER", "Tomek:",
-         _kod_na_jedna_linie(team.get("planner", ""))),
+         _dla_maina_z_zapisem("PLANNER", team.get("planner", ""))),
         ("ENGINEER", "Bartek:",
-         _kod_na_jedna_linie(team.get("engineer", ""))),
+         _dla_maina_z_zapisem("ENGINEER", team.get("engineer", ""))),
         ("RESEARCHER", "Kamil:",
-         _kod_na_jedna_linie(team.get("researcher", ""))),
+         _dla_maina_z_zapisem("RESEARCHER", team.get("researcher", ""))),
         # v401: gdy wymiana sie odbyla, Marek idzie RAZ.
         #
         # team_exchange zaczyna sie od ("Marek", _critic_out_full) —
@@ -34311,16 +45991,16 @@ def main_decide(
         # oba wpisy staja obok siebie i MAIN czyta Marka dwa razy.
         ("CRITIC", "Marek:",
          "" if _exchange
-         else _kod_na_jedna_linie(team.get("critic", ""))),
+         else _dla_maina_z_zapisem("CRITIC", team.get("critic", ""))),
         (None, "",
          _kod_na_jedna_linie(_exchange)),
         ("BROWSER", "Ola:",
-         _kod_na_jedna_linie(team.get("browser", ""))),
+         _dla_maina_z_zapisem("BROWSER", team.get("browser", ""))),
         # v416: do v415 szlo to do zespolu, a MAIN-owi nie.
         (None, "Ola:",
          _kod_na_jedna_linie(team.get("odczyt_oli", ""))),
         ("WOJTEK", "Wojtek:",
-         _kod_na_jedna_linie(team.get("wojtek", ""))),
+         _dla_maina_z_zapisem("WOJTEK", team.get("wojtek", ""))),
     ):
 
         # v422: tylko to, co padlo w TYM kroku.
@@ -34492,7 +46172,7 @@ def main_decide(
     # v341: MAIN tez musi wiedziec, co powiedzial uzytkownik —
     # to on decyduje, czy jeszcze raz kazac sprawdzac instalacje.
     # Patrz _co_powiedzial_uzytkownik().
-    _od_uzytkownika_dla_maina = _co_powiedzial_uzytkownik()
+    _od_uzytkownika_dla_maina = _co_powiedzial_uzytkownik("MAIN")
 
     _uzytkownik_block = (
         _only_if_new(
@@ -34502,6 +46182,23 @@ def main_decide(
         )
         if _od_uzytkownika_dla_maina else ""
     )
+
+    # v480: odpowiedz uzytkownika na NEED_USER_LOGIN szla w kroku 21
+    # dwa razy w tej samej wiadomosci — w "Uzytkownik:" i jeszcze raz
+    # w "Co sie wlasnie stalo" jako "wartosc wklejona przez
+    # uzytkownika". Gdy pelny tekst jest juz wyzej, nizej zostaje
+    # tylko sciezka do pliku z nim.
+    if _uzytkownik_block and isinstance(last_result, dict):
+        _wklejone = " ".join(
+            str(last_result.get("user_provided_value") or "").split()
+        )
+        if _wklejone and _wklejone[:200] in " ".join(
+            _uzytkownik_block.split()
+        ):
+            _facts = "\n".join(
+                l for l in str(_facts).split("\n")
+                if not l.startswith("wartość wklejona przez użytkownika: ")
+            )
 
     # v348: co powstalo na dysku w tym kroku — zeby MAIN mial to
     # przed oczami, gdy decyduje, co uruchomic. Patrz
@@ -34514,29 +46211,352 @@ def main_decide(
     # Patrz _postep_blok().
     _postep_dla_maina = _only_if_new("MAIN", "postep", _postep_blok())
 
-    # v410: "Co sie wlasnie stalo" tylko wtedy, gdy cos sie stalo.
-    # v435: po odpowiedzi na ASK bez powtorki tego, co sie stalo —
-    # MAIN dostal to na poczatku kroku.
-    _co_sie_stalo_main = (
-        "" if (_jeszcze_nic_sie_nie_stalo(last_result) or asked_followup)
-        else "Co się właśnie stało:\n" + _facts + "\n"
-    )
+    # v480gw: wiadomosc do MAIN-a ulozona w sekcje (uzytkownik 2026-10-27:
+    # "uporzadkuj w koncu te wyslanie tak, jak bys ty chcial dostawac").
+    # Kolejnosc wedlug tego, co MAIN-owi potrzebne do decyzji: slowa
+    # uzytkownika, co skonczylo sie w tle, wynik jego ostatniego kroku,
+    # co dalej leci (jedna linia na rzecz), zespol, ocena, dysk, ekran;
+    # linia o zespole na samym koncu, raz. Kazda sekcja ma krotki
+    # naglowek "### …" i pojawia sie tylko, gdy cos w niej jest.
+    # v410/v435: wynik kroku tylko, gdy cos sie stalo; po ASK — odpowiedzi.
+    _twoj_krok = ""
+    if asked_followup:
+        _twoj_krok = ask_block
+    elif not _jeszcze_nic_sie_nie_stalo(last_result):
+        _twoj_krok = _facts
+    _twoj_krok = re.sub(r"(?m)^Wyniki akcji RUN:\n", "", str(_twoj_krok or ""))
+    if _main_topic_block.strip():
+        _twoj_krok = _main_topic_block.strip() + "\n" + _twoj_krok
 
-    prompt = f"""{_main_topic_block}{_uzytkownik_block}{_nowe_pliki}{_postep_dla_maina}
-{_co_sie_stalo_main}
+    # v480: co poprzedni bieg zatrzymal przy zamknieciu — raz; v480ac:
+    # tylko gdy wznawiamy TEN SAM cel.
+    _blok_zamkniecia = ""
+    if int(step or 0) <= 1 and not globals().get("_zamkniecie_powiedziane"):
+        globals()["_zamkniecie_powiedziane"] = True
+        _bz = _zatrzymane_przy_zamknieciu_blok()
+        if (
+            "MAIN" in globals().get("_wznowione_sesje", set())
+            or (
+                sessions.get("MAIN") is None
+                and _load_session_state("MAIN")
+            )
+        ):
+            _blok_zamkniecia = _bz
 
-{team_block}
-{_chrome_dla_maina}{_android_dla_maina}
-{ask_block}{_format_block}
-{ask_contract_block}"""
+    # v480aq: werdykty sedziego; v480ec: burza mozgow; v480ed: tlo.
+    _werdykty = _sedzia_blok()
+    _burza = _burza_blok()
+    _tlo_skonczone, _tlo_trwa = _czekanie_czesci()
+    _tlo_trwa = (_stan_tla.strip() + "\n" + _tlo_trwa).strip()
+    # v480ha: koncowka logu zakonczonego procesu, ktora jest tez w wyniku
+    # czekania w tej samej wiadomosci (bieg 2026-10-27 13:25: 8 tych samych
+    # linii dwa razy pod soba) — zostaje raz, w wyniku czekania.
+    if _tlo_skonczone_procesy and _tlo_skonczone:
+        _bez = []
+        for _lp in _tlo_skonczone_procesy.split("\n• "):
+            _gl, _, _ogon = _lp.partition(", końcówka:\n")
+            if _ogon and all(l.strip() in _tlo_skonczone for l in _ogon.split("\n") if l.strip()):
+                _lp = _gl + " — końcówka logu jest niżej, w wyniku czekania."
+            _bez.append(_lp)
+        _tlo_skonczone_procesy = "\n• ".join(_bez)
+    _tlo_skonczone = (_tlo_skonczone_procesy + "\n\n" + _tlo_skonczone).strip()
 
-    return deepseek(
+    # v480gz: linia o zespole, gdy przyszedl wynik z tla (caly albo
+    # czesciowy) — chwila decyzji; z faktem, ile krokow temu MAIN pytal
+    # zespol. Gdy pytal w ostatnich 2 krokach albo to odpowiedzi na ASK —
+    # bez linii. Przyklad ASK raz na rozmowe MAIN-a.
+    _linia_zespolu = ""
+    _jest_wynik = bool(_tlo_skonczone.strip()) or _wynik_do_decyzji[0]
+    _wynik_do_decyzji[0] = False
+    _ile_od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
+    # v480ib: uzytkownik 2026-10-28 ("zeruje sie, jak w 5 krokach juz
+    # poszlo to zapytanie? zeby nie spamowac"; "czy nie dokladamy cos na
+    # cos"): kazde zdanie o zespole (przy wyniku, przy starcie tla, w
+    # krotkim glosie, pytanie "czemu") liczy sie do jednego licznika —
+    # po jednym nastepne najwczesniej po 5 krokach; ASK zeruje.
+    _nowe_tlo = False
+    try:
+        _nowe_tlo = bool(_nowe_tlo_dla_maina())
+    except Exception:
+        pass
+    _zespol_wolno = int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
+    if (_jest_wynik and not asked_followup and _zespol_wolno and not _nowe_tlo
+            and (not _ostatni_ask_krok[0] or _ile_od_ask > 2)):
+        _glos_czemu_krok[0] = int(step or 0)
+        _linia_zespolu = _ZESPOL_PRZY_WYNIKU + (
+            " Ostatnie pytanie do zespołu: " + str(_ile_od_ask) + " kroków temu."
+            if _ostatni_ask_krok[0] else "")
+        _s_main = sessions.get("MAIN")
+        _rozmowa_main = getattr(_s_main, "chat_session_id", None) or "?"
+        if _rozmowa_main not in _zespol_pelny_tekst_w:
+            _zespol_pelny_tekst_w.add(_rozmowa_main)
+            _linia_zespolu += _ZESPOL_PRZY_WYNIKU_ASK
+
+    # v480ib: uzytkownik 2026-10-28 ("jak sie uruchamia cos w tle, to od
+    # razu mozna te wiadomosc wyslac do MAIN-a, a to chodzi w tle"): gdy
+    # cos wlasnie zaczelo liczyc w tle, ta sama wiadomosc konczy sie
+    # pytaniem o zespol — bez czekania minuty ani 5 krokow. Bieg 2026-10-28
+    # 18:30 (druzyna 1, krok 185): MAIN dostal tylko "liczy dalej w tle" i
+    # od razu odpisal "sleep 120 && ps aux | grep ...".
+    if _nowe_tlo and not asked_followup and _ile_od_ask > 0 and _zespol_wolno:
+        _linia_zespolu = _CZEMU_ZDANIE
+        _glos_czemu_krok[0] = int(step or 0)
+
+    def _bez_linii_zespolu(t):
+        return str(t or "").replace(" " + _CZAS_DLA_ZESPOLU, "").replace(_CZAS_DLA_ZESPOLU, "").strip()
+
+    def _bez_naglowka(t, *naglowki):
+        t = str(t or "").strip()
+        for n in naglowki:
+            if t.startswith(n):
+                return t[len(n):].strip()
+        return t
+
+    try:
+        _uwagi_pamieci = _uwagi_pamieci_dla_maina()
+    except Exception:
+        _uwagi_pamieci = ""
+
+    _sekcje = []
+
+    def _sekcja(tytul, tresc):
+        tresc = _bez_linii_zespolu(tresc)
+        if tresc:
+            _sekcje.append(("### " + tytul + "\n" if tytul else "") + tresc)
+
+    _restart = ""
+    if (
+        int(step or 0) <= 1
+        and not globals().get("_restart_powiedziany")
+        and (
+            "MAIN" in globals().get("_wznowione_sesje", set())
+            or (
+                sessions.get("MAIN") is None
+                and _load_session_state("MAIN")
+            )
+        )
+    ):
+        globals()["_restart_powiedziany"] = True
+        _restart = (
+            "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
+            "— jego ostatnie wyniki nie wracają; to, co się teraz "
+            "wykona, dostaniesz tutaj. Kontynuujcie pracę nad celem od "
+            "miejsca, w którym przerwaliście."
+        )
+
+
+    # v480hb: MAIN powtorzyl to samo (czekanie/sprawdzenie) i nic sie nie
+    # wydarzylo — jedna linia: co liczy (postep) i ze moze zapytac zespol.
+    _powtorka = _run_bez_nowego[0]
+    _run_bez_nowego[0] = False
+    if (_powtorka and not asked_followup and not _jest_wynik and not _restart
+            and not _uzytkownik_block.strip() and not _blok_zamkniecia
+            and not _werdykty and not _burza and not team_block.strip()
+            and not _linia_zespolu and not _uwagi_pamieci):
+        # uzytkownik: samo pytanie, jedna wiadomosc w jednej linii; reszta
+        # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
+        # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
+        # przyjdzie sam i ze moze zapytac zespol.
+        _glos_krotkie[0] += 1
+        # v480hf/hh: uzytkownik 2026-10-27: gdy MAIN mimo tych linii dalej
+        # nie pyta zespolu — pytanie wprost, czemu (trzeci krotki glos od
+        # ostatniego ASK, potem co 15.). Bieg 15:27-15:50: MAIN po kazdej
+        # linii sam sprawdzal log, pelna wiadomosc zerowala licznik i
+        # pytanie nie padlo ani razu — teraz zeruje go tylko ASK.
+        # v480hk: bieg 2026-10-27 18:30-18:40 (druzyna 1): MAIN po kazdej
+        # krotkiej linii sam sprawdzal log (pelna wiadomosc), krotkie glosy
+        # byly co 3 kroki i trzeci nie przychodzil przez 20 krokow. Liczy
+        # sie wiec, ile krokow minelo od ostatniego ASK: od 5 krokow pytanie
+        # zamiast zwyklego zdania, potem nie czesciej niz co 10 krokow.
+        _od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
+        # v480hl: uzytkownik 2026-10-27: "za rzadko" i "samo zdanie, bez
+        # logow" — pytanie idzie samo, osobna wiadomoscia, co 5 krokow bez ASK.
+        _czemu = _od_ask >= _CZEMU_CO_KROKOW and int(step or 0) - _glos_czemu_krok[0] >= _CZEMU_CO_KROKOW
+        if _czemu:
+            _glos_czemu_krok[0] = int(step or 0)
+            return deepseek("MAIN", _CZEMU_ZDANIE)
+        # v480if: krotki glos nie wspomina juz o zespole. Bieg 2026-10-29
+        # 18:44 (druzyna 1, kroki 62-64): wzmianka "Zapytasz zespol...?"
+        # w krotkim glosie zajmowala wspolny licznik (v480ib), wiec zdanie
+        # o zespole przy starcie tla nie przychodzilo, a MAIN trzy razy sam
+        # sprawdzal eval_tfm. O zespole mowi teraz tylko zdanie przy starcie
+        # tla, przy wyniku i pytanie "Czemu..." wyzej.
+        _wolno_c = False
+        if _glos_postep_byl[0]:
+            return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam" + (
+                "; w tym czasie możesz zapytać zespół (ASK z imieniem)." if _wolno_c else "."))
+        _glos_postep_byl[0] = True
+        _trwa_linie = []
+        try:
+            for _st in _procesy_z_procentem().values():
+                _trwa_linie.append(_nazwa_w_tle(_st["kom"]) + ": " + short(_postep_z_logu(
+                    _st["plik"], _ogon_logu(_st["plik"])[1], _st["start"], _st["kom"], _st["cwd"]), 120))
+        except Exception:
+            pass
+        if not _trwa_linie:
+            _trwa_linie = [short(l[2:].rstrip("."), 140) for l in _tlo_trwa.split("\n")
+                           if l.startswith("• ") and not l.startswith("• Czekanie")]
+        return deepseek("MAIN", (
+            "Nic nowego od Twojego ostatniego sprawdzenia"
+            + (" — " + "; ".join(_trwa_linie[:3]) if _trwa_linie else "")
+            + (". Zapytasz zespół (ASK z imieniem) czy czekasz dalej?" if _wolno_c else ".")
+        ))
+
+    _glos_postep_byl[0] = False
+    if asked_followup:
+        _glos_krotkie[0] = 0
+    _sekcja("", _restart)
+    _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
+    _sekcja("Poprzedni bieg", _blok_zamkniecia)
+    _sekcja("Skończone w tle", _tlo_skonczone)
+    _sekcja("Pamięć telefonu", _uwagi_pamieci)
+    _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
+    _sekcja("Dalej w tle — wynik przyjdzie sam", _tlo_trwa)
+    _sekcja("Zespół", team_block)
+    _sekcja("Ocena", (_werdykty or "") + "\n" + (_postep_dla_maina or ""))
+    _sekcja("Nowe na dysku", _bez_naglowka(_nowe_pliki, "Nowe na dysku w tym kroku:"))
+    _sekcja("Ekran", (_chrome_dla_maina or "") + "\n" + (_android_dla_maina or ""))
+    _sekcja("", _burza)
+    _sekcja("", (_format_block or "") + (ask_contract_block or ""))
+    if _linia_zespolu:
+        _sekcje.append(_linia_zespolu)
+
+    prompt = "\n\n".join(_sekcje) + "\n"
+
+    odp = deepseek(
         "MAIN",
         prompt
     )
+    # v480hl: uzytkownik 2026-10-27 ("za rzadko"): MAIN przeplatal czekanie
+    # w tle z wlasnym sprawdzaniem logu, wiec krotkich glosow prawie nie
+    # bylo, a pytanie o zespol nie padalo przez 20 krokow. Gdy cos liczy
+    # w tle, od ostatniego ASK minelo >= 5 krokow, a MAIN znowu wybral sam
+    # RUN — zaraz po jego odpowiedzi idzie osobna wiadomosc z samym
+    # pytaniem; to, co na nia odpowie, jest jego decyzja w tym kroku.
+    try:
+        _od_ask = int(step or 0) - int(_ostatni_ask_krok[0] or 0)
+        # v480hp: uzytkownik: "jak nic nie bedzie w tle (inny cel)?" — bez
+        # niczego w tle to samo pytanie po 10 krokach bez ASK, bez zdania
+        # o czekaniu.
+        _w_tle_cos = bool(_w_tle_zywe() or _zywe_w_tle())
+        # v480ib: uzytkownik 2026-10-28: "co 5 krokow dla zadan bez tla".
+        _prog = _CZEMU_CO_KROKOW
+        if (not asked_followup and _od_ask >= _prog
+                and int(step or 0) - _glos_czemu_krok[0] >= _prog
+                and re.search(r'"type"\s*:\s*"RUN"', str(odp or ""))):
+            _glos_czemu_krok[0] = int(step or 0)
+            log("MAIN", "Od " + str(_od_ask) + " kroków bez pytania do zespołu"
+                + (", a coś liczy w tle" if _w_tle_cos else "")
+                + " — MAIN dostaje samo pytanie, czemu nie pyta zespołu.")
+            odp2 = deepseek("MAIN", _CZEMU_ZDANIE if _w_tle_cos else _CZEMU_ZDANIE.replace(
+                " I tak czekasz na wynik.", " Od " + str(_od_ask) + " kroków działasz sam."))
+            if re.search(r'"type"\s*:\s*"[A-Z_]+"', str(odp2 or "")):
+                # v480hy: bieg 2026-10-28 19:12 (druzyna 1, krok 214) — MAIN
+                # dal RUN z zapisem oracle_bytes.py i jego uruchomieniem, na
+                # pytanie o zespol odpisal ASK-ami, a ASK zastapil RUN: plik
+                # nie powstal, MAIN 5 krokow czekal na proces, ktorego nie
+                # bylo, i w koncu sam przyznal "deklarowalem falszywie". Same
+                # ASK-i ida teraz obok RUN-a (jak pytania obok RUN, v480cl),
+                # a RUN sie wykonuje.
+                if (not re.search(r'"type"\s*:\s*"(?!ASK")[A-Z_]+"', str(odp2 or ""))
+                        and _ma_akcje_run(odp)):
+                    log("MAIN", "Na pytanie o zespół MAIN odpisał pytaniami — jego RUN z tego kroku też się wykona.")
+                    _razem = str(odp) + "\n\n" + str(odp2)
+                    globals()["_ostatnia_odpowiedz_maina"] = _razem
+                    return _razem
+                return odp2
+    except Exception as e:
+        log("MAIN", "Pytanie o zespół nie poszło: " + str(e))
+    if asked_followup:
+        _uwaga_maina_do_roli(odp)
+    return odp
 
 
-_MAIN_ASK_MAX = 4
+def _ma_akcje_run(odp):
+    try:
+        d = parse_json(str(odp or ""))
+        return isinstance(d, dict) and str(d.get("type") or "").upper() == "RUN" and bool(d.get("actions"))
+    except Exception:
+        return False
+
+
+_UWAGA_PROSTUJE_RE = re.compile(
+    r"nie widzia|nie zauważy|przeoczy|nie wiedzia|nie wie\b|nie dosta|myli|pomyli|"
+    r"błędn|nieaktualn|nie ma racji|niespełnion|nieprawd|już (?:mam|mamy|jest|są|był|zrobi|działa|sprawdz|zmierz)|"
+    r"wbrew|nie zgadzam|odrzucam|nie przyjmuj|\bźle\b|nie tak\b|to nie\b",
+    re.IGNORECASE,
+)
+
+
+def _uwaga_maina_do_roli(odp):
+    """v480hm: bieg 2026-10-27 19:31 — MAIN po odpowiedzi Marka napisal
+    w uzasadnieniu "test JUZ MAM z KROKU 44, Marek tego nie widzial", ale
+    Marek tego nigdy nie dostal i przy kolejnym pytaniu radzil to samo.
+    Gdy MAIN zaraz po odpowiedziach zespolu pisze w uzasadnieniu o kims
+    z nich po imieniu, to zdanie trafia do tej osoby (dostanie je przy
+    swoim nastepnym pytaniu)."""
+    try:
+        m = re.search(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"', str(odp or ""))
+        if not m:
+            return
+        powod = json.loads('"' + m.group(1) + '"')
+        for rola, (mian, dop) in _IMIE_AUTORA.items():
+            if rola in _ROLE_BEZ_CELU:
+                continue
+            _rdzen = re.escape(dop[:-1] if dop.endswith("a") else mian)
+            if not re.search(r"\b" + re.escape(mian) + r"\b|\b" + _rdzen + r"\w{0,4}\b", powod):
+                continue
+            # zdania, w ktorych pada imie, a nie cale uzasadnienie
+            # v480hr: tylko zdania, ktore cos tej osobie prostuja. Biegi
+            # 2026-10-27 20:38-21:02: MAIN streszczal w uzasadnieniu, co
+            # kto radzil ("Marek: NIE ensemble…", "Marek+Tomek+Ela
+            # zgodni") i to wracalo do nich jako "uwaga" — echo ich
+            # wlasnych slow.
+            zdania = [z.strip() for z in re.split(r"(?<=[.!?])\s+", powod)
+                      if re.search(r"\b" + _rdzen + r"\w{0,4}\b|\b" + re.escape(mian) + r"\b", z)
+                      and _UWAGA_PROSTUJE_RE.search(z)]
+            if not zdania:
+                continue
+            tekst = "Uwaga do Twojej ostatniej odpowiedzi: " + " ".join(zdania)[:600]
+            if any(t == tekst for _, t in _role_inbox.get(rola, [])):
+                continue
+            _role_inbox.setdefault(rola, []).append(("MAIN", tekst))
+            log("MAIN", "Uwaga MAIN-a dotycząca " + dop + " trafi do " + dop + " przy następnym pytaniu.")
+    except Exception as e:
+        log("MAIN", "Uwaga MAIN-a do roli: " + str(e))
+
+
+_MAIN_ASK_MAX = 5
+
+# v458: pytania MAIN-a, ktore nie zmiescily sie w kroku — ida jako
+# pierwsze w nastepnym (patrz _handle_main_ask i run_agent).
+_ask_przeniesione = []
+
+# v454: gdy zapytany zwroci sie w odpowiedzi do kolegi po imieniu
+# ("Bartku, napisz…"), kolega odpowiada OD RAZU, w tym samym kroku —
+# najwyzej tylu na krok. Do v453 taka wiadomosc lezala w skrzynce do
+# chwili, az MAIN sam zapytal adresata (osobne ASK, osobny obieg), a w
+# trybie MAIN-a nikt inny nie budzil adresata. Bieg 2026-09-25 16:15,
+# krok 10-11: Bartek prosil o wynik `ls`, dostal go dopiero po
+# kolejnym pytaniu MAIN-a.
+_ROZMOWA_HOP_MAX = 8
+# v480fp: uzytkownik (2026-10-25): "MAIN ma decyzje, do kogo pisze, on
+# wywoluje; dodatek, zeby mogli miedzy soba rozmawiac, ale zeby to nie
+# bylo w petli". Rozmowa zaczyna sie tylko od pytania MAIN-a: zawolany
+# odpowiada od razu, odpowiedz wraca do pytajacego, kazda para raz na
+# pytanie MAIN-a, do 8 odpowiedzi. Bez pytania MAIN-a nikt nie mowi;
+# niedoreczony list czeka w skrzynce do nastepnego pytania tej osoby.
+
+
+def _czekaja_na_kolege():
+    """v480fp: kto z zespolu ma w skrzynce wiadomosc od kolegi (nie od
+    MAIN-a), na ktora jeszcze nie odpowiedzial."""
+
+    return {
+        rola for rola, listy in _role_inbox.items()
+        if rola in _ROLE_DO_ROZMOWY
+        and any(str(kto) != "MAIN" and str(tresc or "").strip() for kto, tresc in (listy or []))
+    }
 
 
 def _pytania_ask(raw):
@@ -34565,8 +46585,13 @@ def _pytania_ask(raw):
 
         if isinstance(obj, dict) and obj.get("type") == "ASK":
             pytania.append(obj)
+        elif isinstance(obj, dict):
+            pytania.extend(_ask_z_akcji(obj))
 
         i = tekst.find("{", koniec)
+
+    if not pytania and "DSML" in tekst:
+        pytania = _dsml_pytania(tekst)
 
     return pytania
 
@@ -34594,6 +46619,7 @@ def _handle_main_ask(
     """
 
     zadane = 0
+    _hopy = 0
 
     while isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -34603,31 +46629,26 @@ def _handle_main_ask(
 
         if zadane >= _MAIN_ASK_MAX:
 
-            # Sam fakt o limicie — nie "niepoprawny JSON", bo JSON byl
-            # poprawny.
+            # v458: pytanie ponad limit NIE przepada i nie konczy kroku
+            # "niepoprawnym JSON-em". Bieg 2026-09-27 22:11, krok 1:
+            # MAIN po czterech pytaniach chcial jeszcze kodu od Bartka,
+            # Python trzy razy odmowil, MAIN trzy razy powtorzyl to samo
+            # i osiem minut rozmowy skonczylo sie UNKNOWN_DECISION.
+            # Pytanie idzie na poczatek nastepnego kroku.
             log(
                 "MAIN",
                 "ASK ponad " + str(_MAIN_ASK_MAX) + " pytania w tym "
-                "kroku — nie wysyłam, mówię o tym MAIN-owi."
+                "kroku — to pytanie idzie na początek następnego kroku."
             )
 
-            decision = parse_json(deepseek(
-                "MAIN",
-                "Pytań w tym kroku było już " + str(_MAIN_ASK_MAX)
-                + " — tego nie wysłałem."
-            ))
-
-            if isinstance(decision, dict) and decision.get("type") == "ASK":
-                return None
-
-            return decision
+            return {"type": "ASK_DALEJ", "pytania": pytania}
 
         odpowiedzi = []
         niewyslane = 0
 
         for pytanie in pytania:
 
-            ask_role = str(pytanie.get("ask_role") or "").strip().upper()
+            ask_role = _rola_ask(pytanie.get("ask_role"))
             ask_question = str(pytanie.get("ask_question") or "").strip()
 
             if ask_role not in _MAIN_ASK_ALLOWED_ROLES or not ask_question:
@@ -34636,6 +46657,19 @@ def _handle_main_ask(
                     "ASK odrzucone (nieprawidłowa rola '" + ask_role
                     + "' lub puste pytanie)."
                 )
+                # v480fx: MAIN dowiaduje sie, co bylo nie tak i jak to poprawic.
+                odpowiedzi.insert(0, {
+                    "role": "PROGRAM",
+                    "question": ask_question,
+                    "answer": (
+                        ("Pytanie bez treści (puste ask_question) — nie wysłałem go. "
+                         if not ask_question else
+                         "Nie wysłałem pytania do '" + str(pytanie.get("ask_role") or "")
+                         + "' — nie ma takiej osoby do pytania. ")
+                        + "W ask_role wpisz imię: Tomek, Kamil, Marek, Bartek, Piotr, "
+                        "Ania, Ola, Wojtek, Ela albo Igor."
+                    ),
+                })
                 continue
 
             if zadane >= _MAIN_ASK_MAX:
@@ -34649,6 +46683,8 @@ def _handle_main_ask(
                 "ASK " + str(zadane) + " -> " + ask_role + ": "
                 + short(ask_question, 300)
             )
+            _zapisz_pytanie_maina(ask_role)
+            _ostatni_ask_krok[0] = int(step or 0)
 
             _speak(
                 "MAIN",
@@ -34657,18 +46693,54 @@ def _handle_main_ask(
                 + ":\n" + ask_question
             )
 
-            # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie je w
-            # swojej zwyklej wiadomosci, pod "MAIN:".
-            _role_inbox.setdefault(ask_role, []).append(("MAIN", ask_question))
+            if ask_role in _ROLE_BEZ_CELU:
 
-            _odp_team = consult_team(
-                goal, last_result, step, chrome_text, android_text,
-                wolani={ask_role}
-            )
+                # v480cf: Igor dostaje samo pytanie MAIN-a — bez celu,
+                # bez skrzynki i bez kontekstu zespolu.
+                # v480ic: deepseek() sam pokazuje odpowiedz (_speak) —
+                # drugi raz byl ta sama ramka dwa razy w terminalu.
+                answer = str(deepseek(ask_role, ask_question) or "")
 
-            answer = str(
-                ((_odp_team or {}).get("kod_full") or {}).get(ask_role) or ""
-            )
+            elif ask_role == "PROGRESS_ESTIMATOR":
+
+                # v480ec: Ela nie bierze udzialu w naradzie zespolu
+                # (consult_team) — pytanie MAIN-a idzie wprost do jej
+                # rozmowy, ktora zna cel.
+                answer = str(deepseek(ask_role, "MAIN pyta:\n" + ask_question) or "")
+
+            elif ask_role in ("CODE_REVIEWER", "CODE_FIXER"):
+
+                # v480io: Piotr i Ania nie maja tury w naradzie zespolu
+                # (consult_team) — pytanie MAIN-a idzie wprost do ich
+                # rozmowy, z tym, co ma kazdy wolany (_wspolne_dla_wolanego:
+                # slowa uzytkownika, ich wlasny log) i celem raz na rozmowe.
+                # Moga sprawdzac pliki (PODGLĄD/URUCHOM) jak reszta.
+                _wiad = (
+                    _only_if_new(ask_role, "cel_ask", "Cel użytkownika:\n" + str(goal or "").strip() + "\n\n")
+                    + _wspolne_dla_wolanego(ask_role)
+                    + "MAIN:\n" + ask_question
+                )
+                answer = str(deepseek(ask_role, _wiad) or "")
+                if answer.strip():
+                    answer = str(_podglad_dla_roli(ask_role, answer, _wiad) or "")
+
+            else:
+
+                # Pytanie MAIN-a idzie do skrzynki tej osoby — dostanie
+                # je w swojej zwyklej wiadomosci, pod "MAIN:".
+                _role_inbox.setdefault(ask_role, []).append(
+                    ("MAIN", ask_question)
+                )
+
+                _odp_team = consult_team(
+                    goal, last_result, step, chrome_text, android_text,
+                    wolani={ask_role}
+                )
+
+                answer = str(
+                    ((_odp_team or {}).get("kod_full") or {}).get(ask_role)
+                    or ""
+                )
 
             log(
                 "MAIN",
@@ -34688,8 +46760,89 @@ def _handle_main_ask(
             odpowiedzi.append({
                 "role": ask_role,
                 "question": ask_question,
-                "answer": answer
+                # v480fj: nowy plik Bartka program kladzie sam
+                "answer": _poloz_nowy_plik_autora(ask_role, answer, ask_question)
             })
+
+            # v454: adresat odpowiada od razu — patrz _ROZMOWA_HOP_MAX.
+            # v480cf: Igor nie zna zespolu, wiec nikogo z niego nie wola.
+            # v480fp: rozmowa idzie dalej. Kto ma od kolegi wiadomosc,
+            # na ktora nie odpowiedzial (zawolanie po imieniu albo
+            # odpowiedz na jego wlasne pytanie), odpowiada od razu — po
+            # kolei, az nikt na nikogo nie czeka.
+            if ask_role in _ROLE_BEZ_CELU:
+                continue
+
+            _pary = set()
+
+            while _hopy < _ROZMOWA_HOP_MAX:
+
+                _czekaja = sorted(_czekaja_na_kolege())
+
+                if not _czekaja:
+                    break
+
+                # v480fp: kazda para raz na pytanie MAIN-a — B odpowiada A
+                # najwyzej raz, wiec rozmowa nie moze krecic sie w kolko.
+                _kogo = None
+                for _k in _czekaja:
+                    _nowe = [
+                        (kto, tresc) for kto, tresc in _role_inbox.get(_k, [])
+                        if str(kto) != "MAIN" and (str(kto), _k) not in _pary
+                    ]
+                    if _nowe:
+                        _kogo, _listy = _k, _nowe
+                        break
+                if _kogo is None:
+                    break
+                _od = []
+                for kto, _ in _listy:
+                    if kto not in _od:
+                        _od.append(str(kto))
+                _co = "\n\n".join(str(t) for _, t in _listy)
+
+                _hopy += 1
+                _pary.update((kto, _kogo) for kto in _od)
+
+                log(
+                    "MAIN",
+                    ", ".join(_od) + " → "
+                    + _ROLE_DISPLAY_NAME.get(_kogo, _kogo)
+                    + " — odpowiada od razu."
+                )
+
+                _t2 = consult_team(
+                    goal, last_result, step, chrome_text, android_text,
+                    wolani={_kogo}
+                )
+
+                # List, ktorego rozmowa nie zabrala, nie moze krecic
+                # petli — zdejmujemy te same listy; nowe (np. odpowiedz
+                # Igora dla niego) zostaja.
+                if _role_inbox.get(_kogo):
+                    _role_inbox[_kogo] = [
+                        w for w in _role_inbox[_kogo] if w not in _listy
+                    ]
+                    if not _role_inbox[_kogo]:
+                        del _role_inbox[_kogo]
+
+                _odp2 = str(
+                    ((_t2 or {}).get("kod_full") or {}).get(_kogo) or ""
+                )
+
+                if _kogo == "ENGINEER" and _odp2.strip():
+                    team["engineer_full"] = _odp2
+                    globals()["_kod_bartka_teraz"] = _odp2
+
+                if isinstance(team.get("kod_full"), dict):
+                    team["kod_full"][_kogo] = _odp2
+
+                odpowiedzi.append({
+                    "role": _kogo,
+                    "question": _co,
+                    "answer": _poloz_nowy_plik_autora(_kogo, _odp2, _co),
+                    "na_slowa": " i ".join(_od)
+                })
 
         if not odpowiedzi:
             log(
@@ -34712,7 +46865,7 @@ def _handle_main_ask(
             asked_followup=_followup
         )
 
-        decision = parse_json(raw)
+        decision = _tylko_decyzja(parse_json(raw))
 
     return decision
 
@@ -34766,10 +46919,389 @@ def _extract_last_balanced_json_object(text):
     return None
 
 
+_NAZWY_ASK = ("ask_role", "ask", "ask_dalej")
+
+
+def _pierwszy_obiekt_json(surowe):
+    """Pierwszy pelny obiekt JSON w tekscie; nadmiarowe "}" po nim (czeste
+    w DSML) nie psuja odczytu."""
+    surowe = str(surowe or "").strip()
+    i = surowe.find("{")
+    if i < 0:
+        return None
+    try:
+        return json.JSONDecoder().raw_decode(surowe, i)[0]
+    except Exception:
+        return _extract_last_balanced_json_object(surowe)
+
+
+def _ask_z_akcji(d):
+    """v480hs: ASK wpisane jako narzedzie w RUN ({"tool": "ask_role",
+    "args": {"ask_role": "Marek", "ask_question": ...}}) — noc 27/28.10,
+    druzyna 1: 9 razy "Nieznane narzędzie: ask_role", pytanie przepadlo."""
+    wynik = []
+    if not isinstance(d, dict) or str(d.get("type") or "").upper() != "RUN":
+        return wynik
+    for a in d.get("actions") or []:
+        if not isinstance(a, dict):
+            continue
+        args = a.get("args") if isinstance(a.get("args"), dict) else a
+        if (str(a.get("tool") or "").strip().lower() in _NAZWY_ASK
+                and str(args.get("ask_role") or "").strip()
+                and str(args.get("ask_question") or "").strip()):
+            wynik.append({"type": "ASK", "ask_role": str(args["ask_role"]).strip(),
+                          "ask_question": str(args["ask_question"]).strip()})
+    return wynik
+
+
+def _bez_ask_w_run(d):
+    """v480hs: RUN, ktorego akcje to same pytania, jest pytaniem (ASK);
+    w mieszanym RUN pytania wypadaja z akcji (_pytania_ask zabierze je
+    na nastepny krok, jak inne pytania obok RUN)."""
+    pyt = _ask_z_akcji(d)
+    if not pyt:
+        return d
+    reszta = [a for a in d.get("actions") or []
+              if not (isinstance(a, dict) and str(a.get("tool") or "").strip().lower() in _NAZWY_ASK)]
+    if not reszta:
+        return dict(pyt[0])
+    d = dict(d)
+    d["actions"] = reszta
+    return d
+
+
+def _dsml_pytania(text):
+    """v480hs: pytania ASK zapisane w DSML. Noc 27/28.10 (druzyna 1):
+    145 razy "Niepoprawny JSON" — MAIN pisal ASK jako
+      <DSML parameter name="args">{"ask_role": "Marek", "ask_question": ...}
+    (bez invoke) albo invoke name="ask_role" z parametrami ask_role /
+    ask_question. Kazde takie pytanie kosztowalo dodatkowa wiadomosc
+    i budzet konta. To jest zwykle ASK."""
+    tekst = str(text or "")
+    if "DSML" not in tekst:
+        return []
+    pytania = []
+    _koniec = r'(?=<\s*/?[^<>]*DSML|$)'
+    for m in re.finditer(r'parameter\s+name="(?:args|arguments|input)"[^>]*>(.*?)' + _koniec, tekst, re.DOTALL):
+        obj = _pierwszy_obiekt_json(m.group(1))
+        if isinstance(obj, dict) and str(obj.get("ask_role") or "").strip() and str(obj.get("ask_question") or "").strip():
+            pytania.append({"type": "ASK", "ask_role": str(obj["ask_role"]).strip(),
+                            "ask_question": str(obj["ask_question"]).strip()})
+    # parametry ask_role / ask_question jako osobne znaczniki (takze z
+    # zepsutym zamknieciem, ktore od razu otwiera nastepny parametr)
+    kto = None
+    for m in re.finditer(r'parameter\s+name="(ask_role|ask_question)"[^>]*>(.*?)' + _koniec, tekst, re.DOTALL):
+        w = m.group(2).strip()
+        if m.group(1) == "ask_role":
+            kto = w
+        elif kto and w:
+            p = {"type": "ASK", "ask_role": kto, "ask_question": w}
+            if p not in pytania:
+                pytania.append(p)
+            kto = None
+    return pytania
+
+
+def _dsml_na_run(text):
+    """
+    v467: DeepSeek potrafi odpowiedziec swoim natywnym formatem
+    wywolan narzedzi zamiast JSON-em:
+      <|DSML| invoke name="chrome_execute_js">
+      <|DSML| parameter name="args" string="false">{...}</|DSML| parameter>
+      </|DSML| invoke>
+    Bieg 2026-09-30: cztery kroki (38, 55, 58, 66) poszly jako
+    UNKNOWN_DECISION, choc kazdy byl gotowa lista akcji. To jest RUN.
+    """
+    tekst = str(text or "")
+    if "DSML" not in tekst:
+        return None
+    _pyt = _dsml_pytania(tekst)
+    if "invoke" not in tekst and "parameter" not in tekst:
+        return None
+    akcje = []
+    for m in re.finditer(
+        r'invoke\s+name="([A-Za-z0-9_]+)"[^>]*>(.*?)</[^>]*invoke\s*>',
+        tekst, re.DOTALL
+    ):
+        nazwa = m.group(1).strip()
+        if nazwa.lower() in _NAZWY_ASK and _pyt:
+            continue
+        cialo = m.group(2)
+        # v480bu: cala decyzja (type, reason, actions...) wlozona jako
+        # parametry jednego invoke o zmyslonej nazwie. Bieg 2026-10-16
+        # 15:12: invoke name="think" z parametrami type=RUN, reason,
+        # actions=[7 akcji] — program wykonal "think" (nieznane
+        # narzedzie) i zgubil wszystkie 7 akcji. Parametry to decyzja.
+        _param = {}
+        for pm3 in re.finditer(
+            r'parameter\s+name="([A-Za-z0-9_]+)"([^>]*)>(.*?)</[^>]*parameter\s*>',
+            cialo, re.DOTALL
+        ):
+            _w = pm3.group(3).strip()
+            if 'string="false"' in pm3.group(2):
+                try:
+                    _w = json.loads(_w)
+                except Exception:
+                    pass
+            _param[pm3.group(1)] = _w
+        # v480ia: typ decyzji jako nazwa invoke (bieg 2026-10-28 21:40,
+        # druzyna 1, krok 305): invoke name="RUN" z parametrami reason i
+        # actions. Program wykonal "RUN" jako narzedzie ("Nieznane
+        # narzedzie: RUN") i zgubil sprawdzenie wyniku — trzy razy w biegu.
+        if (not _param.get("type") and nazwa.upper() in _TYPY_DECYZJI
+                and any(k in _param for k in ("actions", "reason", "ask_question", "task"))):
+            _param["type"] = nazwa.upper()
+        if (str(_param.get("type", "")).strip().upper()
+                in ("RUN", "ASK", "TASK", "DONE", "FAILED", "NEED_USER_LOGIN")
+                and any(k in _param for k in ("actions", "reason", "ask_question", "task"))):
+            _decyzja = dict(_param)
+            _decyzja["type"] = str(_decyzja["type"]).strip().upper()
+            if isinstance(_decyzja.get("actions"), str):
+                try:
+                    _decyzja["actions"] = json.loads(_decyzja["actions"])
+                except Exception:
+                    pass
+            _decyzja["_z_dsml"] = True
+            return _decyzja
+        args = {}
+        pm = re.search(
+            r'parameter\s+name="args"[^>]*>(.*?)</[^>]*parameter\s*>',
+            cialo, re.DOTALL
+        )
+        if pm:
+            surowe = pm.group(1).strip()
+            try:
+                args = json.loads(surowe)
+            except Exception:
+                obj = _pierwszy_obiekt_json(surowe)
+                args = obj if isinstance(obj, dict) else {}
+        else:
+            for pm2 in re.finditer(
+                r'parameter\s+name="([A-Za-z0-9_]+)"([^>]*)>(.*?)</[^>]*parameter\s*>',
+                cialo, re.DOTALL
+            ):
+                # v480dv: string="false" = wartosc JSON (false, 5, [..]),
+                # nie napis — tak jak w petli _param wyzej.
+                _w2 = pm2.group(3).strip()
+                if 'string="false"' in pm2.group(2):
+                    try:
+                        _w2 = json.loads(_w2)
+                    except Exception:
+                        pass
+                args[pm2.group(1)] = _w2
+            # v480hs: bieg 2026-10-28 08:36 (druzyna 2, krok 285) —
+            # parametry jako zwykle znaczniki <path>…</path>
+            # <content>…</content>. Program ich nie widzial, zapis
+            # poszedl bez sciezki ("Is a directory: home").
+            if not args:
+                for pm4 in re.finditer(r"<([A-Za-z_][A-Za-z0-9_]*)>(.*?)</\1\s*>", cialo, re.DOTALL):
+                    _w4 = pm4.group(2)
+                    _w4 = _w4 if pm4.group(1) == "content" else _w4.strip()
+                    if _w4 in ("true", "false"):
+                        _w4 = (_w4 == "true")
+                    args[pm4.group(1)] = _w4
+        if nazwa and _pyt and isinstance(args, dict) and args.get("ask_role") and args.get("ask_question"):
+            continue
+        if nazwa:
+            akcje.append({"tool": nazwa, "args": args if isinstance(args, dict) else {}})
+    # v480hs: same parametry "args" bez invoke (noc 27/28.10, druzyna 1:
+    # 140 odpowiedzi <DSML parameter name="args">{"command": ...}). Nazwe
+    # narzedzia widac po polach: command -> termux_run, path+content ->
+    # termux_write_file, samo path -> termux_read_file.
+    if not akcje and not re.search(r'invoke\s+name=', tekst):
+        for m in re.finditer(r'parameter\s+name="args"[^>]*>(.*?)(?=<\s*/?[^<>]*DSML|$)', tekst, re.DOTALL):
+            a = _pierwszy_obiekt_json(m.group(1))
+            if not isinstance(a, dict) or (a.get("ask_role") and a.get("ask_question")):
+                continue
+            if isinstance(a.get("tool"), str) and isinstance(a.get("args"), dict):
+                akcje.append({"tool": a["tool"], "args": a["args"]})
+            elif str(a.get("command") or "").strip():
+                akcje.append({"tool": "termux_run", "args": a})
+            elif str(a.get("path") or "").strip() and "content" in a:
+                akcje.append({"tool": "termux_write_file", "args": a})
+            elif str(a.get("path") or "").strip():
+                akcje.append({"tool": "termux_read_file", "args": a})
+    # v480im: cala decyzja jako parametry bez invoke — "parameter
+    # name=reason", "parameter name=actions" zamkniete golym "</DSML>".
+    # Bieg 2026-10-29/30 (druzyna 2, kroki 400-574): prawie co krok
+    # "Niepoprawny JSON. Naprawiam." — 238 razy, kazdy kosztowal drugie
+    # zapytanie do DeepSeeka.
+    if not akcje:
+        _par = {}
+        for pm5 in re.finditer(
+            r'parameter\s+name="([A-Za-z0-9_]+)"([^>]*)>(.*?)(?=(?:</?)?\s*[｜|]{1,2}\s*DSML|$)',
+            tekst, re.DOTALL
+        ):
+            _w5 = pm5.group(3).strip()
+            if pm5.group(1) in ("actions", "args") or 'string="false"' in pm5.group(2):
+                try:
+                    _w5 = json.loads(_w5)
+                except Exception:
+                    # poczatek wartosci to JSON, a za nim smieci zamkniecia
+                    try:
+                        _w5 = json.JSONDecoder().raw_decode(_w5.lstrip())[0]
+                    except Exception:
+                        pass
+            _par.setdefault(pm5.group(1), _w5)
+        if isinstance(_par.get("actions"), list) and _par["actions"]:
+            _typ = str(_par.get("type") or "RUN").strip().upper()
+            if _typ not in _TYPY_DECYZJI:
+                _typ = "RUN"
+            _d = dict(_par)
+            _d["type"] = _typ
+            _d["reason"] = str(_par.get("reason") or "").rstrip("\\").strip() or "(decyzja w formacie DSML)"
+            _d["_z_dsml"] = True
+            return _d
+    if _pyt and not akcje:
+        _d = dict(_pyt[0])
+        _d["_z_dsml"] = True
+        return _d
+    if not akcje:
+        return None
+    przed = re.split(r"<[^>]*DSML", tekst, maxsplit=1)[0].strip()
+    return {
+        "type": "RUN",
+        "reason": short(przed, 600) if przed else "(wywołania narzędzi w formacie DSML)",
+        "actions": akcje,
+        "_z_dsml": True
+    }
+
+
+_TYPY_DECYZJI = ("TASK", "DONE", "FAILED", "NEED_USER_LOGIN", "ASK", "RUN")
+
+
+def _tylko_decyzja(d):
+    """v480bz: slownik z typem decyzji MAIN-a albo None."""
+    if isinstance(d, dict) and str(d.get("type") or "").strip().upper() in _TYPY_DECYZJI:
+        return d
+    return None
+
+
+# v480dd: kilka decyzji w jednej odpowiedzi MAIN-a. Bieg 2026-10-21
+# 22:04 i 22:17 (druzyna 2): RUN, a pod nim NEED_USER_LOGIN — wykonal
+# sie RUN, drugi blok przepadl bez slowa i MAIN pisal potem
+# "NEED_USER_LOGIN nie zadziałał". Pytania ASK obok RUN ida dalej
+# osobna droga (v480cl), wiec ich tu nie liczymy.
+def _pominiete_decyzje(raw, wykonana):
+    try:
+        typy = []
+        for m in re.finditer(
+            r"```(?:json)?\s*(\{.*?\})\s*```", str(raw or ""),
+            re.DOTALL | re.IGNORECASE
+        ):
+            try:
+                obj = json.loads(m.group(1))
+            except Exception:
+                continue
+            if _tylko_decyzja(obj):
+                typy.append(str(obj.get("type")).strip().upper())
+        if len(typy) < 2:
+            return []
+        wyk = str((wykonana or {}).get("type") or "").strip().upper()
+        reszta = list(typy)
+        if wyk in reszta:
+            reszta.remove(wyk)
+        # v480ht: wszystkie ASK z jednej odpowiedzi ida po kolei
+        # (_pytania_ask). Bieg 2026-10-28 (druzyna 1, kroki 4-32): 5 razy
+        # "program pominął: ASK, ASK, ASK", a wszystkie pytania poszly —
+        # falszywe ostrzezenie trafialo do zespolu.
+        if wyk in ("RUN", "ASK"):
+            reszta = [t for t in reszta if t != "ASK"]
+        return reszta
+    except Exception:
+        return []
+
+
+def _oznacz_uciete_akcje(obj, text):
+    """
+    v480dt: json_repair naprawia zepsuty JSON, ale niedomkniety string
+    po prostu ucina. Bieg 2026-10-23 16:47 (druzyna 1, krok 7): w
+    odpowiedzi MAINa zginal koniec dlugiej komendy (heredoc z Pythonem),
+    naprawa zostawila z niej 8 linii i program to wykonal — bash i
+    Python zglosily bledy, a druzyna uznala, ze to jej wina. Kazdy
+    napis z args, ktorego w tej postaci nie ma w surowej odpowiedzi,
+    jest ucieta czescia; taka akcja dostaje "_uciete" i nie jest
+    wykonywana (patrz _wykonaj_akcje_maina).
+    """
+    try:
+        akcje = obj.get("actions")
+        if akcje is None:
+            akcje = obj.get("akcje")
+        if isinstance(akcje, dict):
+            akcje = [akcje]
+        if not isinstance(akcje, list):
+            return obj
+        surowy = str(text or "")
+        surowy = surowy + "\n" + surowy.replace("\\/", "/")
+        for akcja in akcje:
+            if not isinstance(akcja, dict):
+                continue
+            args = akcja.get("args")
+            if args is None:
+                args = akcja.get("arguments", akcja.get("argumenty"))
+            if not isinstance(args, dict):
+                continue
+            for klucz, wartosc in args.items():
+                if not isinstance(wartosc, str) or len(wartosc) < 20:
+                    continue
+                if (
+                    json.dumps(wartosc, ensure_ascii=False) in surowy
+                    or json.dumps(wartosc) in surowy
+                ):
+                    continue
+                akcja["_uciete"] = (
+                    "Program: tej akcji nie wykonałem — Twoja odpowiedź "
+                    "doszła uszkodzona. Pole \"" + str(klucz) + "\" nie "
+                    "ma końca (brakuje zamykającego cudzysłowu), więc "
+                    "program nie zna całości. Dało się odczytać tylko początek, kończący się na: "
+                    + json.dumps(wartosc[-80:], ensure_ascii=False)
+                    + ". Wykonanie tylko tego kawałka zepsułoby wynik. "
+                    "Wyślij tę akcję jeszcze raz w całości; długi skrypt "
+                    "pewniej przejdzie, gdy najpierw zapiszesz go do pliku "
+                    "(termux_write_file), a potem go uruchomisz."
+                )
+                break
+    except Exception:
+        pass
+    return obj
+
+
 def parse_json(text):
+    d = _parse_json_surowe(text)
+    try:
+        return _bez_ask_w_run(d) if isinstance(d, dict) else d
+    except Exception:
+        return d
+
+
+def _parse_json_surowe(text):
 
     if not text:
         return None
+    _d = _dsml_na_run(text)
+    if _d:
+        # v480hs: ta sama odpowiedz ma po DSML pelna decyzje w JSON-ie
+        # (urwana odpowiedz + dalszy ciag, bieg 2026-10-28 08:36: DSML
+        # z jednym zapisem, potem JSON z trzema akcjami). Pelna decyzja
+        # JSON po ostatnim DSML jest ta wlasciwa.
+        try:
+            _kawalki = re.split(r"<[^>]*DSML[^>]*calls\s*>", str(text))
+            _po = _kawalki[-1]
+            if len(_kawalki) > 1 and "{" in _po:
+                _j = None
+                _mj = re.search(r"```(?:json)?\s*(\{.*\})\s*```", _po, re.DOTALL)
+                if _mj:
+                    try:
+                        _j = json.loads(_mj.group(1))
+                    except Exception:
+                        _j = None
+                if _j is None:
+                    _j = _extract_last_balanced_json_object(_po)
+                if _tylko_decyzja(_j):
+                    return _j
+        except Exception:
+            pass
+        return _d
 
     text = str(
         text
@@ -34831,14 +47363,14 @@ def parse_json(text):
             repaired = _repair_json(text, return_objects=True)
 
             if isinstance(repaired, dict):
-                return repaired
+                return _oznacz_uciete_akcje(repaired, text)
 
             if isinstance(repaired, str):
 
                 obj = json.loads(repaired)
 
                 if isinstance(obj, dict):
-                    return obj
+                    return _oznacz_uciete_akcje(obj, text)
 
         except Exception:
             pass
@@ -35567,6 +48099,76 @@ def _fakty_o_telefonie():
     return linia
 
 
+_fakty_o_srodowisku_cache = None
+
+
+def _fakty_o_srodowisku():
+    """
+    v480fw: Python, rdzenie, pamiec i zainstalowane biblioteki — raz,
+    przy starcie programu. Bieg 2026-10-25 23:33: Bartek trzy razy
+    probowal sprawdzic wersje Pythona i torcha, nie mogl, wiec napisal
+    szesc plikow na slepo ("zakladam, ze torch jest"). Uzytkownik: "nie
+    wiedzial gdzie i co jak".
+    """
+    global _fakty_o_srodowisku_cache
+    if _fakty_o_srodowisku_cache is not None:
+        return _fakty_o_srodowisku_cache
+    czesci = []
+    try:
+        czesci.append("Python " + sys.version.split()[0] + " (" + (shutil.which("python3") or sys.executable) + ")")
+    except Exception:
+        pass
+    try:
+        rdzenie = os.cpu_count() or 0
+        if rdzenie:
+            czesci.append(str(rdzenie) + " rdzeni"
+                          + (" — w rywalizacji drużyna ma " + str(_WATKI_DRUZYNY) + " wątki"
+                             if _DRUZYNA else ""))
+    except Exception:
+        pass
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for l in f:
+                k, _, v = l.partition(":")
+                mem[k] = int(v.split()[0]) if v.split() else 0
+        if mem.get("MemTotal"):
+            czesci.append("RAM " + str(round(mem["MemTotal"] / 1048576, 1)) + " GB, wolne "
+                          + str(round(mem.get("MemAvailable", 0) / 1048576, 1)) + " GB")
+    except Exception:
+        pass
+    pakiety = []
+    try:
+        import importlib.metadata as _md
+        widziane = set()
+        for d in _md.distributions():
+            n = str(d.metadata.get("Name") or "").strip()
+            if n and n.lower() not in widziane and n.lower() not in ("pip", "setuptools", "wheel"):
+                widziane.add(n.lower())
+                pakiety.append(n + " " + str(d.version))
+        pakiety.sort(key=str.lower)
+    except Exception:
+        pakiety = []
+    linia = ""
+    if czesci:
+        linia = "Środowisko (sprawdzone przy starcie programu): " + ", ".join(czesci) + "."
+    if pakiety:
+        linia += (" Biblioteki Pythona: " + ", ".join(pakiety[:80])
+                  + (" i " + str(len(pakiety) - 80) + " innych" if len(pakiety) > 80 else "") + ".")
+    _fakty_o_srodowisku_cache = linia.strip()
+    return _fakty_o_srodowisku_cache
+
+
+def _zapisz_fakty_srodowiska(*linie):
+    """v480fx: fakty o telefonie i srodowisku do ~/AEL_SRODOWISKO.txt."""
+    try:
+        tresc = "\n\n".join(l for l in linie if l).strip()
+        if tresc:
+            (HOME / "AEL_SRODOWISKO.txt").write_text(tresc + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _pierwsza_wiadomosc(rola=None):
     """
     Pierwsza wiadomosc w kazdej rozmowie: co to za maszyna. Tyle.
@@ -35615,14 +48217,21 @@ def _pierwsza_wiadomosc(rola=None):
 
     # v422: MAIN dostaje na poczatek, jak dziala program.
     # v436: fakty o telefonie pod linia o platformie.
+    # v480fy: uzytkownik (2026-10-26, "nie wiem czy ten szum jest im
+    # potrzebny"): telefon (su, Termux:API) i pelna lista bibliotek leza
+    # w ~/AEL_SRODOWISKO.txt (dla chetnych: PODGLĄD cat), nie w pierwszej wiadomosci.
     _tel = _fakty_o_telefonie()
-    _platforma = (
-        "Termux API, ADB DEBUGOWANIE, Android"
-        + (("\n\n" + _tel) if _tel else "")
-    )
+    _srod = _fakty_o_srodowisku()
+    # Uzytkownik dalej: "nie wiem, czy w ogole to w pierwszym prompcie
+    # jest potrzebne do roli kazdej" — nie jest: wersje sprawdza sie
+    # PODGLĄDEM (python3 --version, pip show), a plik jest dla chetnych.
+    _zapisz_fakty_srodowiska(_tel, _srod)
+    _platforma = "Termux API, ADB DEBUGOWANIE, Android"
 
+    # v480fx: MAIN zaczyna od zespolu; fakty o telefonie i bibliotekach
+    # (dziesiatki linii) leza w pliku, nie na poczatku jego rozmowy.
     if str(rola) == "MAIN":
-        return _platforma + "\n\n" + _JAK_TO_DZIALA
+        return _JAK_TO_DZIALA + "\n\nTermux API, ADB DEBUGOWANIE, Android"
 
     if rola is not None:
         return _platforma + "\n\n" + _JAK_ROZMAWIAMY
@@ -35644,15 +48253,60 @@ def _pierwsza_wiadomosc(rola=None):
 # nieprawda i ciagneloby go do szukania przez telefon. Bez Wojtka — on
 # patrzy na cel jak zwykly uzytkownik, bez technicznego tla (v335).
 # Bez slowa "Gemini" — v345 dalej trzyma.
+# v480fp: na prosbe uzytkownika (2026-10-25: "moga ze soba rozmawiac")
+# przepisany w calosci: kto jest w zespole i ze rozmawiaja wprost,
+# bez posrednictwa MAIN-a; MAIN dalej decyduje.
+# v480ft: przepisany w calosci — jak powstaja i zmieniaja sie pliki
+# (autor, poprawka fragmentu, proba uruchomienia) i PODGLĄD.
+# v480fw: przepisany w calosci — PODGLĄD tez do sprawdzania srodowiska (wersje, pip show), komendy laczone ; i |.
+# v480gi: przepisany w calosci — zespol sam uruchamia kod (URUCHOM:).
+# v480gj: przepisany w calosci — zespol sam instaluje biblioteki.
+# v480gt: przepisany w calosci — pelny sklad (Ela, Piotr, Ania) i
+# aktualne zdanie o tle (od v480gl dlugie URUCHOM samo idzie w tlo).
 _JAK_ROZMAWIAMY = (
     "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
     "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
-    "dostajecie, co z tego wyszło. Kod, który napiszecie, program "
-    "kładzie na dysk i uruchamia, gdy MAIN tak zdecyduje."
+    "dostajecie, co z tego wyszło. Do plików i środowiska zaglądacie "
+    "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
+    "plik, head, ls, wc, python3 --version, pip show pakiet; kilka "
+    "komend łączycie przez ; albo |), a kod uruchamiacie linią "
+    "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
+    "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
+    "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
+    "działa. Uruchomienie dłuższe niż 2 minuty liczy dalej w tle, "
+    "a jego wynik dostaje autor i MAIN, gdy się skończy. Bibliotekę "
+    "albo program, którego brakuje, instalujecie tak samo (URUCHOM: "
+    "pip install pakiet albo URUCHOM: pkg install -y pakiet) — program "
+    "czeka, aż instalacja się skończy, i oddaje jej wynik. Nowy plik "
+    "z kodem piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
+    "nim; program od razu kładzie go na dysk, sprawdza i krótko "
+    "uruchamia, a błąd wraca do autora. Plik należy do tego, kto go "
+    "napisał: zmiany w nim to poprawka fragmentu (który fragment i na "
+    "co go zamienić), nie cały plik od nowa. W zespole są: Tomek "
+    "(następny krok), Kamil (fakty i informacje), Marek (słabe punkty "
+    "planów), Bartek (kod i technika), Ola (porządkuje to, co się "
+    "wydarzyło), Wojtek (praktyczny sens) i Ela (ocenia, ile celu jest "
+    "naprawdę zrobione). Piotr przegląda kod i szuka przyczyny błędu, "
+    "Ania pisze poprawkę — MAIN może ich zapytać jak każdego, a gdy "
+    "program odda autorowi błąd w jego kodzie, autor może ich zawołać "
+    "po imieniu. "
+    "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani "
+    "niczego z programu i dostaje wyłącznie to, co ktoś sam do niego "
+    "napisze, jak w nowym czacie. Rozmowę prowadzi MAIN: pyta, kogo "
+    "potrzebuje. Gdy odpowiadacie, możecie też porozmawiać ze sobą "
+    "wprost: gdy zwrócicie się do kogoś po imieniu, dostanie to od "
+    "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą "
+    "rozmowę i to on decyduje, co zespół robi dalej. Użytkownik chce, "
+    "żeby program działał sam: loguje się, daje dostęp do kont i "
+    "podaje dane, których nikt z was nie ma — resztę ustala zespół."
 )
 
+# v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela
+# wpisala zdanie o logowaniu i dostepie do kont do "celu
+# uzytkownika" i liczyla postep wzgledem niego. Ela ocenia cel tak,
+# jak go napisal uzytkownik — opis programu jej w tym nie pomaga.
 _ROLE_ZNAJACE_PROGRAM = (
-    "PLANNER", "CRITIC", "BROWSER", "PROGRESS_ESTIMATOR",
+    "PLANNER", "CRITIC", "BROWSER",
 )
 
 
@@ -35671,44 +48325,134 @@ _ROLE_ZNAJACE_PROGRAM = (
 #   - glosy po kolei: v406; ASK w tym samym kroku: v363,
 #   - sciezki kodu na dysku: v419; ekran po dzialaniu na nim: v419.
 # Tylko MAIN: v345 dalej trzyma zespol z dala od tego, kto wykonuje.
+def _lista_narzedzi_dla_maina():
+    """Narzedzia z nazwami argumentow, pogrupowane (v480gt) — raz,
+    w pierwszej wiadomosci."""
+
+    try:
+        grupy = {}
+        for t in _gemini_tools_legacy():
+            nazwa = str(t.get("name"))
+            props = list((t.get("parameters") or {}).get("properties", {}).keys())
+            przed = nazwa.split("_", 1)[0] if "_" in nazwa else ""
+            klucz = przed if przed in ("termux", "chrome", "android") else "inne"
+            grupy.setdefault(klucz, []).append(nazwa + "(" + ", ".join(props) + ")")
+        opis = {"termux": "pliki i komendy", "chrome": "przeglądarka",
+                "android": "telefon", "inne": "pozostałe"}
+        linie = []
+        for klucz in ("termux", "chrome", "android", "inne"):
+            if grupy.get(klucz):
+                linie.append("- " + opis[klucz] + ": " + "; ".join(grupy[klucz]))
+        return "\n".join(linie)
+    except Exception:
+        return ""
+
+
+# v480ga: akapit "Kod." przepisany w calosci (uzytkownik 2026-10-26: MAIN
+# pisal kod sam w RUN i tylko czekal) — kod pisze zespol, MAIN zleca,
+# uruchamia i decyduje; czas procesu w tle jest dla zespolu.
 _JAK_TO_DZIALA = (
     "Kilka słów o tym, jak to wszystko działa.\n\n"
-    "Program chodzi na telefonie z Androidem, w Termuxie. To zwykły "
-    "linuksowy terminal: katalog domowy to ~ "
-    "(/data/data/com.termux/files/home), jest Termux:API, a ADB jest "
-    "połączone bezprzewodowo z tym samym telefonem — przez nie da się "
-    "instalować APK, uruchamiać aplikacje i zaglądać na ekran.\n\n"
-    "Zespół to osoby na DeepSeeku, każda we własnej rozmowie:\n"
+    "Zespół. Każda osoba to osobna rozmowa na DeepSeeku:\n"
     "- Tomek szuka sensownego następnego kroku,\n"
     "- Kamil sprawdza fakty i szuka informacji w sieci,\n"
-    "- Marek ocenia plany Tomka i szuka w nich słabych punktów,\n"
+    "- Marek ocenia plany i szuka w nich słabych punktów,\n"
     "- Bartek pisze kod i skrypty,\n"
     "- Ola opowiada po ludzku, co wyszło z wykonania,\n"
     "- Wojtek patrzy na cel oczami zwykłego użytkownika,\n"
     "- Ela ocenia, ile celu jest naprawdę zrobione,\n"
-    "- Piotr i Ania wchodzą, gdy kod się wysypie: Piotr szuka "
-    "przyczyny, Ania pisze poprawkę.\n\n"
-    "Ty decydujesz, co dalej. Twój TASK wykonuje Gemini — to on ma "
-    "ręce: uruchamia komendy w Termuxie (także w tle), czyta i "
-    "zapisuje pliki, klika i pisze na ekranie telefonu, obsługuje "
-    "Chrome. Na jedno zadanie ma około "
-    + str(GEMINI_MAX_TOOL_CALLS) + " wywołań narzędzi. Kod do plików "
-    "kładzie Python — dokładnie ten, który napisał ktoś z zespołu. "
-    "Gdy podasz write_engineer_code_to, ten kod ląduje pod tą "
-    "ścieżką, zanim Gemini zacznie, a Gemini go uruchamia.\n\n"
-    "W każdym kroku dostajesz, co się stało, i odpowiadasz decyzją. "
-    "Zespół odzywa się, gdy kogoś zapytasz: ASK to pytanie do jednej "
-    "osoby, dostaje je razem z tym, co się stało od jej ostatniej "
-    "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu. W jednym "
-    "kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX) + " razy. "
-    "NEED_USER_LOGIN to prośba do użytkownika, np. o zalogowanie się "
-    "albo o wartość, której nikt z nas nie ma. DONE i FAILED kończą "
-    "cel.\n\n"
-    "Po wykonaniu dostajesz fakty z narzędzi: co wypisały, co się "
-    "udało, co padło. Kod, który leży już na dysku, widzisz jako "
-    "ścieżkę, np. [~/projekt/build.sh — 1234 znaków, na dysku] — "
-    "można go po prostu uruchomić. Ekran telefonu i Chrome zobaczysz "
-    "po kroku, w którym Gemini coś na nich robiło."
+    "- Piotr i Ania pomagają, gdy kod się wysypie: Piotr szuka "
+    "przyczyny, Ania pisze poprawkę,\n"
+    "- Igor nie zna celu ani niczego z programu. Dostaje tylko to, co "
+    "sam mu napiszesz, jak w nowym czacie, więc patrzy na sprawę "
+    "świeżo, z zewnątrz.\n\n"
+    "Rozmowa. Zespół to Twoje główne narzędzie: każda osoba widzi to, "
+    "czego sam nie zobaczysz — Bartek pisze i poprawia kod, Marek "
+    "znajduje słabe punkty, zanim kosztują krok, Kamil sprawdza fakty "
+    "w sieci, Tomek układa następny krok, Wojtek pyta o praktyczny "
+    "sens, a Igor patrzy świeżym okiem. Pytanie do osoby, której sprawa "
+    "dotyczy, daje Ci przed RUN albo TASK to, czego sam byś nie "
+    "zobaczył. ASK to pytanie do jednej osoby (w ask_role jej "
+    "imię): dostaje je razem z tym, co się stało od jej ostatniej "
+    "wypowiedzi, a jej odpowiedź wraca do Ciebie od razu, w tym samym "
+    "kroku. W jednym kroku możesz tak zapytać do " + str(_MAIN_ASK_MAX)
+    + " razy. Przy Twoim pytaniu zespół może też porozmawiać między "
+    "sobą: gdy zapytany zwróci się do kolegi po imieniu, kolega "
+    "odpowiada mu od razu, a odpowiedź wraca do pytającego, który może "
+    "na nią odpisać. Dostajesz całą tę rozmowę, każdą wypowiedź pod "
+    "imieniem i z tym, na czyje słowa odpowiada. Decyzję, co dalej, "
+    "podejmujesz Ty.\n\n"
+    "Telefon. Program chodzi na telefonie z Androidem, w Termuxie — "
+    "zwykłym linuksowym terminalu. Katalog domowy to ~ "
+    "(/data/data/com.termux/files/home). Jest Termux:API, a ADB jest "
+    "połączone bezprzewodowo z tym samym telefonem, więc da się przez "
+    "nie instalować APK, uruchamiać aplikacje i zaglądać na ekran. "
+    "Model telefonu, wersja Pythona, pamięć i lista bibliotek leżą "
+    "w ~/AEL_SRODOWISKO.txt (spisane przy starcie programu).\n\n"
+    "Wykonanie. RUN to lista do " + str(_RUN_MAX_AKCJI) + " akcji, "
+    "które program wykonuje od razu, po kolei, i oddaje Ci pełne "
+    "wyniki — także numerowaną listę elementów strony, po której "
+    "działają chrome_click(nr) i chrome_type(pole). Gdy któraś akcja "
+    "zawiedzie, program zatrzymuje się i mówi, które pominął. TASK "
+    "oddaje dłuższą robotę Gemini, który ma te same narzędzia i około "
+    + str(GEMINI_MAX_TOOL_CALLS) + " wywołań na jedno zadanie. Gemini "
+    "pamięta poprzednie zadania z tego celu (to jedna rozmowa na cały "
+    "cel), więc w zadaniu wystarczy to, co nowe. RUN działa także "
+    "wtedy, gdy Gemini ma wyczerpany limit. Narzędzia (te same dla RUN "
+    "i Gemini):\n" + _lista_narzedzi_dla_maina() + "\n\n"
+    # v480gi: akapit przepisany w calosci — zespol sam uruchamia i
+    # sprawdza swoj kod (URUCHOM:), MAIN dostaje kod, ktory dziala.
+    # v480gj: przepisany w calosci — doinstalowanie bibliotek.
+    # v480gt: przepisany w calosci — dlugie uruchomienie samo idzie w tlo.
+    # v480ib: przepisany w calosci — kiedy program sam budzi MAIN-a
+    # (koniec/blad, co 25%, przyrost logu 3-24 min, linia co minute).
+    "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
+    "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
+    "pisze poprawkę. Zespół sam uruchamia swój kod i widzi błędy, więc "
+    "autor poprawia go, aż działa, i oddaje Ci kod sprawdzony. Plik "
+    "należy do autora i on go poprawia, więc zmiana w pliku Bartka to "
+    "pytanie do Bartka. Bibliotekę albo program, którego brakuje, "
+    "instaluje zespół albo Ty (pip install, pkg install -y) — to, co "
+    "jest ogólnodostępne, wolno doinstalować. Ty puszczasz właściwe "
+    "przebiegi, sprawdzasz wyniki i decydujesz, co dalej. Pliki z kodem kładzie na dysk "
+    "program, dokładnie z tego, co ktoś napisał; kodu nie dostajesz w "
+    "całości, tylko jedną linią, np. [Program od razu zapisał ten plik "
+    "Bartka w ~/projekt/prep.py (…, składnia OK; próba uruchomienia … "
+    "OK). … uruchomienie: python3 ~/projekt/prep.py [--wejscie "
+    "--wyjscie] …]. Poprawkę fragmentu od autora program nanosi od razu "
+    "i też mówi to jedną linią. Kod podany bez ścieżki widzisz jako "
+    "[nazwa — liczba znaków]; program położy go z wypowiedzi autora, "
+    "1:1, gdy w TASK podasz write_engineer_code_to ze ścieżką pliku "
+    "albo katalogu. Kod, który już jest na dysku, widzisz jako ścieżkę, "
+    "np. [~/projekt/build.sh — 1234 znaków, na dysku], i można go po "
+    "prostu uruchomić. Do kodu zaglądasz komendą do odczytu (grep -n, "
+    "sed -n 'od,dop' plik, head, wc -l) zamiast czytać cały plik. "
+    "Uruchomienie dłuższe niż 2 minuty — Twoje, zespołu albo Gemini — "
+    "samo przechodzi w tło i program pokazuje, ile już trwa, postęp z "
+    "logu i ile zostało. Wynik program przynosi sam, gdy proces się "
+    "skończy albo w logu pojawi się błąd. Gdy log pokazuje postęp w "
+    "procentach, dostajesz stan przy 25, 50 i 75%; gdy procentów nie ma, "
+    "dostajesz nowe linie z logu, kiedy przybędą — najpierw po 3 "
+    "minutach, potem coraz rzadziej (6, 12, 24 min). Co minutę "
+    "dostajesz jedną krótką linię o stanie. Ten czas jest Twój i "
+    "zespołu na inne rzeczy.\n\n"
+    "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
+    "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
+    "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
+    "ekranu (android_screenshot) to plik PNG, którego nikt z zespołu "
+    "nie ogląda. Gdy tekst nie wystarcza (WebView, gra, obrazki, "
+    "klawiatura zasłania czat) albo kliknięcia trafiają obok, "
+    "android_look pokazuje ekran Gemini i zwraca opis, widoczny tekst "
+    "i elementy z przybliżonymi współrzędnymi. Ekran telefonu i Chrome "
+    "zobaczysz po kroku, w którym ktoś coś na nich robił.\n\n"
+    "Użytkownik. Użytkownik chce, żeby program działał sam. "
+    "NEED_USER_LOGIN to prośba do niego o to, czego nikt z zespołu nie "
+    "ma: zalogowanie się na stronie, dostęp do konta, hasło, kod, dane "
+    "osobowe, konto do wypłaty. Na pytania o plan, wybór drogi czy o "
+    "to, co umie i ma, odpowiada zespół, nie użytkownik. Formularze, "
+    "profile i ustawienia na stronach wypełnia RUN (chrome_type, "
+    "chrome_click, chrome_execute_js) albo Gemini. DONE i FAILED "
+    "kończą cel."
 )
 
 
@@ -35990,10 +48734,13 @@ def _python_written_files_lines(already_listed):
         except Exception:
             pass
 
+        # v480gt: bez "Treść: "import os os.environ…" … (pominięto 4610
+        # znaków)" — kod splaszczony do jednej linii nikomu nic nie mowi;
+        # kto chce, zaglada do pliku. Autor z mapy autorow, nie zawsze Bartek.
+        _kto = _IMIE_AUTORA.get(_autor_pliku.get(p.name, "ENGINEER"), ("Bartek", "Bartka"))[1]
         lines.append(
-            "- " + str(p) + ": ISTNIEJE (" + str(size) + " B), "
-            "z gotowym kodem od Bartka"
-            + (". Treść: " + preview if preview else "")
+            "- " + _sciezka_od_domu(str(p)) + ": jest (" + str(size) + " B), kod "
+            + _kto
         )
 
     return lines
@@ -36078,10 +48825,26 @@ _team_file_pytania = []
 # w wypowiedziach, wiec to jest teraz JEDYNA droga, zeby go
 # zobaczyc. Musi dowozic calosc.
 _FILE_ANSWER_MAX = 60000
+# v480iu: plik wiekszy od tego nie jest czytany w calosci (pamiec telefonu).
+_PLIK_CALY_DO_B = 2 * 1024 * 1024
+
+
+_KOPIA_W_SPISIE_RE = re.compile(
+    r"(?:\.bak(?:_[\w.-]*)?$|\.przed_\w+$|\.orig$|\.old$|~$|\.pyc$|^__pycache__/$|^\.)"
+)
 
 
 def _file_answer_body(p):
     """Odpowiedz o pliku: CO w nim jest, nie ile ma bajtow."""
+
+    # v480ds: bieg 2026-10-23 03:16 (druzyna 1, krok 761) — program sam
+    # wstawil Tomkowi listing ~/MAIN_2, a Sedzia obcial za to druzynie
+    # 2 pp. Rzeczy rywala program nie pokazuje.
+    if _DRUZYNA and _sciezka_rywala(str(p)):
+        return (
+            "to folder albo plik drugiej drużyny — w rywalizacji jest "
+            "zamknięty, program go nie pokazuje."
+        )
 
     try:
         size = p.stat().st_size
@@ -36096,6 +48859,12 @@ def _file_answer_body(p):
     try:
         if p.is_dir():
             _w_srodku = sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir())
+            # v480et: kopie zapasowe i smieci to szum (bieg 2026-10-24,
+            # Tomek dostal ~/MAIN_1 z kilkunastoma BURZA_MOZGOW.md.bak_...).
+            _kopie = [n for n in _w_srodku if _KOPIA_W_SPISIE_RE.search(n)]
+            _w_srodku = [n for n in _w_srodku if not _KOPIA_W_SPISIE_RE.search(n)]
+            if _kopie:
+                _w_srodku.append("(+ " + str(len(_kopie)) + " kopii zapasowych/ukrytych)")
             return (
                 "JEST — to katalog, "
                 + (
@@ -36111,6 +48880,37 @@ def _file_answer_body(p):
 
     if size == 0:
         return "JEST, ale PUSTY (0 B)."
+
+    # v480iu: zamkniecie 2026-10-31 11:23 (LOW_MEMORY, druzyna 1, krok 12):
+    # proces programu urosl w minute z 51 do 749 MB. Plik wspomniany przez
+    # osobe z zespolu byl czytany w calosci (dane uczace maja dziesiatki MB,
+    # pickle 141 MB) — jako tekst Pythona to kilka razy wiecej. Duzy plik:
+    # czytamy tylko poczatek i koniec, tyle, ile i tak pokazujemy.
+    if size > _PLIK_CALY_DO_B:
+        _pol = _FILE_ANSWER_MAX // 2
+        try:
+            with open(p, "rb") as _f:
+                _glowa = _f.read(_pol)
+                _f.seek(max(0, size - _pol))
+                _ogon = _f.read(_pol)
+            _glowa_t = None
+            if b"\0" not in _glowa:
+                # znak UTF-8 moze byc uciety na granicy odczytu
+                for _o in (0, 1, 2, 3):
+                    try:
+                        _glowa_t = _glowa[:len(_glowa) - _o].decode("utf-8", errors="strict")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+        except Exception:
+            _glowa_t = None
+        if _glowa_t is None:
+            return "JEST (" + str(size) + " B), plik binarny."
+        return (
+            "JEST (" + str(size) + " B). Środek pominięty:\n"
+            + _glowa_t.rstrip() + "\n…\n"
+            + _ogon.decode("utf-8", errors="ignore").lstrip()
+        )
 
     try:
         tresc = p.read_text(encoding="utf-8", errors="strict")
@@ -36718,6 +49518,132 @@ def _remember_team_file_questions(pary):
         _team_file_pytania.append((rola, str(t or "")))
 
 
+# v480hr: (rola, sciezka) -> skrot tresci, ktora ta osoba ma juz w
+# rozmowie (sama ja napisala albo program jej ja pokazal).
+_tresc_znana_roli = {}
+
+
+def _skrot_pliku(p):
+    try:
+        # v480iu: duzy plik — rozmiar, czas zmiany, poczatek i koniec
+        # zamiast czytania calosci przy kazdej wiadomosci.
+        st = p.stat()
+        if st.st_size > _PLIK_CALY_DO_B:
+            h = hashlib.sha1((str(st.st_size) + ":" + str(st.st_mtime_ns)).encode())
+            with open(p, "rb") as f:
+                h.update(f.read(65536))
+                f.seek(max(0, st.st_size - 65536))
+                h.update(f.read(65536))
+            return h.hexdigest()
+        return hashlib.sha1(p.read_bytes().strip()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _rozmowa_roli(rola):
+    # nowa rozmowa tej osoby (reset czatu) nie pamieta starych plikow
+    try:
+        _s = sessions.get(str(rola))
+        return str(getattr(_s, "chat_session_id", None) or "")
+    except Exception:
+        return ""
+
+
+def _rola_poznala_plik(rola, p):
+    try:
+        if rola and p.is_file():
+            _tresc_znana_roli[(str(rola), _rozmowa_roli(rola), str(p.resolve()))] = _skrot_pliku(p)
+    except Exception:
+        pass
+
+
+def _rola_zna_plik(rola, p):
+    try:
+        h = _tresc_znana_roli.get((str(rola), _rozmowa_roli(rola), str(p.resolve())))
+        return bool(h) and h == _skrot_pliku(p)
+    except Exception:
+        return False
+
+
+# v480hw: bieg 2026-10-28 (druzyna 2, krok 355): MAIN poprawil sed-em
+# literaly w k3_loop_lite.py i k4_autonomiczny.py, a Bartek, ktory mial w
+# rozmowie stara wersje tych plikow, napisal "patch nigdy nie wszedl" i
+# przepisal ceche od nowa w osobnym pliku; Sedzia powtorzyl to w ocenie,
+# MAIN stracil dwa kroki na sprawdzanie. Osoba nie wie, ze plik, ktory
+# zna, zmienil ktos inny — program wie (skrot tresci z jej rozmowy). Jedno
+# zdanie raz na kazda zmiane.
+_zmiana_zgloszona = {}
+
+
+def _znane_pliki_zmienione(rola, tresc=""):
+    rozm = _rozmowa_roli(rola)
+    nazwy = []
+    for (r, c, sciezka), h in list(_tresc_znana_roli.items()):
+        if r != str(rola) or c != rozm or not h:
+            continue
+        p = Path(sciezka)
+        if not p.is_file():
+            continue
+        teraz = _skrot_pliku(p)
+        if not teraz or teraz == h or _zmiana_zgloszona.get((r, c, sciezka)) == teraz:
+            continue
+        _zmiana_zgloszona[(r, c, sciezka)] = teraz
+        try:
+            with open(p, "rb") as _f:
+                poczatek = _f.read(4096).decode("utf-8", errors="replace").strip()[:300]
+        except Exception:
+            poczatek = ""
+        if poczatek and poczatek in str(tresc or ""):
+            continue  # ta wiadomosc i tak niesie nowa tresc
+        nazwy.append(_sciezka_od_domu(str(p)))
+    if not nazwy:
+        return ""
+    return ("Od czasu, gdy " + ("ten plik był" if len(nazwy) == 1 else "te pliki były")
+            + " w tej rozmowie, ktoś zmienił na dysku: " + ", ".join(nazwy[:10])
+            + (" (i " + str(len(nazwy) - 10) + " więcej)" if len(nazwy) > 10 else "")
+            + ". Wersja, którą pamiętasz, jest starsza — aktualną treść pokaże "
+            "PODGLĄD: grep -n albo sed -n na tym pliku.")
+
+
+def _spis_katalogu(p):
+    try:
+        return sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir()
+                      if not _KOPIA_W_SPISIE_RE.search(x.name + ("/" if x.is_dir() else "")))
+    except Exception:
+        return None
+
+
+def _katalog_od_ostatniego(rola, p):
+    """v480hs: None = pokaz pelny spis (pierwszy raz w tej rozmowie);
+    inaczej jedno zdanie o tym, co sie zmienilo od ostatniego spisu."""
+    try:
+        if not p.is_dir() or (_DRUZYNA and _sciezka_rywala(str(p))):
+            return None
+        teraz = _spis_katalogu(p)
+        if teraz is None:
+            return None
+        klucz = (str(rola), _rozmowa_roli(rola), str(p.resolve()))
+        bylo = _katalog_znany_roli.get(klucz)
+        _katalog_znany_roli[klucz] = teraz
+        if bylo is None:
+            return None
+        nowe = [n for n in teraz if n not in set(bylo)]
+        znikly = [n for n in bylo if n not in set(teraz)]
+        if not nowe and not znikly:
+            return "JEST — katalog, bez zmian od spisu, który już masz w tej rozmowie."
+        czesci = []
+        if nowe:
+            czesci.append("przybyło: " + ", ".join(nowe[:30]) + (" (i " + str(len(nowe) - 30) + " więcej)" if len(nowe) > 30 else ""))
+        if znikly:
+            czesci.append("zniknęło: " + ", ".join(znikly[:30]) + (" (i " + str(len(znikly) - 30) + " więcej)" if len(znikly) > 30 else ""))
+        return "JEST — katalog; od spisu, który już masz: " + "; ".join(czesci) + "."
+    except Exception:
+        return None
+
+
+_katalog_znany_roli = {}
+
+
 def _policz_odpowiedzi_dla_zespolu(pary):
     """
     Uruchamia sondy TERAZ i sklada z nich odpowiedzi — kazda z
@@ -36797,10 +49723,32 @@ def _policz_odpowiedzi_dla_zespolu(pary):
 
         try:
             if p.exists():
+                # v480hr: bieg 2026-10-27 20:56 (druzyna 1, krok 279) —
+                # Bartek dostal na poczatku wiadomosci cale swoje dwa
+                # pliki (9 kB), ktore sam napisal krok wczesniej, tylko
+                # dlatego, ze wymienil je w odpowiedzi. Plik, ktorego
+                # tresc ta osoba juz ma w rozmowie (napisala go albo juz
+                # go dostala), idzie jedna linia; zmieniony — w calosci.
+                # v480hs: katalog — ta sama osoba dostaje spis raz,
+                # potem tylko to, co przybylo/ubylo (druzyna 2, noc
+                # 27/28.10: Bartek dostawal pelny spis ~/MAIN_2 przy
+                # kazdym "cd ~/MAIN_2" w swojej odpowiedzi).
+                _zmiana_kat = _katalog_od_ostatniego(rola, p)
+                if _zmiana_kat is not None:
+                    odpowiedzi.append((rola, "- " + candidate + ": " + _zmiana_kat))
+                    continue
+                if p.is_file() and _rola_zna_plik(rola, p):
+                    odpowiedzi.append((
+                        rola,
+                        "- " + candidate + ": JEST (" + str(p.stat().st_size)
+                        + " B), bez zmian — tę samą treść masz już w tej rozmowie."
+                    ))
+                    continue
                 odpowiedzi.append((
                     rola,
                     "- " + candidate + ": " + _file_answer_body(p)
                 ))
+                _rola_poznala_plik(rola, p)
                 continue
         except Exception:
             continue
@@ -38290,6 +51238,140 @@ def _sam_wyciagnij_na_wierzch(decision):
     }
 
 
+# v472: prosba do czlowieka o instalacje ze Sklepu Google Play.
+#
+# Bieg 2026-10-04 11:51, krok 11: MAIN zatrzymal bieg prosba "zainstaluj
+# apkę Facebook (...) Wejdź do Play Store -> Facebook -> Zainstaluj.
+# Po instalacji zaloguj się (...)". Uzytkownik: "google play mógł sam
+# sobie pobrać". Instalacje ze Sklepu robi program sam (patrz
+# _zainstaluj_ze_sklepu); czlowiekowi zostaje to, czego program nie
+# ma — logowanie.
+_PROSBA_O_SKLEP_RE = re.compile(
+    r"play\s*store|sklep\w*\s+(?:google\s+)?play|google\s+play",
+    re.IGNORECASE
+)
+_PROSBA_O_INSTALACJE_RE = re.compile(
+    r"zainstaluj|instal|pobierz|install", re.IGNORECASE
+)
+_ZNANE_APLIKACJE_SKLEPU = (
+    (r"facebook\s+lite", "com.facebook.lite"),
+    (r"messenger", "com.facebook.orca"),
+    (r"facebook", "com.facebook.katana"),
+    (r"instagram", "com.instagram.android"),
+    (r"whats\s*app", "com.whatsapp"),
+    (r"telegram", "org.telegram.messenger"),
+    (r"tik\s*tok", "com.zhiliaoapp.musically"),
+    (r"linkedin", "com.linkedin.android"),
+    (r"discord", "com.discord"),
+    (r"signal", "org.thoughtcrime.securesms"),
+    (r"\bolx\b", "pl.tablica"),
+    (r"allegro", "pl.allegro"),
+    (r"vinted", "fr.vinted"),
+    (r"fiverr", "com.fiverr.fiverr"),
+    (r"upwork", "com.upwork.android.apps.main"),
+    (r"revolut", "com.revolut.revolut"),
+)
+
+
+def _aplikacje_z_prosby(tekst):
+    """Pakiety, o ktorych instalacje prosi tekst — po kolei, bez powtorzen."""
+
+    pakiety = []
+
+    for m in _PAKIET_W_TEKSCIE_RE.finditer(tekst):
+        # Adres strony (m.facebook.com, useme.com/pl/...) to nie pakiet.
+        if (
+            m.group(0).rsplit(".", 1)[-1] in ("com", "pl", "net", "org", "io", "eu", "me", "app", "dev")
+            or tekst[m.end():m.end() + 1] == "/"
+            or tekst[max(0, m.start() - 2):m.start()] == "//"
+        ):
+            continue
+        if m.group(0) not in pakiety:
+            pakiety.append(m.group(0))
+
+    # Nazwy wlasne tylko w zdaniu o Sklepie/instalacji — "Messenger
+    # masz" nie jest prosba o Messengera, a "nie Messenger" tym
+    # bardziej.
+    for zdanie in re.split(r"[.\n!?]", tekst):
+        if not (_PROSBA_O_INSTALACJE_RE.search(zdanie) or _PROSBA_O_SKLEP_RE.search(zdanie)):
+            continue
+        reszta = zdanie
+        for wzor, pakiet in _ZNANE_APLIKACJE_SKLEPU:
+            if re.search(r"\bnie\s+" + wzor, reszta, re.IGNORECASE):
+                reszta = re.sub(wzor, " ", reszta, flags=re.IGNORECASE)
+                continue
+            if re.search(wzor, reszta, re.IGNORECASE):
+                if pakiet not in pakiety:
+                    pakiety.append(pakiet)
+                reszta = re.sub(wzor, " ", reszta, flags=re.IGNORECASE)
+
+    return pakiety
+
+
+def _sam_zainstaluj_ze_sklepu(decision):
+    """
+    Instaluje aplikacje, o ktore MAIN prosi czlowieka. Zwraca
+    (gotowy last_result albo None, lista zainstalowanych pakietow).
+    last_result jest tylko wtedy, gdy w prosbie nie zostalo nic dla
+    czlowieka (bez logowania i kont).
+    """
+
+    tekst = (
+        str(decision.get("reason") or "")
+        + "\n"
+        + str(decision.get("instructions") or "")
+    )
+
+    if not (_PROSBA_O_SKLEP_RE.search(tekst) and _PROSBA_O_INSTALACJE_RE.search(tekst)):
+        return None, []
+
+    zainstalowane = []
+    wyniki = []
+
+    for pakiet in _aplikacje_z_prosby(tekst)[:3]:
+
+        if _pakiet_jest_na_telefonie(pakiet) is not False:
+            continue
+
+        log(
+            "MAIN",
+            "Prośba do użytkownika o instalację " + pakiet + " ze "
+            "Sklepu Google Play — instaluję sam."
+        )
+
+        try:
+            wynik = _zainstaluj_ze_sklepu(pakiet)
+        except Exception as e:
+            wynik = {"ok": False, "error": str(e)}
+
+        wyniki.append(dict(wynik, package=pakiet))
+
+        if wynik.get("ok"):
+            zainstalowane.append(pakiet)
+
+    if not zainstalowane:
+        return None, []
+
+    _pending_team_warnings.append(
+        "MAIN prosił użytkownika o instalację ze Sklepu Google Play — "
+        "program zainstalował sam: " + ", ".join(zainstalowane) + "."
+    )
+
+    if re.search(r"zaloguj|logowan|has[łl]o|konto", tekst, re.IGNORECASE):
+        return None, zainstalowane
+
+    return {
+        "status": "ZAINSTALOWANO_ZE_SKLEPU",
+        "ok": True,
+        "zainstalowane": zainstalowane,
+        "wyniki": wyniki,
+        "message": (
+            "Nie pytałem użytkownika — zainstalowałem ze Sklepu Google "
+            "Play: " + ", ".join(zainstalowane) + "."
+        )
+    }, zainstalowane
+
+
 def _need_user_login_with_contact_gate(
     decision, contact_gate_redirects, credential_gate_redirects=0
 ):
@@ -38306,6 +51388,29 @@ def _need_user_login_with_contact_gate(
     wywołujący musi nadpisać obie swoje lokalne zmienne licznika
     wynikiem.
     """
+
+    # v472: instalacje ze Sklepu robi program — patrz
+    # _sam_zainstaluj_ze_sklepu().
+    try:
+        _po_instalacji, _zainstalowane = _sam_zainstaluj_ze_sklepu(decision)
+    except Exception as e:
+        log("MAIN", "Instalacja ze Sklepu nie wyszła: " + str(e))
+        _po_instalacji, _zainstalowane = None, []
+
+    if _po_instalacji is not None:
+        return (
+            _po_instalacji,
+            contact_gate_redirects,
+            credential_gate_redirects
+        )
+
+    if _zainstalowane:
+        decision = dict(decision)
+        decision["instructions"] = (
+            "Program sam zainstalował ze Sklepu Google Play: "
+            + ", ".join(_zainstalowane) + " — tę część prośby możesz "
+            "pominąć.\n\n" + str(decision.get("instructions") or "")
+        )
 
     sam_zrobione = _sam_wyciagnij_na_wierzch(decision)
 
@@ -38624,6 +51729,47 @@ def _handle_need_user_login(decision):
     login_reason = str(decision.get("reason") or "")
     login_url = str(decision.get("url") or "").strip()
     login_instructions = str(decision.get("instructions") or "")
+
+    # v480dh: proces bez terminala (druzyna 2 w tle, stdin=/dev/null)
+    # nie ma kogo zapytac. Bieg 2026-10-21 22:57-23:09: input() rzucil
+    # EOFError trzy razy, druzyna 2 padala i startowala od nowa.
+    # Prosba idzie do DLA_UZYTKOWNIKA.md (powiadomienie z v480df), bieg
+    # idzie dalej.
+    try:
+        _jest_terminal = sys.stdin is not None and sys.stdin.isatty()
+    except Exception:
+        _jest_terminal = False
+    if not _jest_terminal:
+        try:
+            _dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+            _dla.parent.mkdir(parents=True, exist_ok=True)
+            with open(_dla, "a", encoding="utf-8") as _f:
+                _f.write(
+                    "\n\n## " + datetime.now().strftime("%Y-%m-%d %H:%M")
+                    + " — prośba o działanie użytkownika\n\n"
+                    + (login_reason + "\n" if login_reason else "")
+                    + ("Strona: " + login_url + "\n" if login_url else "")
+                    + ("Co zrobić: " + login_instructions + "\n"
+                       if login_instructions else "")
+                )
+            _gdzie = _plik_dla_uzytkownika()
+        except Exception as _e:
+            _gdzie = "(nie udało się zapisać: " + str(_e) + ")"
+        log(
+            "MAIN",
+            "Ta drużyna działa w tle, bez terminala — prośba do użytkownika "
+            "zapisana w " + _gdzie + ", bieg idzie dalej."
+        )
+        return {
+            "status": "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
+            "message": (
+                "Ta drużyna działa w tle, bez terminala, więc nikt nie "
+                "odpowie tu od razu. Prośba jest zapisana w " + _gdzie
+                + "; użytkownik dostał powiadomienie i zrobi to, kiedy "
+                "zechce. Bieg nie czeka — jeśli odpisze, odpowiedź "
+                "przyjdzie jako „Użytkownik: …”."
+            )
+        }
 
     print()
     print("=" * 72)
@@ -38980,7 +52126,34 @@ def run_agent(goal):
     # faktycznie doczeka realnego resetu zamiast zamykać się na próżno.
     step = 0
 
-    while step < MAX_STEPS:
+    # v480k: po cichej aktualizacji bieg idzie dalej tam, gdzie stal.
+    if _stan_przed_aktualizacja:
+        try:
+            step = int(_stan_przed_aktualizacja.get("krok") or 0)
+            if isinstance(_stan_przed_aktualizacja.get("last_result"), dict):
+                last_result = _stan_przed_aktualizacja["last_result"]
+            if isinstance(_stan_przed_aktualizacja.get("signatures"), list):
+                signatures = _stan_przed_aktualizacja["signatures"]
+            _goal_briefed.update(_stan_przed_aktualizacja.get("goal_briefed") or [])
+            for _r, _k, _v in _stan_przed_aktualizacja.get("role_seen_blocks") or []:
+                _role_seen_blocks[(_r, _k)] = _v
+            _przywroc_procesy_w_tle()
+            globals()["_restart_powiedziany"] = True
+            ustaw_krok(step)
+            _c = str(_stan_przed_aktualizacja.get("commit", ""))
+            log(
+                "AKTUALIZACJA",
+                "Działa nowa wersja ("
+                + (_commit_na_dysku() if _c == "nowy-plik" else _c[:7])
+                + ") — ciągnę bieg dalej od kroku " + str(step + 1) + "."
+            )
+        except Exception as e:
+            log("AKTUALIZACJA", "Nie odtworzyłem całego stanu biegu: " + str(e))
+
+    uruchom_pilnowanie_aktualizacji()
+    uruchom_sedziego()
+
+    while MAX_STEPS is None or step < MAX_STEPS:
 
         # ------------------------------------------------------
         # Jeśli Gemini quota jest wyczerpana, NIE twórz kolejnych
@@ -39003,27 +52176,62 @@ def run_agent(goal):
                 if _najbl else "czas odnowienia nieznany"
             )
 
-            log(
-                "GEMINI",
-                "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
-            )
+            # v459: MAIN moze wykonywac sam (RUN), wiec blokada Gemini
+            # nie zatrzymuje programu. Czekamy dopiero wtedy, gdy MAIN
+            # mimo faktu dwa razy z rzedu zlecil TASK.
+            if globals().get("_taski_przy_blokadzie", 0) < 2:
 
-            last_result = {
-                "status":
-                    "GEMINI_QUOTA_EXHAUSTED",
-                "message":
-                    "Limit wykonawcy wyczerpany — " + _kiedy
-                    + ". Nowy klucz API można dodać do "
-                    + str(GEMINI_KEYS_DIR) + "."
-            }
+                # Po RUN MAIN pracuje na wynikach swoich akcji — nie
+                # zastepujemy ich komunikatem o blokadzie (o niej juz wie).
+                if (
+                    isinstance(last_result, dict)
+                    and last_result.get("executed_by") == "main_run"
+                ):
+                    pass
+
+                elif (
+                    not isinstance(last_result, dict)
+                    or last_result.get("status") != "GEMINI_QUOTA_EXHAUSTED"
+                ):
+                    log(
+                        "GEMINI",
+                        "WYKONAWCA ZABLOKOWANY — " + _kiedy
+                        + ". MAIN może wykonywać sam (RUN)."
+                    )
+
+                    last_result = {
+                        "status": "GEMINI_QUOTA_EXHAUSTED",
+                        "message": (
+                            "Limit wykonawcy wyczerpany — " + _kiedy
+                            + ". RUN wykonuje akcje bez Gemini. Nowy "
+                            "klucz API można dodać do "
+                            + str(GEMINI_KEYS_DIR) + "."
+                        )
+                    }
+
+            else:
+
+                log(
+                    "GEMINI",
+                    "WYKONAWCA ZABLOKOWANY — " + _kiedy + ". Czekam."
+                )
+
+                last_result = {
+                    "status":
+                        "GEMINI_QUOTA_EXHAUSTED",
+                    "message":
+                        "Limit wykonawcy wyczerpany — " + _kiedy
+                        + ". Nowy klucz API można dodać do "
+                        + str(GEMINI_KEYS_DIR) + "."
+                }
 
             # v450: bez lokalnego "import time" — robilo z `time`
             # zmienna lokalna CALEGO run_agent, wiec time.sleep(1) nizej
             # (Gemini zablokowany przy nowym zadaniu) rzucilby
             # UnboundLocalError, gdyby ta galaz nie przeszla wczesniej.
-            time.sleep(30)
+                time.sleep(30)
 
-            continue
+                continue
 
         # v266: to samo dla awarii KONTA DeepSeek. Bezpiecznik juz
         # istnial i dzialal poprawnie, ale odczekiwal DOPIERO przy
@@ -39084,6 +52292,10 @@ def run_agent(goal):
                 status=str(_powod_przepadku)
             )
 
+        # v480k: nowa wersja z GitHuba — wgrywamy na granicy krokow.
+        if _nowa_wersja["commit"]:
+            _przeladuj_po_aktualizacji(step, last_result, signatures)
+
         step += 1
 
         ustaw_krok(step)
@@ -39097,6 +52309,22 @@ def run_agent(goal):
             + " ---"
         )
         dopisz_do_przebiegu("\n\n--- KROK " + str(step) + " ---")
+
+        _poczta_uzytkownika(step)
+
+        try:
+            _linie_tla_zmienione.clear()
+            for _z in _raport_z_tla():
+                if _z in _linie_tla_zmienione:
+                    log("TERMUX", short(_z, 300))
+                _pending_team_warnings.append(_z)
+        except Exception as _e:
+            log("TERMUX", "Nie sprawdziłem procesów w tle: " + str(_e))
+
+        # v480bq: Sedzia zdyskwalifikowal druzyne 1 — nowy zespol od tego kroku.
+        if wykonaj_dyskwalifikacje_1():
+            del _python_written_files[:]
+            last_result = {"status": "START", "goal": goal}
 
         # Wykryj nowe/zmienione narzędzia w custom_tools/ — tanie
         # (stat() na plikach), gdy nic się nie zmieniło.
@@ -39156,30 +52384,79 @@ def run_agent(goal):
         # Wcześniej każda z tych 3 funkcji pytała urządzenie o
         # DOKŁADNIE ten sam stan osobno (do 4 żywych zapytań ADB/CDP
         # na jeden krok agenta).
-        step_chrome_text = chrome_summary()
+        # v480ct: stan na poczatku kroku nie budzi Chrome'a (patrz
+        # ensure_chrome_cdp_forward) — budzi go dopiero narzedzie chrome_.
+        # v480dy: bieg 2026-10-24 11:06 (krok 137) — co krok proba CDP do
+        # Chrome'a, ktorego Android zamrozil w tle, i w logu "CDP AUTO
+        # ERROR", choc nikt Chrome'a nie uzywal. Chrome sprawdzamy na
+        # poczatku kroku tylko po kroku z narzedziami chrome_; gdy rola po
+        # niego siegnie, narzedzie samo go obudzi (v480ct).
+        if _dzialalo_na(last_result, "chrome_"):
+            step_chrome_text = chrome_summary(budz=False)
+        else:
+            step_chrome_text = (
+                "(Chrome nie był sprawdzany na początku kroku — narzędzia "
+                "chrome_ same go obudzą, gdy będą potrzebne.)"
+            )
         step_android_text = android_summary()
 
         # v432: patrz _tekst_pythona().
         _znane_dodaj(step_chrome_text)
         _znane_dodaj(step_android_text)
 
-        log(
-            "STATE",
-            "Chrome: "
-            + short(
-                step_chrome_text,
-                900
+        # v480bv: uzytkownik (2026-10-16): karty Chrome uzytkownika nie
+        # trafiaja do logu w kazdym kroku — tylko gdy zespol w ostatnim
+        # kroku uzywal przegladarki. (Do DeepSeeka szly i tak tylko wtedy,
+        # patrz _dzialalo_na() przy budowaniu wiadomosci.)
+        if _dzialalo_na(last_result, "chrome_"):
+            log(
+                "STATE",
+                "Chrome: "
+                + short(
+                    step_chrome_text,
+                    900
+                )
             )
-        )
 
-        log(
-            "STATE",
-            "Android: "
-            + short(
-                step_android_text,
-                900
+        # v480du: patrz _sprawdz_procesor_druzyny().
+        try:
+            _o_cpu = _sprawdz_procesor_druzyny()
+        except Exception:
+            _o_cpu = ""
+        if _o_cpu:
+            log("RYWALIZACJA", _o_cpu)
+            _pending_team_warnings.append(_o_cpu)
+
+        # v480dt: prywatnosc, jak przy Chrome wyzej. Bieg 2026-10-23
+        # 16:26: na wierzchu byla inna aplikacja uzytkownika i caly
+        # tekst jej ekranu (prywatne rozmowy) szedl do logu, a log na
+        # telefon (AEL-MINI). Pelny ekran tylko po kroku, w ktorym
+        # zespol sam uzywal narzedzi android_; inaczej sama nazwa
+        # aplikacji na wierzchu (pierwsza linia).
+        _stan_androida = str(step_android_text or "")
+        if not _dzialalo_na(last_result, "android_"):
+            _stan_androida = _stan_androida.strip().split("\n", 1)[0]
+            if not _stan_androida.startswith("Na wierzchu"):
+                _stan_androida = (
+                    "(treści ekranu nie zapisuję — zespół nie używał "
+                    "narzędzi android_)"
+                )
+        # v480fo: bez szumu — sama nazwa aplikacji na wierzchu idzie do
+        # logu tylko, gdy sie zmienila. Bieg 2026-10-25 19:09: 66 razy ta
+        # sama linia "Na wierzchu jest teraz: ..." przez caly bieg.
+        if (
+            _dzialalo_na(last_result, "android_")
+            or _stan_androida != globals().get("_ostatni_stan_androida_w_logu")
+        ):
+            globals()["_ostatni_stan_androida_w_logu"] = _stan_androida
+            log(
+                "STATE",
+                "Android: "
+                + short(
+                    _stan_androida,
+                    900
+                )
             )
-        )
 
         # ------------------------------------------------------
         # POSTĘP CELU — co 5 kroków, żeby nie dokładać kolejnego
@@ -39191,8 +52468,16 @@ def run_agent(goal):
         # v350: zegarek zostaje (to pasek postepu dla uzytkownika,
         # nie budzenie roli do rozmowy), ale MAIN moze poprosic o to
         # takze poza kolejka — patrz _o_kogo_prosi_main().
+        # v480as: w rywalizacji co 5 krokow ocenia Sedzia (obie druzyny);
+        # Ela odzywa sie wtedy tylko na zawolanie MAIN-a.
+        # v480ay: kazda druzyna na swoim kroku 5, 10… dostaje ocene Sedziego.
+        # v480cq: ocena co 15 minut, a druzyna dostaje najnowsza na swoim
+        # najblizszym kroku — patrz odbierz_ocene_sedziego().
+        if _DRUZYNA:
+            odbierz_ocene_sedziego(step)
+
         if (
-            step % 5 == 0
+            (step % 5 == 0 and not _DRUZYNA)
             or "PROGRESS_ESTIMATOR" in _o_kogo_prosi_main(
                 _main_decision_for_team
             )
@@ -39251,16 +52536,47 @@ def run_agent(goal):
         # MAIN
         # ------------------------------------------------------
 
-        raw = main_decide(
-            goal,
-            step,
-            team,
-            last_result,
-            step_chrome_text,
-            step_android_text
-        )
+        if _ask_przeniesione:
 
-        decision = parse_json(raw)
+            # v458: najpierw pytania z poprzedniego kroku — MAIN dostaje
+            # odpowiedzi razem z tym, co sie stalo, i wtedy decyduje.
+            _pyt = list(_ask_przeniesione)
+            del _ask_przeniesione[:]
+
+            raw = json.dumps(_pyt, ensure_ascii=False)
+            decision = dict(_pyt[0])
+
+        else:
+
+            raw = main_decide(
+                goal,
+                step,
+                team,
+                last_result,
+                step_chrome_text,
+                step_android_text
+            )
+
+            decision = parse_json(raw)
+
+        # v480bz: obiekt bez typu decyzji to nie decyzja. Bieg 2026-10-16
+        # 20:07, krok 40: MAIN odpisal podsumowaniem w markdownie, w ktorym
+        # stal przyklad {"wynik": 91.3782, "lepiej": "wiecej"} — parser
+        # wzial go za decyzje i krok skonczyl sie UNKNOWN_DECISION zamiast
+        # prosba o poprawny JSON.
+        decision = _tylko_decyzja(decision)
+
+        _pominiete = _pominiete_decyzje(raw, decision) if decision else []
+        if _pominiete:
+            _o_pominietych = (
+                "W odpowiedzi MAIN-a z kroku " + str(step) + " było "
+                "kilka decyzji; program wykonał jedną ("
+                + str(decision.get("type")) + "), a pominął: "
+                + ", ".join(_pominiete) + ". Jedna odpowiedź = jedna "
+                "decyzja — pominiętą trzeba wysłać w osobnej odpowiedzi."
+            )
+            log("MAIN", _o_pominietych)
+            _pending_team_warnings.append(_o_pominietych)
 
         if isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -39274,6 +52590,30 @@ def run_agent(goal):
                 step_android_text,
                 raw=raw
             )
+
+        # v458: pytania ponad limit — na poczatek nastepnego kroku.
+        if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
+
+            _ask_przeniesione[:] = list(decision.get("pytania") or [])
+
+            _kogo = ", ".join(
+                _ROLE_DISPLAY_NAME.get(
+                    _rola_ask(q.get("ask_role")),
+                    str(q.get("ask_role") or "")
+                )
+                for q in _ask_przeniesione
+            )
+
+            last_result = {
+                "status": "ASK_PRZENIESIONE",
+                "message": (
+                    "W kroku " + str(step) + " MAIN zadał już "
+                    + str(_MAIN_ASK_MAX) + " pytań; pytanie do " + _kogo
+                    + " poszło na początek kroku " + str(step + 1) + "."
+                )
+            }
+
+            continue
 
         if decision is not None:
 
@@ -39310,6 +52650,32 @@ def run_agent(goal):
 
             continue
 
+        # v480dc: blad wysylki (limit DeepSeeka, siec, zerwana rozmowa)
+        # to tez brak odpowiedzi, nie zly JSON. Bieg 2026-10-21 18:14,
+        # krok 23: po "rate_limit_reached" MAIN dwa razy dostal
+        # "Poprzednia odpowiedź nie była poprawnym JSON." — a zadnej
+        # odpowiedzi nie napisal.
+        if decision is None and str(raw or "").lstrip().startswith(
+            "DEEPSEEK ERROR ["
+        ):
+
+            log(
+                "MAIN",
+                "Wiadomość do MAIN-a nie doszła (" + short(str(raw), 160)
+                + ") — to nie jest zły JSON. Nie proszę o poprawkę."
+            )
+
+            last_result = {
+                "status": "MAIN_BEZ_ODPOWIEDZI",
+                "message": (
+                    "W kroku " + str(step) + " wiadomość do MAIN-a nie "
+                    "doszła przez błąd po stronie DeepSeeka ("
+                    + short(str(raw), 160) + ")."
+                )
+            }
+
+            continue
+
         if decision is None:
 
             log(
@@ -39331,13 +52697,45 @@ def run_agent(goal):
             # tozsamosci.
             repair = deepseek(
                 "MAIN",
-                "Poprzednia odpowiedź nie była poprawnym JSON."
+                "Poprzednia odpowiedź nie była poprawnym JSON"
+                + _gdzie_psuje_sie_json(raw) + "."
             )
 
-            decision = parse_json(
+            decision = _tylko_decyzja(parse_json(
                 repair
-            )
+            ))
 
+            # v480bz: poprawiona odpowiedz bywa pytaniem do zespolu.
+            # Bieg 2026-10-16 21:13 (druzyna 2, krok 9): po bledzie sieci
+            # MAIN odpisal dwoma ASK-ami, a krok skonczyl sie
+            # UNKNOWN_DECISION, bo ASK z poprawki nie szedl do zespolu.
+            if isinstance(decision, dict) and decision.get("type") == "ASK":
+
+                decision = _handle_main_ask(
+                    decision,
+                    goal,
+                    step,
+                    team,
+                    last_result,
+                    step_chrome_text,
+                    step_android_text,
+                    raw=repair
+                )
+
+            if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
+
+                _ask_przeniesione[:] = list(decision.get("pytania") or [])
+
+                last_result = {
+                    "status": "ASK_PRZENIESIONE",
+                    "message": (
+                        "W kroku " + str(step) + " MAIN zadał już "
+                        + str(_MAIN_ASK_MAX) + " pytań; reszta pytań "
+                        "poszła na początek kroku " + str(step + 1) + "."
+                    )
+                }
+
+                continue
 
             if decision is not None:
 
@@ -39527,14 +52925,66 @@ def run_agent(goal):
             # i log mowil "MAIN wskazał do zapisu null | tee…". Pole
             # jest puste; plik kladzie droga z v428/v429 — zadanie
             # uruchamia plik, ktorego nie ma.
+            # v480aw: "sciezka\n\nkod" — pierwsza linia to sciezka, reszta
+            # to kod do niej. Bieg 2026-10-14 19:15 (druzyna 2, krok 6):
+            # MAIN dal "~/MAIN_2/curriculum_race.py\n\n#!/usr/bin/env
+            # python3…" (6286 znakow), pole poszlo do kosza, a na dysk
+            # trafil 454-znakowy szkic Bartka z kroku 4, i to w ~.
+            _kod_z_pola = ""
             if "\n" in write_target:
-                log(
-                    "MAIN",
-                    "W polu write_engineer_code_to był kod ("
-                    + str(len(write_target)) + " znaków), nie ścieżka "
-                    "— traktuję pole jako puste."
-                )
-                write_target = ""
+                _pierwsza, _, _reszta = write_target.partition("\n")
+                _pierwsza = _pierwsza.strip().strip("`").strip()
+                _reszta = _reszta.strip("\n")
+                _plot = re.match(r"^```[\w+-]*\n(.*?)\n?```\s*$", _reszta.strip(), re.S)
+                if _plot:
+                    _reszta = _plot.group(1)
+                if (
+                    re.fullmatch(r"[~/.\w-][\w~./-]*\.\w{1,8}", _pierwsza)
+                    and _reszta.strip()
+                ):
+                    log(
+                        "MAIN",
+                        "W polu write_engineer_code_to była ścieżka "
+                        + _pierwsza + " i kod (" + str(len(_reszta))
+                        + " znaków) — kładę ten kod pod tę ścieżkę."
+                    )
+                    write_target = _pierwsza
+                    _kod_z_pola = _reszta.rstrip() + "\n"
+                else:
+                    log(
+                        "MAIN",
+                        "W polu write_engineer_code_to był kod ("
+                        + str(len(write_target)) + " znaków), nie ścieżka "
+                        "— traktuję pole jako puste."
+                    )
+                    write_target = ""
+
+            # v480ft: w polu katalog ("~/MAIN_1/src/") — kladziemy tam
+            # kazdy plik, ktory ktos z zespolu podal pod naglowkiem z sama
+            # nazwa. Bieg 2026-10-25 22:35, krok 3: szesc plikow Bartka,
+            # pole "~/MAIN_1/src/", a krok skonczyl sie bledem "to katalog".
+            if write_target and not _kod_z_pola:
+                try:
+                    _kat = _resolve_home_relative_path(write_target)
+                    _jest_kat = write_target.rstrip().endswith(("/", "\\")) or _kat.is_dir()
+                except Exception:
+                    _jest_kat = False
+                if _jest_kat:
+                    _zap, _byly = _poloz_pliki_w_katalogu(_kat, team)
+                    # v480fw: nikt jeszcze nie napisal kodu do tego katalogu
+                    # — najpierw Bartek, jego nowe pliki program kladzie sam.
+                    if not (_zap or _byly):
+                        _zap = list(_zlec_kod_bartkowi(task_text, [write_target], team, step) or [])
+                        _z2, _byly = _poloz_pliki_w_katalogu(_kat, team)
+                        _zap += [x for x in _z2 if x.split(" ")[0] not in " ".join(_zap)]
+                    if _zap or _byly:
+                        _fakt = (
+                            "Do " + _sciezka_od_domu(str(_kat)) + "/ program położył pliki z wypowiedzi zespołu: "
+                            + "; ".join(_zap + _byly) + ". Kod jest w plikach — można je uruchomić."
+                        )
+                        log("MAIN", _fakt)
+                        task_text += "\n\n" + _fakt
+                        write_target = ""
 
             # Bartek odzywa sie w nastepnym kroku, gdy MAIN wlasnie
             # poprosil o kod — patrz consult_team().
@@ -39713,6 +53163,7 @@ def run_agent(goal):
             # gdy nie ma go w ŻADNYM z tych dwóch miejsc.
             if (
                 write_target
+                and not _kod_z_pola
                 and Path(str(write_target)).name
                 not in str(team.get("engineer_full", ""))
                 and Path(str(write_target)).name not in str(task_text)
@@ -39762,6 +53213,11 @@ def run_agent(goal):
                     if _kto not in _autorzy_patcha:
                         _autorzy_patcha.append(_kto)
 
+                # v480aw: MAIN podal caly kod w polu — ten kod idzie na
+                # dysk, bez nakladania czyichs poprawek.
+                if _kod_z_pola:
+                    _autorzy_patcha = []
+
                 _patch_wynik = {"applied": False, "reason": ""}
 
                 for _kto in _autorzy_patcha:
@@ -39806,7 +53262,7 @@ def run_agent(goal):
                         _ROLE_DISPLAY_NAME.get(_patch_wynik.get("autor"), "Ktoś") + ": poprawka SZUKAJ/ZAMIEŃ naniesiona na " + _patch_wynik["path"] + " (" + str(_patch_wynik["size_before"]) + " B -> " + str(_patch_wynik["size_after"]) + " B, backup: " + Path(_patch_wynik["backup"]).name + ")."
                     )
 
-                elif any(
+                elif not _kod_z_pola and any(
                     extract_search_replace_blocks(_t)
                     for _t in (
                         [team.get("engineer_full", "")]
@@ -39858,10 +53314,10 @@ def run_agent(goal):
                 engineer_code = (
                     None
                     if _patch_wynik.get("applied")
-                    else _kod_z_wypowiedzi(
+                    else (_kod_z_pola or _kod_z_wypowiedzi(
                         team.get("engineer_full", ""),
                         write_target
-                    )
+                    ))
                 )
 
                 # v293: Bartek milczal w tym kroku (nikt go nie
@@ -39879,6 +53335,42 @@ def run_agent(goal):
                     if (engineer_code or _patch_wynik.get("applied"))
                     else _kod_autora_dla(write_target)
                 )
+
+                # v480cz: kod z pamieci nie zastepuje pliku duzo
+                # wiekszego. Bieg 2026-10-21 17:11, kroki 4 i 8: ~400 B
+                # fragmentu Ani/Tomka (cytat do dyskusji) wjechalo w
+                # 13 KB h2_modular.py. Fragment z pamieci to nie decyzja
+                # autora o skroceniu pliku — wtedy pisze Bartek.
+                if _z_pamieci:
+                    try:
+                        _na_dysku = _resolve_home_relative_path(
+                            write_target
+                        )
+                        _rozmiar_dysku = (
+                            _na_dysku.stat().st_size
+                            if _na_dysku.is_file() else 0
+                        )
+                    except Exception:
+                        _rozmiar_dysku = 0
+                    _rozmiar_pamieci = len(
+                        str(_z_pamieci[0]).encode("utf-8")
+                    )
+                    if (
+                        _rozmiar_dysku > 200
+                        and _rozmiar_pamieci < _rozmiar_dysku * 0.4
+                    ):
+                        log(
+                            "MAIN",
+                            Path(str(write_target)).name + ": kod, który "
+                            + _kto_to_napisal(_z_pamieci[1])
+                            + " napisał w kroku " + str(_z_pamieci[2])
+                            + ", ma " + str(_rozmiar_pamieci)
+                            + " B, a plik na dysku "
+                            + str(_rozmiar_dysku) + " B — to wygląda "
+                            "na fragment, nie na cały plik. Plik "
+                            "zostaje, proszę Bartka o kod."
+                        )
+                        _z_pamieci = None
 
                 if _z_pamieci:
 
@@ -39900,11 +53392,23 @@ def run_agent(goal):
             # tym kroku nie pisal kodu, krok przepadl.
             if write_target and not engineer_code:
 
-                _zlec_kod_bartkowi(task_text, [write_target], team, step)
+                _polozone_bartka = _zlec_kod_bartkowi(task_text, [write_target], team, step)
 
                 engineer_code = _kod_z_wypowiedzi(
                     team.get("engineer_full", ""), write_target
                 )
+
+                # v480gl2: plik program polozyl juz po drodze (Bartek dal go
+                # w rundzie URUCHOM, a koncowa odpowiedz byla bez bloku) —
+                # bieg 2026-10-27 00:13: "położone: kn_higher.py", a zaraz
+                # potem ENGINEER_CODE_MISSING dla kn_higher.py.
+                if not engineer_code and _polozone_bartka:
+                    try:
+                        _cel = Path(os.path.expanduser(str(write_target)))
+                        if any(str(y).startswith(_cel.name + " ") for y in _polozone_bartka) and _cel.is_file():
+                            engineer_code = _cel.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        pass
 
             if write_target:
 
@@ -39993,6 +53497,50 @@ def run_agent(goal):
                 target_path = _resolve_home_relative_path(
                     write_target
                 )
+
+                # v480ft: katalog sprawdzamy od razu — wczesniej szly
+                # najpierw mylace "wyglada jak komendy… zapisuje" i "nowy kod
+                # ma 280 B, na dysku bylo 3440 B" (rozmiar katalogu).
+                # v358: sciezka wskazujaca KATALOG, nie plik.
+                #
+                # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16
+                # 18:24, krok 2). MAIN podal
+                # write_engineer_code_to = "~/twilio_mvp/" — z
+                # ukosnikiem na koncu, czyli katalog, ktory Gemini
+                # zalozylo krok wczesniej. Probowalismy otworzyc go do
+                # zapisu i oddalismy zespolowi surowy wyjatek Pythona:
+                #
+                #   ENGINEER_CODE_WRITE_ERROR: [Errno 21] Is a
+                #   directory: '/data/.../home/twilio_mvp'
+                #
+                # Ola rozszyfrowala to poprawnie ("sciezka wskazala
+                # folder, nie plik"), ale krok juz przepadl, a ona
+                # sama w tej samej wiadomosci kazala uzytkownikowi
+                # wklepac plik recznie przez nano. Mowimy to wiec
+                # sami, zanim sprobujemy zapisac.
+                if str(write_target).rstrip().endswith(("/", "\\")) \
+                        or target_path.is_dir():
+
+                    last_result = {
+                        "status":
+                            "ENGINEER_CODE_WRITE_ERROR",
+                        "error": (
+                            str(write_target)
+                            + " wskazuje katalog, nie plik"
+                        ),
+                        "path": write_target,
+                        "message": (
+                            str(write_target)
+                            + " to katalog, a nie plik — nie mam "
+                            "gdzie zapisać tej treści. Podaj, jak "
+                            "ma się nazywać plik w tym katalogu "
+                            "(np. "
+                            + str(write_target).rstrip("/\\")
+                            + "/app.py) i zlecę zapis jeszcze raz."
+                        )
+                    }
+
+                    continue
 
                 # --------------------------------------------------
                 # BEZPIECZEŃSTWO: blok kodu może być SKRYPTEM DO
@@ -40133,61 +53681,74 @@ def run_agent(goal):
                         engineer_code.encode("utf-8")
                     )
 
+                    # v454: bylo "nie nadpisalem, krok przepada". Autor
+                    # ma prawo skrocic wlasny plik; Python jest rekami.
+                    # Stara wersja zostaje obok jako kopia, a zespol
+                    # dostaje liczby — z nich widac, czy to skrot, czy
+                    # urwany fragment.
                     if (
                         existing_size > 200
                         and new_size < existing_size * 0.4
                     ):
 
-                        last_result = {
-                            "status":
-                                "ENGINEER_CODE_LOOKS_LIKE_PARTIAL_FIX",
-                            "message": (
-                                "Nie nadpisałem " + str(target_path)
-                                + " — na dysku ma " + str(existing_size)
-                                + " B, nowy blok " + str(new_size)
-                                + " B."
-                            )
-                        }
+                        _kopia = target_path.parent / ".kopie" / (
+                            target_path.name + ".bak_"
+                            + datetime.now().strftime("%Y%m%d_%H%M%S")
+                        )
 
-                        continue
+                        try:
+                            _kopia.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(str(target_path), str(_kopia))
+                        except Exception:
+                            _kopia = None
 
-                # v358: sciezka wskazujaca KATALOG, nie plik.
-                #
-                # ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-09-16
-                # 18:24, krok 2). MAIN podal
-                # write_engineer_code_to = "~/twilio_mvp/" — z
-                # ukosnikiem na koncu, czyli katalog, ktory Gemini
-                # zalozylo krok wczesniej. Probowalismy otworzyc go do
-                # zapisu i oddalismy zespolowi surowy wyjatek Pythona:
-                #
-                #   ENGINEER_CODE_WRITE_ERROR: [Errno 21] Is a
-                #   directory: '/data/.../home/twilio_mvp'
-                #
-                # Ola rozszyfrowala to poprawnie ("sciezka wskazala
-                # folder, nie plik"), ale krok juz przepadl, a ona
-                # sama w tej samej wiadomosci kazala uzytkownikowi
-                # wklepac plik recznie przez nano. Mowimy to wiec
-                # sami, zanim sprobujemy zapisac.
-                if str(write_target).rstrip().endswith(("/", "\\")) \
-                        or target_path.is_dir():
+                        log(
+                            "MAIN",
+                            target_path.name + ": nowy kod ma "
+                            + str(new_size) + " B, na dysku było "
+                            + str(existing_size) + " B — zapisuję, "
+                            + ("stara wersja: .kopie/" + _kopia.name
+                               if _kopia else "bez kopii (nie udało się)")
+                            + "."
+                        )
+
+                        _pending_team_warnings.append(
+                            _sciezka_od_domu(str(target_path))
+                            + ": nowa wersja ma " + str(new_size)
+                            + " B, poprzednia miała " + str(existing_size)
+                            + " B"
+                            + (" (kopia: .kopie/" + _kopia.name + ")" if _kopia else "")
+                            + "."
+                        )
+
+                _poprawiony = _popraw_skladnie_u_autora(
+                    target_path, engineer_code, team, step
+                )
+
+                if _poprawiony:
+                    engineer_code = _poprawiony
+
+                _zly = _zepsuty_zastepuje_dzialajacy(
+                    target_path, engineer_code
+                )
+
+                if _zly:
+
+                    _msg = (
+                        "Nie nadpisałem " + target_path.name + " — nowy "
+                        "kod się nie kompiluje (" + _zly + "), a plik na "
+                        "dysku działa, więc zostaje. Wygląda na urwany "
+                        "albo niepełny kod: autor musi podać cały plik "
+                        "albo poprawkę fragmentu."
+                    )
+
+                    log("MAIN", _msg)
 
                     last_result = {
-                        "status":
-                            "ENGINEER_CODE_WRITE_ERROR",
-                        "error": (
-                            str(write_target)
-                            + " wskazuje katalog, nie plik"
-                        ),
+                        "status": "ENGINEER_CODE_WRITE_ERROR",
+                        "error": "KOD_NIE_KOMPILUJE_SIE: " + _zly,
                         "path": write_target,
-                        "message": (
-                            str(write_target)
-                            + " to katalog, a nie plik — nie mam "
-                            "gdzie zapisać tej treści. Podaj, jak "
-                            "ma się nazywać plik w tym katalogu "
-                            "(np. "
-                            + str(write_target).rstrip("/\\")
-                            + "/app.py) i zlecę zapis jeszcze raz."
-                        )
+                        "message": _msg
                     }
 
                     continue
@@ -40439,11 +54000,16 @@ def run_agent(goal):
                     "Nie tworzę nowego taska."
                 )
 
+                globals()["_taski_przy_blokadzie"] = (
+                    globals().get("_taski_przy_blokadzie", 0) + 1
+                )
+
                 last_result = {
                     "status":
                         "GEMINI_QUOTA_EXHAUSTED",
                     "message":
-                        "Brak wykonawcy."
+                        "Brak wykonawcy — to zadanie nie poszło. RUN "
+                        "wykonuje akcje bez Gemini."
                 }
 
                 # Nie wpadaj w pętlę.
@@ -40494,6 +54060,55 @@ def run_agent(goal):
             continue
 
         # ------------------------------------------------------
+        # RUN — MAIN wykonuje sam (v459)
+        # ------------------------------------------------------
+
+        if dtype == "RUN":
+
+            _odp_maina = str(globals().get("_ostatnia_odpowiedz_maina") or "")
+            globals()["_ostatnia_odpowiedz_maina"] = ""
+
+            last_result = _wykonaj_akcje_maina(decision, step)
+            globals()["_taski_przy_blokadzie"] = 0
+
+            # v480cl: bieg 2026-10-17 22:31 (druzyna 2) — MAIN odpisal
+            # RUN-em i trzema ASK naraz (Bartek, Igor, Tomek). Wykonal
+            # sie sam RUN, pytania przepadly bez slowa, a MAIN pisal
+            # dalej, ze "Igor dostanie pytanie o swiezy pomysl". Pytania
+            # z tej samej odpowiedzi ida teraz na poczatek nastepnego
+            # kroku, razem z wynikami RUN — jak przy limicie ASK (v458).
+            _pytania_obok = (
+                _pytania_ask(_odp_maina) if ('"RUN"' in _odp_maina or "DSML" in _odp_maina) else []
+            )
+            if _pytania_obok and isinstance(last_result, dict):
+                _ask_przeniesione[:] = _pytania_obok
+                log(
+                    "MAIN",
+                    "Obok RUN były pytania (" + ", ".join(
+                        _ROLE_DISPLAY_NAME.get(
+                            _rola_ask(q.get("ask_role")),
+                            str(q.get("ask_role") or "")
+                        ) for q in _pytania_obok
+                    ) + ") — idą na początek następnego kroku."
+                )
+
+            _w_kolko = _zauwaz_powtarzane_ruchy(last_result)
+
+            if _w_kolko:
+                log("MAIN", _w_kolko)
+                _pending_team_warnings.append(_w_kolko)
+
+            sep = "─" * 60
+            print()
+            print(sep)
+            print("  WYKONAŁ: Python na polecenie MAIN-a (RUN)")
+            print("  AKCJE: " + str(last_result.get("tool_calls")) + "  STATUS: " + str(last_result.get("status")))
+            print(sep)
+            print()
+
+            continue
+
+        # ------------------------------------------------------
         # DONE
         # ------------------------------------------------------
 
@@ -40501,15 +54116,100 @@ def run_agent(goal):
 
             reason = decision.get("reason") or ""
 
+            # v474: bieg 2026-10-10 23:03 (cel: MISJA RSI — "kontynuuje
+            # prace bez koniecznosci otrzymywania nowego polecenia po
+            # kazdym etapie"). W kroku 33 MAIN dal DONE, bo zespol
+            # "zamknal sesje" — choc Marek w tej samej rozmowie ocenil
+            # postep na 5% i level_3_not_started. Program sie zakonczyl.
+            # Tak jak przy FAILED (v466): zanim DONE zamknie bieg, Tomek
+            # i Marek mowia, czy cel uzytkownika jest zrobiony. Gdy zaden
+            # nie mowi tego wprost — cel trwa. Bez limitu odbic: program
+            # chodzi, poki cel nie jest zrobiony (decyzja uzytkownika).
+            _done_odrzucone = int(globals().get("_done_odrzucone") or 0)
+
+            if True:
+
+                _glosy = []
+                _ktos_mowi_zrobione = False
+                _ktos_mowi_niezrobione = False
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Uważam, że cel użytkownika jest zrobiony, i "
+                            "chcę zakończyć bieg (DONE). Powód:\n"
+                            + str(reason)
+                            + "\n\nPo DONE program zapisze raport dla "
+                            "użytkownika i działa dalej z tym samym celem — "
+                            "program zamyka tylko użytkownik. Jeśli cel użytkownika "
+                            "(cały, tak jak go napisał) jest zrobiony, "
+                            "napisz wprost: CEL ZROBIONY. Jeśli nie — "
+                            "napisz, czego brakuje i co robimy dalej."
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O DONE MAIN-A: " + short(_t, 300))
+                            if _mowi_cel_zrobiony(_t):
+                                _ktos_mowi_zrobione = True
+                            else:
+                                # v480bh: bieg 2026-10-14 22:17 — Tomek
+                                # "CEL ZROBIONY — dla tej sesji", Marek "Nie
+                                # zgadzam sie… Tego nie mamy" bez slow "cel
+                                # nie jest zrobiony", i bieg sie zakonczyl.
+                                # Kto nie potwierdza wprost, ten mowi "nie".
+                                _ktos_mowi_niezrobione = True
+                            if re.search(
+                                r"\bcel\W+(?:\w+\W+){0,2}nie\W+(?:jest\W+)?zrobiony",
+                                " ".join(_t.lower().split())
+                            ):
+                                _ktos_mowi_niezrobione = True
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o DONE: " + str(_e))
+
+                # Jeden "nie" wystarcza, zeby cel trwal.
+                if _glosy and (_ktos_mowi_niezrobione or not _ktos_mowi_zrobione):
+                    globals()["_done_odrzucone"] = _done_odrzucone + 1
+                    log(
+                        "MAIN",
+                        "Zespół nie potwierdza, że cel jest zrobiony — cel "
+                        "trwa (DONE nie zamyka biegu, odbicie "
+                        + str(_done_odrzucone + 1) + ")."
+                    )
+                    last_result = {
+                        "status": "CEL_NIE_JEST_ZROBIONY",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zakończyć "
+                            "bieg (DONE). Nic się w tym kroku nie wykonało. "
+                            "Tomek i Marek nie potwierdzili, że cel "
+                            "użytkownika jest zrobiony — ich odpowiedzi "
+                            "niżej. Program dalej działa, cel trwa."
+                            + _zdanie_o_pliku_dla_uzytkownika()
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
             # v432: DONE nalezy do MAIN-a. Bez "W celu pada jeszcze…"
             # (zgadywane po slowach celu) i bez odrzucania DONE przez
             # "weryfikacje fizyczna" (szukala FINAL_OK i plikow z celu).
             # Wynik sprawdzenia zostaje tylko w zapisie konca celu.
+            #
+            # v480cr: uzytkownik (2026-10-19, po falszywym DONE o 05:01):
+            # druzyny "nie moga w ogole zamykac programu". DONE zapisuje
+            # raport dla uzytkownika i bieg trwa z tym samym celem —
+            # program zamyka tylko uzytkownik.
             verification = verify_final(goal)
 
             print()
             print("=" * 72)
-            print("CEL ZAKOŃCZONY")
+            print("ZESPÓŁ UZNAŁ CEL ZA ZROBIONY — program działa dalej")
             print("=" * 72)
             print(
                 short(
@@ -40518,32 +54218,39 @@ def run_agent(goal):
                 )
             )
 
-            write_json(
-                LAST_RESULT_FILE,
-                {
-                    "status":
-                        "DONE",
-                    "goal":
-                        goal,
-                    "reason":
-                        reason,
-                    "step":
-                        step,
-                    "verification":
-                        verification["checks"]
-                }
-            )
+            _raporty = read_json(_PLIK_RAPORTOW_DONE, [])
+            if not isinstance(_raporty, list):
+                _raporty = []
+            _raporty.append({
+                "czas": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "goal": goal,
+                "reason": reason,
+                "step": step,
+                "glosy_zespolu": "\n\n".join(_glosy),
+                "verification": verification["checks"]
+            })
+            write_json(_PLIK_RAPORTOW_DONE, _raporty)
 
-            # Sesja faktycznie i fizycznie potwierdzona jako
-            # skończona — nie ma czego wznawiać.
-            try:
-                GOAL_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
+            log(
+                "MAIN",
+                "Zespół uznał cel za zrobiony (DONE) — raport zapisany w "
+                + str(_PLIK_RAPORTOW_DONE) + ". Program działa dalej; "
+                "zamyka go tylko użytkownik."
+            )
 
             pokaz_podsumowanie_biegu()
 
-            return
+            last_result = {
+                "status": "DONE_ZAPISANY_PROGRAM_DZIALA",
+                "message": (
+                    "W kroku " + str(step) + " MAIN dał DONE, a Tomek i "
+                    "Marek potwierdzili cel. Raport jest zapisany dla "
+                    "użytkownika. Programu nie zamyka zespół, tylko "
+                    "użytkownik — więc bieg trwa dalej z tym samym celem."
+                )
+            }
+
+            continue
 
         # ------------------------------------------------------
         # NEED_USER_LOGIN
@@ -40557,6 +54264,126 @@ def run_agent(goal):
         # też przy alternatywie po FAILED niżej.
 
         if dtype == "NEED_USER_LOGIN":
+
+            # v480: bieg 2026-10-11 11:07, kroki 10 i 20. MAIN uzyl
+            # NEED_USER_LOGIN bez zadnej strony, zeby zapytac
+            # uzytkownika o decyzje i dane ("POTRZEBUJEMY DECYZJI
+            # UZYTKOWNIKA ... dostarcz 200+ rozmow"). Uzytkownik
+            # odpisal: "Masz dostep do przegladarki Chrome, Termuxa i
+            # narzedzi systemowych. Sprawdz, czy mozesz sam" — i zespol
+            # zrobil to sam. Wiec gdy to nie jest logowanie na stronie,
+            # najpierw pytaja Tomek i Marek. Do uzytkownika pytanie
+            # idzie dopiero, gdy obaj napisza, ze to moze zrobic tylko
+            # on (albo gdy zaden nie odpowie).
+            # v480dg: adres, ktory nie jest strona (file://, sciezka
+            # pliku), to tez nie logowanie. Bieg 2026-10-21 22:56,
+            # druzyna 1: NEED_USER_LOGIN z file://~/MAIN_1/RAPORT...md
+            # zatrzymal bieg na Enterze uzytkownika.
+            _bez_strony = not re.match(
+                r"(?i)\s*https?://", str(decision.get("url") or "")
+            )
+            if _bez_strony:
+                _pytanie = str(
+                    decision.get("instructions")
+                    or decision.get("reason") or ""
+                )
+                _glosy = []
+                _tylko_on = 0
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Chcę zatrzymać pracę i zapytać użytkownika. "
+                            "Moje pytanie do niego:\n" + _pytanie
+                            + "\n\nMamy Chrome, Termuxa, internet i "
+                            "narzędzia telefonu. Jeśli to może zrobić "
+                            "albo rozstrzygnąć tylko użytkownik, napisz "
+                            "wprost: TYLKO UŻYTKOWNIK. Jeśli damy radę "
+                            "sami — napisz jak."
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O PYTANIU DO UŻYTKOWNIKA: " + short(_t, 300))
+                            if _mowi_tylko_uzytkownik(_t):
+                                _tylko_on += 1
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o pytanie do użytkownika: " + str(_e))
+
+                if _glosy and _tylko_on < len(_glosy):
+                    log(
+                        "MAIN",
+                        "Zespół uważa, że da radę bez użytkownika — "
+                        "pytanie zostaje w zespole."
+                    )
+                    last_result = {
+                        "status": "PYTANIE_ZOSTAJE_W_ZESPOLE",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zapytać "
+                            "użytkownika. Nic się w tym kroku nie wykonało. "
+                            "Tomek i Marek nie napisali obaj, że to może "
+                            "zrobić tylko użytkownik — ich odpowiedzi "
+                            "niżej. Pytanie nie poszło do użytkownika. "
+                            "NEED_USER_LOGIN służy do logowania na stronie "
+                            "(z adresem w url)."
+                            + _zdanie_o_pliku_dla_uzytkownika()
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+                # v480dg: bieg nie czeka na uzytkownika (v480de/df).
+                # Pytanie idzie do DLA_UZYTKOWNIKA.md — program powiadomi
+                # uzytkownika na poczatku nastepnego kroku, a jego
+                # odpowiedz przyjdzie przez OD_UZYTKOWNIKA.txt.
+                try:
+                    _dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+                    _dla.parent.mkdir(parents=True, exist_ok=True)
+                    with open(_dla, "a", encoding="utf-8") as _f:
+                        _f.write(
+                            "\n\n## " + datetime.now().strftime("%Y-%m-%d %H:%M")
+                            + " — pytanie MAIN-a (krok " + str(step) + ")\n\n"
+                            + str(decision.get("reason") or "").strip()
+                            + ("\n\n" + _pytanie.strip()
+                               if _pytanie.strip()
+                               and _pytanie.strip() != str(decision.get("reason") or "").strip()
+                               else "")
+                            + (
+                                "\n\nPlik: " + str(decision.get("url")).strip()
+                                if str(decision.get("url") or "").strip() else ""
+                            )
+                            + "\n"
+                        )
+                    _gdzie = _plik_dla_uzytkownika()
+                except Exception as _e:
+                    _gdzie = ""
+                    log("MAIN", "Nie zapisałem pytania do użytkownika: " + str(_e))
+                if _gdzie:
+                    log(
+                        "MAIN",
+                        "Pytanie do użytkownika zapisane w " + _gdzie
+                        + " — bieg nie czeka, zespół idzie dalej."
+                    )
+                    last_result = {
+                        "status": "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zapytać "
+                            "użytkownika. Pytanie jest zapisane w " + _gdzie
+                            + "; użytkownik dostał o nim powiadomienie i "
+                            "przeczyta je, kiedy zechce. Bieg nie czeka — "
+                            "jeśli odpisze, odpowiedź przyjdzie jako "
+                            "„Użytkownik: …”. NEED_USER_LOGIN służy do "
+                            "logowania na stronie (adres http/https w url)."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
 
             last_result, contact_gate_redirects, credential_gate_redirects = (
                 _need_user_login_with_contact_gate(
@@ -40640,15 +54467,84 @@ def run_agent(goal):
             # turze, a MAIN decyduje jeszcze raz — juz z tym, co
             # powiedzieli. Powtorzony ten sam powod konczy cel,
             # zeby to nie bylo krecenie w kolko.
-            if not _zespol_slyszal_juz_ten_powod(reason):
+            # v466: bieg 2026-09-29 16:18 — MAIN zamknal cel, bo padla
+            # JEDNA sciezka (Useme), ktora Tomek sam nazwal w kroku 1;
+            # Tomek i Marek w tej samej odpowiedzi wskazali inne drogi
+            # (Fiverr, wlasny klient), a program i tak sie zamknal.
+            # Program chodzi, poki cel nie jest zrobiony: FAILED konczy
+            # bieg dopiero wtedy, gdy zespol mowi wprost, ze innej drogi
+            # nie ma — albo gdy MAIN upiera sie czwarty raz.
+            _failed_z_droga = int(globals().get("_failed_z_droga") or 0)
+            _zespol_bez_drogi = bool(globals().get("_zespol_bez_drogi"))
 
-                # v423: w relacji z kroku — sam fakt. Uzasadnienie to
-                # slowa MAIN-a i zespol dostaje je pod jego imieniem
-                # ("MAIN: FAILED — ..."). Bieg 2026-09-22 23:24, kroki
-                # 6-7: to samo uzasadnienie ("petla trwa juz szosta
-                # runde", "Ela 0%") szlo drugi raz pod "Co sie wlasnie
-                # stalo", czyli jako wynik kroku — a zespol je
-                # "jednomyslnie" potwierdzal. Brak kodu byl raz.
+            if not _zespol_bez_drogi and _failed_z_droga < 3:
+
+                _glosy = []
+                _ktos_widzi_droge = False
+                try:
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _role_inbox.setdefault(_rola, []).append((
+                            "MAIN",
+                            "Uważam, że tego celu nie da się zrealizować "
+                            "i chcę go zamknąć jako FAILED. Powód:\n"
+                            + str(reason)
+                            + "\n\nJeśli widzisz inną drogę do celu użytkownika "
+                            "(nie tej ścieżki, która padła), opisz ją. Jeśli "
+                            "nie ma żadnej, napisz wprost: NIE MA INNEJ DROGI."
+                        ))
+                    _odp = consult_team(
+                        goal, last_result, step,
+                        step_chrome_text, step_android_text,
+                        wolani={"PLANNER", "CRITIC"}
+                    )
+                    for _rola in ("PLANNER", "CRITIC"):
+                        _t = str(((_odp or {}).get("kod_full") or {}).get(_rola) or "").strip()
+                        if _t:
+                            _glosy.append(_ROLE_DISPLAY_NAME.get(_rola, _rola) + ":\n" + _t)
+                            log("MAIN", _rola + " O FAILED MAIN-A: " + short(_t, 300))
+                            if "nie ma innej drogi" not in " ".join(_t.lower().split()):
+                                _ktos_widzi_droge = True
+                except Exception as _e:
+                    log("MAIN", "Nie udało się zapytać zespołu o FAILED: " + str(_e))
+
+                if _ktos_widzi_droge:
+                    globals()["_failed_z_droga"] = _failed_z_droga + 1
+                    log(
+                        "MAIN",
+                        "Zespół widzi inną drogę — cel trwa (FAILED nie "
+                        "zamyka biegu, próba " + str(_failed_z_droga + 1) + "/3)."
+                    )
+                    last_result = {
+                        "status": "ZESPOL_WIDZI_INNA_DROGE",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN chciał zamknąć cel "
+                            "(FAILED). Nic się w tym kroku nie wykonało. Tomek "
+                            "i Marek usłyszeli powód i widzą inną drogę do celu "
+                            "użytkownika — ich odpowiedzi niżej. Cel trwa."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+                if _glosy:
+                    globals()["_zespol_bez_drogi"] = True
+                    last_result = {
+                        "status": "WNIOSEK_ZE_SIE_NIE_DA",
+                        "message": (
+                            "W kroku " + str(step) + " MAIN uznał, że "
+                            "dalej się nie da. Nic się w tym kroku nie "
+                            "wykonało. Tomek i Marek nie widzą innej drogi "
+                            "— ich odpowiedzi niżej. Powtórzony FAILED "
+                            "zamknie cel."
+                        ),
+                        "glosy_zespolu": "\n\n".join(_glosy)
+                    }
+                    continue
+
+            # Gdy zespol juz powiedzial, ze innej drogi nie ma, powtorzony
+            # FAILED konczy cel od razu — bez kolejnych ech.
+            if not _zespol_bez_drogi and not _zespol_slyszal_juz_ten_powod(reason):
+
                 last_result = {
                     "status": "WNIOSEK_ZE_SIE_NIE_DA",
                     "message": (
@@ -40708,6 +54604,11 @@ def run_agent(goal):
     print("=" * 72)
     print("OSIĄGNIĘTO LIMIT KROKÓW")
     print("=" * 72)
+    log(
+        "MAIN",
+        "Osiągnięto limit " + str(MAX_STEPS) + " kroków (AGENT_MAX_STEPS) "
+        "— program kończy bieg sam; cel nie jest ani DONE, ani FAILED."
+    )
 
     pokaz_podsumowanie_biegu()
 
@@ -40757,6 +54658,9 @@ def maybe_restart_team_sessions_for_new_goal():
         + ") — zespół zacznie od zera, "
         "bez pamięci poprzedniej rozmowy (świeży system_prompt dla "
         "każdej roli)"
+        + ("; w rywalizacji także nowe oceny Sędziego — o foldery z pracą "
+           "drużyn (~/MAIN_1, ~/MAIN_2) będzie osobne pytanie"
+           if _DRUZYNA == "1" else "")
     ):
         log(
             "DEEPSEEK",
@@ -40767,6 +54671,14 @@ def maybe_restart_team_sessions_for_new_goal():
 
     for name in _role_do_resetu:
         _clear_session_state(name)
+
+    # v480bm: w rywalizacji "t" to nowy start obu druzyn i Sedziego.
+    # v480fe: foldery z praca druzyn tylko po OSOBNYM pytaniu. Bieg
+    # 2026-10-25 08:45: uzytkownik chcial nowych druzyn bez kasowania
+    # plikow, dal "t" na reset rozmow, a to bez slowa usunelo ~/MAIN_1
+    # i ~/MAIN_2 (pytanie mowilo tylko o sesjach DeepSeek).
+    if _DRUZYNA == "1":
+        _nowy_start_rywalizacji(_zapytaj_o_foldery_druzyn())
 
     # Nowy, niepowiązany cel nie powinien dziedziczyć "już otwarte w
     # tym celu" ostrzeżeń o aplikacjach z POPRZEDNIEGO celu — inaczej
@@ -40780,6 +54692,34 @@ def maybe_restart_team_sessions_for_new_goal():
         + " sesji zespołu — założą się od zera "
         "(bez kontekstu poprzedniej rozmowy), gdy będą potrzebne."
     )
+
+
+def _wyczysc_dane_poprzedniej_sesji():
+    """Kolejka, wyniki krokow i stan poprzedniego biegu (bez pytania)."""
+    for f in list(QUEUE_DIR.glob("*.json")) + list(RESULTS_DIR.glob("*.json")):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+    for extra in (
+        TOOL_ATTEMPTS_FILE,
+        LAST_RESULT_FILE,
+        GEMINI_STATE_FILE,
+        PROGRESS_CHECKLIST_FILE,
+        APPROACHES_FILE,
+        CONTACTS_LOOKUP_ATTEMPTED_FILE,
+        USER_PROVIDED_VALUE_FILE,
+        USER_SAID_FILE,
+        # v480ad: seria bledow narzedzia z poprzedniego celu i to, co
+        # zatrzymal jego koniec, nie dotycza nowego celu.
+        TOOL_FAILURE_STREAK_FILE,
+        _PLIK_ZATRZYMANYCH
+    ):
+        try:
+            extra.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def maybe_clear_previous_session_data():
@@ -40831,26 +54771,7 @@ def maybe_clear_previous_session_data():
         )
         return
 
-    for f in queue_files + result_files:
-        try:
-            f.unlink()
-        except Exception:
-            pass
-
-    for extra in (
-        TOOL_ATTEMPTS_FILE,
-        LAST_RESULT_FILE,
-        GEMINI_STATE_FILE,
-        PROGRESS_CHECKLIST_FILE,
-        APPROACHES_FILE,
-        CONTACTS_LOOKUP_ATTEMPTED_FILE,
-        USER_PROVIDED_VALUE_FILE,
-        USER_SAID_FILE
-    ):
-        try:
-            extra.unlink(missing_ok=True)
-        except Exception:
-            pass
+    _wyczysc_dane_poprzedniej_sesji()
 
     log(
         "MAIN",
@@ -41209,7 +55130,8 @@ def prompt_adb_target():
             + " > "
         )
 
-        typed = input(prompt_text).strip()
+        # v480k: po cichej aktualizacji — zapisany adres, bez pytania.
+        typed = "" if _BEZ_PYTAN else input(prompt_text).strip()
 
     except (EOFError, KeyboardInterrupt):
 
@@ -41251,11 +55173,19 @@ def _read_full_input(prompt):
     przypadkowej konsumpcji przez późniejsze input().
     """
 
-    first_line = input(prompt)
+    # v480dh: bez terminala input() rzuca EOFError — to pusta odpowiedz,
+    # nie powod do wylozenia calego programu.
+    try:
+        first_line = input(prompt)
+    except EOFError:
+        return ""
     lines = [first_line]
 
     try:
-        while select.select([sys.stdin], [], [], 0)[0]:
+        # v480cj: wklejka w Termuksie przychodzi kawalkami — chwila
+        # oddechu, zeby dociagnac caly tekst, a nie tylko to, co juz
+        # doszlo.
+        while select.select([sys.stdin], [], [], 0.3)[0]:
             line = sys.stdin.readline()
             if not line:
                 break
@@ -41269,6 +55199,37 @@ def _read_full_input(prompt):
 _PERMISSION_TEST_COMMAND_WORDS = {
     "uprawnienia", "uprawnienie", "permissions"
 }
+
+
+def _potwierdz_cel(cel):
+    """
+    v480cj: uzytkownik (2026-10-17) — "jak wklejam, od razu odpala cel;
+    zmien, zeby po wklejeniu nie odpalal, tylko po docisnieciu".
+
+    Wklejka z Entera na koncu (albo z jednej linii) startowala bieg od
+    razu — tak o 22:11 poszedl jako cel kawalek terminala ze schowka.
+    Teraz program pokazuje, co dostal, i czeka: Enter = start, "n" =
+    wklej od nowa, a kazdy inny tekst to dalszy ciag celu (wklejka,
+    ktora doszla w kawalkach) i jest doklejany.
+    """
+    while True:
+        print()
+        print("Cel ma " + str(len(cel)) + " znaków.")
+        print("Początek: " + short(cel, 200))
+        if len(cel) > 200:
+            print("Koniec:   ..." + cel[-150:])
+        print()
+        try:
+            odp = _read_full_input(
+                "Enter = START z tym celem, 'n' = wklej od nowa > "
+            )
+        except EOFError:
+            return cel
+        if not odp.strip():
+            return cel
+        if odp.strip().lower() in ("n", "nie"):
+            return None
+        cel = (cel + "\n" + odp).strip()
 
 
 def _run_permission_bootstrap():
@@ -41366,9 +55327,2991 @@ def _run_permission_bootstrap():
     print()
 
 
+# ============================================================
+# v480aq: RYWALIZACJA DWOCH DRUZYN
+# ============================================================
+#
+# Uzytkownik (2026-10-14): "zdrowa rywalizacja" — dwie druzyny nad
+# tym samym celem, jednoczesnie, kazda na swoim koncie DeepSeek i z
+# osobnymi logami; sedzia, ktory rzetelnie mowi obu, jak stoja; stary
+# program zostaje bez zmian pod "1" na starcie, rywalizacja pod "2".
+#
+# Druzyna 1 to ten terminal: dotychczasowe dane, konto 1. Druzyna 2
+# to drugi proces tego samego programu w tle: konto 2, stan i logi w
+# ~/agent_druzyna2 (kopia logow w AEL-MINI/druzyna_2). Pracuja w
+# ~/MAIN_1 i ~/MAIN_2. Sedzia to sam program, bez zadnego modelu:
+# uruchamia komende, ktora druzyna podala przy wyniku, i porownuje
+# liczbe — obie druzyny dostaja ten sam werdykt.
+
+_RYWALIZACJA_DIR = HOME / "RYWALIZACJA"
+_PLIK_PID_DRUZYNY2 = _DRUZYNA2_DIR / "pid.txt"
+_SEDZIA_CO_S = 30
+_SEDZIA_MAKS_S = 20 * 60
+_druzyna2 = {"pid": 0, "cel": "", "starty": []}
+_druzyna2_lock = _threading.Lock()
+_sedzia_wiadomosci = []
+_sedzia_lock = _threading.Lock()
+_sedzia_watek = [None]
+
+
+# v480de: dokad zespol pisze sprawy do uzytkownika. Bieg 2026-10-21
+# (druzyna 2): po 9 odbitych DONE MAIN szukal drogi do uzytkownika przez
+# NEED_USER_LOGIN bez strony. Bieg nie czeka na uzytkownika — on czyta
+# ten plik, kiedy zechce.
+def _plik_dla_uzytkownika():
+    if _DRUZYNA in ("1", "2"):
+        return "~/MAIN_" + _DRUZYNA + "/DLA_UZYTKOWNIKA.md"
+    return "~/DLA_UZYTKOWNIKA.md"
+
+
+def _zdanie_o_pliku_dla_uzytkownika():
+    return (
+        " Bieg nie czeka na użytkownika. Jeśli potrzebujecie jego "
+        "decyzji albo chcecie mu coś przekazać, dopiszcie to do "
+        + _plik_dla_uzytkownika() + " — przeczyta, kiedy zechce — "
+        "i idźcie dalej z kolejnym krokiem celu. Jeśli odpisze, jego "
+        "odpowiedź przyjdzie w zwykłej wiadomości jako „Użytkownik: …”."
+    )
+
+
+# v480df: poczta miedzy uzytkownikiem a druzyna. Uzytkownik (2026-10-21):
+# "jak mi coś wyślą, gdzie będę mógł się kontaktować krótką wiadomością,
+# która raz się pojawi". Dwa pliki w folderze druzyny:
+#   DLA_UZYTKOWNIKA.md — zespol pisze; program raz mowi o kazdej zmianie
+#                        (terminal, log, powiadomienie Termuksa).
+#   OD_UZYTKOWNIKA.txt — uzytkownik pisze; program na poczatku kroku
+#                        przekazuje tresc zespolowi (kazda rola raz, jak
+#                        reszte zdan uzytkownika) i odklada plik do
+#                        archiwum, zeby nie poszla drugi raz.
+_POCZTA_WIDZIANE_FILE = STATE_DIR / "dla_uzytkownika_widziane.json"
+
+
+def _plik_od_uzytkownika():
+    return _plik_dla_uzytkownika().replace(
+        "DLA_UZYTKOWNIKA.md", "OD_UZYTKOWNIKA.txt"
+    )
+
+
+_ZAPIS_DO_PLIKU_UZYTKOWNIKA_RE = re.compile(
+    r"(?:>>?|\btee\b(?:\s+-\S+)*)\s*[\"']?[^\s;&|\"']*OD_UZYTKOWNIKA"
+    r"|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s[\"']?[^\s;&|\"']*OD_UZYTKOWNIKA[^\s;&|]*[\"']?\s*(?:$|[;&|\n])"
+    r"|OD_UZYTKOWNIKA[^\n]{0,80}?[\"']\s*,\s*[\"'][wax+]"
+    r"|OD_UZYTKOWNIKA[^\n]{0,80}?\.write_text"
+)
+
+
+def _pisze_za_uzytkownika(tekst):
+    """Komunikat, gdy zespol probuje pisac do pliku uzytkownika."""
+    if "OD_UZYTKOWNIKA" in str(tekst or ""):
+        return (
+            "Nie wykonałem — OD_UZYTKOWNIKA.txt to plik, do którego pisze "
+            "tylko użytkownik (jego odpowiedzi przychodzą stamtąd jako "
+            "„Użytkownik: …”). Sprawy do niego dopiszcie do "
+            + _plik_dla_uzytkownika() + "."
+        )
+    return ""
+
+
+# v480dj: co sie dzieje z robota w tle. Uzytkownik (2026-10-21, gdy obie
+# druzyny instalowaly Debiana i torch w tle): "żeby mieli dobre
+# informacje przy instalacji — ile się zainstalowało, czy błąd, jaki
+# błąd, tak jak z innymi poleceniami". Dotad zespol dowiadywal sie tylko
+# wtedy, gdy sam zajrzal do logu (sleep + tail). Teraz na poczatku kroku
+# MAIN dostaje raz:
+#   - o kazdym procesie, ktory sie skonczyl: kod wyjscia, czas, ostatnie
+#     linie logu (przy bledzie — linie z bledem);
+#   - o kazdym, ktory dalej idzie: czas, rozmiar logu i jego ostatnia
+#     linie — tylko gdy log sie zmienil od poprzedniej wiadomosci.
+_tlo_zgloszone_konce = set()
+_tlo_ostatnio_widziane = {}
+_BLAD_W_LOGU_RE = re.compile(
+    r"(?i)\b(error|errno|failed|failure|fatal|traceback|exception|"
+    r"not found|no such|denied|cannot|unable|killed|no space)\b"
+)
+
+
+def _log_procesu_w_tle(pid):
+    for _sciezka, _wpis in list(_logi_w_tle.items()):
+        if _wpis and _wpis[0] == pid:
+            return _sciezka, float(_wpis[1])
+    return "", 0.0
+
+
+def _ogon_logu(sciezka, ile_bajtow=6000):
+    try:
+        with open(sciezka, "rb") as f:
+            f.seek(0, 2)
+            rozmiar = f.tell()
+            f.seek(max(0, rozmiar - ile_bajtow))
+            tekst = f.read().decode("utf-8", "replace")
+        # paski postepu (\r) — zostaje ostatni stan linii
+        linie = [
+            ([c for c in l.split("\r") if c.strip()] or [""])[-1].rstrip()
+            for l in tekst.split("\n")
+        ]
+        return rozmiar, [l for l in linie if l.strip()]
+    except Exception:
+        return 0, []
+
+
+# v480gr: uzytkownik 2026-10-27: MAIN nie ma zegarka — zamiast pilnowac
+# procesu sleep-em i liczyc minuty, dostaje postep w jednostkach samej
+# roboty: ktora iteracja/epoka/krok z ilu, tempo i ile zostalo. Program
+# czyta to z logu (typowe zapisy: "iter 5000", "step 120/2000",
+# "epoch 3/20", "N_iter=29115"); bez liczby calkowitej — samo tempo.
+_POSTEP_RE = re.compile(
+    r"\b(iter(?:ation)?s?|steps?|epoch|ep|krok|batch|gen(?:eration)?|pokolenie|round|runda)"
+    r"[\s_=:#\[(]*(\d+)(?:\s*(?:/|of|z)\s*(\d+))?", re.I)
+_POSTEP_RAZEM_RE = re.compile(
+    r"\b(n_?iters?|max_?iters?|total_?iters?|n_?steps|max_?steps|total_?steps|"
+    r"num_?epochs|n_?epochs|epochs|iters|steps)\s*[=:]\s*(\d+)", re.I)
+_POSTEP_SAM_LICZNIK_RE = re.compile(r"\s*\[?\s*(\d+)\s*/\s*(\d+)\s*\]?(?=[\s:,|]|$)")
+_postep_historia = {}
+
+
+def _jednostka_postepu(slowo):
+    s = str(slowo or "").lower()
+    if s.startswith("ep") or "epoch" in s:
+        return "epoka"
+    if s.startswith(("gen", "pokol")):
+        return "pokolenie"
+    if s.startswith(("round", "rund")):
+        return "runda"
+    return "iter"
+
+
+_RAZEM_ARG_RE = re.compile(
+    r"--(?:max[_-]?|n[_-]?|num[_-]?|total[_-]?)?(iters?|iterations|steps|epochs|gens?|generations)[=\s]+(\d+)", re.I)
+_RAZEM_DOMYSLNIE_RE = re.compile(
+    r"[\"']--(?:max[_-]?|n[_-]?|num[_-]?|total[_-]?)?(iters?|iterations|steps|epochs|gens?|generations)[\"'][^\n)]*?default\s*=\s*(\d+)", re.I)
+
+
+def _razem_z_kodu(komenda, cwd=None, jedn=None):
+    """v480gy: ile iteracji/epok w calosci, gdy log tego nie mowi — z
+    argumentow komendy (--iters 30000), a potem ze skryptu (MAX_ITERS =
+    30000, default=30000 przy --iters). Bieg 2026-10-27 11:50: MAIN
+    dostawal "iter 17500" bez "z ilu" i pilnowal treningu sleep-em."""
+    try:
+        kom = str(komenda or "")
+        zgodne = lambda slowo: (_jednostka_postepu(slowo) == "epoka") == (jedn == "epoka")
+        for m in _RAZEM_ARG_RE.finditer(kom):
+            if zgodne(m.group(1)):
+                return int(m.group(2))
+        kat = cwd
+        mcd = re.search(r"\bcd\s+([^\s;&|]+)", kom)
+        if mcd:
+            kat = os.path.expanduser(mcd.group(1).replace("$HOME", str(HOME)))
+        for skrypt in re.findall(r"([\w./~-]+\.py)\b", kom):
+            pth = Path(os.path.expanduser(skrypt))
+            if not pth.is_absolute() and kat:
+                pth = Path(kat) / pth
+            try:
+                kod = pth.read_text(encoding="utf-8", errors="replace")[:200000]
+            except Exception:
+                continue
+            for wzor in (_RAZEM_DOMYSLNIE_RE, _POSTEP_RAZEM_RE):
+                for m in wzor.finditer(kod):
+                    if zgodne(m.group(1)) and int(m.group(2)) > 1:
+                        return int(m.group(2))
+    except Exception:
+        pass
+    return None
+
+
+def _postep_z_logu(sciezka, linie, start=None, komenda=None, cwd=None):
+    """v480gr/gy: "17% — iter 5000 z 29115, ok. 9 iter/s, do końca ok. 44 min"
+    albo "" gdy w logu nie ma licznika."""
+    try:
+        wartosc = razem = jedn = None
+        for l in reversed(list(linie or [])[-40:]):
+            # "steps=2000" w naglowku to liczba calkowita, nie postep
+            ms = [m for m in _POSTEP_RE.finditer(l) if not _POSTEP_RAZEM_RE.match(l, m.start())]
+            if ms:
+                m = ms[0]
+                jedn = _jednostka_postepu(m.group(1))
+                wartosc = int(m.group(2))
+                razem = int(m.group(3)) if m.group(3) else None
+                break
+            # v480gx: sam licznik na poczatku linii ("  12000/20000 t=114s",
+            # "[350/1000]") — bieg 2026-10-27 11:25: interpolate.py liczyl
+            # tak, a MAIN zamiast postepu pilnowal logu sleep-em.
+            m = _POSTEP_SAM_LICZNIK_RE.match(l)
+            if m and 0 < int(m.group(1)) <= int(m.group(2)):
+                jedn, wartosc, razem = "", int(m.group(1)), int(m.group(2))
+                break
+        if wartosc is None:
+            return ""
+        if razem is None:
+            try:
+                with open(sciezka, "rb") as f:
+                    glowa = f.read(6000).decode("utf-8", "replace")
+            except Exception:
+                glowa = ""
+            for m in _POSTEP_RAZEM_RE.finditer(glowa + "\n" + "\n".join(linie or [])):
+                if (_jednostka_postepu(m.group(1)) == "epoka") == (jedn == "epoka"):
+                    razem = int(m.group(2))
+        if razem is not None and razem < wartosc:
+            razem = None
+        teraz = time.time()
+        hist = _postep_historia.get(sciezka)
+        if hist is None or wartosc < hist[1]:
+            _postep_historia[sciezka] = hist = (teraz, wartosc)
+        tempo = None
+        if wartosc > hist[1] and teraz - hist[0] >= 30:
+            tempo = (wartosc - hist[1]) / (teraz - hist[0])
+        elif start and wartosc > 0 and teraz - start >= 30:
+            tempo = wartosc / (teraz - start)
+        if razem is None and komenda:
+            razem = _razem_z_kodu(komenda, cwd, jedn)
+            if razem is not None and razem < wartosc:
+                razem = None
+        # v480gy: procent na poczatku — to pierwsze, czego MAIN szuka
+        # ("58% — iter 17500 z 30000, …"); bez liczby calkowitej sam licznik.
+        tekst = (str(int(100 * wartosc / razem)) + "% — ") if razem else ""
+        tekst += (jedn + " " if jedn else "") + str(wartosc)
+        if razem:
+            tekst += " z " + str(razem)
+        if tempo:
+            if tempo >= 1:
+                tekst += ", ok. " + (str(int(round(tempo))) if tempo >= 10 else ("%.1f" % tempo).rstrip("0").rstrip(".")) + (" " + jedn if jedn else "") + "/s"
+            else:
+                tekst += ", ok. " + ("%.1f" % (tempo * 60)).rstrip("0").rstrip(".") + (" " + jedn if jedn else "") + "/min"
+            if razem and razem > wartosc:
+                tekst += ", do końca ok. " + _min_s((razem - wartosc) / tempo)
+        return tekst
+    except Exception:
+        return ""
+
+
+def _pilnuje_sleepem(sciezka):
+    """v480gr: MAIN w ostatnim RUN czekal sleep-em i czytal ten log."""
+    try:
+        nazwa = Path(str(sciezka)).name
+        return bool(nazwa) and any(
+            _sekundy_sleep(k) >= 60 and nazwa in str(k)
+            for k in _ostatni_run()["komendy"])
+    except Exception:
+        return False
+
+
+# v480gs: uzytkownikowi (2026-10-27) to zdanie sie nie podobalo — brzmialo
+# jak pouczenie ("nie trzeba"), a postep z logu sam odpowiada na to, po co
+# MAIN czekal sleep-em. Zostaje pusty; _pilnuje_sleepem zostaje do uzycia.
+_BUDZENIE_ZDANIE = ""
+
+
+def _czas_slownie(s):
+    return _min_s(s)
+
+
+def _plik_z_przekierowania(komenda, cwd=None):
+    """
+    v480ep: plik, do ktorego komenda sama pisze ("> plik", ">> plik",
+    "2> plik", "&> plik", "tee plik") — najswiezszy z istniejacych.
+
+    ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-24 20:11). MAIN puscil
+    termux_run_background "python3 -u scratch_tying_fsp.py
+    > scratch_out.log 2> scratch_stderr.log". Log programu
+    (scratch_run.log) zostal pusty, wiec MAIN dostawal tylko "Log …: 0 B,
+    ostatnia linia:" — nic o tym, co skrypt naprawde wypisuje.
+    """
+    cele = re.findall(
+        r"(?:&>>?|(?<![&])[0-9]?>>?|\btee(?:\s+-a)?)\s*[\"']?([^\s;&|\"'<>]+)",
+        str(komenda)
+    )
+    najlepszy, czas = "", -1.0
+    # v480ey: katalogi z "cd X" w komendzie — gdy proces juz nie zyje,
+    # jego cwd z /proc zniknal (bieg 2026-10-24 21:51: "cd ~/MAIN_1 &&
+    # proot … 2>untie13mv2_stderr.log", a raport szukal pliku w ~).
+    katalogi = ([cwd] if cwd else []) + [
+        str(_resolve_home_relative_path(d))
+        for d in re.findall(r"\bcd\s+[\"']?([^\s;&|\"']+)", str(komenda))
+    ]
+    for c in cele:
+        if c.startswith("/dev/") or c.startswith("&"):
+            continue
+        for pc in ([Path(k) / c for k in katalogi] if not c.startswith(("/", "~")) else []) + [
+            _resolve_home_relative_path(c)
+        ]:
+            try:
+                if pc.is_file() and pc.stat().st_mtime > czas:
+                    najlepszy, czas = str(pc), pc.stat().st_mtime
+                    break
+            except Exception:
+                pass
+    return najlepszy
+
+
+def _nazwa_w_tle(komenda):
+    """v480gy: krotka nazwa tego, co liczy ("mlp_bpe.py"), zamiast calej
+    komendy z cd, rm, zmiennymi i przekierowaniem."""
+    m = re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", str(komenda or ""))
+    if m:
+        return os.path.basename(m[-1])
+    return _komenda_jedna_linia(str(komenda or ""), 80)
+
+
+def _linia_dziala(nazwa, pid, start, postep, log_path, rozmiar, ostatnia,
+                  juz_czytal, blad):
+    """v480gy: jedna linia o tym, co dalej liczy w tle — procent i ile
+    zostalo na poczatku; koncowka logu tylko, gdy MAIN jej nie widzial i
+    nie ma postepu."""
+    tekst = "• " + nazwa + ((" (proces " + str(pid) + ")") if pid else "") + ": "
+    trwa = ("działa " + _min_s(time.time() - start)) if start else "działa"
+    if postep:
+        tekst += postep + "; " + trwa
+    else:
+        tekst += trwa
+        if log_path and not juz_czytal:
+            tekst += "; log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B), ostatnia linia: " + short(ostatnia, 160)
+    tekst += "."
+    if blad:
+        tekst += "\n  W ostatnich liniach logu jest: " + short(blad, 200)
+    return tekst
+
+
+# v480gy: linie o tym, co sie skonczylo (a nie dalej liczy) — main_decide
+# kladzie je w "Skonczone w tle", reszte w "Dalej w tle".
+_linie_tla_skonczone = set()
+# linie, ktore zmienily sie od poprzedniego kroku (tylko je pisze log)
+_linie_tla_zmienione = set()
+
+
+def _log_juz_czytany(log_path, ostatnia):
+    """v480fc: MAIN wlasnie sam czytal ten log (jego ostatnia linia jest w
+    wyjsciu ostatniego RUN albo komenda z RUN / skonczonego czekania, ktore
+    przyjdzie w tej wiadomosci, czyta ten plik) — wtedy bez koncowki."""
+    if ostatnia and ostatnia.strip() and ostatnia.strip() in _ostatni_run()["wyjscie"]:
+        return True
+    nazwa = os.path.basename(str(log_path or ""))
+    if not nazwa:
+        return False
+    wzor = re.compile(r"(?<![\w.-])" + re.escape(nazwa) + r"(?![\w-])")
+    # v480gx: bieg 2026-10-27 11:22 — "Proces w tle 26956 dalej działa, od
+    # 0 s (jego log czytaliście w tym kroku)", choc RUN tylko go puscil
+    # ("> interpolate.log") i dal czekanie, ktore poszlo w tlo. Liczy sie
+    # komenda, ktora naprawde wykonala sie teraz i czytala plik — nie
+    # czekanie w tle ani przekierowanie do niego.
+    komendy = []
+    for k in list(_ostatni_run()["komendy"]):
+        try:
+            if _sekundy_sleep(k) >= _CZEKANIE_W_TLE_OD_S:
+                continue
+        except Exception:
+            pass
+        komendy.append(re.sub(r"(?:&>>?|[0-9]?>>?|\btee(?:\s+-a)?)\s*[\"']?[^\s;&|\"'<>]+", " ", str(k)))
+    try:
+        with _w_tle_lock:
+            komendy += [str(r.get("komenda") or "") for r in _w_tle
+                        if r.get("wynik") is not None and not r.get("dostarczony")]
+    except Exception:
+        pass
+    return any(wzor.search(k) for k in komendy)
+
+
+def _raport_z_tla():
+    zdania = []
+    for pid, proces in list(_procesy_w_tle.items()):
+        try:
+            kod = proces.poll()
+        except Exception:
+            continue
+        komenda = short(" ".join(str(getattr(proces, "args", "")).split()), 140)
+        log_path, start = _log_procesu_w_tle(pid)
+        trwa = _czas_slownie(time.time() - start) if start else ""
+        rozmiar, linie = _ogon_logu(log_path) if log_path else (0, [])
+        if not linie:
+            # v480ep: skrypt pisze do wlasnych plikow (> plik), nie do logu
+            try:
+                _cwd = os.readlink("/proc/" + str(pid) + "/cwd")
+            except Exception:
+                _cwd = str(getattr(proces, "_ael_cwd", "") or "") or None
+            _wlasny = _plik_z_przekierowania(
+                " ".join(str(a) for a in (getattr(proces, "args", "") or []))
+                if isinstance(getattr(proces, "args", ""), (list, tuple))
+                else str(getattr(proces, "args", "")),
+                _cwd,
+            )
+            if _wlasny:
+                _r2, _l2 = _ogon_logu(_wlasny)
+                if _l2 or not log_path:
+                    log_path, rozmiar, linie = _wlasny, _r2, _l2
+                    # v480ey: przy koncu tylko krotka koncowka — pelny odczyt
+                    # tych plikow zwykle przychodzi w karcie czekania
+                    if proces.poll() is not None and not _grupa_zyje(pid):
+                        linie = linie[-3:]
+        if kod is None and not _jeszcze_zyje(pid):
+            kod = "?"
+        if kod is not None and _grupa_zyje(pid):
+            # glowna powloka skonczyla, jej procesy pracuja dalej
+            kod = None
+        if kod is not None:
+            if pid in _tlo_zgloszone_konce:
+                continue
+            _tlo_zgloszone_konce.add(pid)
+            _tlo_ostatnio_widziane.pop(pid, None)
+            if kod == 0:
+                jak = "skończył się poprawnie (kod 0)"
+                pokaz = linie[-8:]
+            elif kod == "?":
+                jak = "już nie działa (kodu wyjścia nie znam — ruszył przed przeładowaniem programu)"
+                pokaz = linie[-8:]
+            else:
+                jak = _jak_skonczyl_proces(kod)
+                bledy = [l for l in linie if _BLAD_W_LOGU_RE.search(l)]
+                pokaz = (
+                    (bledy[-6:] + ["…"] + linie[-4:])
+                    if bledy and len(linie) > 10 else linie[-10:]
+                )
+            _l = (
+                "• " + _nazwa_w_tle(str(getattr(proces, "args", ""))) + " (proces " + str(pid) + ") " + jak
+                + (", trwał " + trwa if trwa else "")
+                + (". Log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B)"
+                   if log_path else "")
+                + (", końcówka:\n" + "\n".join("  " + short(l, 200) for l in pokaz)
+                   if pokaz else ".")
+            )
+            zdania.append(_l)
+            _linie_tla_skonczone.add(_l)
+            _linie_tla_zmienione.add(_l)
+        else:
+            ostatnia = linie[-1] if linie else ""
+            znak = (rozmiar, ostatnia)
+            _zmiana = _tlo_ostatnio_widziane.get(pid) != znak
+            _tlo_ostatnio_widziane[pid] = znak
+            bledy = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            # v480fc: tuz po starcie (pusty log) nic nowego — pid MAIN ma
+            # z wyniku akcji; a koncowke, ktora MAIN wlasnie sam przeczytal,
+            # pomijamy (zostaje samo "dalej dziala").
+            if not linie and start and time.time() - start < 30:
+                continue
+            _juz_czytal = _log_juz_czytany(log_path, ostatnia)
+            _pelna = str(getattr(proces, "args", ""))
+            try:
+                _cwd_p = os.readlink("/proc/" + str(pid) + "/cwd")
+            except Exception:
+                _cwd_p = str(getattr(proces, "_ael_cwd", "") or "") or None
+            _postep = _postep_z_logu(log_path, linie, start, _pelna, _cwd_p) if log_path else ""
+            _l = _linia_dziala(_nazwa_w_tle(_pelna), pid, start, _postep, log_path,
+                               rozmiar, ostatnia, _juz_czytal, bledy[-1] if bledy else "")
+            zdania.append(_l)
+            if _zmiana:
+                _linie_tla_zmienione.add(_l)
+    # Grupy puszczone w tlo zwykla komenda (`nohup ... &`): kodu wyjscia
+    # nie znamy, ale wiemy, kiedy grupa zniknela.
+    for grupa, (komenda, start) in list(_grupy_z_komend.items()):
+        klucz = ("g", grupa)
+        if klucz in _tlo_zgloszone_konce:
+            continue
+        try:
+            os.killpg(grupa, 0)
+            _zyje = True
+        except ProcessLookupError:
+            _zyje = False
+        except Exception:
+            continue
+        # Plik, do ktorego komenda pisala (ostatnie "> plik" / ">> plik" /
+        # "&> plik" / "tee plik") — z niego bierzemy koncowke.
+        _cele = re.findall(
+            r"(?:&>>?|(?<![0-9&])>>?|\btee(?:\s+-a)?)\s*[\"']?([^\s;&|\"'<>]+)",
+            str(komenda)
+        )
+        _cele = [c for c in _cele if not c.startswith("/dev/")]
+        _plik = ""
+        # v480ih: wzgledna sciezka po "cd X" lezy w X, nie w ~. Bieg
+        # 2026-10-29 20:20 (druzyna 1): "cd ~/MAIN_1 && setsid python3 …
+        # > eval_tfm_verne.log" — MAIN dostal "nie widzi pliku, do ktorego
+        # pisala (brak przekierowania > plik)".
+        _kat_cd = _cwd_z_komendy(komenda)
+        for _c in reversed(_cele):
+            try:
+                _pc = _resolve_home_relative_path(_c)
+                if _kat_cd and not os.path.isabs(os.path.expanduser(_c)) and not _c.startswith("$"):
+                    _pk = Path(_kat_cd) / _c
+                    if _pk.is_file():
+                        _pc = _pk
+                if _pc.is_file():
+                    _plik = str(_pc)
+                    break
+            except Exception:
+                pass
+        rozmiar, linie = _ogon_logu(_plik) if _plik else (0, [])
+        if _zyje:
+            if not _plik:
+                continue
+            ostatnia = linie[-1] if linie else ""
+            _zmiana = _tlo_ostatnio_widziane.get(klucz) != (rozmiar, ostatnia)
+            _tlo_ostatnio_widziane[klucz] = (rozmiar, ostatnia)
+            _bl = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
+            _postep = _postep_z_logu(_plik, linie, start, str(komenda))
+            _l = _linia_dziala(_nazwa_w_tle(komenda), None, float(start or 0) or None,
+                               _postep, _plik, rozmiar, ostatnia,
+                               _log_juz_czytany(_plik, ostatnia), _bl[-1] if _bl else "")
+            zdania.append(_l)
+            if _zmiana:
+                _linie_tla_zmienione.add(_l)
+            continue
+        _tlo_zgloszone_konce.add(klucz)
+        _tlo_ostatnio_widziane.pop(klucz, None)
+        bledy = [l for l in linie if _BLAD_W_LOGU_RE.search(l)]
+        pokaz = (
+            (bledy[-6:] + ["…"] + linie[-4:])
+            if bledy and len(linie) > 10 else linie[-10:]
+        )
+        _l = (
+            "• " + _nazwa_w_tle(komenda) + " (komenda puszczona w tło) już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
+            + ". Kodu wyjścia program nie zna"
+            + (
+                " — log " + _sciezka_od_domu(_plik) + " (" + str(rozmiar)
+                + " B)" + (", w nim linie z błędem" if bledy else "")
+                + ", końcówka:\n" + "\n".join("  " + short(l, 200) for l in pokaz)
+                if _plik and pokaz else
+                " i nie widzi pliku, do którego pisała (brak przekierowania > plik)."
+            )
+        )
+        zdania.append(_l)
+        _linie_tla_skonczone.add(_l)
+        _linie_tla_zmienione.add(_l)
+    return zdania
+
+
+def _jeszcze_zyje(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+
+
+def _pliki_dla_uzytkownika():
+    """Pliki zespolu do uzytkownika: DLA_UZYTKOWNIKA.md i podobne
+    (RAPORT_DLA_UZYTKOWNIKA.md, DECYZJA_DLA_UZYTKOWNIKA.md, ...)."""
+    dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+    pliki = []
+    try:
+        for p in sorted(dla.parent.iterdir()):
+            nazwa = p.name.upper()
+            if (
+                "UZYTKOWNIK" in nazwa
+                and "OD_UZYTKOWNIKA" not in nazwa
+                and p.suffix.lower() in (".md", ".txt")
+                and p.is_file()
+            ):
+                pliki.append(p)
+    except Exception:
+        pass
+    return pliki
+
+
+def _na_telefon_dla_uzytkownika(plik):
+    """v480dm: kopia do AEL-MINI (folder druzyny), bo ~/MAIN_<n> lezy
+    w Termuksie i menedzer plikow telefonu go nie widzi. Zwraca sciezke
+    w telefonie albo "" (brak termux-setup-storage)."""
+    try:
+        if not (HOME / "storage" / "shared").exists():
+            return ""
+        PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
+        cel = PRZEBIEG_NA_TELEFONIE / plik.name
+        shutil.copy2(plik, cel)
+        # v480iq: uzytkownik (2026-10-30) dostal powiadomienie o raporcie,
+        # a w menedzerze plikow go nie widzial — Android pokazuje nowy plik
+        # dopiero po zgloszeniu go do indeksu (MediaStore). termux-media-scan
+        # z Termux:API (tego samego, co termux-notification); bez niego
+        # kopia i tak lezy na miejscu.
+        try:
+            subprocess.Popen(["termux-media-scan", str(cel)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL)
+        except Exception:
+            pass
+        return "AEL-MINI/" + (
+            ("druzyna_" + _DRUZYNA + "/") if _DRUZYNA else ""
+        ) + plik.name
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie skopiowałem " + plik.name + " do AEL-MINI: " + str(e))
+        return ""
+
+
+def _poczta_uzytkownika(step):
+    _kto = ("Drużyna " + _DRUZYNA) if _DRUZYNA in ("1", "2") else "Zespół"
+
+    # 1) Zespol zostawil cos uzytkownikowi (kazdy plik *DLA_UZYTKOWNIKA*
+    #    w folderze druzyny). Kazda zmiana: raz baner, log, powiadomienie
+    #    i kopia do AEL-MINI, gdzie widzi ja menedzer plikow telefonu.
+    try:
+        widziane = read_json(_POCZTA_WIDZIANE_FILE, {})
+        if not isinstance(widziane, dict):
+            widziane = {}
+        if "znak" in widziane:
+            # zapis sprzed v480dm: jeden plik, bez nazwy
+            widziane = {"DLA_UZYTKOWNIKA.md": {
+                "znak": widziane.get("znak"),
+                "rozmiar": widziane.get("rozmiar"),
+            }}
+        zmiana = False
+        for dla in _pliki_dla_uzytkownika():
+            st = dla.stat()
+            znak = [int(st.st_mtime), int(st.st_size)]
+            byl = widziane.get(dla.name)
+            if not isinstance(byl, dict):
+                byl = {}
+            if byl.get("znak") == znak or st.st_size == 0:
+                # juz ogloszony (np. przed v480dm) — tylko dociagnij kopie
+                kopia = PRZEBIEG_NA_TELEFONIE / dla.name
+                try:
+                    if st.st_size and (
+                        not kopia.exists()
+                        or kopia.stat().st_mtime < st.st_mtime
+                    ):
+                        _na_telefon_dla_uzytkownika(dla)
+                except Exception:
+                    pass
+                continue
+            tresc = dla.read_text(encoding="utf-8", errors="replace")
+            stary = int(byl.get("rozmiar") or 0)
+            # v480do: koncowka tylko, gdy plik zostal DOPISANY (poczatek
+            # bez zmian). Przepisany od nowa — pokazuje jego poczatek,
+            # a nie urwany srodek zdania.
+            dopisany = (
+                0 < stary < len(tresc)
+                and byl.get("skrot") == hashlib.sha1(
+                    tresc[:stary].encode("utf-8")
+                ).hexdigest()
+            )
+            nowe = (tresc[stary:] if dopisany else tresc).strip()
+            poczatek = " ".join(nowe.split())[:200]
+            na_telefonie = _na_telefon_dla_uzytkownika(dla)
+            gdzie = (
+                na_telefonie + " (w menedżerze plików telefonu)"
+                if na_telefonie else
+                str(dla).replace(str(HOME), "~")
+            )
+            odp = (
+                "AEL-MINI/" + (
+                    ("druzyna_" + _DRUZYNA + "/") if _DRUZYNA else ""
+                ) + "OD_UZYTKOWNIKA.txt albo "
+                if na_telefonie else ""
+            ) + _plik_od_uzytkownika()
+            linia = (
+                _kto + " zostawiła Ci wiadomość: " + gdzie + " — „"
+                + poczatek + ("…" if len(nowe) > 200 else "")
+                + "”. Odpowiedź zapisz w " + odp
+            )
+            print()
+            print("=" * 60)
+            print("  " + linia)
+            print("=" * 60)
+            log("UŻYTKOWNIK", linia)
+            try:
+                subprocess.run(
+                    [
+                        "termux-notification",
+                        "--id", "ael_poczta_" + (_DRUZYNA or "0"),
+                        "-t", _kto + ": wiadomość dla Ciebie",
+                        "-c", (poczatek or dla.name)
+                        + (" — " + na_telefonie if na_telefonie else ""),
+                    ],
+                    capture_output=True, timeout=15
+                )
+            except Exception:
+                pass
+            widziane[dla.name] = {
+                "znak": znak, "rozmiar": len(tresc),
+                "skrot": hashlib.sha1(tresc.encode("utf-8")).hexdigest(),
+            }
+            zmiana = True
+        if zmiana:
+            write_json(_POCZTA_WIDZIANE_FILE, widziane)
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie sprawdziłem plików dla użytkownika: " + str(e))
+
+    # 2) Uzytkownik odpisal — w folderze druzyny albo (v480dm) w AEL-MINI,
+    #    gdzie moze utworzyc plik z menedzera plikow telefonu.
+    for od in (
+        Path(os.path.expanduser(_plik_od_uzytkownika())),
+        PRZEBIEG_NA_TELEFONIE / "OD_UZYTKOWNIKA.txt",
+    ):
+        _odbierz_od_uzytkownika(od, step)
+
+
+def _odbierz_od_uzytkownika(od, step):
+    try:
+        if not od.is_file():
+            return
+        tresc = od.read_text(encoding="utf-8", errors="replace").strip()
+        archiwum = od.parent / "archiwum_od_uzytkownika"
+        archiwum.mkdir(parents=True, exist_ok=True)
+        od.rename(
+            archiwum / (
+                "OD_UZYTKOWNIKA_"
+                + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
+            )
+        )
+        if not tresc:
+            return
+        jedna = " ".join(tresc.split())
+        if _WYGLADA_NA_SEKRET_RE.search(jedna):
+            log(
+                "UŻYTKOWNIK",
+                "Twoja wiadomość z " + od.name + " wygląda "
+                "na klucz albo hasło — nie przekazałem jej zespołowi "
+                "(leży w archiwum_od_uzytkownika)."
+            )
+            return
+        USER_SAID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(USER_SAID_FILE, "a", encoding="utf-8") as f:
+            f.write(jedna + "\n")
+        log(
+            "UŻYTKOWNIK",
+            "Przekazałem zespołowi Twoją wiadomość (krok " + str(step)
+            + "): „" + short(jedna, 200) + "”."
+        )
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie przekazałem wiadomości z " + str(od) + ": " + str(e))
+
+
+def _folder_druzyny(numer):
+    return HOME / ("MAIN_" + str(numer))
+
+
+def _rywal():
+    return "2" if _DRUZYNA == "1" else "1"
+
+
+def _wybierz_tryb():
+    """Pytanie na starcie: 1 = zwykly program, 2 = rywalizacja."""
+
+    if _DRUZYNA or _PO_AKTUALIZACJI or _PO_PODDANIU:
+        return
+
+    try:
+        typed = input(
+            "Tryb: 1 = zwykły program, 2 = rywalizacja dwóch drużyn "
+            "[Enter = 1] > "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        typed = ""
+
+    if typed != "2":
+        return
+
+    if not read_text(TOKEN_FILE_2).strip():
+        print(
+            "Rywalizacja potrzebuje drugiego konta DeepSeek ("
+            + str(TOKEN_FILE_2) + ") — ruszam zwykły program."
+        )
+        return
+
+    # v480ar: druzyna 1 ma wlasny katalog, a sciezki program liczy przy
+    # imporcie — wiec startujemy od nowa jako druzyna 1. Zapisany cel
+    # zwyklego programu idzie z nami, zeby Enter go wznowil.
+    #
+    # v480bp: tylko przy pierwszej rywalizacji. Bieg 2026-10-16: Enter
+    # wznowil stary cel zwyklego programu ("piaskownica") zamiast ostatniego
+    # celu rywalizacji — kazdy wybor 2 nadpisywal cel druzyny 1 celem z ~/agent.
+    try:
+        _cel = read_text(_AGENT_DIR_WSPOLNY / "current_goal.txt").strip()
+        if _cel and not read_text(_DRUZYNA1_DIR / "current_goal.txt").strip():
+            _DRUZYNA1_DIR.mkdir(parents=True, exist_ok=True)
+            write_text(_DRUZYNA1_DIR / "current_goal.txt", _cel)
+    except Exception:
+        pass
+
+    print(
+        "Rywalizacja: ten terminal to drużyna 1 (konto 1, folder ~/MAIN_1, "
+        "osobne rozmowy w " + str(_DRUZYNA1_DIR) + "); drużyna 2 ruszy w tle "
+        "po wyborze celu."
+    )
+    os.environ["AEL_DRUZYNA"] = "1"
+    try:
+        sys.stdout.flush()
+        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
+    except Exception as e:
+        os.environ.pop("AEL_DRUZYNA", None)
+        print("Rywalizacja nie ruszyła (" + str(e) + ") — ruszam zwykły program.")
+
+
+def _stare_pliki_tekst(my):
+    """v480ff: nowy start druzyn bez usuwania plikow (uzytkownik 2026-10-25)."""
+    try:
+        f = _RYWALIZACJA_DIR / ("stare_pliki_" + str(my) + ".txt")
+        if not f.is_file():
+            return ""
+        kiedy = f.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return (
+        "W ~/MAIN_" + str(my) + " leżą pliki poprzednich drużyn " + str(my)
+        + ", które pracowały nad tym samym celem przed Wami — użytkownik "
+        + ("(" + kiedy + ") " if kiedy else "")
+        + "zaczął drużyny od nowa, ale pliki zostawił. Możecie z nich "
+        "korzystać i na nich budować; to praca Waszej drużyny, nie rywala. "
+        "Co w nich jest i co z tego działa, sprawdzicie sami.\n\n"
+    )
+
+
+def _rywalizacja_tekst():
+    """Opis rywalizacji dla zespolu tej druzyny; "" w zwyklym programie.
+
+    v480dq: uzytkownik (2026-10-22): "nie mogą od siebie kopiować
+    pomysłów", "miał być ban", "dyskwalifikacja z zostawieniem plików,
+    które są zgodne". Tekst przepisany w calosci: bez zaproszenia do
+    folderu rywala, z jasnym zakazem i dyskwalifikacja zawsze w
+    rywalizacji (niezaleznie od celu).
+    """
+
+    if not _DRUZYNA:
+        return ""
+
+    my, oni = _DRUZYNA, _rywal()
+
+    return (
+        "RYWALIZACJA\n\n"
+        "Nad tym celem pracują teraz jednocześnie dwie drużyny. Wy "
+        "jesteście drużyną " + my + ". Drużyna " + oni + " ma własnego "
+        "MAIN-a, własny zespół i własne konto. To zdrowa rywalizacja: "
+        "obie drużyny chcą dojść jak najdalej, a liczy się wynik, który "
+        "przetrwa sprawdzenie.\n\n"
+        "Wasz folder to ~/MAIN_" + my + " — tam budujecie i zapisujecie "
+        "wszystko, co robicie w tej rywalizacji. Każda drużyna dochodzi "
+        "do wyniku sama: kodu, plików z kodem albo wynikami ani pomysłów "
+        "drużyny " + oni + " nie wolno brać ani podglądać. Ogólnodostępne "
+        "biblioteki i programy (np. instalowane przez pip, pkg czy w "
+        "Debianie) są wspólne — możecie ich używać, także gdy "
+        "zainstalowała je drużyna " + oni + ". Jej folder "
+        "~/MAIN_" + oni + " jest dla Was zamknięty — program nie wykona "
+        "polecenia, które do niego sięga. Wszystko, co powstało przed "
+        "rywalizacją, leży tam, gdzie leżało.\n\n"
+        + _stare_pliki_tekst(my) +
+        "Obie drużyny pracują na jednym telefonie i dzielą jego "
+        "procesor: każda ma połowę, czyli " + str(_WATKI_DRUZYNY) + " z "
+        + str(os.cpu_count() or 2) + " wątków. Program ustawia to sam "
+        "(OMP_NUM_THREADS i podobne) dla wszystkiego, co uruchamiacie, "
+        "także w Debianie. Czas próby zależy więc też od tego, czy druga "
+        "drużyna akurat liczy — wolniejszy krok nie musi znaczyć, że "
+        "Wasz kod jest gorszy.\n\n"
+        "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
+        "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
+        "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
+        "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
+        "liczbę\"}. Program uruchomi tę komendę w bashu, w waszym "
+        "folderze (może trwać do " + str(_SEDZIA_MAKS_S // 60) + " minut), i "
+        "porówna liczbę. Mniej więcej co kwadrans Sędzia ocenia obie "
+        "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
+        + " tylko jej procent i to, kto prowadzi. Jej wyników, liczb ani "
+        "opisu jej pracy program Wam nie pokazuje.\n\n"
+        "Ta rywalizacja ma dyskwalifikację. Drużyna, która weźmie coś "
+        "od drużyny " + oni + " — jej kod, plik z kodem albo wynikami "
+        "czy jej pomysł — albo spróbuje wprowadzić Sędziego w błąd co do "
+        "tego, na czym zbudowała swoją pracę, zostaje zdyskwalifikowana. "
+        + ("Drużyna, która jawnie spełni warunek dyskwalifikacji z celu, "
+           "dostaje ostrzeżenie, a trzecie ostrzeżenie oznacza "
+           "dyskwalifikację. " if _cel_przewiduje_dyskwalifikacje() else "")
+        + "Zdyskwalifikowana drużyna zaczyna od nowa, cały zespół od "
+        "zera, a powód dostają nowa drużyna i jej rywal. Z jej folderu "
+        "zostaje tylko to, co Sędzia uzna za własne i zgodne z zasadami "
+        "— nowa drużyna dostaje to w podfolderze spadek."
+    )
+
+
+def _swieze_rozmowy_po_poddaniu():
+    """
+    v480bk2: druzyna, ktora sama zamknela cel jako FAILED, przy nowym
+    starcie zaczyna od czystych rozmow. Bieg 2026-10-14/15: MAIN druzyny 2
+    zapisal w rozmowie "projekt zamkniety, FAILED ostateczny" i po kazdym
+    wznowieniu powtarzal to w 1-2 krokach (9 wznowien). Nowa rozmowa
+    dostaje cel, opis rywalizacji i ostatnia ocene Sedziego, a wyniki
+    druzyny zostaja w jej folderze. Sedzia (ARBITER) zostaje w swojej
+    rozmowie — porownuje z poprzednimi ocenami. Nigdy nie rzuca.
+    """
+    if _PO_AKTUALIZACJI:
+        return
+    try:
+        lr = read_json(LAST_RESULT_FILE, {})
+        if not (isinstance(lr, dict) and lr.get("status") == "FAILED"):
+            return
+        for _rola in _ROLE_ACCOUNT:
+            if _rola != "ARBITER":
+                _clear_session_state(_rola)
+        lr["status"] = "FAILED_NOWE_ROZMOWY"
+        write_json(LAST_RESULT_FILE, lr)
+        if not _DRUZYNA:
+            log("MAIN", "Zespół zamknął poprzedni bieg jako FAILED — zaczyna "
+                "od nowych rozmów, z tym samym celem.")
+            return
+        log(
+            "RYWALIZACJA",
+            "Drużyna " + _DRUZYNA + " zamknęła poprzedni bieg jako FAILED — "
+            "zaczyna od nowych rozmów (cel, rywalizacja, ostatnia ocena "
+            "Sędziego; jej wyniki zostają w ~/MAIN_" + _DRUZYNA + ")."
+        )
+        o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+        if isinstance(o, dict) and o.get("druzyna_1"):
+            with _sedzia_lock:
+                _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
+    except Exception as e:
+        log("RYWALIZACJA", "Nowe rozmowy po FAILED nie wyszły: " + str(e))
+
+
+_MAKS_PODDAN_W_10_MIN = 3
+
+
+def _nowy_bieg_po_poddaniu():
+    """
+    v480cc: uzytkownik (2026-10-17) — druzyna 1 po FAILED rusza od nowa,
+    tak samo jak druzyna 2, zamiast konczyc cala rywalizacje. Bieg
+    2026-10-17 08:22: FAILED druzyny 1 zamknal program, a z nim druzyne 2.
+    Ten sam proces (execv), wiec druzyna 2 i robota w tle zyja dalej;
+    nowy start idzie bez pytan, z tym samym celem i nowymi rozmowami
+    (_swieze_rozmowy_po_poddaniu).
+    v480cr: uzytkownik (2026-10-19) — druzyny "nie moga w ogole zamykac
+    programu". Trzy FAILED w 10 minut nie koncza juz programu: nowy start
+    czeka, az minie 10 minut od najstarszego z nich. Tak samo w zwyklym
+    programie (tryb 1).
+    """
+    if _DRUZYNA not in ("", "1") or globals().get("_zamkniete_przez_uzytkownika"):
+        return
+    lr = read_json(LAST_RESULT_FILE, {})
+    if not (isinstance(lr, dict) and lr.get("status") == "FAILED"):
+        return
+    teraz = time.time()
+    starty = []
+    for t in os.environ.get("AEL_STARTY_PO_PODDANIU", "").split(","):
+        try:
+            if teraz - float(t) < 600:
+                starty.append(float(t))
+        except ValueError:
+            pass
+    _kto = "Drużyna 1" if _DRUZYNA else "Zespół"
+    if len(starty) >= _MAKS_PODDAN_W_10_MIN - 1:
+        _czekaj = max(0.0, min(starty) + 600 - teraz)
+        log("RYWALIZACJA" if _DRUZYNA else "MAIN",
+            _kto + " zamyka bieg jako FAILED zaraz po starcie — nowy start za "
+            + str(int(_czekaj // 60) + 1) + " min (program zamyka tylko użytkownik).")
+        time.sleep(_czekaj)
+        teraz = time.time()
+        starty = [t for t in starty if teraz - t < 600]
+    starty.append(teraz)
+    os.environ["AEL_STARTY_PO_PODDANIU"] = ",".join(str(t) for t in starty)
+    os.environ["AEL_PO_PODDANIU"] = "1"
+    if _DRUZYNA:
+        log("RYWALIZACJA", "Drużyna 1 zamknęła bieg jako FAILED — rusza od nowa w nowych "
+            "rozmowach, z tym samym celem; drużyna 2 pracuje dalej.")
+    else:
+        log("MAIN", "Zespół zamknął bieg jako FAILED — rusza od nowa w nowych "
+            "rozmowach, z tym samym celem (program zamyka tylko użytkownik).")
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    _KOLEJKA_KONTA.acquire()
+    try:
+        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
+    except Exception as e:
+        _KOLEJKA_KONTA.release()
+        os.environ.pop("AEL_PO_PODDANIU", None)
+        log("RYWALIZACJA", "Nowy bieg drużyny 1 nie ruszył: " + str(e))
+
+
+def _druzyna2_zyje(pid):
+    if not pid:
+        return False
+    try:
+        _p, _ = os.waitpid(int(pid), os.WNOHANG)
+        if _p == int(pid):
+            return False
+    except ChildProcessError:
+        pass
+    except Exception:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _odpal_druzyne_2():
+    _DRUZYNA2_DIR.mkdir(parents=True, exist_ok=True)
+    write_text(_DRUZYNA2_DIR / "current_goal.txt", _druzyna2["cel"])
+    env = dict(os.environ)
+    env["AEL_DRUZYNA"] = "2"
+    env.pop("AEL_PO_AKTUALIZACJI", None)
+    env.pop("AEL_URUCHOMIENIE_ID", None)
+    with open(_DRUZYNA2_DIR / "terminal.log", "a", encoding="utf-8") as wyjscie:
+        proces = subprocess.Popen(
+            [sys.executable, _SCIEZKA_PROGRAMU],
+            stdin=subprocess.DEVNULL,
+            stdout=wyjscie,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=str(HOME),
+            start_new_session=True,
+        )
+    _druzyna2["pid"] = proces.pid
+    _druzyna2["starty"].append(time.time())
+    write_text(_PLIK_PID_DRUZYNY2, str(proces.pid))
+    return proces.pid
+
+
+def _zatrzymaj_stara_druzyne_2(skad=""):
+    """Zatrzymuje dzialajacy proces druzyny 2 (SIGTERM, po 10 s SIGKILL)."""
+    try:
+        stary = int(read_text(_PLIK_PID_DRUZYNY2).strip() or 0)
+    except Exception:
+        stary = 0
+    if not _druzyna2_zyje(stary):
+        return
+    try:
+        os.killpg(os.getpgid(stary), signal.SIGTERM)
+    except Exception:
+        try:
+            os.kill(stary, signal.SIGTERM)
+        except Exception:
+            pass
+    for _ in range(20):
+        if not _druzyna2_zyje(stary):
+            break
+        time.sleep(0.5)
+    if _druzyna2_zyje(stary):
+        try:
+            os.kill(stary, signal.SIGKILL)
+        except Exception:
+            pass
+    log("RYWALIZACJA", "Zatrzymałem drużynę 2" + (" " + skad if skad else "") + " (pid " + str(stary) + ").")
+
+
+# v480ff: rzeczy w ~, ktore program albo biblioteki potrzebuja, choc ich
+# nie zakladal (~/test/pow_helper.js — opendeep; 2026-10-16 jego
+# usuniecie zepsulo DeepSeek). Nigdy na liscie do usuniecia.
+_NIGDY_NIE_USUWAJ_Z_HOME = {
+    "test", "agent", "bot", "storage", "update_agent.sh", "api_token.txt",
+    "api_token_2.txt", "agent_druzyna1", "agent_druzyna2",
+}
+
+
+def _pliki_druzyn_poza_folderami():
+    """v480ff: to, co drużyny założyły w ~ poza ~/MAIN_<n> — z list
+    śledzenia obu drużyn (project_dirs.json; tylko pozycje, których nie
+    było w ~ przed biegiem, bez chronionych nazw — patrz
+    _track_project_path)."""
+    pomin = set()
+    for p in (HOME, _folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR,
+              _DRUZYNA1_DIR, _DRUZYNA2_DIR, _AGENT_DIR_WSPOLNY,
+              HOME / "archiwum_rywalizacji"):
+        try:
+            pomin.add(p.resolve())
+        except Exception:
+            pass
+    wynik = []
+    for katalog in (_DRUZYNA1_DIR, _DRUZYNA2_DIR):
+        lista = read_json(katalog / PROJECT_DIRS_FILE.name, [])
+        for e in (lista if isinstance(lista, list) else []):
+            try:
+                p = Path(str(e)).expanduser().resolve()
+                rel = p.relative_to(HOME.resolve())
+            except Exception:
+                continue
+            if len(rel.parts) != 1 or p in pomin or not p.exists():
+                continue
+            if (rel.parts[0] in _PROJECT_TRACKING_EXCLUDED_NAMES
+                    or rel.parts[0] in _NIGDY_NIE_USUWAJ_Z_HOME
+                    or rel.parts[0].startswith(".")):
+                continue
+            if p not in wynik:
+                wynik.append(p)
+    return wynik
+
+
+def _debian_root():
+    """v480fg: /root Debiana widziany z Termuksa. Miejsce zalezy od wersji
+    proot-distro (telefon uzytkownika 2026-10-25: nie bylo go pod
+    installed-rootfs/debian), wiec szukamy po znanych miejscach; None, gdy
+    nie ma go nigdzie."""
+    prefix = Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+    kandydaci = []
+    for wzor in ("var/lib/proot-distro/installed-rootfs/debian*/root",
+                 "var/lib/proot-distro/containers/debian*/rootfs/root",
+                 "var/lib/proot-distro/*/debian*/root"):
+        kandydaci += sorted(prefix.glob(wzor))
+    for k in kandydaci:
+        if k.is_dir():
+            return k
+    return None
+
+
+def _w_debianie(skrypt, czas=120):
+    try:
+        return subprocess.run(
+            ["proot-distro", "login", "debian", "--", "bash", "-c", skrypt],
+            capture_output=True, text=True, timeout=czas,
+        )
+    except Exception:
+        return None
+
+
+def _usun_pliki_w_debianie_od_srodka():
+    """v480fg: gdy /root Debiana nie widac z Termuksa — lista i usuwanie
+    przez proot-distro (to samo, co komenda dla uzytkownika)."""
+    _lista = ('cd /root && for p in *; do [ -e "$p" ] || continue; '
+              '[ -f "$p/pyvenv.cfg" ] && continue; echo "$p"; done')
+    r = _w_debianie(_lista)
+    if r is None or r.returncode != 0:
+        log("RYWALIZACJA", "Nie zajrzałem do /root Debiana (proot-distro login "
+            "debian nie zadziałał) — pliki w Debianie zostają.")
+        return
+    nazwy = [l for l in r.stdout.splitlines() if l.strip()]
+    if not nazwy:
+        return
+    if not _confirm_destructive_action(
+        "USUNIĘCIE PLIKÓW W DEBIANIE (/root): "
+        + ", ".join(nazwy[:20])
+        + (" i " + str(len(nazwy) - 20) + " więcej" if len(nazwy) > 20 else "")
+        + " — to, co drużyny zostawiły w Debianie poza swoimi folderami; "
+        "biblioteki (venv-y, .local, .cache) i ukryte pliki konfiguracji zostają"
+    ):
+        log("RYWALIZACJA", "Pliki w /root Debiana zostają.")
+        return
+    r = _w_debianie(_lista.replace('echo "$p"', 'rm -rf -- "$p" && echo "$p"'), 600)
+    if r is not None and r.stdout.strip():
+        log("RYWALIZACJA", "Usunąłem z /root Debiana: "
+            + ", ".join(r.stdout.split()))
+
+
+def _usun_pliki_druzyn_w_debianie():
+    """v480ff: pelne usuniecie — tez to, co drużyny zostawily w /root
+    Debiana (proot). Bieg 2026-10-25 09:17: Sedzia widzial tam m2_venv,
+    nli_venv, rung1_semantic*.py z poprzednich biegow. Osobne pytanie z
+    lista (domyslnie NIE); ukryte pliki konfiguracji (.bashrc, .cache,
+    .local z bibliotekami pip) zostaja."""
+    _DEBIAN_ROOT = _debian_root()
+    if _DEBIAN_ROOT is None:
+        _usun_pliki_w_debianie_od_srodka()
+        return
+    try:
+        # biblioteki zostaja (uzytkownik 2026-10-25: "biblioteki moga
+        # zostac, krzywdy nie robia") — venv-y rozpoznajemy po pyvenv.cfg
+        pozycje = sorted(
+            p for p in _DEBIAN_ROOT.iterdir()
+            if not p.name.startswith(".")
+            and not (p.is_dir() and (p / "pyvenv.cfg").is_file())
+        )
+    except Exception:
+        return
+    if not pozycje:
+        return
+    if not _confirm_destructive_action(
+        "USUNIĘCIE PLIKÓW W DEBIANIE (/root): "
+        + ", ".join(p.name for p in pozycje[:20])
+        + (" i " + str(len(pozycje) - 20) + " więcej" if len(pozycje) > 20 else "")
+        + " — to, co drużyny zostawiły w Debianie poza swoimi folderami; "
+        "biblioteki (venv-y, .local, .cache) i ukryte pliki konfiguracji zostają"
+    ):
+        log("RYWALIZACJA", "Pliki w /root Debiana zostają.")
+        return
+    usuniete = []
+    for p in pozycje:
+        try:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            usuniete.append(p.name)
+        except Exception as e:
+            log("RYWALIZACJA", "Nie usunąłem /root/" + p.name + " w Debianie: " + str(e))
+    if usuniete:
+        log("RYWALIZACJA", "Usunąłem z /root Debiana: " + ", ".join(usuniete))
+
+
+def _zapytaj_o_foldery_druzyn():
+    """v480fe: osobne pytanie o usuniecie folderow druzyn (domyslnie NIE)."""
+    opis = []
+    _poza = _pliki_druzyn_poza_folderami()
+    for p in (_folder_druzyny(1), _folder_druzyny(2), HOME / "archiwum_rywalizacji"):
+        try:
+            if p.is_dir():
+                n = sum(1 for _ in p.rglob("*"))
+                opis.append("~/" + p.name + " (" + str(n) + " plików i folderów)")
+        except Exception:
+            opis.append("~/" + p.name)
+    if _poza:
+        opis.append(
+            "a poza nimi to, co drużyny założyły w ~: "
+            + ", ".join("~/" + p.name for p in _poza[:12])
+            + (" i " + str(len(_poza) - 12) + " więcej" if len(_poza) > 12 else "")
+        )
+    if not opis:
+        return False
+    return _confirm_destructive_action(
+        "USUNIĘCIE FOLDERÓW Z PRACĄ DRUŻYN: " + ", ".join(opis)
+        + " — kod, dane i modele drużyn znikną bezpowrotnie. Odpowiedz NIE, "
+        "jeśli nowe drużyny mają zacząć od nowa, ale z tymi plikami"
+    )
+
+
+def _nowy_start_rywalizacji(usun_foldery=True):
+    """v480bm: druzyna 1 zgodzila sie na reset rozmow — nowy start calej gry.
+
+    Bieg 2026-10-15 21:13: uzytkownik dal "t" i nowy cel, a Sedzia od razu
+    sprawdzil stary wynik.json z ~/MAIN_1 (R5FIX ze starego celu). Reset
+    czyscil tylko rozmowy druzyny 1: druzyna 2 nie dostaje pytan, wiec
+    zostawala ze starymi rozmowami (albo jej stary proces dalej pracowal),
+    a ~/MAIN_1, ~/MAIN_2 i oceny w ~/RYWALIZACJA byly ze starego biegu.
+    v480cb: uzytkownik (2026-10-16): druzyny znajdowaly stare biegi
+    w ~/archiwum_rywalizacji, wiec "t" kasuje teraz stare foldery
+    razem z archiwum, zamiast je tam przenosic.
+    """
+
+    _zatrzymaj_stara_druzyne_2("ze starego biegu")
+
+    # v480fm: reset rozmow w rywalizacji to nowe druzyny — wyniki krokow
+    # starej druzyny 1 nie sa ich krokami. Bieg 2026-10-25 18:39: Sedzia
+    # dostal jako "ostatnie kroki druzyny 1" kroki z poprzedniego biegu
+    # (od v480fl pytanie o dane poprzedniej sesji w rywalizacji nie pada).
+    try:
+        _wyczysc_dane_poprzedniej_sesji()
+    except Exception as e:
+        log("RYWALIZACJA", "Nie wyczyściłem wyników kroków starej drużyny 1: " + str(e))
+
+    _poza = _pliki_druzyn_poza_folderami() if usun_foldery else []
+    if not usun_foldery:
+        # v480ff: lista tego, co druzyna 2 zalozyla w ~, przechodzi do
+        # listy druzyny 1, bo ~/agent_druzyna2 zaraz znika — inaczej
+        # pozniejsze "usun wszystko" by o tych plikach nie wiedzialo.
+        try:
+            _l1 = read_json(PROJECT_DIRS_FILE, [])
+            _l2 = read_json(_DRUZYNA2_DIR / PROJECT_DIRS_FILE.name, [])
+            _l1 = _l1 if isinstance(_l1, list) else []
+            for e in (_l2 if isinstance(_l2, list) else []):
+                if e not in _l1:
+                    _l1.append(e)
+            write_json(PROJECT_DIRS_FILE, _l1)
+        except Exception:
+            pass
+    usuniete = []
+    # v480fe: bez zgody na foldery — tylko rozmowy druzyny 2 i oceny
+    # Sedziego (nowe druzyny, nowe oceny); ~/MAIN_1, ~/MAIN_2 zostaja.
+    _co_usunac = (
+        (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR,
+         HOME / "archiwum_rywalizacji")
+        if usun_foldery else (_RYWALIZACJA_DIR, _DRUZYNA2_DIR)
+    ) + tuple(_poza)
+    for p in _co_usunac:
+        try:
+            if not p.exists():
+                continue
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            usuniete.append("~/" + p.name)
+        except Exception as e:
+            log("RYWALIZACJA", "Nie usunąłem " + str(p) + ": " + str(e))
+    if usuniete:
+        log(
+            "RYWALIZACJA",
+            "Nowy start rywalizacji: usunąłem " + ", ".join(usuniete)
+            + (" — obie drużyny i Sędzia zaczynają od zera." if usun_foldery else
+               " — nowe drużyny i Sędzia zaczynają od nowa, a ~/MAIN_1 i "
+               "~/MAIN_2 z dotychczasową pracą zostają."),
+        )
+    if usun_foldery:
+        try:
+            write_json(PROJECT_DIRS_FILE, [])
+        except Exception:
+            pass
+        _usun_pliki_druzyn_w_debianie()
+    else:
+        # v480ff: nowe druzyny dowiaduja sie o plikach poprzednich
+        # (_rywalizacja_tekst); flaga znika razem z ~/RYWALIZACJA.
+        for n in (1, 2):
+            try:
+                if _folder_druzyny(n).is_dir() and any(_folder_druzyny(n).iterdir()):
+                    _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+                    (_RYWALIZACJA_DIR / ("stare_pliki_" + str(n) + ".txt")).write_text(
+                        datetime.now().strftime("%Y-%m-%d %H:%M"), encoding="utf-8")
+            except Exception:
+                pass
+
+
+# v480bq: DYSKWALIFIKACJA. Uzytkownik (2026-10-16): gdy cel przewiduje
+# dyskwalifikacje, a Sedzia ja ogosi, druzyna zaczyna od nowa — caly zespol
+# od zera, z tym samym celem — a nowa druzyna (i rywal, w ocenie) dostaje
+# powod i to, co zrobila poprzednia. Bez slowa o dyskwalifikacji w celu
+# program jej nie wykonuje, nawet gdy Sedzia ja wpisze.
+_dyskwalifikacja_1 = [False]
+_nowe_po_dyskwalifikacji = {}
+
+
+def _plik_dyskwalifikacji(numer):
+    return _RYWALIZACJA_DIR / ("dyskwalifikacja_" + str(numer) + ".json")
+
+
+def _powod_dyskwalifikacji(v):
+    """Powod z pola Sedziego albo "" — "brak", "nie", false itp. to nie powod."""
+    if v is None or v is False or v is True:
+        return ""
+    t = str(v).strip()
+    if len(t) < 20 and re.match(
+        r"^(brak|nie|none|null|false|n/?a|-+|—|0|puste|żadn\w*)\b", t.lower()
+    ):
+        return ""
+    return t if len(t) >= 8 else ""
+
+
+# v480by: uzytkownik (2026-10-16) — za jawnie przyznany znany pomysl
+# Sedzia daje ostrzezenie; trzecie ostrzezenie to dyskwalifikacja.
+_OSTRZEZEN_DO_DYSKWALIFIKACJI = 3
+_PLIK_OSTRZEZEN = _RYWALIZACJA_DIR / "ostrzezenia.json"
+
+
+def _ostrzezenia(numer):
+    d = read_json(_PLIK_OSTRZEZEN, {})
+    w = d.get(str(numer)) if isinstance(d, dict) else None
+    return w if isinstance(w, list) else []
+
+
+def _zapisz_ostrzezenia(numer, lista):
+    d = read_json(_PLIK_OSTRZEZEN, {})
+    if not isinstance(d, dict):
+        d = {}
+    d[str(numer)] = lista
+    try:
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        write_json(_PLIK_OSTRZEZEN, d)
+    except Exception as e:
+        log("RYWALIZACJA", "Zapis ostrzeżeń nie wyszedł: " + str(e))
+
+
+def _ostrzezenia_dla_sedziego(numer):
+    lista = _ostrzezenia(numer)
+    if not lista:
+        return "Ostrzeżenia drużyny " + str(numer) + ": żadnego.\n"
+    return ("Ostrzeżenia drużyny " + str(numer) + ": " + str(len(lista)) + " z "
+            + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + " — "
+            + " | ".join(short(str(o.get("powod", "")), 300) for o in lista) + "\n")
+
+
+def _cel_przewiduje_dyskwalifikacje():
+    return "dyskwalifik" in str(_current_goal_text or "").lower()
+
+
+# v480dq: w rywalizacji dyskwalifikacja jest zawsze (za branie od
+# rywala i za wprowadzanie Sedziego w blad); cel moze dodac wlasne
+# warunki — za nie sa ostrzezenia.
+def _jest_dyskwalifikacja():
+    return bool(_DRUZYNA) or _cel_przewiduje_dyskwalifikacje()
+
+
+def _do_archiwum_po_dyskwalifikacji(numer, sciezki):
+    archiwum = HOME / "archiwum_rywalizacji" / (
+        time.strftime("%Y%m%d_%H%M%S") + "_dyskwalifikacja_" + str(numer)
+    )
+    for p in sciezki:
+        try:
+            if not p.exists():
+                continue
+            # v480br: uzytkownik (2026-10-16): folder pracy zdyskwalifikowanej
+            # druzyny znika bez pytania — jej pliki byly niezgodne z celem
+            # i nie maja kusic nowej druzyny. Rozmowy i logi ida do archiwum.
+            if p == _folder_druzyny(numer):
+                shutil.rmtree(p)
+                log("RYWALIZACJA", "Usunąłem ~/" + p.name + " zdyskwalifikowanej drużyny.")
+                continue
+            archiwum.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(p), str(archiwum / p.name))
+        except Exception as e:
+            log("RYWALIZACJA", "Nie przeniosłem " + str(p) + " do archiwum: " + str(e))
+    return archiwum
+
+
+# v480ca: uzytkownik (2026-10-16): oryginalny pomysl zdyskwalifikowanej
+# druzyny nie musi przepasc — Sedzia w polu "spadek" wybiera pliki zgodne
+# z celem, a nowa druzyna dostaje je w ~/MAIN_N/spadek. Reszta folderu
+# znika jak dotad (v480br).
+_SPADEK_MAKS = 40
+
+
+def _spadek_lista(v):
+    """Pole "spadek" Sedziego jako lista sciezek wzglednych (bez pustych)."""
+    if isinstance(v, (list, tuple)):
+        el = [str(x) for x in v]
+    elif isinstance(v, str):
+        el = re.split(r"[\n,;]+", v)
+    else:
+        el = []
+    out = []
+    for x in el:
+        x = x.strip().strip("`'\"").strip()
+        x = re.sub(r"^(~/)?MAIN_\d+/", "", x).lstrip("/")
+        if not x or x in out or re.match(r"^(brak|nie|none|null|false|n/?a|-+|—|żadn\w*)$", x.lower()):
+            continue
+        out.append(x)
+    return out[:_SPADEK_MAKS]
+
+
+def _spadek_poczekalnia(numer):
+    return _RYWALIZACJA_DIR / ("spadek_" + str(numer))
+
+
+def _zachowaj_spadek(numer, lista):
+    """Kopiuje wybrane przez Sedziego pliki z ~/MAIN_N do poczekalni.
+    Zwraca liste skopiowanych sciezek."""
+    folder = _folder_druzyny(numer).resolve()
+    cel = _spadek_poczekalnia(numer)
+    shutil.rmtree(cel, ignore_errors=True)
+    zrobione = []
+    for rel in lista:
+        try:
+            zr = (folder / rel).resolve()
+            if zr == folder or folder not in zr.parents or not zr.exists():
+                continue
+            do = cel / zr.relative_to(folder)
+            do.parent.mkdir(parents=True, exist_ok=True)
+            if zr.is_dir():
+                shutil.copytree(zr, do, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+            else:
+                shutil.copy2(zr, do)
+            zrobione.append(str(zr.relative_to(folder)))
+        except Exception as e:
+            log("RYWALIZACJA", "Spadek: nie skopiowałem " + str(rel) + ": " + str(e))
+    return zrobione
+
+
+def _wloz_spadek(numer):
+    """Po nowym starcie: poczekalnia -> ~/MAIN_N/spadek."""
+    zrodlo = _spadek_poczekalnia(numer)
+    if not zrodlo.exists():
+        return
+    try:
+        do = _folder_druzyny(numer) / "spadek"
+        do.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(do, ignore_errors=True)
+        shutil.move(str(zrodlo), str(do))
+        log("RYWALIZACJA", "Nowa drużyna " + str(numer) + " dostała spadek w ~/MAIN_" + str(numer) + "/spadek.")
+    except Exception as e:
+        log("RYWALIZACJA", "Spadek nie trafił do nowej drużyny: " + str(e))
+
+
+def _zablokowane_komendy(numer, n=12):
+    """v480fm: komendy druzyny z ostatnich krokow, ktorych program nie
+    wykonal, bo siegaly do rywala."""
+    katalog = RESULTS_DIR if str(numer) == _DRUZYNA else (
+        (_DRUZYNA2_DIR if str(numer) == "2" else _DRUZYNA1_DIR) / "results"
+    )
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return []
+    out = []
+    for f in pliki:
+        data = read_json(f, {})
+        for t in (data.get("tool_trace") or []) if isinstance(data, dict) else []:
+            if isinstance(t, dict) and t.get("zablokowane") and str(t.get("komenda") or "").strip():
+                out.append(str(t["komenda"]))
+    return out
+
+
+def _powod_to_zablokowana_komenda(numer, powod):
+    """Powod dyskwalifikacji wskazuje komende, ktorej program nie wykonal."""
+    p = re.sub(r"\s+", " ", str(powod or ""))
+    for k in _zablokowane_komendy(numer):
+        k = re.sub(r"\s+", " ", k).strip()
+        if k and (k in p or k[:60] in p):
+            return k
+    return ""
+
+
+def zdyskwalifikuj(numer, powod, ocena):
+    """Druzyna 1 (proces Sedziego): zapis powodu i nowy start druzyny `numer`."""
+    numer = str(numer)
+    # v480fm: za komende, ktora program zablokowal, nie ma dyskwalifikacji —
+    # nic sie nie wykonalo i druzyna nic od rywala nie dostala.
+    if _powod_to_zablokowana_komenda(numer, powod):
+        return
+    d = ocena.get("druzyna_" + numer) or {}
+    try:
+        w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
+        wynik = _werdykt_zdaniem(w, "Jej ostatni wynik.json")
+    except Exception:
+        wynik = "Jej ostatni wynik.json: żadnego."
+    spadek = _zachowaj_spadek(numer, _spadek_lista(d.get("spadek")))
+    if spadek:
+        o_folderze = (
+            "z tym samym celem. Folder ~/MAIN_" + numer + " jest pusty poza "
+            "podfolderem spadek: Sędzia uznał te pliki poprzedniej drużyny za "
+            "zgodne z celem i możecie je rozwijać, zmieniać albo pominąć — "
+            + ", ".join(spadek) + "."
+        )
+    else:
+        o_folderze = "z tym samym celem, a folder ~/MAIN_" + numer + " jest pusty."
+    tekst = (
+        "Poprzednia drużyna " + numer + " została zdyskwalifikowana przez "
+        "Sędziego (" + str(ocena.get("czas", "")) + "). Powód: "
+        + str(powod).strip() + "\n"
+        "Co zrobiła, według ostatniej oceny Sędziego (" + str(d.get("procent", 0))
+        + "%): " + str(d.get("ocena") or "").strip() + "\n"
+        + wynik + "\n"
+        "Wy jesteście nową drużyną " + numer + ": cały zespół zaczyna od zera, "
+        + o_folderze
+    )
+    try:
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        write_json(_plik_dyskwalifikacji(numer), {
+            "czas": ocena.get("czas"), "powod": str(powod).strip(),
+            "tekst": tekst, "spadek": spadek, "dostarczono": False,
+        })
+    except Exception as e:
+        log("RYWALIZACJA", "Zapis dyskwalifikacji nie wyszedł: " + str(e))
+        return
+    _zapisz_ostrzezenia(numer, [])
+    log("RYWALIZACJA", "Sędzia zdyskwalifikował drużynę " + numer + ". Powód: "
+        + str(powod).strip() + " — drużyna " + numer + " zaczyna od nowa.")
+    _nowe_po_dyskwalifikacji[numer] = str(ocena.get("czas", ""))
+    if numer == "1":
+        # na granicy krokow, w glownej petli — nie w srodku kroku
+        _dyskwalifikacja_1[0] = True
+        return
+    with _druzyna2_lock:
+        _zatrzymaj_stara_druzyne_2("po dyskwalifikacji")
+        try:
+            _PLIK_PROSBY_2.unlink()
+        except Exception:
+            pass
+        _do_archiwum_po_dyskwalifikacji("2", (
+            _folder_druzyny(2), _RYWALIZACJA_DIR / "druzyna_2.json", _DRUZYNA2_DIR,
+        ))
+        try:
+            _folder_druzyny(2).mkdir(parents=True, exist_ok=True)
+            _wloz_spadek("2")
+            if not _druzyna2.get("cel"):
+                _druzyna2["cel"] = str(_current_goal_text or "")
+            pid = _odpal_druzyne_2()
+            log("RYWALIZACJA", "Nowa drużyna 2 ruszyła (pid " + str(pid) + ").")
+        except Exception as e:
+            log("RYWALIZACJA", "Nowa drużyna 2 nie ruszyła: " + str(e))
+
+
+def wykonaj_dyskwalifikacje_1():
+    """Drużyna 1, na poczatku kroku: nowy zespol po dyskwalifikacji. True = zrobione."""
+    if _DRUZYNA != "1" or not _dyskwalifikacja_1[0]:
+        return False
+    _dyskwalifikacja_1[0] = False
+    try:
+        do_archiwum = [_folder_druzyny(1), _RYWALIZACJA_DIR / "druzyna_1.json"]
+        archiwum = _do_archiwum_po_dyskwalifikacji("1", do_archiwum)
+        for _katalog in (RESULTS_DIR, QUEUE_DIR):
+            for f in list(_katalog.glob("*.json")):
+                try:
+                    (archiwum / _katalog.name).mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(f), str(archiwum / _katalog.name / f.name))
+                except Exception:
+                    pass
+        for f in (LAST_RESULT_FILE, GEMINI_STATE_FILE, PROGRESS_CHECKLIST_FILE, APPROACHES_FILE):
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+        for _rola in _ROLE_ACCOUNT:
+            if _rola == "ARBITER":
+                continue
+            _clear_session_state(_rola)
+            sessions.pop(_rola, None)
+            _goal_briefed.discard(_rola)
+        _folder_druzyny(1).mkdir(parents=True, exist_ok=True)
+        _wloz_spadek("1")
+        zapisz_zdarzenie("dyskwalifikacja")
+        _wiadomosc_po_dyskwalifikacji()
+        log("RYWALIZACJA", "Nowa drużyna 1: cały zespół w nowych rozmowach, ~/MAIN_1 pusty.")
+    except Exception as e:
+        log("RYWALIZACJA", "Nowy start drużyny 1 po dyskwalifikacji nie wyszedł: " + str(e))
+    return True
+
+
+def _wiadomosc_po_dyskwalifikacji():
+    """Nowa druzyna dostaje raz powod dyskwalifikacji poprzedniej."""
+    if not _DRUZYNA:
+        return
+    try:
+        plik = _plik_dyskwalifikacji(_DRUZYNA)
+        d = read_json(plik, {})
+        if not (isinstance(d, dict) and d.get("tekst")) or d.get("dostarczono"):
+            return
+        with _sedzia_lock:
+            _sedzia_wiadomosci.append(str(d["tekst"]))
+        d["dostarczono"] = True
+        write_json(plik, d)
+    except Exception:
+        pass
+
+
+def _pilnuj_druzyny_2():
+    """Druzyna 2 padla — rusza od nowa; trzy padniecia w 10 min = przerwa.
+
+    v480cr: uzytkownik (2026-10-19) — druzyny "nie moga w ogole zamykac
+    programu". Zamiast przestac pilnowac, czekamy, az minie 10 minut od
+    najstarszego z trzech startow, i ruszamy ja dalej.
+    """
+    _przerwa_zgloszona = False
+    while True:
+        time.sleep(60)
+        with _druzyna2_lock:
+            if _druzyna2_zyje(_druzyna2["pid"]):
+                continue
+        _ostatnie = [t for t in _druzyna2["starty"] if time.time() - t < 600]
+        if len(_ostatnie) >= 3:
+            if not _przerwa_zgloszona:
+                _przerwa_zgloszona = True
+                log("RYWALIZACJA", "Drużyna 2 pada zaraz po starcie — ruszy znowu, "
+                    "gdy minie 10 minut od pierwszego z tych startów. Jej log: "
+                    + str(_DRUZYNA2_DIR / "terminal.log"))
+            continue
+        _przerwa_zgloszona = False
+        try:
+            _lr2 = read_json(_DRUZYNA2_DIR / "last_result.json", {})
+            _poddala = isinstance(_lr2, dict) and _lr2.get("status") == "FAILED"
+            with _druzyna2_lock:
+                if _druzyna2_zyje(_druzyna2["pid"]):
+                    continue
+                pid = _odpal_druzyne_2()
+            # v480cc: bieg 2026-10-17 — trzy razy "przestała działać",
+            # a za kazdym razem MAIN druzyny 2 sam zamknal bieg jako FAILED.
+            log("RYWALIZACJA", (
+                "Drużyna 2 zamknęła bieg jako FAILED — rusza od nowa w nowych "
+                "rozmowach (pid " if _poddala else
+                "Drużyna 2 przestała działać — ruszyła od nowa (pid "
+            ) + str(pid) + ").")
+        except Exception as e:
+            log("RYWALIZACJA", "Drużyny 2 nie dało się wznowić: " + str(e)
+                + " — spróbuję znowu za minutę.")
+
+
+def _uruchom_druzyne_2(cel):
+    """Druzyna 1: rusza druzyne 2 w tle (albo zostawia te, ktora juz idzie)."""
+
+    _druzyna2["cel"] = cel
+    for _n in ("1", "2"):
+        try:
+            _folder_druzyny(_n).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    try:
+        stary = int(read_text(_PLIK_PID_DRUZYNY2).strip() or 0)
+    except Exception:
+        stary = 0
+
+    # v480cu: bieg 2026-10-19 — uzytkownik zmienil cel na starych
+    # rozmowach. Druzyna 2, ktora przezyla w tle, pracowalaby dalej nad
+    # starym celem (czyta go tylko na starcie). Inny cel = nowy start
+    # druzyny 2 z nowym celem; jej rozmowy i pliki zostaja.
+    try:
+        _cel_2 = read_text(_DRUZYNA2_DIR / "current_goal.txt").strip()
+    except Exception:
+        _cel_2 = ""
+    if _druzyna2_zyje(stary) and _cel_2 and _cel_2 != str(cel or "").strip():
+        _zatrzymaj_stara_druzyne_2("bo cel się zmienił")
+
+    try:
+        if _druzyna2_zyje(stary):
+            _druzyna2["pid"] = stary
+            log("RYWALIZACJA", "Drużyna 2 dalej pracuje w tle (pid " + str(stary) + ").")
+        else:
+            pid = _odpal_druzyne_2()
+            log(
+                "RYWALIZACJA",
+                "Drużyna 2 ruszyła w tle (pid " + str(pid) + ", konto 2, "
+                "folder ~/MAIN_2). Jej logi: " + str(_DRUZYNA2_DIR / "memory" / "przebieg")
+                + " i AEL-MINI/druzyna_2."
+            )
+    except Exception as e:
+        log("RYWALIZACJA", "Drużyna 2 nie ruszyła: " + str(e))
+        return
+
+    if not _druzyna2.get("pilnowana"):
+        _druzyna2["pilnowana"] = True
+        _threading.Thread(target=_pilnuj_druzyny_2, name="druzyna-2", daemon=True).start()
+
+
+def _zatrzymaj_druzyne_2():
+    """Wyjscie druzyny 1 (nie przeladowanie) konczy tez druzyne 2."""
+    if _DRUZYNA != "1" or not _druzyna2_zyje(_druzyna2["pid"]):
+        return
+    try:
+        print("Zamykam drużynę 2 (pid " + str(_druzyna2["pid"]) + ").")
+        os.killpg(int(_druzyna2["pid"]), signal.SIGTERM)
+    except Exception:
+        try:
+            os.kill(int(_druzyna2["pid"]), signal.SIGTERM)
+        except Exception:
+            pass
+
+
+atexit.register(_zatrzymaj_druzyne_2)
+
+
+def _ostatnia_liczba(tekst):
+    """Ostatnia liczba z ostatniej niepustej linii albo None."""
+    linie = [l for l in str(tekst or "").splitlines() if l.strip()]
+    if not linie:
+        return None
+    liczby = re.findall(r"[-+]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", linie[-1])
+    if not liczby:
+        return None
+    try:
+        return float(liczby[-1].replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _liczba_wpisana(komenda, folder, wyjscie):
+    """v480ip: czy liczba, ktora wypisala komenda "sprawdz", stoi wprost w
+    tresci samej komendy albo uruchamianego przez nia skryptu. Bieg
+    2026-10-30 (druzyna 1): sprawdz_attention_fast.sh mial CACHED_BPC=
+    2.338994 i przy zgodnej sumie kontrolnej wypisywal te liczbe bez
+    liczenia — Sedzia widzial "potwierdzone". Uniwersalnie: zwraca jedno
+    zdanie faktu z linia, w ktorej liczba stoi (moze to byc tez komentarz
+    albo porownanie z poprzednim wynikiem — ocenia Sedzia), albo "".
+    Nic nie blokuje."""
+    linie = [l for l in str(wyjscie or "").splitlines() if l.strip()]
+    if not linie:
+        return ""
+    liczby = re.findall(r"\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", linie[-1])
+    if not liczby:
+        return ""
+    surowa = liczby[-1]
+    if len(re.sub(r"\D", "", surowa.split("e")[0].split("E")[0])) < 4:
+        return ""  # 0, 1, 42 — za krotkie, zeby cos znaczylo
+    wzor = re.compile(r"(?<![\d.,])" + re.escape(surowa) + r"(?![\d])")
+    komenda = str(komenda or "")
+    zrodla = [("w samej komendzie", komenda)]
+    # komenda Sedziego startuje w folderze druzyny (Popen cwd=folder),
+    # chyba ze sama zaczyna sie od "cd X"
+    cwd = Path(folder)
+    if re.match(r"\s*cd\s", komenda):
+        try:
+            cwd = Path(_katalog_startu_komendy(komenda))
+        except Exception:
+            pass
+    for tok in re.findall(r"[\w./~-]+\.(?:sh|py|bash)\b", komenda):
+        sciezka = Path(os.path.expanduser(tok))
+        if not sciezka.is_absolute():
+            sciezka = cwd / sciezka
+        try:
+            if sciezka.is_file() and sciezka.stat().st_size <= 500_000:
+                zrodla.append(("w " + tok, sciezka.read_text(encoding="utf-8", errors="replace")))
+        except Exception:
+            continue
+    for gdzie, tekst in zrodla:
+        for nr, linia in enumerate(tekst.splitlines(), 1):
+            if wzor.search(linia):
+                return (" — liczba " + surowa + " stoi też wprost " + gdzie
+                        + ("" if gdzie == "w samej komendzie" else " (linia " + str(nr) + ")")
+                        + ": " + short(linia.strip(), 160)
+                        + "; komenda mogła ją wypisać bez liczenia od nowa")
+    return ""
+
+
+def _sedzia_ocen(numer):
+    """Sprawdza wynik.json druzyny i zapisuje werdykt na tablicy."""
+
+    folder = _folder_druzyny(numer)
+    werdykt = {"druzyna": numer, "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+    try:
+        dane = json.loads((folder / "wynik.json").read_text(encoding="utf-8"))
+        if not isinstance(dane, dict):
+            raise ValueError("to nie jest obiekt JSON")
+    except Exception as e:
+        werdykt.update(werdykt="nie wyszło", szczegol="wynik.json nie do odczytania: " + str(e)[:200])
+        return werdykt
+
+    werdykt["opis"] = _utnij_po_zdaniu(str(dane.get("opis") or ""), 300)
+    werdykt["lepiej"] = str(dane.get("lepiej") or "")[:20]
+    komenda = str(dane.get("sprawdz") or "").strip()
+    werdykt["sprawdz"] = komenda[:500]
+
+    try:
+        ogloszony = float(str(dane.get("wynik")).replace(",", "."))
+        werdykt["wynik"] = ogloszony
+    except Exception:
+        werdykt.update(werdykt="nie wyszło", szczegol="pole \"wynik\" nie jest liczbą")
+        return werdykt
+
+    if not komenda:
+        werdykt.update(werdykt="nie wyszło", szczegol="brak komendy \"sprawdz\"")
+        return werdykt
+
+    # v480fj: rm wewnatrz wlasnego ~/MAIN_<n> (np. czyszczenie katalogu
+    # wynikow przed przebiegiem) to porzadek we wlasnym folderze. Bieg
+    # 2026-10-25 10:31: "rm -rf wyniki/krok1_sedzia && python ..." bylo
+    # odrzucone zdaniem bez wskazowki i MAIN zgadywal, co jest nie tak.
+    if (_looks_like_delete_command(komenda)
+            and not _usuwa_tylko_wlasne_katalogi(komenda, folder=folder)):
+        werdykt.update(werdykt="nie wyszło", szczegol=(
+            "komenda usuwa coś poza Waszym folderem ~/MAIN_" + str(numer)
+            + " albo cały folder naraz — sędzia jej nie uruchamia; zostawcie "
+            "w \"sprawdz\" usuwanie tylko w środku swojego folderu albo żadne "
+            "(program może po prostu nadpisać pliki wyników)"))
+        return werdykt
+
+    # v480ez: sprawdzenie przezywa przeladowanie programu. Bieg 2026-10-24
+    # 21:02-21:36 (druzyna 2): po kazdej aktualizacji nowy proces
+    # uruchamial "sprawdz" od nowa, choc poprzedni (~25 min) dalej liczyl —
+    # trzy sprawdz_v19.py naraz walczyly o RAM i CPU, a Sedzia dostal
+    # "test..." zamiast liczby. Teraz stan sprawdzania jest w pliku, a
+    # wyjscie idzie do pliku: nowy proces programu czeka na to samo
+    # sprawdzanie, zamiast puszczac drugie.
+    stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
+    wyj_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".out")
+    klucz = json.dumps([str(dane.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")],
+                       ensure_ascii=False)
+    stan = read_json(stan_plik, {})
+    proces = None
+    kod = None
+    try:
+        _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+        if (isinstance(stan, dict) and stan.get("klucz") == klucz
+                and _zyje(stan.get("pid"))):
+            pid = int(stan["pid"])
+            start = float(stan.get("start") or time.time())
+            log("RYWALIZACJA", "Sędzia: to samo sprawdzenie drużyny " + str(numer)
+                + " już liczy (pid " + str(pid) + ", od " + _min_s(time.time() - start)
+                + ") — czekam na nie, nie puszczam drugiego.")
+        else:
+            if isinstance(stan, dict) and _zyje(stan.get("pid")):
+                try:
+                    os.killpg(int(stan["pid"]), signal.SIGKILL)  # stare zgloszenie
+                except Exception:
+                    pass
+            with open(wyj_plik, "w", encoding="utf-8") as _fh:
+                proces = subprocess.Popen(
+                    ["bash", "-c", komenda],
+                    cwd=str(folder), stdin=subprocess.DEVNULL,
+                    stdout=_fh, stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            pid, start = proces.pid, time.time()
+            write_json(stan_plik, {"pid": pid, "klucz": klucz, "start": start})
+        while True:
+            if proces is not None:
+                if proces.poll() is not None:
+                    kod = proces.returncode
+                    break
+            elif not _zyje(pid):
+                # v480ih: zombie po przeladowaniu — odbieramy kod wyjscia
+                try:
+                    _p, _st = os.waitpid(pid, os.WNOHANG)
+                    if _p == pid and os.WIFEXITED(_st):
+                        kod = os.WEXITSTATUS(_st)
+                except Exception:
+                    pass
+                break
+            if time.time() - start > _SEDZIA_MAKS_S:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                if proces is not None:
+                    try:
+                        proces.wait(timeout=10)
+                    except Exception:
+                        pass
+                try:
+                    stan_plik.unlink()
+                except Exception:
+                    pass
+                werdykt.update(werdykt="nie wyszło", szczegol="komenda nie skończyła się w "
+                               + str(_SEDZIA_MAKS_S // 60) + " min — komenda w wynik.json ma "
+                               "tylko przeliczyć wynik z gotowego modelu; skróćcie ją albo "
+                               "wskażcie szybszą")
+                return werdykt
+            time.sleep(2)
+        try:
+            wyjscie = wyj_plik.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            wyjscie = ""
+        try:
+            stan_plik.unlink()
+        except Exception:
+            pass
+    except Exception as e:
+        werdykt.update(werdykt="nie wyszło", szczegol="komenda nie ruszyła: " + str(e)[:200])
+        return werdykt
+
+    wypisala = _ostatnia_liczba(wyjscie)
+    werdykt["wypisala"] = wypisala
+    if wypisala is None:
+        werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
+                       + str(kod if kod is not None else "?") + "): " + short(str(wyjscie or "").strip(), 200))
+    elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):
+        werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala)
+                       + _liczba_wpisana(komenda, folder, wyjscie))
+    else:
+        werdykt.update(werdykt="nie wyszło", szczegol="komenda wypisała " + str(wypisala)
+                       + ", a ogłoszone było " + str(ogloszony))
+    return werdykt
+
+
+def _utnij_po_zdaniu(t, n):
+    """v480go: opis skrocony na koncu zdania albo slowa, z "…" — nie w pol
+    slowa ("mc=1 + lzma zamiast mc=2 + — ogłoszony wynik")."""
+    t = str(t or "").strip()
+    if len(t) <= n:
+        return t
+    cz = t[:n]
+    k = max(cz.rfind(". "), cz.rfind("; "), cz.rfind(") "))
+    if k < n // 2:
+        k = cz.rfind(" ")
+    return cz[:k + 1].rstrip(" ,;:+-") + " …"
+
+
+def _werdykt_zdaniem(w, kto, z_opisem=True):
+    # v480dq: wynik rywala bez jego opisu (co i jak zrobil).
+    return (
+        kto + ": " + ((w.get("opis") or "(bez opisu)") if z_opisem else "sprawdzony wynik")
+        + (" — ogłoszony wynik " + str(w["wynik"]) if "wynik" in w else "")
+        + (" (lepiej: " + w["lepiej"] + ")" if w.get("lepiej") else "")
+        + " — " + str(w.get("werdykt"))
+        + (" (" + str(w.get("szczegol", "")) + ")." if z_opisem else ".")
+    )
+
+
+def _sedzia_petla():
+    moj_plik = _folder_druzyny(_DRUZYNA) / "wynik.json"
+    moja_tablica = _RYWALIZACJA_DIR / ("druzyna_" + _DRUZYNA + ".json")
+    ich_tablica = _RYWALIZACJA_DIR / ("druzyna_" + _rywal() + ".json")
+
+    def _mtime(p):
+        try:
+            return p.stat().st_mtime
+        except Exception:
+            return 0.0
+
+    # Tego, co juz ocenione przed tym startem, nie oceniamy drugi raz.
+    try:
+        _tab = json.loads(moja_tablica.read_text(encoding="utf-8"))
+        _juz = _tab.get("_mtime_wyniku", 0.0)
+        ostatni_klucz = _tab.get("_klucz_wyniku", "")
+    except Exception:
+        _juz = 0.0
+        ostatni_klucz = ""
+    widziany_wynik = _juz
+
+    # v480az: ocenia sie TRESC zgloszenia, nie date pliku. Bieg 2026-10-14
+    # 19:44-19:50 (druzyna 2): skrypt z "sprawdz" sam zapisywal wynik.json,
+    # wiec kazde sprawdzenie zmienialo date i Sedzia sprawdzal to samo
+    # w kolko (12 razy), za kazdym razem z ta sama wiadomoscia do MAIN-a.
+    def _klucz():
+        try:
+            d = json.loads(moj_plik.read_text(encoding="utf-8"))
+            return json.dumps([str(d.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")], ensure_ascii=False)
+        except Exception:
+            return ""
+    widziana_tablica_rywala = 0.0
+
+    while True:
+        try:
+            m = _mtime(moj_plik)
+            if m and m != widziany_wynik:
+                time.sleep(5)   # niech druzyna skonczy zapis
+                m = _mtime(moj_plik)
+                widziany_wynik = m
+                k = _klucz()
+                if k and k == ostatni_klucz:
+                    time.sleep(_SEDZIA_CO_S)
+                    continue
+                ostatni_klucz = k
+                w = _sedzia_ocen(_DRUZYNA)
+                # v480fj: bieg 2026-10-25 10:32 — w trakcie sprawdzania
+                # druzyna zapisala nowy wynik.json, a MAIN dostal werdykt
+                # starej wersji ("usuwa pliki") jako odpowiedz na nowa i
+                # szukal bledu, ktorego juz nie bylo. Werdykt starej wersji
+                # nie idzie do MAIN-a; nowa jest sprawdzana od razu.
+                _k_po = _klucz()
+                if _k_po and _k_po != k:
+                    log("RYWALIZACJA", "Sędzia, drużyna " + _DRUZYNA + ": w trakcie "
+                        "sprawdzania wynik.json się zmienił — sprawdzam nową wersję.")
+                    widziany_wynik = 0.0
+                    continue
+                # sprawdzenie moglo samo nadpisac wynik.json — to nie nowe zgloszenie
+                widziany_wynik = _mtime(moj_plik)
+                ostatni_klucz = _klucz() or k
+                w["_mtime_wyniku"] = widziany_wynik
+                w["_klucz_wyniku"] = ostatni_klucz
+                _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+                tmp = moja_tablica.with_suffix(".tmp")
+                tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
+                os.replace(tmp, moja_tablica)
+                with _sedzia_lock:
+                    # starszy, jeszcze niedoręczony werdykt wyniku jest nieaktualny
+                    _sedzia_wiadomosci[:] = [
+                        l for l in _sedzia_wiadomosci
+                        if not str(l).startswith("Wasz wynik")
+                    ]
+                    _sedzia_wiadomosci.append(_werdykt_zdaniem(w, "Wasz wynik"))
+                log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA))
+
+            # v480dx: sprawdzony wynik rywala nie idzie juz do tej druzyny
+            # (uzytkownik: o rywalu tylko procent i kto prowadzi). Bieg
+            # 2026-10-24: druzyna 2 dostala od programu 13 razy liczbe
+            # druzyny 1, a Sedzia odjal jej 2 pp za to, ze ja zna.
+        except Exception as e:
+            try:
+                log("RYWALIZACJA", "Sędzia: " + str(e))
+            except Exception:
+                pass
+        time.sleep(_SEDZIA_CO_S)
+
+
+def _zyje(pid):
+    # v480ih: proces, ktory sie skonczyl, a byl dzieckiem programu sprzed
+    # przeladowania (os.execv — ten sam pid programu), zostaje zombie:
+    # os.kill(pid, 0) dalej sie udaje. Bieg 2026-10-29 19:23-19:43
+    # (druzyna 1): sprawdzenie Sedziego skonczylo sie, a Sedzia czekal na
+    # zombie 20 min i oglosil "komenda nie skonczyla sie w 20 min".
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return False
+        try:
+            with open("/proc/" + str(pid) + "/stat", encoding="utf-8", errors="replace") as _f:
+                if _f.read().rsplit(")", 1)[-1].split()[0] in ("Z", "X"):
+                    return False
+        except Exception:
+            pass
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+# v480bb: uzytkownik (2026-10-14) — druzyny nie czekaja na siebie, a ocena
+# Sedziego jest JEDNA dla obu. Co 5 krokow jest runda ocen: kto pierwszy
+# dojdzie do kroku 5 (10, 15…), ten wywoluje Sedziego i dostaje ocene od
+# razu; spozniona druzyna na swoim kroku 5 dostaje te SAMA ocene z pliku
+# rundy. Sedzia jest jeden, na koncie 1, a na jednym koncie mowi naraz
+# tylko jeden agent — gdy pierwsza jest druzyna 2, jej prosbe obsluguje
+# watek druzyny 1 w pierwszej wolnej chwili konta 1 (_KOLEJKA_KONTA,
+# patrz deepseek()).
+_PLIK_PROSBY_2 = _RYWALIZACJA_DIR / "prosba_oceny_2.json"
+_PLIK_OBSLUGI_1 = _RYWALIZACJA_DIR / "obsluga_ocen_1.txt"
+_DIR_RUND = _RYWALIZACJA_DIR / "oceny"
+
+
+def _plik_rundy(runda):
+    return _DIR_RUND / ("runda_" + str(int(runda)) + ".json")
+
+
+def _ocena_rundy(runda, od=None):
+    """Ocena rundy albo None. v480bg: ocena sprzed startu biegu `od`
+    (domyslnie: tego biegu) jest stara — druzyna 2 wznowiona po padnieciu
+    liczy kroki od 1 i inaczej dostawala oceny sprzed godziny."""
+    try:
+        o = json.loads(_plik_rundy(runda).read_text(encoding="utf-8"))
+        if not (isinstance(o, dict) and o.get("druzyna_1")):
+            return None
+        od = int(_URUCHOMIENIE_ID) if od is None else int(od or 0)
+        if od and time.mktime(time.strptime(str(o.get("czas")), "%Y-%m-%d %H:%M:%S")) < od:
+            return None
+        return o
+    except Exception:
+        return None
+
+
+def _krok_druzyny(numer):
+    if numer == _DRUZYNA:
+        return _biezacy_krok
+    try:
+        katalog = _DRUZYNA2_DIR if numer == "2" else _DRUZYNA1_DIR
+        return json.loads((katalog / "state" / "ostatni_oddech.json").read_text(encoding="utf-8")).get("krok")
+    except Exception:
+        return None
+
+
+_PLIK_SKALI_OCENY = STATE_DIR / "skala_oceny_sedziego.json"
+
+
+def _zdanie_o_nowej_skali(o):
+    """
+    v480dw: jedno zdanie przy pierwszej ocenie po zmianie sposobu liczenia
+    (nowy prompt Sedziego) albo celu — inaczej "". Bieg 2026-10-24 09:25:
+    po v480dv procent spadl z 85% na 22% bez slowa wyjasnienia, a druzyna
+    mogla to wziac za kare.
+    """
+    try:
+        skala, cel = o.get("skala"), o.get("cel")
+        if not skala:
+            return ""
+        zn = read_json(_PLIK_SKALI_OCENY, {})
+        if not isinstance(zn, dict):
+            zn = {}
+        write_json(_PLIK_SKALI_OCENY, {"skala": skala, "cel": cel})
+        if zn and zn.get("cel") and cel and zn.get("cel") != cel:
+            return (
+                "Program: cel się zmienił, więc Sędzia ocenia od nowa, "
+                "względem nowego celu — procent to część całego nowego celu. "
+                "Zmiana liczby wynika ze zmiany celu, a nie z kary; to, co "
+                "macie potwierdzone, zostaje i liczy się tam, gdzie pasuje "
+                "do nowego celu."
+            )
+        if (zn and zn.get("skala") != skala) or (
+            not zn and int(o.get("runda") or 1) > 1
+        ):
+            return (
+                "Program: Sędzia liczy teraz procent jako część całego celu "
+                "(100% = cel osiągnięty w całości), a nie jako zmianę od "
+                "swojej poprzedniej oceny. Jeśli liczba jest inna niż "
+                "ostatnio, to dlatego, że zmieniła się skala, a nie Wasz "
+                "stan: to, co macie potwierdzone, zostaje. To nie kara."
+            )
+    except Exception:
+        pass
+    return ""
+
+
+def _daj_ocene(o, step):
+    if not o:
+        return
+    _skala = _zdanie_o_nowej_skali(o)
+    with _sedzia_lock:
+        _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
+        if _skala:
+            _sedzia_wiadomosci.append(_skala)
+    if _skala:
+        log("RYWALIZACJA", _skala)
+    log("RYWALIZACJA", _ocena_zdaniem(o))
+    try:
+        if o.get("runda") not in _paski_pokazane:
+            pasek_rywalizacji(o)
+            _paski_pokazane.add(o.get("runda"))
+    except Exception:
+        pass
+
+
+_paski_pokazane = set()
+
+
+def pasek_rywalizacji(o):
+    """v480bc: dwa paski — procent kazdej druzyny z tej samej oceny Sedziego."""
+    print()
+    print("═" * 60)
+    print("  POSTĘP CELU — ocena Sędziego z " + str(o.get("czas", ""))[11:16] + _kroki_oceny(o))
+    for n in ("1", "2"):
+        d = o.get("druzyna_" + n) or {}
+        try:
+            pr = max(0, min(100, int(d.get("procent", 0))))
+        except Exception:
+            pr = 0
+        filled = int(round(pr / 5))
+        print("  " + ("Drużyna " + n + (" (wy)" if n == _DRUZYNA else "")).ljust(16) + "["
+              + "█" * filled + "░" * (20 - filled) + "] " + str(pr) + "%")
+    _prow = str(o.get("prowadzi", "")).strip()
+    print("  Prowadzi: " + ("remis" if _prow.lower().startswith("remis") or not _prow else "drużyna " + _prow))
+    print("═" * 60)
+    print()
+
+
+# v480cq: Sedzia ocenia co _SEDZIA_CO_S_OCENA sekund (uzytkownik
+# 2026-10-18: "lepiej czasowo ustawic co 10 min ... czy nawet 15"), a nie
+# co 5 krokow kazdej druzyny.
+#
+# ZAOBSERWOWANY REALNY PRZYPADEK (bieg 2026-10-18 wieczorem). Ocena byla
+# przypieta do numeru kroku: druzyna 1 na kroku 20 dostawala ocene
+# zrobiona wtedy, gdy druzyna 2 tez byla na kroku 20 — choc ta byla juz na
+# kroku 55. O rywalu widziala stan sprzed godzin. Do tego druzyna 2,
+# pierwsza w rundzie, czekala na Sedziego 22 minuty, bo konto 1 bylo
+# zajete rozmowa druzyny 1.
+#
+# Teraz jest jedna, zawsze najnowsza ocena. Proces druzyny 1 prosi o nia
+# Sedziego co kwadrans, gdy konto 1 jest wolne, a kazda druzyna dostaje
+# ja raz, na swoim najblizszym kroku. Nikt na nikogo nie czeka.
+_SEDZIA_CO_S_OCENA = 15 * 60
+_PLIK_ODEBRANEJ_OCENY = STATE_DIR / "odebrana_ocena_sedziego.txt"
+
+
+def _czas_oceny(o):
+    try:
+        return time.mktime(time.strptime(str(o.get("czas")), "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        return 0.0
+
+
+def odbierz_ocene_sedziego(step):
+    """Najnowsza ocena Sedziego, jesli ta druzyna jeszcze jej nie dostala. Nigdy nie rzuca."""
+    if not _DRUZYNA:
+        return
+    try:
+        o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+        if not (isinstance(o, dict) and o.get("druzyna_1")):
+            return
+        # v480bg: ocena sprzed startu tego biegu jest stara.
+        if _czas_oceny(o) < int(_URUCHOMIENIE_ID):
+            return
+        try:
+            if _PLIK_ODEBRANEJ_OCENY.read_text(encoding="utf-8").strip() == str(o.get("czas")):
+                return
+        except Exception:
+            pass
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _PLIK_ODEBRANEJ_OCENY.write_text(str(o.get("czas")), encoding="utf-8")
+        _daj_ocene(o, step)
+    except Exception as e:
+        try:
+            log("RYWALIZACJA", "Ocena Sędziego: " + str(e))
+        except Exception:
+            pass
+
+
+def _sedzia_co_kwadrans():
+    """Druzyna 1, watek: co _SEDZIA_CO_S_OCENA jedna ocena obu druzyn, gdy konto 1 jest wolne."""
+    nie_przed = int(_URUCHOMIENIE_ID) + _SEDZIA_CO_S_OCENA
+    ostatnie_kroki = None
+    while True:
+        time.sleep(30)
+        try:
+            o = read_json(_PLIK_OCENY_SEDZIEGO, {})
+            if isinstance(o, dict) and o.get("druzyna_1"):
+                nie_przed = max(nie_przed, _czas_oceny(o) + _SEDZIA_CO_S_OCENA)
+            if time.time() < nie_przed or _przerwa_konta_do(1) > time.time():
+                continue
+            kroki = (_krok_druzyny("1"), _krok_druzyny("2"))
+            # Nikt nie zrobil kroku od ostatniej oceny — nie ma czego oceniac.
+            if kroki == ostatnie_kroki:
+                continue
+            with _KOLEJKA_KONTA:
+                ocena = ocen_rywalizacje(kroki)
+            ostatnie_kroki = kroki
+            # Takze gdy ocena nie wyszla: nastepna proba za kwadrans, nie
+            # co 30 sekund.
+            nie_przed = time.time() + _SEDZIA_CO_S_OCENA
+            if not ocena:
+                continue
+        except Exception as e:
+            try:
+                log("RYWALIZACJA", "Ocena Sędziego co kwadrans: " + str(e))
+            except Exception:
+                pass
+
+
+def uruchom_sedziego():
+    if not _DRUZYNA or _sedzia_watek[0] is not None:
+        return
+    for _n in ("1", "2"):
+        try:
+            _folder_druzyny(_n).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    if _DRUZYNA == "2":
+        # prosba z poprzedniego startu nie jest juz niczyja
+        try:
+            _PLIK_PROSBY_2.unlink()
+        except Exception:
+            pass
+    if _DRUZYNA == "1":
+        # v480bb: nowy start = rundy ocen od nowa (kroki tez licza sie od 1);
+        # po przeladowaniu na nowa wersje bieg trwa dalej, rundy zostaja.
+        if not _PO_AKTUALIZACJI:
+            try:
+                for _f in _DIR_RUND.glob("runda_*.json"):
+                    _f.unlink()
+            except Exception:
+                pass
+        try:
+            _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
+            (_RYWALIZACJA_DIR / "pid_1.txt").write_text(str(os.getpid()))
+            _PLIK_OBSLUGI_1.write_text(str(os.getpid()))
+        except Exception:
+            pass
+        _threading.Thread(target=_sedzia_co_kwadrans, name="oceny-sedziego", daemon=True).start()
+    _sedzia_watek[0] = _threading.Thread(target=_sedzia_petla, name="sedzia", daemon=True)
+    _sedzia_watek[0].start()
+
+
+# v480as: sedzia-agent rywalizacji. Uzytkownik (2026-10-14): tak jak Ela
+# co 5 krokow mowi, ile celu jest zrobione, tak w rywalizacji osobny,
+# bezstronny agent dostaje to, co potrzebne do oceny obu druzyn, i co
+# 5 krokow mowi obu, jak stoja — uczciwie. W rywalizacji zastepuje
+# automatyczna ocene Eli (Ela odzywa sie tylko, gdy MAIN ja zawola).
+# Pracuje w procesie druzyny 1, czyli na koncie 1, po kolei z jej
+# zespolem — jedna rozmowa naraz na koncie. Druzyna 2 dostaje jego
+# ocene przez ~/RYWALIZACJA/ocena_sedziego.json.
+# v480av: Sedzia sprawdza tez, czy kazda druzyna pracuje w swoim folderze
+# i nie wchodzi drugiej w droge (patrz jak_to_dziala.txt, punkt 47).
+# v480cw: uzytkownik (2026-10-20) — porownanie z obcym modelem liczy sie
+# tylko, gdy komenda sprawdzajaca uruchamia obie strony na tych samych,
+# nieuczonych zadaniach (druzyna 1 dostala szczebel za GPT-2 wpisane
+# recznie). Prompt przepisany w calosci, dla spojnosci.
+# v480dq: uzytkownik (2026-10-22) — branie od rywala to dyskwalifikacja
+# w kazdej rywalizacji; spadek bez rzeczy rywala; druzyny dostaja o
+# rywalu tylko procent. Prompt znow przepisany w calosci.
+# v480dr: uzytkownik (2026-10-22 18:38) — zakaz dotyczy tylko kodu i
+# pomyslow; ogolnodostepne biblioteki i programy (takze zainstalowane
+# przez rywala) sa wspolne.
+# v480ds: to, co wstawil sam program, nie jest naruszeniem druzyny.
+# v480gt: przepisany w calosci — te same zasady w czasie terazniejszym,
+# bez zdan o historii ("wczesniej odjales… oddajesz", "zanim dostales
+# te zasade"), ktore nowy Sedzia mogl brac za polecenie oddawania.
+ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Mniej więcej co kwadrans dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
+
+Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd ma się wziąć. Jako zrobione liczysz to, co ma wynik potwierdzony przez program i zgadza się z treścią celu; to, co dopiero ruszyło, opisujesz jako rozpoczęte. Potwierdzony wynik mówi tylko, że komenda wypisuje tę liczbę — gdy drużyna sama ustaliła, że był przypadkowy albo nie wytrzymał powtórzenia, liczysz go tak, jak ustaliła. Porównanie z czymś spoza pracy drużyny — innym modelem, programem albo ludzką metodą — liczysz jako potwierdzone tylko wtedy, gdy komenda sprawdzająca sama uruchamia obie strony na tych samych zadaniach i żadna z nich nie była na tych zadaniach uczona; liczba drugiej strony wpisana ręcznie, wzięta z innego pomiaru albo zmierzona na zadaniach, na których drużyna się uczyła, jest tylko opisem. Wynik drugiej strony, który wygląda nieprawdopodobnie słabo jak na to, czym ona jest, traktujesz jako znak, że jej test trzeba sprawdzić, i piszesz to w ocenie. To, co drużyna pisze o sobie, waży mniej niż to, co widać w jej krokach, komendach i plikach.
+
+Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wolno brać od siebie nawzajem kodu, plików z kodem albo wynikami ani pomysłów, ani zaglądać do folderu rywala. Ogólnodostępne biblioteki i programy — także te, które zainstalował rywal, na przykład wspólne środowisko z torch — są wspólne: korzystanie z nich nie jest braniem od rywala, a wynik na nich liczy się normalnie. Gdy drużyna dochodzi do czegoś drogą, która nie zgadza się z treścią celu, buduje poza swoim folderem, zmienia coś u rywala albo mu przeszkadza, piszesz to wprost w jej ocenie i odejmujesz tę część z procentu, dopóki drużyna nie zrobi jej u siebie, zgodnie z celem.
+
+Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Program sam pilnuje folderu rywala: komendy, która do niego sięga, nie wykonuje, a na liście komend widzisz ją z dopiskiem, że ją zablokował. Taka komenda nic drużynie nie dała, więc nie jest braniem od rywala ani czytaniem jego folderu; opisujesz ją w ocenie, a o dyskwalifikacji decyduje to, co drużyna od rywala naprawdę dostała. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą. Drużyna dostaje od programu o rywalu jego procent i to, kto prowadzi; znajomość tego nie jest naruszeniem. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
+
+Procent mówi, jaka część całego celu użytkownika jest już potwierdzona: 0% to nic, a 100% to cel osiągnięty w całości, tak jak go opisał użytkownik. Gdy cel ma etapy albo szczeble, każdy waży tyle, o ile przybliża do końca całego celu, więc potwierdzone wczesne etapy przy dalekim końcu to mały procent. Ilość pracy, próby i ustalenia — także uczciwe wyniki negatywne — nie dodają procentu, dopóki nie potwierdzają części celu. Każdą ocenę liczysz od stanu celu, a nie od swojej poprzedniej liczby; poprzednie oceny służą tylko temu, żeby ten sam stan oceniać tak samo. Gdy użytkownik zmieni cel, oceniasz od nowa względem nowego celu: wcześniejsze procenty dotyczyły innego celu i nie są punktem startu, a to, co drużyna zbudowała wcześniej, liczysz tylko na tyle, na ile potwierdza część nowego celu. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik. Dlatego "ocena" każdej drużyny mówi tylko o niej samej, bez wyników i liczb rywala.
+
+{
+  "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},
+  "druzyna_2": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},
+  "prowadzi": "remis",
+  "uzasadnienie": ""
+}"""
+
+_PLIK_OCENY_SEDZIEGO = HOME / "RYWALIZACJA" / "ocena_sedziego.json"
+
+
+def _podsumowania_z(katalog, n=8):
+    """Ostatnie wyniki krokow druzyny (po czasie zapisu) jako zdania."""
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return ""
+    wpisy = []
+    for f in pliki:
+        data = read_json(f, {})
+        if not isinstance(data, dict):
+            continue
+        wpisy.append({
+            "status": data.get("status"),
+            "report": short(str(data.get("report") or data.get("message")
+                                or data.get("error") or ""), 300),
+        })
+    return _human_task_summary_lines(wpisy)
+
+
+# v480fm: bieg 2026-10-25 18:40 — druzyna 2 sprawdzila "ls ~/MAIN_1", program
+# to zablokowal (nic sie nie wykonalo), a Sedzia widzial sama komende i
+# zdyskwalifikowal druzyne za "zajrzenie do folderu rywala". Zablokowana
+# komenda idzie do Sedziego z dopiskiem, ze program jej nie wykonal.
+_BLOKADY_RYWALIZACJI = ("FOLDER_RYWALA", "PROCES_RYWALA")
+
+
+def _zablokowane_przez_program(result):
+    return bool(isinstance(result, dict)
+                and str(result.get("error") or "") in _BLOKADY_RYWALIZACJI)
+
+
+def _gdzie_pracowala(katalog, n=8, ile=30):
+    """v480av: komendy i cele narzedzi z ostatnich krokow druzyny — po nich
+    Sedzia widzi, w jakich folderach druzyna naprawde pracowala."""
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return ""
+    linie = []
+    for f in pliki:
+        data = read_json(f, {})
+        if not isinstance(data, dict):
+            continue
+        for t in data.get("tool_trace") or []:
+            if not isinstance(t, dict):
+                continue
+            co = str(t.get("komenda") or t.get("cel_akcji") or "").strip()
+            if not co:
+                continue
+            # v480ex: bez "sleep N;" — to czekanie, nie miejsce pracy
+            co = re.sub(r"^\s*sleep\s+\d+\s*(?:;|&&)\s*", "", co)
+            linie.append("- " + str(t.get("tool") or "?") + ": " + short(co, 160)
+                         + (" — PROGRAM ZABLOKOWAŁ: nie wykonała się, drużyna nic "
+                            "z niej nie dostała" if t.get("zablokowane") else ""))
+    # v480ex: ta sama komenda raz (ostatnie wystapienie) — bieg 2026-10-24
+    # 21:29: to samo sprawdzenie logu 4 razy w jednej ocenie.
+    linie = list(reversed(list(dict.fromkeys(reversed(linie)))))
+    linie = linie[-ile:]
+    return "\n".join(linie)
+
+
+def _pliki_druzyny(numer, ile=40):
+    folder = HOME / ("MAIN_" + str(numer))
+    linie = []
+    kopii = 0
+    try:
+        for korzen, katalogi, pliki in os.walk(folder):
+            katalogi[:] = sorted(k for k in katalogi if not k.startswith("."))
+            if len(Path(korzen).relative_to(folder).parts) >= 2:
+                katalogi[:] = []
+            for nazwa in sorted(pliki):
+                if nazwa.startswith("."):
+                    continue
+                # v480ex: kopie zapasowe (.bak_…, .przed_…) to szum — bieg
+                # 2026-10-24 21:29: 15 kopii PLATEAU_B_RAPORT.md.bak_… w spisie
+                if _KOPIA_W_SPISIE_RE.search(nazwa):
+                    kopii += 1
+                    continue
+                p = Path(korzen) / nazwa
+                try:
+                    rozmiar = _po_ludzku_rozmiar(p.stat().st_size)
+                except Exception:
+                    rozmiar = "?"
+                linie.append(str(p.relative_to(folder)) + " (" + rozmiar + ")")
+                if len(linie) >= ile:
+                    return ", ".join(linie) + ", …"
+    except Exception:
+        pass
+    if kopii:
+        linie.append("(+ " + str(kopii) + " kopii zapasowych)")
+    return ", ".join(linie) if linie else "(pusto)"
+
+
+# v480bw: uzytkownik (2026-10-16) — Sedzia widzi to, co drużyna
+# naprawde zbudowala i o czym rozmawiala, nie tylko jej streszczenia.
+# Bieg 2026-10-16 15:09: "Materiał jest skrócony i nie widzę
+# jednoznacznie, czy backoff został faktycznie użyty w predict.py".
+_SEDZIA_KOD_LIMIT = 5000
+_SEDZIA_ROZMOWA_LIMIT = 5000
+_SEDZIA_TEKSTOWE = (".py", ".sh", ".json", ".md", ".txt", ".c", ".cpp", ".h",
+                    ".js", ".rs", ".go", ".java", ".cfg", ".toml", ".yaml", ".yml")
+
+
+def _kroki_dla_sedziego(katalog, n=8):
+    """Ostatnie kroki z pelnym uzasadnieniem MAIN-a."""
+    try:
+        pliki = sorted(Path(katalog).glob("*.json"), key=lambda p: p.stat().st_mtime)[-n:]
+    except Exception:
+        return ""
+    linie = []
+    for i, f in enumerate(pliki, 1):
+        data = read_json(f, {})
+        if not isinstance(data, dict):
+            continue
+        status = _HUMAN_STATUS_LABELS.get(data.get("status"), str(data.get("status") or "?"))
+        po_co = " ".join(str(data.get("task") or "").split())
+        co = " ".join(str(data.get("report") or data.get("message")
+                          or data.get("error") or "").split())
+        # v480ex: po RUN raport to powod MAIN-a + "wykonano N z M akcji" —
+        # powod szedl dwa razy (bieg 2026-10-24 21:29, kazdy krok).
+        _wyk = re.search(r"wykonano \d+ z \d+ akcji.*$", co)
+        if po_co and _wyk and co.startswith(po_co[:60]):
+            co = _wyk.group(0)
+        linie.append(str(i) + ". " + status + (" — " + short(po_co, 500) if po_co else "")
+                     + (" | wynik: " + short(co, 300) if co and co not in po_co else ""))
+    return "\n".join(linie)
+
+
+# v480es: Sedzia nie dostaje co kwadrans tego samego. Uzytkownik
+# 2026-10-24 21:02: "sprawdz, czy sedzia nie dostaje tych samych
+# wiadomosci, np. ostatnich od zespolu Marka ... czy jest spam co 15 min".
+# Bieg 2026-10-24 20:24 -> 20:39: z 34 tys. znakow 24 tys. bylo
+# identycznych jak kwadrans wczesniej — "Ostatnie wypowiedzi zespolu"
+# obu druzyn (po ok. 5 tys.) slowo w slowo, niezmienione pliki
+# (wynik.json, DLA_UZYTKOWNIKA.md ...), te same kroki. W tej samej
+# rozmowie Sedzia ma je juz wyzej, wiec idzie tylko to, co nowe, z
+# jedna linia, ile wczesniejszego pominieto. Nowa rozmowa Sedziego
+# (inny chat_session_id) dostaje znow wszystko.
+_SEDZIA_WIDZIAL_FILE = STATE_DIR / "sedzia_widzial.json"
+_sedzia_widzial = {"stare": set(), "nowe": set(), "czas": ""}
+
+
+def _sedzia_klucz(rodzaj, numer, tekst):
+    return rodzaj + str(numer) + ":" + hashlib.sha1(
+        str(tekst)[:300].encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _sedzia_tylko_nowe(tekst, rodzaj, numer):
+    """Linie, ktorych Sedzia w tej rozmowie jeszcze nie dostal."""
+    if not tekst:
+        return tekst
+    zostaja, pominiete = [], 0
+    for l in str(tekst).split("\n"):
+        if not l.strip():
+            zostaja.append(l)
+            continue
+        k = _sedzia_klucz(rodzaj, numer, re.sub(r"^\d+\.\s*", "", l))
+        _sedzia_widzial["nowe"].add(k)
+        if k in _sedzia_widzial["stare"]:
+            pominiete += 1
+            continue
+        zostaja.append(l)
+    if not pominiete:
+        return tekst
+    nota = ("(" + str(pominiete) + " wcześniejsze — bez zmian, masz je w tej "
+            "rozmowie z oceny z " + (_sedzia_widzial["czas"] or "poprzedniej") + ")")
+    if not any(x.strip() for x in zostaja):
+        return nota
+    return nota + "\n" + "\n".join(zostaja).strip("\n")
+
+
+def _sedzia_wczytaj_widziane(rozmowa):
+    d = read_json(_SEDZIA_WIDZIAL_FILE, {})
+    _sedzia_widzial["nowe"] = set()
+    if isinstance(d, dict) and rozmowa and d.get("rozmowa") == rozmowa:
+        _sedzia_widzial["stare"] = set(d.get("klucze") or [])
+        _sedzia_widzial["czas"] = str(d.get("czas") or "")
+    else:
+        _sedzia_widzial["stare"] = set()
+        _sedzia_widzial["czas"] = ""
+
+
+def _sedzia_rozmowa_teraz():
+    try:
+        _s = sessions.get("ARBITER")
+        r = getattr(_s, "chat_session_id", None) if _s is not None else None
+        if r:
+            return str(r)
+        return str((read_json(_CEL_WYSLANY_FILE, {}).get("ARBITER") or {}).get("rozmowa") or "")
+    except Exception:
+        return ""
+
+
+def _kod_dla_sedziego(numer):
+    """Tresc ostatnio zmienionych plikow tekstowych z ~/MAIN_N."""
+    folder = HOME / ("MAIN_" + str(numer))
+    try:
+        pliki = [
+            p for p in folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in _SEDZIA_TEKSTOWE
+            and not any(cz.startswith(".") or cz == "__pycache__"
+                        for cz in p.relative_to(folder).parts)
+        ]
+        pliki.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return ""
+    wynik = folder / "wynik.json"
+    if wynik in pliki:
+        pliki.remove(wynik)
+        pliki.insert(0, wynik)
+    bloki, zostalo = [], _SEDZIA_KOD_LIMIT
+    for p in pliki:
+        if zostalo < 300:
+            break
+        # v480iu: duzy plik (dane uczace, wielki log) — Sedzia nie czyta
+        # dziesiatek MB kodu, a odczyt w calosci zajmowal setki MB pamieci.
+        try:
+            _rozm = p.stat().st_size
+        except Exception:
+            continue
+        if _rozm > _PLIK_CALY_DO_B:
+            _kd = "duzy" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + str(_rozm)
+            _sedzia_widzial["nowe"].add(_kd)
+            if _kd not in _sedzia_widzial["stare"]:
+                _wiersz = "--- " + str(p.relative_to(folder)) + " --- (" + str(_rozm) + " B, duży plik — treści nie pokazuję)"
+                bloki.append(_wiersz)
+                zostalo -= len(_wiersz)
+            continue
+        try:
+            tresc = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        _k = "plik" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + hashlib.sha1(
+            tresc.encode("utf-8", "replace")).hexdigest()[:12]
+        _sedzia_widzial["nowe"].add(_k)
+        _rel = str(p.relative_to(folder))
+        if _k in _sedzia_widzial["stare"]:
+            bloki.append("--- " + _rel + " --- bez zmian od oceny z "
+                         + (_sedzia_widzial["czas"] or "poprzedniej") + " (treść masz wyżej)")
+            _sedzia_widzial["nowe"].update(
+                x for x in _sedzia_widzial["stare"] if x.startswith("dl" + str(numer) + ":" + _rel + ":"))
+            continue
+        # v480gb: plik dopisywany (NOTES.md, log) — Sedzia dostawal co
+        # runde te same pierwsze 3000 znakow, a dopisanego konca nie
+        # widzial wcale (bieg 2026-10-26 nocny: "## 00:38 — baseline"
+        # 10 razy). Gdy poczatek jest ten sam, co juz widzial, idzie
+        # tylko to, co przybylo.
+        _przybylo_od = 0
+        for x in _sedzia_widzial["stare"]:
+            if not x.startswith("dl" + str(numer) + ":" + _rel + ":"):
+                continue
+            try:
+                _dl, _h = x.rsplit(":", 2)[-2:]
+                _dl = int(_dl)
+            except Exception:
+                continue
+            if (_przybylo_od < _dl <= len(tresc) and hashlib.sha1(
+                    tresc[:_dl].encode("utf-8", "replace")).hexdigest()[:12] == _h):
+                _przybylo_od = _dl
+        if _przybylo_od:
+            _sedzia_widzial["nowe"].add("dl" + str(numer) + ":" + _rel + ":" + str(len(tresc)) + ":"
+                                        + hashlib.sha1(tresc.encode("utf-8", "replace")).hexdigest()[:12])
+            nowe = tresc[_przybylo_od:]
+            kawalek = nowe[-min(zostalo, 3000):]
+            bloki.append("--- " + _rel + " --- (pierwsze " + str(_przybylo_od) + " znaków bez zmian "
+                         "od oceny z " + (_sedzia_widzial["czas"] or "poprzedniej") + ", masz je wyżej; "
+                         "dopisane:)" + ("\n…(pominięto " + str(len(nowe) - len(kawalek)) + " znaków dopisanych wcześniej)"
+                                        if len(kawalek) < len(nowe) else "") + "\n" + kawalek)
+            zostalo -= len(kawalek)
+            continue
+        kawalek = tresc[:min(zostalo, 3000)]
+        _sedzia_widzial["nowe"].add("dl" + str(numer) + ":" + _rel + ":" + str(len(kawalek)) + ":"
+                                    + hashlib.sha1(kawalek.encode("utf-8", "replace")).hexdigest()[:12])
+        bloki.append("--- " + _rel + " ---\n" + kawalek
+                     + ("\n…(dalej " + str(len(tresc) - len(kawalek)) + " znaków)"
+                        if len(kawalek) < len(tresc) else ""))
+        zostalo -= len(kawalek)
+    return "\n".join(bloki)
+
+
+def _rozmowa_dla_sedziego(numer):
+    """Ostatnie wypowiedzi zespolu drużyny (z jej pliku zdarzen biegu)."""
+    katalog = ((_DRUZYNA1_DIR if str(numer) == "1" else _DRUZYNA2_DIR)
+               / "memory" / "przebieg")
+    try:
+        plik = max(katalog.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+        linie = plik.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return ""
+    wpisy = []
+    for l in linie:
+        try:
+            d = json.loads(l)
+        except Exception:
+            continue
+        if d.get("typ") == "dyskwalifikacja":
+            wpisy = []
+        # v480cy: bieg 2026-10-21 15:04 — Sedzia wzial odpowiedz Eli
+        # (jej staly format {"percent", "summary"}) za podrobienie swojej
+        # oceny i zdyskwalifikowal druzyne 2. Ocena postepu to nie praca
+        # zespolu, a w rywalizacji ocenia sam Sedzia — Ela do niego nie idzie.
+        elif (d.get("typ") == "odpowiedz"
+              and d.get("rola") not in ("ARBITER", "PROGRESS_ESTIMATOR")
+              and str(d.get("tresc") or "").strip()):
+            wpisy.append(d)
+    bloki, zostalo = [], _SEDZIA_ROZMOWA_LIMIT
+    for d in reversed(wpisy):
+        if zostalo < 300:
+            break
+        kto = _IMIONA_ROL.get(d.get("rola"), d.get("rola"))
+        tresc = " ".join(str(d["tresc"]).split())
+        if d.get("rola") == "MAIN":
+            # decyzje RUN/TASK sa juz w krokach — z MAIN-a tylko pytania
+            _dec = parse_json(str(d["tresc"]))
+            if not (isinstance(_dec, dict) and _dec.get("ask_question")):
+                continue
+            kto = "MAIN do " + str(_IMIONA_ROL.get(_rola_ask(_dec.get("ask_role")), _dec.get("ask_role") or "zespołu"))
+            tresc = " ".join(str(_dec["ask_question"]).split())
+        kawalek = short(tresc, min(zostalo, 1200))
+        bloki.append("[krok " + str(d.get("krok", "?")) + "] " + str(kto) + ": " + kawalek)
+        zostalo -= len(kawalek)
+    return "\n".join(reversed(bloki))
+
+
+def _stan_druzyny_dla_sedziego(numer):
+    katalog = RESULTS_DIR if numer == _DRUZYNA else (
+        (_DRUZYNA2_DIR if numer == "2" else _DRUZYNA1_DIR) / "results"
+    )
+    try:
+        w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
+        wynik = _werdykt_zdaniem(w, "Ostatni wynik.json")
+    except Exception:
+        wynik = "jeszcze żadnego"
+    return (
+        "Drużyna " + numer + " (folder ~/MAIN_" + numer + ")"
+        + (", teraz w kroku " + str(_krok_druzyny(numer)) if _krok_druzyny(numer) else "") + ":\n"
+        "Ostatnie kroki (z uzasadnieniem MAIN-a):\n" + (_sedzia_tylko_nowe(_kroki_dla_sedziego(katalog), "krok", numer) or "(jeszcze żadnych)") + "\n"
+        "Wynik sprawdzony przez program: " + wynik + "\n"
+        "Pliki w folderze: " + _pliki_druzyny(numer) + "\n"
+        "Ostatnio używane komendy i pliki:\n"
+        + (_sedzia_tylko_nowe(_gdzie_pracowala(katalog), "gdzie", numer) or "(brak)") + "\n"
+        "Treść ostatnio zmienionych plików w ~/MAIN_" + numer + ":\n"
+        + (_kod_dla_sedziego(numer) or "(brak)") + "\n"
+        "Ostatnie wypowiedzi zespołu:\n"
+        + (_sedzia_tylko_nowe(_rozmowa_dla_sedziego(numer), "mowa", numer) or "(brak)") + "\n"
+    )
+
+
+def ocen_rywalizacje(kroki):
+    """
+    Druzyna 1 (proces z Sedzia): jedna ocena obu druzyn (v480cq: co
+    kwadrans, `kroki` = (krok druzyny 1, krok druzyny 2)). Zapis do pliku
+    najnowszej oceny — kazda druzyna dostaje ja na swoim najblizszym
+    kroku. Nigdy nie rzuca.
+    """
+    if _DRUZYNA != "1":
+        return None
+    try:
+        k1, k2 = (str(k if k is not None else "?") for k in kroki)
+        _rozmowa_przed = _sedzia_rozmowa_teraz()
+        _sedzia_wczytaj_widziane(_rozmowa_przed)
+        prompt = (
+            "Ocena z godziny " + datetime.now().strftime("%H:%M")
+            + " — drużyna 1 jest na kroku " + k1 + ", drużyna 2 na kroku " + k2
+            + ". Tę samą ocenę dostaną obie drużyny, każda na swoim najbliższym kroku.\n\n"
+            + "".join(
+                "Drużyna " + _n + " zaczęła od nowa po dyskwalifikacji (" + _cz
+                + ") — to nowy zespół, z nowymi krokami.\n\n"
+                for _n, _cz in sorted(_nowe_po_dyskwalifikacji.items())
+            )
+            + _stan_druzyny_dla_sedziego("1")
+            + (_ostrzezenia_dla_sedziego("1") if _jest_dyskwalifikacja() else "") + "\n"
+            + _stan_druzyny_dla_sedziego("2")
+            + (_ostrzezenia_dla_sedziego("2") if _jest_dyskwalifikacja() else "")
+        )
+        parsed = parse_json(deepseek("ARBITER", prompt))
+        _nowe_po_dyskwalifikacji.clear()
+        try:
+            _rozmowa_po = _sedzia_rozmowa_teraz()
+            write_json(_SEDZIA_WIDZIAL_FILE, {
+                "rozmowa": _rozmowa_po,
+                "czas": datetime.now().strftime("%H:%M"),
+                # inna rozmowa niz ta, do ktorej liczylismy — nastepnym
+                # razem wszystko od nowa
+                "klucze": sorted(_sedzia_widzial["nowe"])
+                if isinstance(parsed, dict) and _rozmowa_po == _rozmowa_przed else [],
+            })
+        except Exception:
+            pass
+        if not isinstance(parsed, dict):
+            return None
+
+        def _druz(k):
+            d = parsed.get(k) if isinstance(parsed.get(k), dict) else {}
+            _l = re.search(r"-?\d+(?:[.,]\d+)?", str(d.get("procent", 0)))
+            try:
+                pr = max(0, min(100, int(float(_l.group().replace(",", "."))))) if _l else 0
+            except Exception:
+                pr = 0
+            # v480bf: cala ocena — skracana do 400 znakow dochodzila do
+            # MAIN-ow urwana w polowie zdania ("...[skrócono]...").
+            return {"procent": pr, "ocena": str(d.get("ocena") or "").strip(),
+                    "ostrzezenie": _powod_dyskwalifikacji(d.get("ostrzezenie")),
+                    "dyskwalifikacja": _powod_dyskwalifikacji(d.get("dyskwalifikacja")),
+                    "spadek": _spadek_lista(d.get("spadek"))}
+
+        ocena = {
+            "czas": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "runda": int(time.time()),
+            "kroki": {"1": k1, "2": k2},
+            "druzyna_1": _druz("druzyna_1"),
+            "druzyna_2": _druz("druzyna_2"),
+            "prowadzi": str(parsed.get("prowadzi", "remis")).strip(),
+            "uzasadnienie": str(parsed.get("uzasadnienie") or "").strip(),
+        }
+        if _jest_dyskwalifikacja():
+            for _n in ("1", "2"):
+                _d = ocena["druzyna_" + _n]
+                if _d.get("dyskwalifikacja") or not _d.get("ostrzezenie"):
+                    continue
+                _lista = _ostrzezenia(_n) + [{"czas": ocena["czas"], "powod": _d["ostrzezenie"]}]
+                _zapisz_ostrzezenia(_n, _lista)
+                _d["ostrzezenie_nr"] = len(_lista)
+                log("RYWALIZACJA", "Sędzia: ostrzeżenie dla drużyny " + _n + " ("
+                    + str(len(_lista)) + " z " + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + "): " + _d["ostrzezenie"])
+                if len(_lista) >= _OSTRZEZEN_DO_DYSKWALIFIKACJI:
+                    _d["dyskwalifikacja"] = (
+                        "Trzecie ostrzeżenie Sędziego. Kolejne ostrzeżenia: "
+                        + " | ".join(str(o.get("powod", "")) for o in _lista)
+                    )
+        else:
+            for _n in ("1", "2"):
+                ocena["druzyna_" + _n].pop("ostrzezenie", None)
+                ocena["druzyna_" + _n].pop("spadek", None)
+        for _n in ("1", "2"):
+            if not ocena["druzyna_" + _n].get("dyskwalifikacja"):
+                ocena["druzyna_" + _n].pop("spadek", None)
+        # v480dv: ocena wie, do ktorego celu byla — patrz v480cs w
+        # _goal_briefing_for (nowa rozmowa Sedziego dostaje stara ocene
+        # tylko przy tym samym celu).
+        ocena["cel"] = hashlib.sha1(
+            _current_goal_text.encode("utf-8")
+        ).hexdigest()[:16]
+        ocena["skala"] = hashlib.sha1(
+            ARBITER_PROMPT.encode("utf-8")
+        ).hexdigest()[:12]
+        # v480fm: dyskwalifikacja za zablokowana komende nie obowiazuje —
+        # pole czyscimy, zanim ocena trafi do druzyn i do pliku.
+        for _n in ("1", "2"):
+            _d = ocena.get("druzyna_" + _n)
+            if isinstance(_d, dict) and _d.get("dyskwalifikacja"):
+                _zabl = _powod_to_zablokowana_komenda(_n, _d["dyskwalifikacja"])
+                if _zabl:
+                    log("RYWALIZACJA", "Sędzia chciał zdyskwalifikować drużynę " + _n
+                        + " za komendę, którą program zablokował (" + short(_zabl, 120)
+                        + ") — nie wykonała się, drużyna nic od rywala nie dostała, "
+                        "więc dyskwalifikacji nie ma.")
+                    _d["dyskwalifikacja"] = ""
+                    _d["spadek"] = []
+        _DIR_RUND.mkdir(parents=True, exist_ok=True)
+        for _plik in (_plik_rundy(ocena["runda"]), _PLIK_OCENY_SEDZIEGO):
+            tmp = _plik.with_suffix(".tmp")
+            tmp.write_text(json.dumps(ocena, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, _plik)
+        # v480bd: paski na ekranie (terminal druzyny 1) od razu, gdy Sedzia
+        # oceni — takze gdy pierwsza byla druzyna 2; MAIN-y dostaja ocene
+        # i tak dopiero na swoim kroku.
+        try:
+            pasek_rywalizacji(ocena)
+            _paski_pokazane.add(ocena["runda"])
+        except Exception:
+            pass
+        log("RYWALIZACJA", "Sędzia ocenił obie drużyny (drużyna 1 na kroku " + k1
+            + ", drużyna 2 na kroku " + k2 + ") — każda dostanie tę ocenę na swoim najbliższym kroku.")
+        log_event("ocena_sedziego", ocena)
+        if _jest_dyskwalifikacja():
+            for _n in ("1", "2"):
+                if ocena["druzyna_" + _n].get("dyskwalifikacja"):
+                    zdyskwalifikuj(_n, ocena["druzyna_" + _n]["dyskwalifikacja"], ocena)
+        return ocena
+    except Exception as e:
+        log("RYWALIZACJA", "Ocena Sędziego nie wyszła (pomijam): " + str(e))
+        return None
+
+
+def _kroki_oceny(o):
+    k = o.get("kroki") if isinstance(o.get("kroki"), dict) else None
+    if k:
+        return " (drużyna 1 na kroku " + str(k.get("1", "?")) + ", drużyna 2 na kroku " + str(k.get("2", "?")) + ")"
+    return " (po kroku " + str(o.get("krok")) + ")" if o.get("krok") is not None else ""
+
+
+def _ocena_zdaniem(o, dla=None):
+    """Ocena Sedziego jako zdania.
+
+    v480dq: `dla` = numer druzyny, ktora ja dostaje — swoja ocene widzi
+    w calosci, o rywalu tylko procent (bez opisu jego metod: program nie
+    moze sam podsuwac pomyslow, za ktore potem karze). Bez `dla` (log
+    dla uzytkownika) — cala.
+    """
+    def _zd(t):
+        t = str(t or "").strip()
+        return t if t.endswith((".", "!", "?")) else t + "."
+    _prow = str(o.get("prowadzi", "")).strip()
+    dla = str(dla) if dla else None
+
+    def _cala(_n):
+        return dla is None or _n == dla
+
+    def _druz(_n):
+        d = o.get("druzyna_" + _n) or {}
+        t = "drużyna " + _n + " — " + str(d.get("procent")) + "%"
+        return t + (": " + _zd(d.get("ocena")) if _cala(_n) else ".")
+
+    return (
+        "Ocena Sędziego z " + str(o.get("czas", "")) + _kroki_oceny(o)
+        + (", wspólna dla obu drużyn: " if dla is None else
+           " — Wasza w całości, o drużynie " + ("2" if dla == "1" else "1")
+           + " tylko procent: ")
+        + _druz("1") + " " + _druz("2")[0].upper() + _druz("2")[1:]
+        + " Prowadzi: " + ("remis" if _prow.lower().startswith("remis") else "drużyna " + _prow)
+        + (" — " + _zd(o["uzasadnienie"]) if o.get("uzasadnienie") and dla is None else ".")
+        + "".join(
+            " Drużyna " + _n + " dostaje ostrzeżenie ("
+            + str(o["druzyna_" + _n].get("ostrzezenie_nr", "?")) + " z "
+            + str(_OSTRZEZEN_DO_DYSKWALIFIKACJI) + ", trzecie to dyskwalifikacja)"
+            + (" — powód: " + _zd(o["druzyna_" + _n]["ostrzezenie"]) if _cala(_n) else ".")
+            for _n in ("1", "2")
+            if (o.get("druzyna_" + _n) or {}).get("ostrzezenie")
+            and not (o.get("druzyna_" + _n) or {}).get("dyskwalifikacja")
+            and _jest_dyskwalifikacja()
+        )
+        + "".join(
+            " Drużyna " + _n + " zdyskwalifikowana — powód: "
+            + _zd(o["druzyna_" + _n]["dyskwalifikacja"])
+            + " Zaczyna od nowa, cały zespół od zera."
+            for _n in ("1", "2")
+            if (o.get("druzyna_" + _n) or {}).get("dyskwalifikacja")
+            and _jest_dyskwalifikacja()
+        )
+    )
+
+
+# v480ec: burza mozgow co 2 h (uzytkownik 2026-10-24 12:58-13:04,
+# swiadomie wyjatek od "bez powtarzanych tekstow", tylko dla tej jednej
+# rzeczy). Osobna wiadomosc do MAIN-a, nie w jego stalym prompcie i nie do
+# reszty zespolu. Pomijana, gdy MAIN w ostatnich 2 h sam zapytal juz co
+# najmniej 3 rozne osoby z zespolu (bez Eli i Igora). Igor nie dostaje
+# nigdy zadnych instrukcji. Logi 23/24.10: druzyna 1 3 pytania na 125
+# krokow; gdy uzytkownik poprosil o burze, MAIN zapytal 5 osob i Marek
+# wylapal zawyzony rekord.
+# v480ho: uzytkownik 2026-10-27: sztywno co 1 h, bez pomijania.
+_BURZA_CO_S = 3600
+_BURZA_PLIK_STANU = STATE_DIR / "burza_mozgow.json"
+_BURZA_BEZ = ("IGOR", "PROGRESS_ESTIMATOR")
+
+
+def _zapisz_pytanie_maina(rola):
+    """v480ec: kogo i kiedy MAIN zapytal (do pomijania burzy mozgow)."""
+    try:
+        st = read_json(_BURZA_PLIK_STANU, {})
+        if not isinstance(st, dict):
+            st = {}
+        teraz = time.time()
+        pyt = [p for p in (st.get("pytania") or [])
+               if isinstance(p, list) and len(p) == 2
+               and teraz - float(p[0]) < _BURZA_CO_S]
+        pyt.append([teraz, str(rola)])
+        st["pytania"] = pyt
+        write_json(_BURZA_PLIK_STANU, st)
+    except Exception:
+        pass
+
+
+def _burza_blok():
+    """v480ec: tekst burzy mozgow dla MAIN-a, gdy minely 2 h — inaczej ""."""
+    try:
+        st = read_json(_BURZA_PLIK_STANU, {})
+        if not isinstance(st, dict):
+            st = {}
+        teraz = time.time()
+        ostatnio = float(st.get("ostatnio") or 0)
+        if not ostatnio:
+            st["ostatnio"] = teraz
+            write_json(_BURZA_PLIK_STANU, st)
+            return ""
+        if teraz - ostatnio < _BURZA_CO_S:
+            return ""
+        st["ostatnio"] = teraz
+        pytani = {
+            str(p[1]) for p in (st.get("pytania") or [])
+            if isinstance(p, list) and len(p) == 2
+            and teraz - float(p[0]) < _BURZA_CO_S
+            and str(p[1]) not in _BURZA_BEZ
+        }
+        write_json(_BURZA_PLIK_STANU, st)
+        plik = (
+            "~/MAIN_" + _DRUZYNA + "/BURZA_MOZGOW.md" if _DRUZYNA
+            else "~/BURZA_MOZGOW.md"
+        )
+        tekst = (
+            # v480ej (uzytkownik 2026-10-24 17:31): tekst dostaje tylko
+            # MAIN, wiec mowi do niego, nie do "was" — inaczej MAIN myslal,
+            # ze zespol sam to zapisze.
+            "Czas na burzę mózgów. Ten tekst dostajesz tylko Ty — zespół go "
+            "nie widzi i odezwie się, gdy go zapytasz. Zapytaj po kolei "
+            "każdego w zespole o zdanie o tym, co robicie i co dalej. Gdy "
+            "zbierzesz odpowiedzi, sam dopisz z datą do " + plik + " krótko: "
+            "jakie macie wnioski, co z nich realizujecie teraz i do czego tym "
+            "dążycie w celu."
+        )
+        log("MAIN", "Burza mózgów (co 1 h): " + tekst)
+        return tekst + "\n\n"
+    except Exception:
+        return ""
+
+
+def _sedzia_blok():
+    """Nowe werdykty dla MAIN-a — kazdy raz; "" gdy nic nowego."""
+    with _sedzia_lock:
+        if not _sedzia_wiadomosci:
+            return ""
+        linie = list(_sedzia_wiadomosci)
+        del _sedzia_wiadomosci[:]
+    return "Sędzia rywalizacji:\n" + "\n".join("- " + l for l in linie) + "\n\n"
+
+
 def main():
 
     banner()
+
+    # v480aq: 1 = zwykly program, 2 = rywalizacja dwoch druzyn.
+    _wybierz_tryb()
+    _ustaw_konta_druzyny()
 
     # Sprząta ewentualne zrzuty ekranu z poprzedniego, twardo
     # zabitego uruchomienia (np. zamknięte przed atexit) — bez
@@ -41385,7 +58328,14 @@ def main():
     # było podpięte przez atexit, tylko nikt nigdy nie włączał blokady.
     # ----------------------------------------------------------
 
-    agent_wake_lock()
+    # v480aq: blokade trzyma druzyna 1 — wyjscie druzyny 2 zwalnialoby
+    # ja obu (termux-wake-lock jest jeden na caly Termux).
+    if _DRUZYNA != "2":
+        agent_wake_lock()
+    zacznij_oddech()
+    zacznij_straznika_pamieci()
+    _podstaw_sleep_zespolu()
+    _podstaw_proot_distro()
 
     # ----------------------------------------------------------
     # Uprawnienia Termux:API — PRZED załadowaniem DeepSeek/Gemini,
@@ -41396,7 +58346,8 @@ def main():
 
     try:
 
-        typed_perm_check = input(
+        # v480k: po cichej aktualizacji start idzie bez pytan.
+        typed_perm_check = "" if _BEZ_PYTAN else input(
             "Sprawdzić/aktywować uprawnienia Termux:API przed "
             "startem? [t/N] > "
         ).strip().lower()
@@ -41425,11 +58376,23 @@ def main():
     # powyżej po prostu znaczy, że założy ją od zera.
     # ----------------------------------------------------------
 
-    maybe_clear_previous_session_data()
-    maybe_clear_generated_project_files()
-    maybe_clear_stale_final_ok_evidence()
-    maybe_clear_custom_tools()
-    maybe_restart_team_sessions_for_new_goal()
+    # v480k: po cichej aktualizacji to ten sam bieg — niczego nie
+    # czyscimy i o nic nie pytamy (jak odpowiedz NIE na kazde pytanie).
+    if not _BEZ_PYTAN:
+        # v480fl: w rywalizacji pliki druzyn ma jedno pytanie o foldery
+        # (po resecie rozmow, razem z tym, co druzyny zalozyly poza nimi).
+        # Bieg 2026-10-25 10:58: uzytkownik dal "t t t", ale trzy "t"
+        # poszly na kolejke, "wygenerowane pliki" (bez ~/MAIN_1, bo ten
+        # folder byl sprzed biegu) i reset rozmow — a ~/MAIN_1 zostal.
+        if _DRUZYNA != "1":
+            maybe_clear_previous_session_data()
+            maybe_clear_generated_project_files()
+        maybe_clear_stale_final_ok_evidence()
+        maybe_clear_custom_tools()
+        maybe_restart_team_sessions_for_new_goal()
+
+    _swieze_rozmowy_po_poddaniu()
+    _wiadomosc_po_dyskwalifikacji()
 
     init_team()
 
@@ -41444,6 +58407,8 @@ def main():
     # ----------------------------------------------------------
 
     init_android()
+    raport_poprzedniego_zamkniecia()
+    chron_termuksa_przed_zamykaniem()
 
     # ----------------------------------------------------------
     # Niestandardowe narzędzia (custom_tools/) — DeepSeek może je
@@ -41471,7 +58436,7 @@ def main():
     # Chrome
     # ----------------------------------------------------------
 
-    tabs = chrome_tabs()
+    tabs = chrome_tabs(budz=False)
 
     if tabs:
 
@@ -41546,6 +58511,11 @@ def main():
 
         while True:
 
+            # v480k: po cichej aktualizacji — ten sam cel, bez pytania.
+            if _BEZ_PYTAN and saved_goal:
+                goal = saved_goal
+                break
+
             if saved_goal:
 
                 print(
@@ -41576,6 +58546,11 @@ def main():
                     _run_permission_bootstrap()
                     continue
 
+                if typed:
+                    typed = _potwierdz_cel(typed)
+                    if typed is None:
+                        continue
+
                 goal = typed if typed else saved_goal
 
             else:
@@ -41593,6 +58568,11 @@ def main():
                 if typed.lower() in _PERMISSION_TEST_COMMAND_WORDS:
                     _run_permission_bootstrap()
                     continue
+
+                if typed:
+                    typed = _potwierdz_cel(typed)
+                    if typed is None:
+                        continue
 
                 goal = typed
 
@@ -41628,14 +58608,21 @@ def main():
 
     print()
 
+    # v480aq: druzyna 2 rusza w tle z tym samym celem.
+    if _DRUZYNA == "1":
+        _uruchom_druzyne_2(goal)
+
     try:
 
         run_agent(
             goal
         )
 
+        _nowy_bieg_po_poddaniu()
+
     except KeyboardInterrupt:
 
+        globals()["_zamkniete_przez_uzytkownika"] = True
         print()
         print(
             "[AGENT] Zatrzymany przez użytkownika."
