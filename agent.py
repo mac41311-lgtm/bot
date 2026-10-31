@@ -27101,30 +27101,70 @@ def _ukryj_rywala_na_laptopie(command_str, wynik):
 _BRAK_MODULU_RE = re.compile(r"(?:ModuleNotFoundError|ImportError): No module named '?([A-Za-z_][\w.]*)'?")
 
 
+# v480jm: to samo dla innych jezykow i programow (uzytkownik: "a jak to
+# dziala w innych jezykach, ktorych pisza?"). Kazdy wzorzec: (regex z
+# nazwa w grupie 1, co brakuje, przyklad na telefonie, przyklad na laptopie).
+_BRAKI = [
+    (re.compile(r"Cannot find (?:module|package) '([^']+)'"), "modułu Node.js",
+     "npm install <nazwa>", "LAPTOP: npm install <nazwa>"),
+    (re.compile(r"cannot load such file -- ([\w./-]+)"), "biblioteki Ruby",
+     "gem install <nazwa>", "LAPTOP: gem install --user-install <nazwa>"),
+    (re.compile(r"Can't locate ([\w/]+)\.pm in @INC"), "modułu Perl",
+     "cpan <nazwa>", "LAPTOP: cpan <nazwa>"),
+    (re.compile(r"there is no package called [‘'\"]([^’'\"]+)"), "pakietu R",
+     "install.packages(\"<nazwa>\")", "install.packages(\"<nazwa>\") w R na laptopie"),
+    (re.compile(r"error while loading shared libraries: ([\w.+-]+)"), "biblioteki systemowej",
+     "pkg install <nazwa>", None),
+    (re.compile(r"(?:^|\n)(?:[^\n:]*: )?(?:line \d+: |\d+: )?([\w.+-]+): (?:command )?not found"), "programu",
+     "pkg install <nazwa>", None),
+]
+
+
 def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
     try:
         if not isinstance(wynik, dict) or wynik.get("podpowiedz"):
             return wynik
         tekst = str(wynik.get("stdout") or "") + "\n" + str(wynik.get("stderr") or "")
+        gdzie = "Na laptopie" if na_laptopie else "Na telefonie"
         m = _BRAK_MODULU_RE.search(tekst)
-        if not m:
+        if m:
+            modul = m.group(1)
+            glowny = modul.split(".")[0]
+            # wlasny modul druzyny (plik obok), a nie biblioteka
+            if not na_laptopie:
+                kat = _katalog_startu_komendy(command_str) or str(HOME)
+                if (Path(kat) / (glowny + ".py")).exists() or (Path(kat) / glowny / "__init__.py").exists():
+                    return wynik
+            # v480jl (uzytkownik): sam blad + ktora biblioteka + przyklad z
+            # <nazwa>, bez gotowej komendy i bez wyboru pakietu za zespol
+            wynik["podpowiedz"] = (
+                gdzie + " brakuje biblioteki Python „" + modul + "”. Możecie ją doinstalować, np. "
+                + ("LAPTOP: pip install <nazwa> (bez sudo: w venv albo z --user)." if na_laptopie
+                   else "pip install <nazwa>."))
             return wynik
-        modul = m.group(1)
-        glowny = modul.split(".")[0]
-        # wlasny modul druzyny (plik obok), a nie biblioteka
-        if not na_laptopie:
-            kat = _katalog_startu_komendy(command_str) or str(HOME)
-            if (Path(kat) / (glowny + ".py")).exists() or (Path(kat) / glowny / "__init__.py").exists():
+        for wzor, co, tel, lap in _BRAKI:
+            m = wzor.search(tekst)
+            if not m:
+                continue
+            nazwa = m.group(1)
+            # wlasny plik druzyny (./x.js, ../lib) albo LAPTOP: — to nie brak pakietu
+            if nazwa.startswith((".", "/")) or nazwa.upper().startswith("LAPTOP"):
                 return wynik
-        # v480jl (uzytkownik): sam blad + ktora biblioteka + przyklad z
-        # <nazwa>, bez gotowej komendy i bez wyboru pakietu za zespol
-        if na_laptopie:
-            rada = ("Na laptopie brakuje biblioteki Python „" + modul + "”. Możecie ją "
-                    "doinstalować, np. LAPTOP: pip install <nazwa> (bez sudo: w venv albo z --user).")
-        else:
-            rada = ("Na telefonie brakuje biblioteki Python „" + modul + "”. Możecie ją "
-                    "doinstalować, np. pip install <nazwa>.")
-        wynik["podpowiedz"] = rada
+            if co == "programu":
+                wynik["podpowiedz"] = (
+                    gdzie + " nie ma programu „" + nazwa + "” (albo to literówka w nazwie). "
+                    + ("Programy systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
+                       "potrzebny, napiszcie to w DLA_UZYTKOWNIKA.md; czasem jest też wersja przez pip."
+                       if na_laptopie else "Możecie go doinstalować, np. pkg install <nazwa>."))
+            elif lap is None and na_laptopie:
+                wynik["podpowiedz"] = (
+                    gdzie + " brakuje " + co + " „" + nazwa + "”. Biblioteki systemowe na laptopie "
+                    "instaluje użytkownik (sudo) — jeśli jest potrzebna, napiszcie to w DLA_UZYTKOWNIKA.md.")
+            else:
+                wynik["podpowiedz"] = (
+                    gdzie + " brakuje " + co + " „" + nazwa + "”. Możecie to doinstalować, np. "
+                    + (lap if na_laptopie else tel) + ".")
+            return wynik
     except Exception:
         pass
     return wynik

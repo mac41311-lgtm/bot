@@ -3923,3 +3923,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        przykład „pip install <nazwa>” — bez gotowej komendy i bez wybierania
        pakietu za zespół. Na laptopie dopisek „bez sudo: w venv albo z
        --user”.
+
+276. (v480jm) Ta sama krótka podpowiedź dla innych języków i programów:
+       moduł Node.js („Cannot find module”, npm install <nazwa>), Ruby
+       (gem install), Perl (cpan), R (install.packages), brak biblioteki
+       systemowej („error while loading shared libraries”) i brak programu
+       („command not found” — z dopiskiem, że to może być literówka; na
+       telefonie pkg install <nazwa>). Na laptopie programy i biblioteki
+       systemowe instaluje użytkownik (sudo), więc podpowiedź mówi, żeby
+       napisać to w DLA_UZYTKOWNIKA.md. Własne pliki drużyny (./lib) i
+       „LAPTOP:” w środku komendy nie dostają tej podpowiedzi.
