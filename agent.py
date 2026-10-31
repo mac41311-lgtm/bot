@@ -27181,6 +27181,82 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
     return wynik
 
 
+_laptop_moje_cache = {"t": 0.0, "lista": []}
+
+
+def _laptop_moje_procesy():
+    """
+    v480jo: [(nazwa skryptu, ile trwa w s)] procesow tej druzyny na
+    laptopie (AEL_DRUZYNA w srodowisku), bez opakowan programu. Raz na
+    minute przez ssh, tylko gdy laptop jest dostepny.
+    """
+    if not _laptop_skonfigurowany() or _laptop.get("ok") is not True:
+        return []
+    if time.time() - _laptop_moje_cache["t"] < 60:
+        return _laptop_moje_cache["lista"]
+    _laptop_moje_cache["t"] = time.time()
+    moja = _DRUZYNA or "0"
+    skrypt = ("for p in /proc/[0-9]*; do grep -qz '^AEL_DRUZYNA=" + moja + "$' $p/environ 2>/dev/null "
+              "|| continue; i=${p#/proc/}; e=$(ps -o etimes= -p $i 2>/dev/null | tr -d ' '); "
+              "echo \"$i ${e:-0} $(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
+    try:
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=20, errors="replace")
+    except Exception:
+        return _laptop_moje_cache["lista"]
+    naj = {}
+    for l in (r.stdout or "").splitlines():
+        cz = l.split(" ", 2)
+        if len(cz) < 3 or "/.ael_laptop/" in cz[2] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[2]):
+            continue
+        k = _KLUCZ_SKRYPTU_RE.search(cz[2]) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", cz[2])
+        if not k:
+            continue
+        nazwa = os.path.basename(k.group(1))
+        try:
+            t = int(cz[1])
+        except ValueError:
+            t = 0
+        naj[nazwa] = max(naj.get(nazwa, 0), t)
+    _laptop_moje_cache["lista"] = sorted(naj.items(), key=lambda x: -x[1])[:8]
+    return _laptop_moje_cache["lista"]
+
+
+_KLUCZ_SKRYPTU_RE = re.compile(r"\b(?:python3?|bash|sh|node|perl|ruby|Rscript)\s+(?:-\S+\s+)*([\w./~-]+\.(?:py|sh|js|pl|rb|R))\b")
+
+
+def _laptop_z_zadania(command_str):
+    """
+    v480jo: wykonawca Gemini zgubil przedrostek LAPTOP: z komendy, ktora w
+    jego zadaniu go miala (bieg 2026-10-31 23:52, druzyna 1: selfloop.py
+    --full poszedl na telefon). Gdy ten sam skrypt w zadaniu stoi tylko w
+    liniach z LAPTOP:, komenda idzie na laptopa (z dopiskiem w logu).
+    Zwraca nowa komende albo "".
+    """
+    zad = str(getattr(_laptop_tl, "zadanie", "") or "")
+    if "LAPTOP" not in zad or not _laptop_skonfigurowany():
+        return ""
+    klucze = {os.path.basename(k) for k in _KLUCZ_SKRYPTU_RE.findall(str(command_str or ""))}
+    if not klucze:
+        return ""
+    na_lap, na_tel = set(), set()
+    for linia in zad.splitlines():
+        ks = {os.path.basename(k) for k in _KLUCZ_SKRYPTU_RE.findall(linia)}
+        if not ks:
+            continue
+        (na_lap if re.search(r"LAPTOP\s*:", linia) else na_tel).update(ks)
+    trafione = (klucze & na_lap) - na_tel
+    if not trafione:
+        return ""
+    tekst = str(command_str).strip()
+    m = re.match(r"^cd\s+(?:~|\$HOME)/MAIN_\d+\s*&&\s*", tekst)
+    if m:
+        tekst = tekst[m.end():]
+    log("LAPTOP", "W zadaniu wykonawcy " + ", ".join(sorted(trafione)) + " miało przedrostek "
+        "LAPTOP:, a komenda przyszła bez niego — puszczam ją na laptopie.")
+    return "LAPTOP: " + tekst
+
+
 def _laptop_w_srodku_odmowa(command_str):
     """
     v480jj: "LAPTOP:" po ; && || w srodku komendy. Powloka szuka wtedy
@@ -27221,6 +27297,10 @@ def termux_run(command):
         log("LAPTOP", odm)
         return {"ok": False, "error": "LAPTOP_W_SRODKU", "command": command_str,
                 "message": odm, "duration_s": 0.0}
+    if not _LAPTOP_RE.match(command_str):
+        _z_zadania = _laptop_z_zadania(command_str)
+        if _z_zadania:
+            command_str = command = _z_zadania
     lap = _na_laptopa(command_str)
     if isinstance(lap, dict):
         return lap
@@ -32715,6 +32795,15 @@ def _stan_telefonu_dla_wykonawcy():
 
 
 def gemini_execute_task(task_id, task, success_condition=''):
+    """v480jo: zadanie wykonawcy znane w tym watku (patrz _laptop_z_zadania)."""
+    _laptop_tl.zadanie = str(task or "")
+    try:
+        return _gemini_execute_task_impl(task_id, task, success_condition)
+    finally:
+        _laptop_tl.zadanie = ""
+
+
+def _gemini_execute_task_impl(task_id, task, success_condition=''):
     """
     Gemini executor — Interactions API.
 
@@ -32929,6 +33018,13 @@ def gemini_execute_task(task_id, task, success_condition=''):
     if _stan_telefonu:
         _stan_telefonu += "\n\n"
 
+    # v480jo: komendy z LAPTOP: w zadaniu ida na laptopa tylko z tym
+    # przedrostkiem (bieg 2026-10-31 23:52: wykonawca puscil selfloop na
+    # telefonie, choc Bartek dal "LAPTOP: bash -c '…'")
+    _regula_laptopa = ("\n9. Komendę, która w zadaniu zaczyna się od „LAPTOP:”, dajesz do "
+                       "termux_run dokładnie z tym przedrostkiem — wtedy wykona się na laptopie. "
+                       "Bez niego poleci na telefonie.\n" if _laptop_skonfigurowany() else "")
+
     # v452: ciagniemy rozmowe z poprzednich zadan tego celu — zasady
     # juz w niej sa, idzie samo zadanie.
     _poprzednia_rozmowa = _pamiec_wykonawcy_dla(key_name, _model)
@@ -32995,7 +33091,7 @@ Jak się tu pracuje:
 8. Do usuwania plików i katalogów służy termux_delete: pokazuje
    operatorowi konkretną ścieżkę zamiast surowej komendy. Gdy
    operator odmówi, kończysz zadanie i mówisz mu o tej odmowie.
-
+{_regula_laptopa}
 CEL, do którego zmierza cały zespół (Twoje zadania to jego kolejne
 kroki):
 {short(str(_current_goal_text or ""), 1200)}
@@ -57135,6 +57231,16 @@ def _raport_z_tla():
         zdania.append(_l)
         _linie_tla_skonczone.add(_l)
         _linie_tla_zmienione.add(_l)
+    # v480jo: procesy drużyny na laptopie, także te puszczone tam w tło
+    # (setsid/nohup … &), których program nie śledzi jako komendy
+    try:
+        _lp = _laptop_moje_procesy()
+        if _lp:
+            zdania.append("• Na laptopie liczy (Wasze): " + ", ".join(
+                n + " — " + _min_s(t) for n, t in _lp)
+                + ". Postęp zobaczycie w ich logu (LAPTOP: tail …).")
+    except Exception:
+        pass
     return zdania
 
 
@@ -58552,6 +58658,13 @@ def _sedzia_ocen(numer):
                                "wskażcie szybszą")
                 return werdykt
             time.sleep(2)
+        # v480jo: Sedzia niczego nie zostawia — to, co komenda sprawdz
+        # puscila w tle w swojej grupie (np. "… &"), konczy sie razem z nia
+        # (uzytkownik 2026-10-31: "sedzia nic na stale nie uruchamia").
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except Exception:
+            pass
         try:
             wyjscie = wyj_plik.read_text(encoding="utf-8", errors="replace")
         except Exception:

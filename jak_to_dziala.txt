@@ -3944,3 +3944,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        telefonie) i komenda, która nie może przejść w tło, po 2 h albo gdy
        stoi. Krótka próba nowego pliku (30 s) i sprawdzenie Sędziego to
        procesy samego programu.
+
+278. (v480jo) Bieg 31.10 23:52 (drużyna 1): Bartek dał „LAPTOP: bash -c
+       '… selfloop.py --full …'”, a wykonawca Gemini puścił selfloop i
+       transformer na telefonie, bez przedrostka; MAIN szukał ich logów na
+       laptopie i uznał, że procesy zniknęły. Teraz: (1) wykonawca ma w
+       zasadach, że komendę z LAPTOP: daje do termux_run z tym
+       przedrostkiem; (2) gdy mimo to przyjdzie bez niego, a ten sam skrypt
+       w jego zadaniu stoi tylko w liniach z LAPTOP:, program puszcza ją na
+       laptopie (linia w logu). (3) „Dalej w tle” ma linię „Na laptopie
+       liczy (Wasze): x.py — 1 h 2 min …” z procesami drużyny na laptopie,
+       także puszczonymi tam w tło (nohup … &), raz na minutę przez ssh.
+       (4) Sędzia po sprawdzeniu kończy wszystko, co komenda sprawdz puściła
+       w tle w swojej grupie — nic po nim nie zostaje.
