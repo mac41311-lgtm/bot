@@ -26547,8 +26547,16 @@ def _laptop_odmowa(polecenie, druzyna=None):
                 "po pid albo nazwie skryptu, np. LAPTOP: pkill -f mój_skrypt.py.")
     if _d:
         wlasny = "MAIN_" + _d
-        m = (re.search(r"(?<![\w/.])~(?!/" + wlasny + r"(?:/|\b))", polecenie)
-             or re.search(r"\$HOME\b|\$\{HOME\}|/home/|(?<![\w.])\.\.(?:/|\b)", polecenie))
+        # v480jc: sciezka, ktora konczy sie we wlasnym folderze (~/MAIN_n,
+        # $HOME/MAIN_n, /home/<konto>/MAIN_n, sciezka telefonu z MAIN_n), nie
+        # wychodzi poza niego. Bieg 2026-10-31 22:17 (druzyna 1): sed
+        # podmieniajacy sciezke telefonu na $HOME/MAIN_1 dostal odmowe za "/home/".
+        _wl = r"/" + wlasny + r"(?![\w.-])"
+        m = (re.search(r"(?<![\w/.$])~(?!" + _wl + r")", polecenie)
+             or re.search(r"(?:\$HOME|\$\{HOME\})(?!" + _wl + r")", polecenie)
+             or re.search(r"(?<![\w.])/home/(?![^/\s'\"]+" + _wl + r")(?!(?<=files/home/)"
+                          + wlasny + r"(?![\w.-]))", polecenie)
+             or re.search(r"(?<![\w.])\.\.(?:/|\b)", polecenie))
         if m:
             return ("Nie wykonałem — na laptopie Wasza drużyna pracuje w ~/" + wlasny
                     + " (tam program zaczyna każdą komendę LAPTOP:). „" + m.group(0)
@@ -26634,6 +26642,14 @@ def termux_run(command):
     if isinstance(wynik, dict):
         wynik["command"] = command_str
         wynik["na_laptopie"] = "~/" + _laptop_folder() + " na laptopie"
+        # v480jc: sciezka telefonu w komendzie albo w skrypcie na laptopie
+        _tel_dom = "/data/data/com.termux/files/home"
+        if (wynik.get("returncode") not in (0, None)
+                and _tel_dom in (str(wynik.get("stdout") or "") + str(wynik.get("stderr") or ""))):
+            wynik["podpowiedz"] = (
+                "Ścieżka telefonu " + _tel_dom + " nie istnieje na laptopie — tam katalog "
+                "domowy to ~, a folder drużyny to ~/" + _laptop_folder() + " (w skrypcie "
+                "zamiast pełnej ścieżki telefonu: $HOME/" + _laptop_folder() + " albo ścieżka względna).")
         if wynik.get("returncode") == 255 and _LAPTOP_SSH_BLAD_RE.search(str(wynik.get("stderr") or "")):
             with _laptop_lock:
                 _laptop.update(ok=False, t=time.time(),

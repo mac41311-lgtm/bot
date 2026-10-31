@@ -3809,3 +3809,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        Bez LAPTOP: wszystko jak dawniej, na telefonie. Akapit o Sędzim
        w zasadach rywalizacji przepisany w całości (wspomina LAPTOP:, gdy
        laptop jest podłączony). Uniwersalne — nic o celu.
+
+266. (v480jc) Blokada folderu na laptopie patrzy, dokąd ścieżka prowadzi:
+       ~/MAIN_n, $HOME/MAIN_n, /home/<konto>/MAIN_n i ścieżka telefonu
+       z własnym MAIN_n są w porządku; ~, $HOME, /home/<konto> bez własnego
+       folderu, .. i folder rywala dalej są blokowane z wyjaśnieniem. Gdy
+       komenda na laptopie pada, a w wyniku jest ścieżka telefonu
+       (/data/data/com.termux/files/home), rola dostaje podpowiedź, że na
+       laptopie folder drużyny to ~/MAIN_n ($HOME/MAIN_n albo ścieżka
+       względna). Bieg 31.10 22:17 (drużyna 1, krok 54): sed zamieniający
+       ścieżkę telefonu na $HOME/MAIN_1 w sprawdz_mix.sh dostał odmowę.
