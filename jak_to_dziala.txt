@@ -3917,3 +3917,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zespołu, która uruchomiła komendę (URUCHOM), nie tylko MAIN. Bieg
        31.10 23:31: drużyna 2 dostała „No module named 'torch'” na laptopie
        bez słowa rady.
+
+275. (v480jl) Podpowiedź przy braku biblioteki jest krótsza (użytkownik):
+       tylko której biblioteki brakuje (na telefonie albo na laptopie) i
+       przykład „pip install <nazwa>” — bez gotowej komendy i bez wybierania
+       pakietu za zespół. Na laptopie dopisek „bez sudo: w venv albo z
+       --user”.

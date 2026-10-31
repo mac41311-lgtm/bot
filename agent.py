@@ -27099,11 +27099,6 @@ def _ukryj_rywala_na_laptopie(command_str, wynik):
 # jak nie ma biblioteki, ze moga ja doinstalowac". Bieg 23:31 (druzyna 2):
 # "ModuleNotFoundError: No module named 'torch'" na laptopie bez slowa rady.
 _BRAK_MODULU_RE = re.compile(r"(?:ModuleNotFoundError|ImportError): No module named '?([A-Za-z_][\w.]*)'?")
-_MODUL_NA_PAKIET = {"cv2": "opencv-python", "sklearn": "scikit-learn", "PIL": "pillow",
-                    "yaml": "pyyaml", "bs4": "beautifulsoup4", "Crypto": "pycryptodome",
-                    "dateutil": "python-dateutil", "google.generativeai": "google-generativeai"}
-_PKG_TERMUX = {"numpy": "python-numpy", "torch": "python-torch", "scipy": "python-scipy",
-               "pandas": "python-pandas", "PIL": "python-pillow", "cryptography": "python-cryptography"}
 
 
 def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
@@ -27121,26 +27116,14 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
             kat = _katalog_startu_komendy(command_str) or str(HOME)
             if (Path(kat) / (glowny + ".py")).exists() or (Path(kat) / glowny / "__init__.py").exists():
                 return wynik
-        pakiet = _MODUL_NA_PAKIET.get(modul) or _MODUL_NA_PAKIET.get(glowny) or glowny
+        # v480jl (uzytkownik): sam blad + ktora biblioteka + przyklad z
+        # <nazwa>, bez gotowej komendy i bez wyboru pakietu za zespol
         if na_laptopie:
-            venv = "venv/bin/" in str(command_str) or "venv/bin/" in tekst
-            rada = ("Na laptopie brakuje biblioteki Python „" + modul + "” (pakiet " + pakiet + "). "
-                    "Możecie ją doinstalować sami, bez sudo: "
-                    + ("LAPTOP: ./venv/bin/pip install " + pakiet if venv else
-                       "LAPTOP: python3 -m venv venv && ./venv/bin/pip install " + pakiet
-                       + " — i uruchamiajcie wtedy ./venv/bin/python3 (albo bez venv: "
-                       "LAPTOP: pip install --user --break-system-packages " + pakiet + ")")
-                    + "."
-                    + ((" Torch tylko na procesor (mniejszy): dopiszcie --index-url "
-                       "https://download.pytorch.org/whl/cpu.") if glowny == "torch" else "")
-                    + " Instalacja może trwać kilka minut — przejdzie w tło.")
+            rada = ("Na laptopie brakuje biblioteki Python „" + modul + "”. Możecie ją "
+                    "doinstalować, np. LAPTOP: pip install <nazwa> (bez sudo: w venv albo z --user).")
         else:
-            pkg = _PKG_TERMUX.get(glowny)
-            rada = ("Na telefonie brakuje biblioteki Python „" + modul + "” (pakiet " + pakiet + "). "
-                    "Możecie ją doinstalować sami: "
-                    + ("pkg install -y " + pkg + " (w Termuksie ta wersja działa pewniej niż pip)"
-                       if pkg else "pip install " + pakiet)
-                    + ". Instalacja może trwać kilka minut — przejdzie w tło.")
+            rada = ("Na telefonie brakuje biblioteki Python „" + modul + "”. Możecie ją "
+                    "doinstalować, np. pip install <nazwa>.")
         wynik["podpowiedz"] = rada
     except Exception:
         pass
