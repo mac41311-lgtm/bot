@@ -36879,7 +36879,15 @@ def _rzecz_w_tle(rodzaj, komenda, sekundy, pominiete, czeka_na=None):
 
 
 def _uruchom_rzecz(rzecz, praca, cichy):
+    # v480ju: zadanie wykonawcy (_laptop_tl.zadanie) jest w watku
+    # wywolujacym, a komenda liczy w nowym watku — bez przeniesienia
+    # _laptop_z_zadania nic nie widzial (bieg 2026-11-01 00:36, druzyna 1:
+    # Gemini puscil mixer2_alpha.py i mixer3.py na telefonie, choc w zadaniu
+    # mialy LAPTOP:, i straznik pamieci telefonu zatrzymal mixer2_alpha)
+    _zadanie_wykonawcy = getattr(_laptop_tl, "zadanie", "")
+
     def _cel():
+        _laptop_tl.zadanie = _zadanie_wykonawcy
         try:
             wynik = praca()
         except Exception as e:

@@ -4005,3 +4005,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        pokazywała eval_mix_old jeszcze po jego końcu (00:29:47), z czasami
        sprzed minuty. Lista z laptopa jest teraz pobierana na świeżo po
        każdej komendzie LAPTOP: i gdy coś w tle właśnie się skończyło.
+
+284. (v480ju) Bieg 1.11 00:36 (drużyna 1): MAIN zlecił w TASK start
+       mixer2_alpha.py i mixer3.py z „LAPTOP:”, a Gemini puścił je bez
+       przedrostka — na telefonie. Strażnik pamięci telefonu zatrzymał
+       mixer2_alpha (2,2 GB). Poprawka z v480jo (komenda bez LAPTOP:, gdy
+       w zadaniu ten skrypt był tylko z LAPTOP:, idzie na laptopa) nie
+       działała, bo komendy wykonawcy liczą w osobnym wątku, a treść
+       zadania była widoczna tylko w wątku wykonawcy. Teraz wątek komendy
+       dostaje treść zadania i takie komendy idą na laptopa.
