@@ -48593,7 +48593,7 @@ def _pierwsza_wiadomosc(rola=None):
     # v424: kto nie dziala na telefonie, dostaje jedno zdanie o tym,
     # jak dziala rozmowa — patrz _JAK_ROZMAWIAMY. Kamil i Wojtek nie.
     if rola is not None and str(rola) not in _ROLE_NA_TELEFONIE:
-        return _JAK_ROZMAWIAMY if str(rola) in _ROLE_ZNAJACE_PROGRAM else ""
+        return _jak_rozmawiamy() if str(rola) in _ROLE_ZNAJACE_PROGRAM else ""
 
     # v422: MAIN dostaje na poczatek, jak dziala program.
     # v436: fakty o telefonie pod linia o platformie.
@@ -48611,10 +48611,12 @@ def _pierwsza_wiadomosc(rola=None):
     # v480fx: MAIN zaczyna od zespolu; fakty o telefonie i bibliotekach
     # (dziesiatki linii) leza w pliku, nie na poczatku jego rozmowy.
     if str(rola) == "MAIN":
-        return _JAK_TO_DZIALA + "\n\nTermux API, ADB DEBUGOWANIE, Android"
+        _lap_m = _laptop_dla_maina_akapit()
+        return ((_JAK_TO_DZIALA.replace("\n\nWykonanie. ", "\n\n" + _lap_m + "\n\nWykonanie. ", 1)
+                 if _lap_m else _JAK_TO_DZIALA) + "\n\nTermux API, ADB DEBUGOWANIE, Android")
 
     if rola is not None:
-        return _platforma + "\n\n" + _JAK_ROZMAWIAMY
+        return _platforma + "\n\n" + _jak_rozmawiamy()
 
     return "Termux API, ADB DEBUGOWANIE, Android"
 
@@ -48643,43 +48645,99 @@ def _pierwsza_wiadomosc(rola=None):
 # v480gj: przepisany w calosci — zespol sam instaluje biblioteki.
 # v480gt: przepisany w calosci — pelny sklad (Ela, Piotr, Ania) i
 # aktualne zdanie o tle (od v480gl dlugie URUCHOM samo idzie w tlo).
-_JAK_ROZMAWIAMY = (
-    "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
-    "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
-    "dostajecie, co z tego wyszło. Do plików i środowiska zaglądacie "
-    "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
-    "plik, head, ls, wc, python3 --version, pip show pakiet; kilka "
-    "komend łączycie przez ; albo |), a kod uruchamiacie linią "
-    "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
-    "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
-    "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
-    "działa. Uruchomienie dłuższe niż 2 minuty liczy dalej w tle, "
-    "a jego wynik dostaje autor i MAIN, gdy się skończy. Bibliotekę "
-    "albo program, którego brakuje, instalujecie tak samo (URUCHOM: "
-    "pip install pakiet albo URUCHOM: pkg install -y pakiet) — program "
-    "czeka, aż instalacja się skończy, i oddaje jej wynik. Nowy plik "
-    "z kodem piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
-    "nim; program od razu kładzie go na dysk, sprawdza i krótko "
-    "uruchamia, a błąd wraca do autora. Plik należy do tego, kto go "
-    "napisał: zmiany w nim to poprawka fragmentu (który fragment i na "
-    "co go zamienić), nie cały plik od nowa. W zespole są: Tomek "
-    "(następny krok), Kamil (fakty i informacje), Marek (słabe punkty "
-    "planów), Bartek (kod i technika), Ola (porządkuje to, co się "
-    "wydarzyło), Wojtek (praktyczny sens) i Ela (ocenia, ile celu jest "
-    "naprawdę zrobione). Piotr przegląda kod i szuka przyczyny błędu, "
-    "Ania pisze poprawkę — MAIN może ich zapytać jak każdego, a gdy "
-    "program odda autorowi błąd w jego kodzie, autor może ich zawołać "
-    "po imieniu. "
-    "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani "
-    "niczego z programu i dostaje wyłącznie to, co ktoś sam do niego "
-    "napisze, jak w nowym czacie. Rozmowę prowadzi MAIN: pyta, kogo "
-    "potrzebuje. Gdy odpowiadacie, możecie też porozmawiać ze sobą "
-    "wprost: gdy zwrócicie się do kogoś po imieniu, dostanie to od "
-    "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą "
-    "rozmowę i to on decyduje, co zespół robi dalej. Użytkownik chce, "
-    "żeby program działał sam: loguje się, daje dostęp do kont i "
-    "podaje dane, których nikt z was nie ma — resztę ustala zespół."
-)
+# v480ix2: na prosbe uzytkownika (2026-10-31, "napisz tak, jak ty bys
+# to najlepiej zrozumial") przepisany w calosci: laptop (gdy jest
+# podlaczony) i poprawka fragmentu jako dwa bloki "Stary/Nowy fragment".
+def _jak_rozmawiamy_laptop():
+    """Zdania o laptopie dla zespolu albo "" (laptop niepodlaczony)."""
+    try:
+        if not _laptop_skonfigurowany():
+            return ""
+    except Exception:
+        return ""
+    f = _laptop_folder()
+    return (
+        "Obok telefonu jest laptop z Linuksem — więcej rdzeni i pamięci. "
+        "Komenda poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny "
+        "~/" + f + " na laptopie, i działa jak na telefonie: wynik albo błąd "
+        "wraca do was, a dłuższa liczy się w tle (np. URUCHOM: LAPTOP: python3 "
+        "test.py albo PODGLĄD: LAPTOP: nproc; free -h). Laptop ma własny dysk, "
+        "więc pliki przenosicie scp: URUCHOM: scp test.py " + _LAPTOP_HOST + ":" + f
+        + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":" + f + "/wynik.txt . z powrotem. "
+        + ("Połowa rdzeni laptopa jest dla Waszej drużyny. " if _DRUZYNA else "")
+        + "Bez LAPTOP: komenda wykonuje się na telefonie. "
+    )
+
+
+def _jak_rozmawiamy(laptop=True):
+    return (
+        "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
+        "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
+        "dostajecie, co z tego wyszło. Do plików i środowiska zaglądacie "
+        "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
+        "plik, head, ls, wc, python3 --version, pip show pakiet; kilka "
+        "komend łączycie przez ; albo |), a kod uruchamiacie linią "
+        "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
+        "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
+        "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
+        "działa. Uruchomienie dłuższe niż 2 minuty liczy dalej w tle, "
+        "a jego wynik dostaje autor i MAIN, gdy się skończy. Bibliotekę "
+        "albo program, którego brakuje, instalujecie tak samo (URUCHOM: "
+        "pip install pakiet albo URUCHOM: pkg install -y pakiet) — program "
+        "czeka, aż instalacja się skończy, i oddaje jej wynik. "
+        + (_jak_rozmawiamy_laptop() if laptop else "")
+        + "Nowy plik "
+        "z kodem piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
+        "nim; program od razu kładzie go na dysk, sprawdza i krótko "
+        "uruchamia, a błąd wraca do autora. Plik należy do tego, kto go "
+        "napisał: zmianę w nim autor podaje jako poprawkę fragmentu — blok "
+        "„Stary fragment:” skopiowany 1:1 z pliku, a pod nim blok „Nowy "
+        "fragment:” — i program podmienia go od razu, bez pisania całego "
+        "pliku od nowa. W zespole są: Tomek "
+        "(następny krok), Kamil (fakty i informacje), Marek (słabe punkty "
+        "planów), Bartek (kod i technika), Ola (porządkuje to, co się "
+        "wydarzyło), Wojtek (praktyczny sens) i Ela (ocenia, ile celu jest "
+        "naprawdę zrobione). Piotr przegląda kod i szuka przyczyny błędu, "
+        "Ania pisze poprawkę — MAIN może ich zapytać jak każdego, a gdy "
+        "program odda autorowi błąd w jego kodzie, autor może ich zawołać "
+        "po imieniu. "
+        "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani "
+        "niczego z programu i dostaje wyłącznie to, co ktoś sam do niego "
+        "napisze, jak w nowym czacie. Rozmowę prowadzi MAIN: pyta, kogo "
+        "potrzebuje. Gdy odpowiadacie, możecie też porozmawiać ze sobą "
+        "wprost: gdy zwrócicie się do kogoś po imieniu, dostanie to od "
+        "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą "
+        "rozmowę i to on decyduje, co zespół robi dalej. Użytkownik chce, "
+        "żeby program działał sam: loguje się, daje dostęp do kont i "
+        "podaje dane, których nikt z was nie ma — resztę ustala zespół."
+    )
+
+
+_JAK_ROZMAWIAMY = _jak_rozmawiamy(laptop=False)
+
+
+# v480ix2: akapit MAIN-a o laptopie (cały, nowy), tylko gdy laptop jest podłączony.
+def _laptop_dla_maina_akapit():
+    try:
+        if not _laptop_skonfigurowany():
+            return ""
+    except Exception:
+        return ""
+    f = _laptop_folder()
+    tel = ("~/MAIN_" + _DRUZYNA) if _DRUZYNA else "~"
+    return (
+        "Laptop. Obok telefonu jest laptop z Linuksem, połączony przez ssh — "
+        "więcej rdzeni i pamięci (dokładnie: ~/AEL_SRODOWISKO.txt). Komenda "
+        "poprzedzona LAPTOP: — w RUN (termux_run), w zadaniu i w URUCHOM: "
+        "zespołu — wykonuje się na nim w folderze ~/" + f + " na laptopie, z tymi "
+        "samymi wynikami, błędami i tłem co na telefonie, np. LAPTOP: python3 "
+        "skrypt.py albo LAPTOP: nproc; free -h. Laptop ma własny dysk: pliki "
+        "przenosi scp " + tel + "/skrypt.py " + _LAPTOP_HOST + ":" + f + "/ i z powrotem scp "
+        + _LAPTOP_HOST + ":" + f + "/wynik.txt " + tel + "/. "
+        + ("Połowa jego rdzeni jest dla Waszej drużyny. " if _DRUZYNA else "")
+        + "Bez LAPTOP: wszystko dzieje się na telefonie. Gdy laptop jest "
+        "niedostępny, komenda nie rusza, a program mówi dlaczego."
+    )
 
 # v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela
 # wpisala zdanie o logowaniu i dostepie do kont do "celu

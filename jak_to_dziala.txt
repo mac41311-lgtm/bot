@@ -3768,3 +3768,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (telefon albo później); MAIN dostaje jedno zdanie raz na starcie
        i przy każdej zmianie (dostępny/niedostępny). Opis też w
        ~/AEL_SRODOWISKO.txt. Agent i DeepSeek zostają na telefonie.
+
+262. (v480iy) Role wiedzą o laptopie od startu. Wspólny tekst ról
+       (_jak_rozmawiamy) przepisany w całości: gdy laptop jest podłączony,
+       ma dwa zdania z przykładami w stylu PODGLĄD/URUCHOM (URUCHOM: LAPTOP:
+       python3 test.py, PODGLĄD: LAPTOP: nproc; free -h, scp tam i z
+       powrotem, folder drużyny na laptopie), a poprawka fragmentu jest
+       opisana jako dwa bloki „Stary fragment:” / „Nowy fragment:”. MAIN ma
+       nowy, cały akapit „Laptop.” obok „Telefon.”. Bez laptopa teksty są
+       jak dawniej. Trwające rozmowy dostają nowy tekst raz (zmiana faktów
+       na starcie rozmowy). Role i ich prompty bez zmian.
