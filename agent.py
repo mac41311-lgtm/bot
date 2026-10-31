@@ -63,6 +63,7 @@ import subprocess
 import tempfile
 import traceback
 import uuid
+import base64
 import html
 import urllib.request
 import urllib.error
@@ -26838,13 +26839,20 @@ def _laptop_oderwane(zdalnie, folder):
     ident = datetime.now().strftime("%Y%m%d_%H%M%S_") + "%04x" % ((os.getpid() ^ int(time.time() * 1000)) % 0x10000)
     d = "$HOME/" + folder + "/.ael_laptop"
     plik = d + "/" + ident
-    wnetrze = zdalnie.replace(" && exec nice ", " && nice ", 1) + "; echo $? > \"" + plik + ".rc\""
+    # v480jj: tresc komendy idzie do pliku (base64), nie do linii polecen —
+    # inaczej pgrep -f / ps druzyny widzialy opakowanie jako drugi proces
+    # z ta sama nazwa (bieg 2026-10-31 23:31, druzyna 2), a pkill -f mogl
+    # trafic w opakowanie.
+    wnetrze = (zdalnie.replace(" && exec nice ", " && nice ", 1)
+               + "\necho $? > \"" + plik + ".rc\"\n")
+    b64 = base64.b64encode(wnetrze.encode("utf-8")).decode("ascii")
     return ("d=\"" + d + "\"; mkdir -p \"$d\"; find \"$d\" -type f -mmin +2880 -delete 2>/dev/null; "
+            "echo " + b64 + " | base64 -d > \"" + plik + ".kom\"; "
             ": > \"" + plik + ".log\"; "
-            "setsid -w nohup bash -c " + shlex.quote(wnetrze) + " > \"" + plik + ".log\" 2>&1 < /dev/null & "
+            "setsid -w nohup bash \"" + plik + ".kom\" > \"" + plik + ".log\" 2>&1 < /dev/null & "
             "p=$!; tail -n +1 -f --pid=$p \"" + plik + ".log\"; wait $p 2>/dev/null; "
             "if [ -s \"" + plik + ".rc\" ]; then r=$(cat \"" + plik + ".rc\"); "
-            "rm -f \"" + plik + ".rc\" \"" + plik + ".log\"; exit $r; fi; exit 1")
+            "rm -f \"" + plik + ".rc\" \"" + plik + ".log\" \"" + plik + ".kom\"; exit $r; fi; exit 1")
 
 
 # v480jf: pliki z kodem takie same na telefonie i laptopie. Uzytkownik
@@ -27082,6 +27090,30 @@ def _ukryj_rywala_na_laptopie(command_str, wynik):
         wynik[k] = "\n".join(out)
 
 
+def _laptop_w_srodku_odmowa(command_str):
+    """
+    v480jj: "LAPTOP:" po ; && || w srodku komendy. Powloka szuka wtedy
+    programu "LAPTOP:" (kod 127). Bieg 2026-10-31 23:18 (druzyna 1):
+    "cd ~/MAIN_1 && sha256sum …; echo '=== hash laptop ==='; LAPTOP:
+    sha256sum …" — polowa na telefonie, druga "command not found".
+    Zwraca wyjasnienie z gotowym podzialem albo "".
+    """
+    tekst = str(command_str or "")
+    m0 = _LAPTOP_RE.match(tekst)
+    start = (len(tekst) - len(m0.group(1))) if m0 else 0
+    for m in re.finditer(r"(;|&&|\|\|)[ \t]*LAPTOP\s*:", tekst[start:]):
+        przed = tekst[start:start + m.start()]
+        if przed.count("'") % 2 or przed.count('"') % 2 or "<<" in przed:
+            continue
+        pierwsza = tekst[:start + m.start()].strip()
+        druga = tekst[start + m.end():].strip()
+        return ("Nie wykonałem — „LAPTOP:” działa tylko na początku komendy (albo po „cd X &&”), "
+                "a tu stoi w środku, po „" + m.group(1) + "”. Powłoka szukałaby wtedy programu "
+                "o nazwie „LAPTOP:”. Rozbij to na dwie akcje termux_run: najpierw „"
+                + short(pierwsza, 200) + "”, potem „LAPTOP: " + short(druga, 200) + "”.")
+    return ""
+
+
 def termux_run(command):
     """
     v480ix: komenda z przedrostkiem LAPTOP: idzie przez ssh na laptopa
@@ -27092,6 +27124,11 @@ def termux_run(command):
     if odm:
         log("LAPTOP", odm + " Komenda: " + short(command_str, 200))
         return {"ok": False, "error": "LAPTOP_ODMOWA", "command": command_str,
+                "message": odm, "duration_s": 0.0}
+    odm = _laptop_w_srodku_odmowa(command_str)
+    if odm:
+        log("LAPTOP", odm)
+        return {"ok": False, "error": "LAPTOP_W_SRODKU", "command": command_str,
                 "message": odm, "duration_s": 0.0}
     lap = _na_laptopa(command_str)
     if isinstance(lap, dict):
@@ -27150,6 +27187,13 @@ def termux_run(command):
                 "komendę). Procesy zatrzymujcie po pid albo wzorcem, który nie pasuje do samej "
                 "komendy, np. pkill -f '[n]azwa.py'.")
         _ukryj_rywala_na_laptopie(command_str, wynik)
+        # v480jj: procesy opakowania programu (.ael_laptop: bash z plikiem,
+        # setsid, tail) to nie robota druzyny — w ps/pgrep ich nie ma
+        if _LAPTOP_PROCESY_RE.search(_polecenie_lap):
+            for _k in ("stdout", "stderr"):
+                _t = wynik.get(_k)
+                if isinstance(_t, str) and "/.ael_laptop/" in _t:
+                    wynik[_k] = "\n".join(l for l in _t.split("\n") if "/.ael_laptop/" not in l)
         wynik["na_laptopie"] = "~/" + _laptop_folder() + " na laptopie"
         # v480jc: sciezka telefonu w komendzie albo w skrypcie na laptopie
         _tel_dom = "/data/data/com.termux/files/home"
@@ -37878,7 +37922,9 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
     # v480ew: czekanie w tle samo mowi, ktorych akcji nie wykonalo i czemu
     try:
         _ost = (wyniki[-1].get("wynik") or {}) if wyniki else {}
-        if isinstance(_ost, dict) and _ost.get("status") in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE"):
+        # v480jj: LECI_W_TLE tez — "Dalej w tle" mowi, ktore akcje czekaja
+        # (bieg 2026-10-31 23:28: to samo zdanie dwa razy w jednej wiadomosci)
+        if isinstance(_ost, dict) and _ost.get("status") in ("CZEKA_W_TLE", "JUZ_CZEKA_W_TLE", "LECI_W_TLE"):
             pominiete = 0
     except Exception:
         pass

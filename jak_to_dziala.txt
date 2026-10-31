@@ -3894,3 +3894,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        program kasuje sam. Usuwanie w tym opakowaniu nie pyta — pytanie
        zależy tylko od komendy roli. Bieg 31.10 22:04: procesy na laptopie
        znikały.
+
+273. (v480jj) Trzy drobne rzeczy z biegu 31.10 23:12–23:32. „LAPTOP:” w
+       środku komendy (po ; && ||, np. „sleep 900; LAPTOP: tail …”) nie
+       idzie już na telefon z błędem „LAPTOP:: command not found” —
+       program nic nie wykonuje i podaje gotowy podział na dwie akcje.
+       Treść komendy na laptopie idzie do pliku ~/MAIN_n/.ael_laptop/*.kom,
+       a nie do linii poleceń opakowania, więc pgrep -f / ps drużyny nie
+       widzą opakowania jako drugiego procesu o tej samej nazwie (i pkill -f
+       w nie nie trafia); linie opakowania program usuwa z wyniku ps/pgrep.
+       Gdy komenda RUN przeszła w tło, zdanie o pominiętych akcjach jest raz
+       (w „Dalej w tle”), nie dwa razy.
