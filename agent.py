@@ -13654,6 +13654,17 @@ atexit.register(_oddech_na_wyjsciu)
 # w wyniku, co sie stalo.
 _PAMIEC_PROG_MB = 700
 _PAMIEC_CO_S = 3
+# v480it: raport zamkniecia 2026-10-31 10:33 (LOW_MEMORY, drugi raz tego
+# dnia): o 10:30 wolne bylo 1.8 GB, o 10:32 Android zabil juz termux.api,
+# a 10:33 caly Termux — straznik (dwa odczyty < 700 MB) nie zdazyl albo
+# MemAvailable nie spadlo tak nisko, bo pamiec szla do swapu (zram), a
+# Android zabija tez wtedy, gdy swap sie konczy. Dlatego: odczyt ponizej
+# _PAMIEC_KRYTYCZNA_MB dziala od razu, bez drugiego; i niski swap przy
+# malej wolnej pamieci liczy sie jak niska pamiec. Zadnego limitu na
+# skrypt — nadal zatrzymujemy jeden, najciezszy, po rowno miedzy druzynami.
+_PAMIEC_KRYTYCZNA_MB = 450
+_PAMIEC_PRZY_SWAPIE_MB = 1200
+_SWAP_PROG_PROC = 15
 _PAMIEC_MIN_SKRYPT_MB = 120
 _PLIK_STRAZNIKA_PAMIECI = HOME / ".ael_straznik_pamieci"
 _straznik_pamieci_watek = None
@@ -13783,7 +13794,10 @@ def _zatrzymaj_przy_braku_pamieci(wolna):
     tekst = (
         "Zatrzymałem proces " + str(pid) + " (" + short(komenda, 120)
         + "), bo zajmował " + str(mb) + " MB, a telefonowi zostało tylko "
-        + str(wolna) + " MB wolnej pamięci. Za chwilę Android zamknąłby "
+        + str(wolna) + " MB wolnej pamięci"
+        + ((" i " + str(int(_swap_wolny_proc())) + "% wolnego swapu")
+           if (_swap_wolny_proc() is not None and wolna >= _PAMIEC_PROG_MB) else "")
+        + ". Za chwilę Android zamknąłby "
         "cały Termux razem z programem. Ten skrypt może ruszyć ponownie, "
         "gdy będzie potrzebował mniej pamięci naraz."
     )
@@ -13822,6 +13836,64 @@ def _uwagi_pamieci_dla_maina():
     return tekst
 
 
+def _swap_wolny_proc():
+    """SwapFree jako procent SwapTotal albo None (brak swapu / odczytu)."""
+    wolny = _kb_z_pliku("/proc/meminfo", "SwapFree:")
+    caly = _kb_z_pliku("/proc/meminfo", "SwapTotal:")
+    if not caly or wolny is None:
+        return None
+    return 100.0 * wolny / caly
+
+
+def _pamiec_nisko(wolna):
+    """v480it: malo wolnej pamieci albo konczy sie swap przy malej wolnej."""
+    if wolna is None:
+        return False
+    if wolna < _PAMIEC_PROG_MB:
+        return True
+    if wolna < _PAMIEC_PRZY_SWAPIE_MB:
+        sw = _swap_wolny_proc()
+        if sw is not None and sw < _SWAP_PROG_PROC:
+            return True
+    return False
+
+
+_pamiec_dziennik_t = [0.0]
+
+
+def _pamiec_do_dziennika(wolna):
+    """v480it: gdy wolnej pamieci jest malo (< 1 GB), co 10 s jedna linia w
+    dzienniku pracy: ile wolne, ile swapu i ktory skrypt bierze najwiecej —
+    zeby raport zamkniecia mowil, co zjadlo pamiec (10:33 nie bylo wiadomo)."""
+    if wolna is None or wolna >= 1000 or time.time() - _pamiec_dziennik_t[0] < 10:
+        return
+    _pamiec_dziennik_t[0] = time.time()
+    nasze = _nasi_przodkowie()
+    najw = None
+    for wpis in os.listdir("/proc"):
+        if not wpis.isdigit() or int(wpis) in nasze:
+            continue
+        uid, mb = _status_procesu(wpis)
+        if uid != os.getuid() or (najw and mb <= najw[0]):
+            continue
+        try:
+            with open("/proc/" + wpis + "/cmdline", "rb") as f:
+                kom = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except Exception:
+            continue
+        if kom:
+            najw = (mb, kom, _druzyna_procesu(wpis))
+    sw = _swap_wolny_proc()
+    linia = (datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " | [pamięć] wolna "
+             + str(wolna) + " MB | swap wolny "
+             + (str(int(sw)) + "%" if sw is not None else "?")
+             + (" | najwięcej: " + short(najw[1], 80) + " — " + str(najw[0])
+                + " MB (drużyna " + str(najw[2]) + ")" if najw else ""))
+    PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_DZIENNIK_ODDECHU, "a", encoding="utf-8") as f:
+        f.write(linia + "\n")
+
+
 def zacznij_straznika_pamieci():
     global _straznik_pamieci_watek
 
@@ -13833,10 +13905,14 @@ def zacznij_straznika_pamieci():
         while True:
             time.sleep(_PAMIEC_CO_S)
             wolna = _wolna_pamiec_mb()
+            try:
+                _pamiec_do_dziennika(wolna)
+            except Exception:
+                pass
             # Dwa odczyty z rzedu, zeby chwilowy skok nie zatrzymal
-            # niczego bez potrzeby.
-            nisko = nisko + 1 if (wolna is not None and wolna < _PAMIEC_PROG_MB) else 0
-            if nisko >= 2:
+            # niczego bez potrzeby — chyba ze juz jest krytycznie (v480it).
+            nisko = nisko + 1 if _pamiec_nisko(wolna) else 0
+            if nisko >= 2 or (wolna is not None and wolna < _PAMIEC_KRYTYCZNA_MB):
                 nisko = 0
                 try:
                     _zatrzymaj_przy_braku_pamieci(wolna)

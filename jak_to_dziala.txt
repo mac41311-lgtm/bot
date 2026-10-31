@@ -3706,3 +3706,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        uwagę jak dotąd na końcu swojego logu. Drużyna 1 (30.10, 19:37):
        eval_mix.py zajął 2,2 GB i został zatrzymany, a zespół nie widział
        dlaczego.
+
+257. (v480it) Strażnik pamięci reaguje szybciej i widzi swap. Gdy wolnej
+       pamięci jest krytycznie mało (poniżej 450 MB), zatrzymuje najcięższy
+       skrypt od razu, bez czekania na drugi odczyt. Gdy kończy się swap
+       (mniej niż 15% wolnego) przy wolnej pamięci poniżej 1,2 GB, traktuje
+       to jak brak pamięci — Android zabija Termux także wtedy. Wybór,
+       który skrypt ustępuje, jest taki jak dotąd (po równo między
+       drużynami), żadnych limitów na skrypty. Przy wolnej pamięci poniżej
+       1 GB co 10 s w dzienniku pracy staje linia „[pamięć]” z wolną
+       pamięcią, swapem i skryptem, który bierze najwięcej — raport
+       zamknięcia pokaże wtedy, co zjadło pamięć. Zamknięcie 31.10 10:33
+       (LOW_MEMORY): o 10:30 wolne było 1,8 GB, a dwie minuty później
+       Android zabił cały Termux i nie było wiadomo, przez co.
