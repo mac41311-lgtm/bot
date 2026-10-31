@@ -3839,3 +3839,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        co zatrzymano i czemu; linia trafia też do dziennika pracy. Pilnuje
        jeden proces programu (drużyna 1 albo zwykły tryb). Procesy z LAPTOP:
        mają AEL_DRUZYNA=<n> (poza rywalizacją 0).
+
+269. (v480jf) Kod na laptopie i telefonie jest ten sam. Przed każdą
+       komendą LAPTOP: i po niej (też przed sprawdzaniem Sędziego na
+       laptopie) program wyrównuje w folderze drużyny pliki z kodem i małe
+       pliki tekstowe (do 1 MB; .py, .sh, .json, .md, …): nowsza wersja
+       (czas zmiany) idzie w drugą stronę, plik tylko po jednej stronie też;
+       nadpisany plik na telefonie ma kopię w .kopie/. Dzięki temu zapis
+       nowych plików, poprawki fragmentów, próba uruchomienia i pętla
+       autora działają dla laptopa tak samo jak dla telefonu. Duże pliki
+       dalej scp. „pkill -f wzorzec” na laptopie dostaje wzorzec w postaci
+       „[w]zorzec”, żeby nie zabić samej komendy; kod 255 bez wyniku ma
+       wyjaśnienie. Wspólny tekst ról, akapit MAIN „Laptop.” i opis laptopa
+       przepisane w całości. Bieg 31.10 22:35–22:38 (drużyna 1): selfloop.py
+       różnił się na obu maszynach, pkill -f zabił własną komendę.

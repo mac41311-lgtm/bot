@@ -26486,7 +26486,8 @@ def _laptop_opis():
                    if _DRUZYNA else "")
                 + ". Komenda z przedrostkiem LAPTOP: (w RUN, w URUCHOM: albo w zadaniu) wykona się "
                 "na nim w Waszym folderze ~/" + _laptop_folder() + " na laptopie, np. "
-                "LAPTOP: python3 skrypt.py. Pliki przenosi scp: scp ~/"
+                "LAPTOP: python3 skrypt.py. Pliki z kodem i małe pliki tekstowe program "
+                "sam trzyma takie same na obu maszynach; duże pliki przenosi scp: scp ~/"
                 + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "plik") + "/plik " + _LAPTOP_HOST + ":"
                 + _laptop_folder() + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + _laptop_folder()
                 + "/wynik.txt ~/" + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "") + ". Bez "
@@ -26725,6 +26726,13 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
     _bez_tla = re.sub(r"\s*&\s*(?:disown(?:\s+-h)?\s*)?;?\s*$", "", polecenie)
     if _bez_tla != polecenie and _bez_tla.strip() and not _bez_tla.rstrip().endswith(("&", "|")):
         polecenie = _bez_tla.strip()
+    # v480jf: "pkill -f wzorzec" trafial tez w sama komende (bash -lc z
+    # tym tekstem) i zabijal ja — kod 255, pusto. Bieg 2026-10-31 22:38
+    # (druzyna 1). "[w]zorzec" pasuje do tego samego procesu, ale nie do
+    # siebie.
+    polecenie = re.sub(
+        r"(\b(?:pkill|pgrep)\s+(?:-[A-Za-z0-9]+\s+)*-f\s+(?:-[A-Za-z0-9]+\s+)*)([\"']?)([A-Za-z0-9_])",
+        r"\1\2[\3]", polecenie)
     k = str(_laptop_watki(druzyna))
     _f = _laptop_folder(druzyna)
     _d_eksport = _DRUZYNA if druzyna is None else str(druzyna or "")
@@ -26737,6 +26745,153 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
     return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
+
+
+# v480jf: pliki z kodem takie same na telefonie i laptopie. Uzytkownik
+# (2026-10-31): role maja na laptopie te same informacje i te same drogi
+# poprawiania co na telefonie. Program zapisuje nowe pliki, nanosi
+# poprawki fragmentow i robi probe uruchomienia na TELEFONIE — wiec przed
+# kazda komenda LAPTOP: (i po niej) wyrownuje pliki z kodem i male pliki
+# tekstowe w folderze druzyny: nowsza wersja (czas zmiany) idzie w druga
+# strone, plik tylko po jednej stronie — tez. Bieg 2026-10-31 22:35
+# (druzyna 1): Marek zauwazyl, ze selfloop.py na laptopie i na telefonie
+# rozni sie w linii 171. Duze dane dalej przenosi scp.
+_LAPTOP_SYNC_SUFIKSY = tuple(sorted(set(_KOD_SUFIKSY) | {
+    ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".md"}))
+_LAPTOP_SYNC_MAX_B = 1024 * 1024
+_LAPTOP_SYNC_MAX_PLIKOW = 3000
+
+
+def _laptop_sync_lokalne(folder):
+    """{rel: (mtime, rozmiar)} plikow do wyrownania na telefonie."""
+    out = {}
+    try:
+        for root, dirs, files in os.walk(str(folder)):
+            dirs[:] = [d for d in dirs if not d.startswith(".")
+                       and d not in ("__pycache__", "node_modules", "venv", ".venv",
+                                     "site-packages", "spadek")]
+            for f in files:
+                if not f.lower().endswith(_LAPTOP_SYNC_SUFIKSY):
+                    continue
+                p = Path(root) / f
+                try:
+                    st = p.stat()
+                except Exception:
+                    continue
+                if st.st_size > _LAPTOP_SYNC_MAX_B:
+                    continue
+                out[str(p.relative_to(folder))] = (st.st_mtime, st.st_size)
+                if len(out) >= _LAPTOP_SYNC_MAX_PLIKOW:
+                    return out
+    except Exception:
+        pass
+    return out
+
+
+def _laptop_sync_zdalne(f):
+    """{rel: (mtime, rozmiar, md5)} z ~/<f> na laptopie albo None."""
+    wzor = " -o ".join("-name '*" + s + "'" for s in _LAPTOP_SYNC_SUFIKSY)
+    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && find . \\( -name '.?*' -o -name __pycache__ "
+              "-o -name node_modules -o -name venv -o -name site-packages -o -name spadek \\) "
+              "-prune -o -type f \\( " + wzor + " \\) -size -" + str(_LAPTOP_SYNC_MAX_B // 1024 + 1)
+              + "k -printf '%T@ %s %p\\n' | head -" + str(_LAPTOP_SYNC_MAX_PLIKOW))
+    try:
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=30, errors="replace")
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    out = {}
+    for l in (r.stdout or "").splitlines():
+        cz = l.split(" ", 2)
+        if len(cz) == 3:
+            try:
+                out[cz[2][2:] if cz[2].startswith("./") else cz[2]] = (float(cz[0]), int(cz[1]))
+            except ValueError:
+                pass
+    return out
+
+
+def _laptop_wyrownaj(druzyna=None):
+    """
+    Wyrownuje pliki z kodem miedzy folderem druzyny na telefonie i na
+    laptopie. Zwraca (na_laptopa, z_laptopa) — listy sciezek — albo None,
+    gdy laptop nie odpowiada.
+    """
+    import tarfile, io
+    d = _DRUZYNA if druzyna is None else str(druzyna or "")
+    folder = _folder_druzyny(d) if d else Path(HOME / "AEL")
+    f = _laptop_folder(druzyna)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    lok = _laptop_sync_lokalne(folder)
+    zd = _laptop_sync_zdalne(f)
+    if zd is None:
+        return None
+    wyslij, pobierz = [], []
+    for rel, (mt, sz) in lok.items():
+        z = zd.get(rel)
+        if z is None or mt > z[0] + 2:
+            wyslij.append(rel)
+    for rel, (mt, sz) in zd.items():
+        l = lok.get(rel)
+        if rel in wyslij:
+            continue
+        if l is None or mt > l[0] + 2:
+            pobierz.append(rel)
+    if wyslij:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for rel in wyslij:
+                try:
+                    tar.add(str(folder / rel), arcname=rel)
+                except Exception:
+                    pass
+        try:
+            subprocess.run(_LAPTOP_SSH.replace("-n ", "").split() + [
+                _LAPTOP_HOST, "mkdir -p ~/" + f + " && tar -xf - -C ~/" + f],
+                input=buf.getvalue(), capture_output=True, timeout=120)
+            # tar zostawia czas zmiany z telefonu — nastepnym razem rowne
+        except Exception:
+            wyslij = []
+    if pobierz:
+        try:
+            r = subprocess.run(
+                _LAPTOP_SSH.split() + [_LAPTOP_HOST, "cd ~/" + f + " && tar -cf - -- "
+                                       + " ".join(shlex.quote(x) for x in pobierz)],
+                capture_output=True, timeout=120)
+            with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r") as tar:
+                for m in tar.getmembers():
+                    if not m.isfile() or m.name.startswith(("/", "..")) or "/../" in m.name:
+                        continue
+                    cel = folder / m.name
+                    try:
+                        dane = tar.extractfile(m).read()
+                        if cel.is_file() and cel.read_bytes() == dane:
+                            os.utime(str(cel), (m.mtime, m.mtime))
+                            pobierz = [x for x in pobierz if x != m.name]
+                            continue
+                        if cel.is_file():
+                            k = cel.parent / ".kopie" / (cel.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+                            k.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(str(cel), str(k))
+                        cel.parent.mkdir(parents=True, exist_ok=True)
+                        cel.write_bytes(dane)
+                        os.utime(str(cel), (m.mtime, m.mtime))
+                        _track_project_path(cel)
+                    except Exception:
+                        pass
+        except Exception:
+            pobierz = []
+    if wyslij or pobierz:
+        log("LAPTOP", "Wyrównane pliki z kodem (~/" + f + "): na laptopa " + str(len(wyslij))
+            + (" (" + ", ".join(wyslij[:5]) + ("…" if len(wyslij) > 5 else "") + ")" if wyslij else "")
+            + ", z laptopa " + str(len(pobierz))
+            + (" (" + ", ".join(pobierz[:5]) + ("…" if len(pobierz) > 5 else "") + ")" if pobierz else "") + ".")
+    return wyslij, pobierz
 
 
 _LAPTOP_PROCESY_RE = re.compile(r"\b(?:ps|top|htop|pgrep|pstree|pidof|lsof|fuser)\b|/proc/")
@@ -26802,9 +26957,34 @@ def termux_run(command):
     if not lap:
         return _termux_run_lokalnie(command)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_LAPTOP_RE.match(command_str).group(1), 200))
+    try:
+        _przed = _laptop_wyrownaj()
+    except Exception:
+        _przed = None
     wynik = _termux_run_lokalnie(lap)
+    _po = None
+    if isinstance(wynik, dict) and wynik.get("status") != "AUTO_BACKGROUNDED" and _przed is not None:
+        try:
+            _po = _laptop_wyrownaj()
+        except Exception:
+            _po = None
     if isinstance(wynik, dict):
         wynik["command"] = command_str
+        _tam = (_przed or ([], []))[0]
+        _stad = (_przed or ([], []))[1] + (_po or ([], []))[1]
+        if _tam or _stad:
+            wynik["pliki_wyrownane"] = (
+                ("na laptopa: " + ", ".join(_tam[:8]) + ("…" if len(_tam) > 8 else "") if _tam else "")
+                + ("; " if _tam and _stad else "")
+                + ("z laptopa na telefon: " + ", ".join(_stad[:8]) + ("…" if len(_stad) > 8 else "")
+                   if _stad else ""))
+        if (wynik.get("returncode") == 255 and not str(wynik.get("stdout") or "").strip()
+                and not _LAPTOP_SSH_BLAD_RE.search(str(wynik.get("stderr") or ""))):
+            wynik["message"] = (
+                "Komenda na laptopie skończyła się kodem 255 bez żadnego wyniku — zwykle znaczy to, "
+                "że zabiła własną powłokę (np. kill albo pkill/killall, który trafił też w samą tę "
+                "komendę). Procesy zatrzymujcie po pid albo wzorcem, który nie pasuje do samej "
+                "komendy, np. pkill -f '[n]azwa.py'.")
         _ukryj_rywala_na_laptopie(command_str, wynik)
         wynik["na_laptopie"] = "~/" + _laptop_folder() + " na laptopie"
         # v480jc: sciezka telefonu w komendzie albo w skrypcie na laptopie
@@ -48977,9 +49157,13 @@ def _jak_rozmawiamy_laptop():
         "Komenda poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny "
         "~/" + f + " na laptopie, i działa jak na telefonie: wynik albo błąd "
         "wraca do was, a dłuższa liczy się w tle (np. URUCHOM: LAPTOP: python3 "
-        "test.py albo PODGLĄD: LAPTOP: nproc; free -h). Laptop ma własny dysk, "
-        "więc pliki przenosicie scp: URUCHOM: scp test.py " + _LAPTOP_HOST + ":" + f
-        + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":" + f + "/wynik.txt . z powrotem. "
+        "test.py albo PODGLĄD: LAPTOP: nproc; free -h). Pliki z kodem i małe pliki "
+        "tekstowe są na telefonie i laptopie te same: przed każdą komendą LAPTOP: i po "
+        "niej program przenosi nowszą wersję w drugą stronę, więc kod piszecie, "
+        "poprawiacie fragmentami i sprawdzacie tak jak zawsze, a na laptopie od razu "
+        "działa ten sam. Duże pliki (dane, modele) przenosicie scp: URUCHOM: scp "
+        "dane.bin " + _LAPTOP_HOST + ":" + f + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":"
+        + f + "/model.bin . z powrotem. "
         + ("Połowa rdzeni laptopa jest dla Waszej drużyny. " if _DRUZYNA else "")
         + "Bez LAPTOP: komenda wykonuje się na telefonie. "
     )
@@ -49047,9 +49231,12 @@ def _laptop_dla_maina_akapit():
         "poprzedzona LAPTOP: — w RUN (termux_run), w zadaniu i w URUCHOM: "
         "zespołu — wykonuje się na nim w folderze ~/" + f + " na laptopie, z tymi "
         "samymi wynikami, błędami i tłem co na telefonie, np. LAPTOP: python3 "
-        "skrypt.py albo LAPTOP: nproc; free -h. Laptop ma własny dysk: pliki "
-        "przenosi scp " + tel + "/skrypt.py " + _LAPTOP_HOST + ":" + f + "/ i z powrotem scp "
-        + _LAPTOP_HOST + ":" + f + "/wynik.txt " + tel + "/. "
+        "skrypt.py albo LAPTOP: nproc; free -h. Pliki z kodem i małe pliki tekstowe "
+        "są na obu maszynach te same: przed każdą komendą LAPTOP: i po niej program "
+        "przenosi nowszą wersję w drugą stronę (zapis nowych plików, poprawki fragmentów "
+        "i próby uruchomienia działają więc jak zawsze). Duże pliki przenosi scp "
+        + tel + "/dane.bin " + _LAPTOP_HOST + ":" + f + "/ i z powrotem scp "
+        + _LAPTOP_HOST + ":" + f + "/model.bin " + tel + "/. "
         + ("Połowa jego rdzeni jest dla Waszej drużyny. " if _DRUZYNA else "")
         + "Bez LAPTOP: wszystko dzieje się na telefonie. Gdy laptop jest "
         "niedostępny, komenda nie rusza, a program mówi dlaczego."
@@ -57962,6 +58149,10 @@ def _sedzia_ocen(numer):
                 return werdykt
             if _lap:
                 _komenda_sedziego = _lap
+                try:
+                    _laptop_wyrownaj(druzyna=str(numer))
+                except Exception:
+                    pass
                 log("RYWALIZACJA", "Sędzia sprawdza drużynę " + str(numer) + " na laptopie (~/"
                     + _laptop_folder(str(numer)) + ").")
             with open(wyj_plik, "w", encoding="utf-8") as _fh:
