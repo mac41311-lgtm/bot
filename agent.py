@@ -9022,6 +9022,10 @@ def _opis_dla_zespolu(komenda, cwd, wynik):
         opis = str(wynik)
     log("PROGRAM", "Uruchomione dla zespołu: " + short(komenda, 120))
     opis = str(opis or "").rstrip()
+    # v480jk: podpowiedz programu (brak biblioteki, sciezka telefonu na
+    # laptopie) — zespol widzi ja tak samo jak MAIN
+    if isinstance(wynik, dict) and wynik.get("podpowiedz"):
+        opis += "\nPodpowiedź programu: " + str(wynik["podpowiedz"])
     if len(opis) > 5000:
         # przy bledzie liczy sie koniec (traceback), wiec zostaje poczatek i koniec
         opis = opis[:1500] + "\n(… " + str(len(opis) - 4500) + " znaków pominięte …)\n" + opis[-3000:]
@@ -27090,6 +27094,59 @@ def _ukryj_rywala_na_laptopie(command_str, wynik):
         wynik[k] = "\n".join(out)
 
 
+# v480jk: brak biblioteki Python w wyniku komendy -> jedno zdanie, jak ja
+# doinstalowac (telefon albo laptop). Uzytkownik 2026-10-31: "dac komunikat
+# jak nie ma biblioteki, ze moga ja doinstalowac". Bieg 23:31 (druzyna 2):
+# "ModuleNotFoundError: No module named 'torch'" na laptopie bez slowa rady.
+_BRAK_MODULU_RE = re.compile(r"(?:ModuleNotFoundError|ImportError): No module named '?([A-Za-z_][\w.]*)'?")
+_MODUL_NA_PAKIET = {"cv2": "opencv-python", "sklearn": "scikit-learn", "PIL": "pillow",
+                    "yaml": "pyyaml", "bs4": "beautifulsoup4", "Crypto": "pycryptodome",
+                    "dateutil": "python-dateutil", "google.generativeai": "google-generativeai"}
+_PKG_TERMUX = {"numpy": "python-numpy", "torch": "python-torch", "scipy": "python-scipy",
+               "pandas": "python-pandas", "PIL": "python-pillow", "cryptography": "python-cryptography"}
+
+
+def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
+    try:
+        if not isinstance(wynik, dict) or wynik.get("podpowiedz"):
+            return wynik
+        tekst = str(wynik.get("stdout") or "") + "\n" + str(wynik.get("stderr") or "")
+        m = _BRAK_MODULU_RE.search(tekst)
+        if not m:
+            return wynik
+        modul = m.group(1)
+        glowny = modul.split(".")[0]
+        # wlasny modul druzyny (plik obok), a nie biblioteka
+        if not na_laptopie:
+            kat = _katalog_startu_komendy(command_str) or str(HOME)
+            if (Path(kat) / (glowny + ".py")).exists() or (Path(kat) / glowny / "__init__.py").exists():
+                return wynik
+        pakiet = _MODUL_NA_PAKIET.get(modul) or _MODUL_NA_PAKIET.get(glowny) or glowny
+        if na_laptopie:
+            venv = "venv/bin/" in str(command_str) or "venv/bin/" in tekst
+            rada = ("Na laptopie brakuje biblioteki Python „" + modul + "” (pakiet " + pakiet + "). "
+                    "Możecie ją doinstalować sami, bez sudo: "
+                    + ("LAPTOP: ./venv/bin/pip install " + pakiet if venv else
+                       "LAPTOP: python3 -m venv venv && ./venv/bin/pip install " + pakiet
+                       + " — i uruchamiajcie wtedy ./venv/bin/python3 (albo bez venv: "
+                       "LAPTOP: pip install --user --break-system-packages " + pakiet + ")")
+                    + "."
+                    + ((" Torch tylko na procesor (mniejszy): dopiszcie --index-url "
+                       "https://download.pytorch.org/whl/cpu.") if glowny == "torch" else "")
+                    + " Instalacja może trwać kilka minut — przejdzie w tło.")
+        else:
+            pkg = _PKG_TERMUX.get(glowny)
+            rada = ("Na telefonie brakuje biblioteki Python „" + modul + "” (pakiet " + pakiet + "). "
+                    "Możecie ją doinstalować sami: "
+                    + ("pkg install -y " + pkg + " (w Termuksie ta wersja działa pewniej niż pip)"
+                       if pkg else "pip install " + pakiet)
+                    + ". Instalacja może trwać kilka minut — przejdzie w tło.")
+        wynik["podpowiedz"] = rada
+    except Exception:
+        pass
+    return wynik
+
+
 def _laptop_w_srodku_odmowa(command_str):
     """
     v480jj: "LAPTOP:" po ; && || w srodku komendy. Powloka szuka wtedy
@@ -27134,7 +27191,7 @@ def termux_run(command):
     if isinstance(lap, dict):
         return lap
     if not lap:
-        return _termux_run_lokalnie(command)
+        return _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False)
     _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
     # v480jg: usuwanie na laptopie oceniamy po komendzie roli, nie po
@@ -27187,6 +27244,7 @@ def termux_run(command):
                 "komendę). Procesy zatrzymujcie po pid albo wzorcem, który nie pasuje do samej "
                 "komendy, np. pkill -f '[n]azwa.py'.")
         _ukryj_rywala_na_laptopie(command_str, wynik)
+        _z_podpowiedzia_biblioteki(wynik, _polecenie_lap, True)
         # v480jj: procesy opakowania programu (.ael_laptop: bash z plikiem,
         # setsid, tail) to nie robota druzyny — w ps/pgrep ich nie ma
         if _LAPTOP_PROCESY_RE.search(_polecenie_lap):

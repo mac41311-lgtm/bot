@@ -3905,3 +3905,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        w nie nie trafia); linie opakowania program usuwa z wyniku ps/pgrep.
        Gdy komenda RUN przeszła w tło, zdanie o pominiętych akcjach jest raz
        (w „Dalej w tle”), nie dwa razy.
+
+274. (v480jk) Brak biblioteki Python w wyniku komendy (ModuleNotFoundError,
+       ImportError) dostaje „podpowiedz”: której biblioteki brakuje i jak ją
+       doinstalować sami. Na telefonie: pkg install python-… dla numpy,
+       torch, scipy, pandas, pillow, cryptography, inaczej pip install. Na
+       laptopie bez sudo: ./venv/bin/pip install … (albo najpierw python3
+       -m venv venv, albo pip install --user --break-system-packages), dla
+       torch wersja tylko na procesor. Własny moduł drużyny (plik obok) nie
+       dostaje tej rady. Podpowiedzi programu widzi teraz także rola
+       zespołu, która uruchomiła komendę (URUCHOM), nie tylko MAIN. Bieg
+       31.10 23:31: drużyna 2 dostała „No module named 'torch'” na laptopie
+       bez słowa rady.
