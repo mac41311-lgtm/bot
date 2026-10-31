@@ -27257,6 +27257,107 @@ def _laptop_z_zadania(command_str):
     return "LAPTOP: " + tekst
 
 
+_PRZELACZ_MASZYNE_RE = re.compile(r"(;|&&|\|\|)[ \t]*(LAPTOP|TELEFON)\s*:", re.IGNORECASE)
+
+
+def _czesci_maszyn(command_str):
+    """
+    v480jp: jedna linia z czesciami na obie maszyny, np. "sleep 900;
+    LAPTOP: tail -5 x.log" albo "LAPTOP: python3 a.py; TELEFON: ls".
+    Po ; && || przedrostek LAPTOP: przelacza na laptopa, TELEFON: z
+    powrotem na telefon; poczatek bez przedrostka jest na telefonie.
+    Zwraca [(separator, "laptop"|"telefon", komenda)] albo None, gdy
+    linia nie przelacza maszyny (zwykla sciezka). Uzytkownik 2026-10-31:
+    "chyba ze moga laczyc — to tylko to popraw".
+    """
+    tekst = str(command_str or "")
+    if not tekst.strip() or "<<" in tekst:
+        return None
+    m0 = _LAPTOP_RE.match(tekst)
+    mt = re.match(r"^\s*TELEFON\s*:\s*", tekst, re.IGNORECASE)
+    if m0:
+        start = len(tekst) - len(m0.group(1))
+        maszyna, pierwsza_od = "laptop", start
+        pref = tekst[:start]
+    elif mt:
+        start = mt.end()
+        maszyna, pierwsza_od, pref = "telefon", start, ""
+    else:
+        start, maszyna, pierwsza_od, pref = 0, "telefon", 0, ""
+    ciecia = []
+    for m in _PRZELACZ_MASZYNE_RE.finditer(tekst, start):
+        przed = tekst[start:m.start()]
+        if przed.count("'") % 2 or przed.count('"') % 2 or przed.count("`") % 2:
+            continue
+        ciecia.append(m)
+    if not ciecia:
+        return None if not mt else [("", "telefon", tekst[mt.end():].strip())]
+    czesci = []
+    poz, sep = pierwsza_od, ""
+    for m in ciecia:
+        kom = tekst[poz:m.start()].strip()
+        if kom:
+            if maszyna == "laptop" and not czesci and pref.strip():
+                # "cd X && LAPTOP: …" — cd X juz jest folderem druzyny na laptopie
+                pass
+            czesci.append((sep, maszyna, kom))
+        sep = m.group(1)
+        maszyna = "laptop" if m.group(2).upper() == "LAPTOP" else "telefon"
+        poz = m.end()
+    kom = tekst[poz:].strip()
+    if kom:
+        czesci.append((sep, maszyna, kom))
+    return czesci or None
+
+
+def _wykonaj_czesci_maszyn(command_str, czesci):
+    """Kolejne czesci na wlasciwej maszynie; ; zawsze, && po sukcesie,
+    || po bledzie — jak w powloce. Jeden wynik z naglowkami czesci."""
+    # "cd X && …" z poczatku linii (np. folder druzyny przy URUCHOM:) dotyczy
+    # tez kolejnych czesci na telefonie
+    _cd = re.match(r"^\s*cd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*&&\s*", str(command_str or ""))
+    if _cd:
+        czesci = [(sp, ms, k) if (ms != "telefon" or i == 0 or k.startswith(_cd.group(0).strip()))
+                  else (sp, ms, _cd.group(0) + k) for i, (sp, ms, k) in enumerate(czesci)]
+    log("TERMUX", "Komenda na dwie maszyny — " + str(len(czesci)) + " części po kolei: "
+        + " | ".join(m + ": " + short(k, 60) for _s, m, k in czesci))
+    rc, wy, bl, opis, pominiete = 0, [], [], [], []
+    na_laptopie = False
+    for sep, maszyna, kom in czesci:
+        if (sep == "&&" and rc != 0) or (sep == "||" and rc == 0):
+            pominiete.append(maszyna + ": " + short(kom, 80))
+            continue
+        w = termux_run(("LAPTOP: " + kom) if maszyna == "laptop" else kom)
+        if not isinstance(w, dict):
+            w = {"ok": False, "stdout": str(w)}
+        kod = w.get("returncode")
+        if kod is None:
+            kod = 0 if w.get("ok") else 1
+        rc = int(kod)
+        na_laptopie = na_laptopie or maszyna == "laptop"
+        naglowek = "── " + maszyna + ": " + short(kom, 120) + " (kod " + str(rc) + ") ──"
+        tresc = str(w.get("stdout") or "").rstrip("\n")
+        if w.get("message") and not tresc:
+            tresc = str(w.get("message"))
+        wy.append(naglowek + ("\n" + tresc if tresc else ""))
+        if str(w.get("stderr") or "").strip():
+            bl.append("[" + maszyna + "] " + str(w.get("stderr")).rstrip("\n"))
+        if w.get("podpowiedz"):
+            opis.append(str(w["podpowiedz"]))
+        if w.get("status") in ("LECI_W_TLE", "AUTO_BACKGROUNDED"):
+            opis.append("Część „" + short(kom, 80) + "” liczy dalej w tle.")
+    wynik = {"ok": rc == 0, "returncode": rc, "stdout": short("\n".join(wy), 6000),
+             "stderr": short("\n".join(bl), 3000), "command": command_str}
+    if pominiete:
+        wynik["pominiete_czesci"] = ("nie wykonane (warunek && / || po poprzedniej części): "
+                                     + "; ".join(pominiete))
+    if opis:
+        wynik["podpowiedz"] = " ".join(opis)
+    if na_laptopie:
+        wynik["na_laptopie"] = "część na laptopie (~/" + _laptop_folder() + ")"
+    return wynik
+
+
 def _laptop_w_srodku_odmowa(command_str):
     """
     v480jj: "LAPTOP:" po ; && || w srodku komendy. Powloka szuka wtedy
@@ -27292,11 +27393,9 @@ def termux_run(command):
         log("LAPTOP", odm + " Komenda: " + short(command_str, 200))
         return {"ok": False, "error": "LAPTOP_ODMOWA", "command": command_str,
                 "message": odm, "duration_s": 0.0}
-    odm = _laptop_w_srodku_odmowa(command_str)
-    if odm:
-        log("LAPTOP", odm)
-        return {"ok": False, "error": "LAPTOP_W_SRODKU", "command": command_str,
-                "message": odm, "duration_s": 0.0}
+    czesci = _czesci_maszyn(command_str)
+    if czesci:
+        return _wykonaj_czesci_maszyn(command_str, czesci)
     if not _LAPTOP_RE.match(command_str):
         _z_zadania = _laptop_z_zadania(command_str)
         if _z_zadania:
@@ -33021,9 +33120,10 @@ def _gemini_execute_task_impl(task_id, task, success_condition=''):
     # v480jo: komendy z LAPTOP: w zadaniu ida na laptopa tylko z tym
     # przedrostkiem (bieg 2026-10-31 23:52: wykonawca puscil selfloop na
     # telefonie, choc Bartek dal "LAPTOP: bash -c '…'")
-    _regula_laptopa = ("\n9. Komendę, która w zadaniu zaczyna się od „LAPTOP:”, dajesz do "
-                       "termux_run dokładnie z tym przedrostkiem — wtedy wykona się na laptopie. "
-                       "Bez niego poleci na telefonie.\n" if _laptop_skonfigurowany() else "")
+    _regula_laptopa = ("\n9. Komendę, która w zadaniu ma „LAPTOP:” (albo „TELEFON:” po ; czy &&), "
+                       "dajesz do termux_run dokładnie tak, z tymi przedrostkami — część po LAPTOP: "
+                       "wykona się na laptopie. Bez przedrostka komenda poleci na telefonie.\n"
+                       if _laptop_skonfigurowany() else "")
 
     # v452: ciagniemy rozmowe z poprzednich zadan tego celu — zasady
     # juz w niej sa, idzie samo zadanie.
@@ -49544,7 +49644,9 @@ def _pierwsza_wiadomosc(rola=None):
 # to najlepiej zrozumial") przepisany w calosci: laptop (gdy jest
 # podlaczony) i poprawka fragmentu jako dwa bloki "Stary/Nowy fragment".
 def _jak_rozmawiamy_laptop():
-    """Zdania o laptopie dla zespolu albo "" (laptop niepodlaczony)."""
+    """Zdania o laptopie dla zespolu albo "" (laptop niepodlaczony).
+    v480jp: przepisane w calosci — laczenie maszyn w jednej linii, tlo bez
+    przerywania, instalacja bez sudo."""
     try:
         if not _laptop_skonfigurowany():
             return ""
@@ -49553,16 +49655,20 @@ def _jak_rozmawiamy_laptop():
     f = _laptop_folder()
     return (
         "Obok telefonu jest laptop z Linuksem — więcej rdzeni i pamięci. "
-        "Komenda poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny "
-        "~/" + f + " na laptopie, i działa jak na telefonie: wynik albo błąd "
-        "wraca do was, a dłuższa liczy się w tle (np. URUCHOM: LAPTOP: python3 "
-        "test.py albo PODGLĄD: LAPTOP: nproc; free -h). Pliki z kodem i małe pliki "
-        "tekstowe są na telefonie i laptopie te same: przed każdą komendą LAPTOP: i po "
-        "niej program przenosi nowszą wersję w drugą stronę, więc kod piszecie, "
-        "poprawiacie fragmentami i sprawdzacie tak jak zawsze, a na laptopie od razu "
-        "działa ten sam. Duże pliki (dane, modele) przenosicie scp: URUCHOM: scp "
-        "dane.bin " + _LAPTOP_HOST + ":" + f + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":"
-        + f + "/model.bin . z powrotem. "
+        "Komenda poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f
+        + " na laptopie, i zachowuje się jak na telefonie: wynik albo błąd wraca do was, "
+        "a dłuższa liczy dalej w tle, aż sama skończy — to, co tam liczy, widać w „Dalej "
+        "w tle” z dopiskiem „na laptopie”. Na przykład URUCHOM: LAPTOP: python3 test.py "
+        "albo PODGLĄD: LAPTOP: nproc; free -h. W jednej linii możecie przechodzić między "
+        "maszynami: po ; albo && wpiszcie LAPTOP: (dalej na laptopie) albo TELEFON: (z "
+        "powrotem na telefonie), np. URUCHOM: sleep 600; LAPTOP: tail -5 log.txt — program "
+        "wykona części po kolei, każdą na swojej maszynie, i odda jeden wynik. Pliki z kodem "
+        "i małe pliki tekstowe są na obu maszynach te same (przed każdą komendą LAPTOP: i po "
+        "niej program przenosi nowszą wersję w drugą stronę), więc kod piszecie i poprawiacie "
+        "jak zawsze. Duże pliki (dane, modele) przenosicie scp: URUCHOM: scp dane.bin "
+        + _LAPTOP_HOST + ":" + f + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":" + f
+        + "/model.bin . z powrotem. Na laptopie nie ma sudo, więc biblioteki instalujecie "
+        "w venv albo przez pip install --user. "
         + ("Połowa rdzeni laptopa jest dla Waszej drużyny. " if _DRUZYNA else "")
         + "Bez LAPTOP: komenda wykonuje się na telefonie. "
     )
@@ -49617,6 +49723,7 @@ _JAK_ROZMAWIAMY = _jak_rozmawiamy(laptop=False)
 
 # v480ix2: akapit MAIN-a o laptopie (cały, nowy), tylko gdy laptop jest podłączony.
 def _laptop_dla_maina_akapit():
+    """v480jp: przepisane w calosci (laczenie maszyn, tlo, instalacja)."""
     try:
         if not _laptop_skonfigurowany():
             return ""
@@ -49625,20 +49732,24 @@ def _laptop_dla_maina_akapit():
     f = _laptop_folder()
     tel = ("~/MAIN_" + _DRUZYNA) if _DRUZYNA else "~"
     return (
-        "Laptop. Obok telefonu jest laptop z Linuksem, połączony przez ssh — "
-        "więcej rdzeni i pamięci (dokładnie: ~/AEL_SRODOWISKO.txt). Komenda "
-        "poprzedzona LAPTOP: — w RUN (termux_run), w zadaniu i w URUCHOM: "
-        "zespołu — wykonuje się na nim w folderze ~/" + f + " na laptopie, z tymi "
-        "samymi wynikami, błędami i tłem co na telefonie, np. LAPTOP: python3 "
-        "skrypt.py albo LAPTOP: nproc; free -h. Pliki z kodem i małe pliki tekstowe "
-        "są na obu maszynach te same: przed każdą komendą LAPTOP: i po niej program "
-        "przenosi nowszą wersję w drugą stronę (zapis nowych plików, poprawki fragmentów "
-        "i próby uruchomienia działają więc jak zawsze). Duże pliki przenosi scp "
-        + tel + "/dane.bin " + _LAPTOP_HOST + ":" + f + "/ i z powrotem scp "
-        + _LAPTOP_HOST + ":" + f + "/model.bin " + tel + "/. "
+        "Laptop. Obok telefonu jest laptop z Linuksem, połączony przez ssh — więcej "
+        "rdzeni i pamięci (dokładnie: ~/AEL_SRODOWISKO.txt). Komenda poprzedzona LAPTOP: — "
+        "w RUN (termux_run), w zadaniu dla wykonawcy i w URUCHOM: zespołu — wykonuje się na "
+        "nim w folderze ~/" + f + " na laptopie, z tymi samymi wynikami, błędami i tłem co na "
+        "telefonie, np. LAPTOP: python3 skrypt.py albo LAPTOP: nproc; free -h. Proces na "
+        "laptopie liczy, aż sam skończy, także gdy połączenie się zerwie; to, co tam liczy, "
+        "widzisz w „Dalej w tle”. W jednej komendzie możesz przechodzić między maszynami: po "
+        "; albo && wpisz LAPTOP: (dalej na laptopie) albo TELEFON: (z powrotem na telefonie), "
+        "np. sleep 600; LAPTOP: tail -5 log.txt — program wykona części po kolei, każdą na "
+        "swojej maszynie, i odda jeden wynik. Pliki z kodem i małe pliki tekstowe są na obu "
+        "maszynach te same: przed każdą komendą LAPTOP: i po niej program przenosi nowszą "
+        "wersję w drugą stronę. Duże pliki przenosi scp " + tel + "/dane.bin " + _LAPTOP_HOST
+        + ":" + f + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + f + "/model.bin " + tel + "/. "
+        "Na laptopie nie ma sudo — biblioteki instaluje się tam w venv albo przez pip install "
+        "--user. "
         + ("Połowa jego rdzeni jest dla Waszej drużyny. " if _DRUZYNA else "")
-        + "Bez LAPTOP: wszystko dzieje się na telefonie. Gdy laptop jest "
-        "niedostępny, komenda nie rusza, a program mówi dlaczego."
+        + "Bez LAPTOP: wszystko dzieje się na telefonie. Gdy laptop jest niedostępny, komenda "
+        "nie rusza, a program mówi dlaczego."
     )
 
 # v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela

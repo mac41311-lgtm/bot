@@ -3957,3 +3957,17 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        także puszczonymi tam w tło (nohup … &), raz na minutę przez ssh.
        (4) Sędzia po sprawdzeniu kończy wszystko, co komenda sprawdz puściła
        w tle w swojej grupie — nic po nim nie zostaje.
+
+279. (v480jp) Jedna linia może łączyć telefon i laptopa (użytkownik: „chyba
+       że mogą łączyć — to tylko to popraw”). Po ; && || przedrostek LAPTOP:
+       przełącza na laptopa, TELEFON: z powrotem; początek bez przedrostka
+       jest na telefonie, np. „sleep 600; LAPTOP: tail -5 log.txt”. Program
+       wykonuje części po kolei, każdą na swojej maszynie (&& tylko po
+       sukcesie, || po błędzie, jak w powłoce), i oddaje jeden wynik z
+       nagłówkami „── telefon: … (kod 0) ──” / „── laptop: … ──”. „cd X &&” z
+       początku linii dotyczy też kolejnych części na telefonie. Zamiast
+       odmowy z v480jj. Akapity o laptopie dla zespołu (_jak_rozmawiamy_laptop)
+       i dla MAIN-a (_laptop_dla_maina_akapit) przepisane w całości: łączenie
+       maszyn, proces liczy do końca także po zerwaniu połączenia i widać go
+       w „Dalej w tle”, na laptopie bez sudo biblioteki w venv albo pip
+       install --user. Reguła 9 wykonawcy mówi też o TELEFON:.
