@@ -8576,6 +8576,9 @@ def _komenda_z_podgladu(k):
     # </parameter>") — bieg 2026-10-26 19:27: bash dostawal go jako czesc
     # komendy, a Bartek kilka rund nie wiedzial, czemu cat nie dziala.
     k = re.sub(r"(?:\s*</[A-Za-z_][\w:.-]*\s*>)+\s*$", "", k).strip()
+    # v480iz: ogon DSML z pelnoszerokimi kreskami ("| cat -A</｜｜DSML｜｜
+    # parameter>") — bieg 2026-10-31 21:52 (druzyna 1).
+    k = re.sub(r"\s*</?\s*[｜|]+\s*DSML.*$", "", k, flags=re.S).strip()
     for _ in range(3):
         k2 = re.sub(r"^(?:\*\*|__|`+)\s*", "", k)
         k2 = re.sub(r"\s*(?:\*\*|__|`+)$", "", k2).strip()
@@ -21821,6 +21824,11 @@ def _autor_poprawia_skladnie(path, content, wynik):
                     blad = b2
             elif extract_search_replace_blocks(odp):
                 blad = str(r.get("reason") or blad)
+        # v480iz: bez poprawki i bez kodu (i bez rozmowy z kolega) = autor
+        # oddal glos; o reszcie rozstrzyga stan pliku na dysku ponizej.
+        _oddal_glos = (not ok and not odpowiedzi_kolegow and not r.get("already")
+                       and not extract_search_replace_blocks(odp)
+                       and not (_kod_z_wypowiedzi(odp, Path(str(path)).name) or "").strip())
         # v480hs: noc 27/28.10 (druzyna 1, krok 9) — Bartek poprawil plik
         # inna droga (pelna wersja polozona przez program w trakcie jego
         # odpowiedzi), a runda 3 wyslala mu ten sam stary blad; dwa razy
@@ -21851,7 +21859,7 @@ def _autor_poprawia_skladnie(path, content, wynik):
                 + ("raz" if runda == 1 else "razy") + "). Teraz się kompiluje."
             )
             return nowy
-        if not odpowiedzi_kolegow and _bez_postepu(_historia, _blad_przed, odp):
+        if _oddal_glos or (not odpowiedzi_kolegow and _bez_postepu(_historia, _blad_przed, odp)):
             break
     wynik["poprawki_autora"] = (
         imie + " dostał błąd od razu i poprawiał " + str(runda)
@@ -22089,6 +22097,11 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                     + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
                     + "kopia: .kopie/" + Path(w["backup"]).name + "). Plik jest gotowy do uruchomienia"
                     + (": " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
+        if w.get("already"):
+            sciezka = _sciezka_od_domu(str(p))
+            log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + " już jest w pliku — bez zmian.")
+            return ["[Zmiana z poprawki " + imie_d + " już jest w pliku " + sciezka
+                    + " — program niczego nie zmieniał.]"]
         powod = powod or str(w.get("reason") or "")
     # Poprawka nie weszla — wraca do autora (v480ie: dopoki jest postep), zanim
     # cokolwiek dostanie MAIN; autor moze zajrzec do pliku PODGLĄDEM.
@@ -22109,6 +22122,19 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
             )) or "")
             _zapamietaj_kod_autora(rola, odp2)
             w = apply_engineer_patch_to_project_file(str(p), odp2)
+            # v480iz: zmiana juz jest w pliku albo autor odpowiada bez
+            # poprawki ("patch juz jest na dysku") — koniec rund. Bieg
+            # 2026-10-31 21:49: Bartek trzy razy pisal, ze plik ma juz
+            # nowa wersje, a program odsylal "nie weszla" (runda 5, 6, 7).
+            if w.get("already") or not extract_search_replace_blocks(odp2):
+                log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + ": "
+                    + ("zmiana już jest w pliku" if w.get("already") else "autor odpowiedział bez poprawki")
+                    + " — koniec rund.")
+                return ["[Poprawka " + imie_d + " do " + sciezka + ": "
+                        + ("zmiana już jest w pliku, program niczego nie zmieniał."
+                           if w.get("already") else
+                           "autor odpowiedział bez nowej poprawki: " + short(" ".join(odp2.split()), 300))
+                        + "]"]
             if w.get("applied"):
                 _record_python_written_file(w["path"])
                 log("PROGRAM", "Poprawka " + imie_d + " naniesiona na " + sciezka + " po " + str(runda) + ". próbie.")
@@ -22253,8 +22279,11 @@ def _autor_poprawia_uruchomienie(rola, p):
         if not odpowiedzi_kolegow and _bez_postepu(_historia, wyj, odp):
             break
         r = apply_engineer_patch_to_project_file(str(p), odp)
-        if not r.get("applied"):
+        if not r.get("applied") and not r.get("already"):
             kod = _kod_z_wypowiedzi(odp, p.name)
+            # v480iz: ani poprawki, ani calego pliku — autor oddal glos
+            if not extract_search_replace_blocks(odp) and not (kod and kod.strip()) and not odpowiedzi_kolegow:
+                break
             if kod and kod.strip() and not extract_search_replace_blocks(odp):
                 b2 = _zapisz_poprawke_autora(str(p), kod)
                 if b2:
@@ -40076,6 +40105,39 @@ def _opis_awarii(run_result):
     return "\n".join(czesci)
 
 
+def _fragment_z_wcieciem(tekst, frag):
+    """
+    v480iz: miejsca w pliku, gdzie stoi `frag` z dodanym jednym wspolnym
+    wcieciem (linie puste dowolne). Zwraca [(start, koniec, wciecie)],
+    koniec obejmuje znak nowej linii ostatniej linii.
+    """
+    fl = [l.rstrip() for l in str(frag or "").strip("\n").split("\n")]
+    if not fl or not any(l.strip() for l in fl):
+        return []
+    linie = str(tekst or "").split("\n")
+    poz = [0]
+    for l in linie:
+        poz.append(poz[-1] + len(l) + 1)
+    pierwsza = next(l for l in fl if l.strip())
+    out = []
+    for i in range(len(linie) - len(fl) + 1):
+        l0 = linie[i + fl.index(pierwsza)].rstrip()
+        if not l0.endswith(pierwsza.lstrip()) or not l0.strip():
+            continue
+        wc = l0[:len(l0) - len(pierwsza)]
+        if wc.strip() or not l0.startswith(wc + pierwsza):
+            continue
+        if all((not f.strip() and not linie[i + j].strip())
+               or linie[i + j].rstrip() == wc + f for j, f in enumerate(fl)):
+            out.append((poz[i], min(poz[i + len(fl)], len(tekst)), wc))
+    return out
+
+
+def _dodaj_wciecie(kod, wc):
+    linie = str(kod or "").strip("\n").split("\n")
+    return "\n".join((wc + l) if l.strip() else l for l in linie) + "\n"
+
+
 def apply_engineer_patch_to_project_file(path, engineer_text):
     """
     Naklada poprawke SZUKAJ/ZAMIEN Bartka na PLIK PROJEKTU.
@@ -40113,14 +40175,35 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
 
     zmieniony = original
     naniesione = 0
+    juz_byly = 0
 
     for stary, nowy in bloki:
 
         wystapienia = zmieniony.count(stary)
 
+        # v480iz: fragment z bloku ```…``` ma zdjete wspolne wciecie, a w
+        # pliku siedzi w funkcji (8 spacji). Bieg 2026-10-31 21:49
+        # (druzyna 1): dwulinijkowy fragment Bartka z wcieciem nie
+        # pasowal nigdy, a "juz jest w pliku" tez nie (nowy bez wciecia),
+        # wiec poprawka wracala do niego runda po rundzie.
+        if wystapienia == 0:
+            _traf = _fragment_z_wcieciem(zmieniony, stary)
+            if len(_traf) == 1:
+                _a, _b, _wc = _traf[0]
+                _nowy_wc = _dodaj_wciecie(nowy, _wc)
+                if zmieniony[_b - 1:_b] != "\n" and _nowy_wc.endswith("\n"):
+                    _nowy_wc = _nowy_wc[:-1]
+                zmieniony = zmieniony[:_a] + _nowy_wc + zmieniony[_b:]
+                naniesione += 1
+                continue
+            if len(_traf) > 1:
+                wystapienia = len(_traf)
+
         # v480ft: ta zmiana juz jest w pliku (autor naniosl ja od razu,
         # a MAIN zlecil ten sam zapis) — nie blad "fragmentu nie ma".
-        if wystapienia == 0 and nowy.strip() and zmieniony.count(nowy) == 1:
+        if wystapienia == 0 and nowy.strip() and (
+                zmieniony.count(nowy) == 1 or len(_fragment_z_wcieciem(zmieniony, nowy)) == 1):
+            juz_byly += 1
             continue
 
         if wystapienia == 0:
@@ -40154,6 +40237,8 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
     if zmieniony == original:
         return {
             "applied": False,
+            # v480iz: zmiana juz jest w pliku — koniec, nie kolejna runda
+            "already": bool(juz_byly) or all(a.strip() == b.strip() for a, b in bloki),
             "reason": "Poprawka nic nie zmienia — plik już tak wygląda.",
         }
 

@@ -3778,3 +3778,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        nowy, cały akapit „Laptop.” obok „Telefon.”. Bez laptopa teksty są
        jak dawniej. Trwające rozmowy dostają nowy tekst raz (zmiana faktów
        na starcie rozmowy). Role i ich prompty bez zmian.
+
+263. (v480iz) Poprawka fragmentu z wcięciem i koniec pustych rund. Blok
+       kodu ma zdjęte wspólne wcięcie, a fragment w pliku siedzi w funkcji
+       — program szuka teraz fragmentu także z jednym wspólnym wcięciem
+       i tak samo wcina nowy fragment. Gdy nowy fragment już jest w pliku
+       (stary nie), albo poprawka nic nie zmienia (stary = nowy), to
+       „zmiana już jest w pliku” — koniec, bez kolejnej rundy. Odpowiedź
+       autora bez poprawki i bez całego pliku („patch już jest na dysku”)
+       kończy rundy (autor oddał głos) — dla każdej roli i w każdej pętli
+       (poprawka, próba uruchomienia, składnia). Ogon DSML
+       („</｜｜DSML｜｜ parameter>”) jest wycinany z PODGLĄD/URUCHOM.
+       Bieg 31.10 21:49 (drużyna 1): Bartek 8 rund dostawał „nie weszła”,
+       choć plik od dawna miał nową wersję.
