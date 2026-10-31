@@ -26523,9 +26523,118 @@ def _laptop_dla_maina():
     return _laptop_opis()
 
 
+# v480je: straznik pamieci laptopa (uzytkownik 2026-10-31: "napisz
+# straznika"). Ta sama zasada co na telefonie (v480cm/it): bez limitow,
+# dziala dopiero, gdy laptopowi konczy sie pamiec, i zatrzymuje JEDEN
+# proces uruchomiony przez LAPTOP: — z druzyny, ktora zajmuje wiecej
+# (rowne szanse), a w niej najwiekszy. Inaczej Linux (OOM) zabija na
+# oslep, czesto zadanie tej druzyny, ktora zajmowala mniej. Pilnuje tylko
+# jeden proces programu (druzyna 1 albo zwykly tryb), zeby nie bylo dwoch
+# zatrzyman naraz.
+_LAPTOP_PAMIEC_PROG_MB = 500
+_LAPTOP_PAMIEC_KRYT_MB = 250
+
+
+def _laptop_pamiec_odczyt():
+    """(wolne_mb, [(pid, druzyna, rss_mb, komenda)]) z laptopa albo None."""
+    skrypt = (
+        "grep '^MemAvailable:' /proc/meminfo; "
+        "for p in /proc/[0-9]*; do d=$(tr '\\0' '\\n' < $p/environ 2>/dev/null "
+        "| sed -n 's/^AEL_DRUZYNA=//p' | head -1); "
+        "[ -n \"$d\" ] || continue; r=$(sed -n 's/^VmRSS:[^0-9]*\\([0-9]*\\).*/\\1/p' $p/status 2>/dev/null); "
+        "[ -n \"$r\" ] && echo \"P ${p#/proc/} $d $r $(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-160)\"; "
+        "done; true")
+    try:
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=20, errors="replace")
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    m = re.search(r"MemAvailable:\s*(\d+)", r.stdout or "")
+    if not m:
+        return None
+    procesy = []
+    for l in (r.stdout or "").splitlines():
+        cz = l.split(" ", 4)
+        if len(cz) >= 4 and cz[0] == "P":
+            try:
+                procesy.append((int(cz[1]), cz[2], int(cz[3]) // 1024, cz[4] if len(cz) > 4 else ""))
+            except ValueError:
+                pass
+    return int(m.group(1)) // 1024, procesy
+
+
+def _laptop_zatrzymaj_przy_braku_pamieci(wolne, procesy):
+    """Zatrzymuje jeden proces (rowne szanse druzyn); zwraca opis albo ""."""
+    procesy = [p for p in procesy if p[2] > 0 and "bash -lc" not in p[3][:12]]
+    if not procesy:
+        return ""
+    suma = {}
+    for p in procesy:
+        suma[p[1]] = suma.get(p[1], 0) + p[2]
+    druzyna = max(suma, key=lambda d: suma[d])
+    pid, d, rss, cmd = max((p for p in procesy if p[1] == druzyna), key=lambda p: p[2])
+    try:
+        subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, "kill -9 " + str(pid)],
+                       capture_output=True, text=True, timeout=15)
+    except Exception:
+        return ""
+    opis = ("Na laptopie kończyła się pamięć (wolne " + str(wolne) + " MB) — program zatrzymał "
+            + short(cmd.strip() or ("pid " + str(pid)), 120) + " (" + str(rss) + " MB"
+            + (", drużyna " + d if d not in ("", "0") else "") + "), zanim Linux zabiłby coś na "
+            "oślep. To nie błąd w kodzie: proces potrzebował więcej pamięci, niż laptop miał "
+            "wolnej. Mniejsze porcje danych, mniej procesów naraz albo zapis pośrednich "
+            "wyników na dysk pozwolą mu się zmieścić.")
+    log("LAPTOP", opis)
+    try:
+        with open(_plik_uwag_pamieci(d if d not in ("", "0") else (_DRUZYNA or "1")),
+                  "a", encoding="utf-8") as f:
+            f.write(opis + "\n")
+    except Exception:
+        pass
+    try:
+        with open(_DZIENNIK_ODDECHU, "a", encoding="utf-8") as f:
+            f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " | [laptop] " + opis + "\n")
+    except Exception:
+        pass
+    return opis
+
+
+def _straznik_pamieci_laptopa():
+    nisko = 0
+    while True:
+        try:
+            if not _laptop.get("ok"):
+                nisko = 0
+                time.sleep(30)
+                continue
+            odczyt = _laptop_pamiec_odczyt()
+            if not odczyt:
+                time.sleep(30)
+                continue
+            wolne, procesy = odczyt
+            if not procesy:
+                nisko = 0
+                time.sleep(30)
+                continue
+            nisko = nisko + 1 if wolne < _LAPTOP_PAMIEC_PROG_MB else 0
+            if nisko >= 2 or wolne < _LAPTOP_PAMIEC_KRYT_MB:
+                if _laptop_zatrzymaj_przy_braku_pamieci(wolne, procesy):
+                    nisko = 0
+                    time.sleep(20)
+                    continue
+            time.sleep(10)
+        except Exception:
+            time.sleep(30)
+
+
 def zacznij_pilnowanie_laptopa():
     if not _laptop_skonfigurowany():
         return
+    if _DRUZYNA != "2":
+        _threading.Thread(target=_straznik_pamieci_laptopa, daemon=True,
+                          name="laptop-pamiec").start()
 
     def _petla():
         while True:
@@ -26623,7 +26732,7 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " && export OMP_NUM_THREADS=" + k + " OPENBLAS_NUM_THREADS=" + k
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
-               + (" AEL_DRUZYNA=" + _d_eksport if _d_eksport else "")
+               + " AEL_DRUZYNA=" + (_d_eksport or "0")
                + " && exec nice -n 5 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))

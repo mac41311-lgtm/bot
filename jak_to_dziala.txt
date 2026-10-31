@@ -3828,3 +3828,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        mają w środowisku AEL_DRUZYNA=<n>; w rywalizacji ps/top/pgrep na
        laptopie pokazują zamiast procesów drugiej drużyny jedną linię z ich
        liczbą (obie drużyny są na jednym koncie laptopa).
+
+268. (v480je) Strażnik pamięci laptopa — ta sama zasada co na telefonie,
+       bez limitów. Gdy na laptopie działa coś z LAPTOP:, program co 10 s
+       patrzy na wolną pamięć laptopa. Poniżej 500 MB przy dwóch odczytach
+       z rzędu (albo poniżej 250 MB od razu) zatrzymuje jeden proces
+       uruchomiony przez LAPTOP: — z drużyny, której procesy zajmują razem
+       więcej (równe szanse), a w niej największy — zanim Linux zabije coś
+       na oślep. MAIN tej drużyny dostaje raz, w sekcji „Pamięć telefonu”,
+       co zatrzymano i czemu; linia trafia też do dziennika pracy. Pilnuje
+       jeden proces programu (drużyna 1 albo zwykły tryb). Procesy z LAPTOP:
+       mają AEL_DRUZYNA=<n> (poza rywalizacją 0).
