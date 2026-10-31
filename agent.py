@@ -26520,14 +26520,34 @@ def _laptop_do_srodowiska():
         pass
 
 
+def _laptop_powiedziane_plik():
+    return HOME / (".ael_laptop_powiedziane_" + (_DRUZYNA or "0") + ".txt")
+
+
 def _laptop_dla_maina():
     """Raz przy pierwszym sprawdzeniu i przy kazdej zmianie (dostepny <->
-    niedostepny) jedno zdanie dla MAIN-a; inaczej ""."""
+    niedostepny) jedno zdanie dla MAIN-a; inaczej "".
+    v480jh: to, co MAIN juz uslyszal, zapisane w pliku — przeladowanie po
+    aktualizacji ani wznowienie biegu nie powtarza sekcji Laptop (bieg
+    2026-10-31 22:57: po przeladowaniu w kroku 74 MAIN dostal ja znowu).
+    Nowa rozmowa MAIN-a i tak ma opis laptopa we wstepie."""
     with _laptop_lock:
         ok = _laptop.get("ok")
-        if ok is None or _laptop.get("powiedziane") == ok:
+        if ok is None:
+            return ""
+        if _laptop.get("powiedziane") is None:
+            try:
+                z = _laptop_powiedziane_plik().read_text().strip()
+                _laptop["powiedziane"] = {"1": True, "0": False}.get(z)
+            except Exception:
+                pass
+        if _laptop.get("powiedziane") == ok:
             return ""
         _laptop["powiedziane"] = ok
+        try:
+            _laptop_powiedziane_plik().write_text("1" if ok else "0")
+        except Exception:
+            pass
     return _laptop_opis()
 
 
@@ -26835,7 +26855,7 @@ def _laptop_sync_lokalne(folder):
 def _laptop_sync_zdalne(f):
     """{rel: (mtime, rozmiar, md5)} z ~/<f> na laptopie albo None."""
     wzor = " -o ".join("-name '*" + s + "'" for s in _LAPTOP_SYNC_SUFIKSY)
-    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && find . \\( -name '.?*' -o -name __pycache__ "
+    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && find . -type d \\( -name '.?*' -o -name __pycache__ "
               "-o -name node_modules -o -name venv -o -name site-packages -o -name spadek \\) "
               "-prune -o -type f \\( " + wzor + " \\) -size -" + str(_LAPTOP_SYNC_MAX_B // 1024 + 1)
               + "k -printf '%T@ %s %p\\n' | head -" + str(_LAPTOP_SYNC_MAX_PLIKOW))
@@ -56692,14 +56712,20 @@ def _plik_z_przekierowania(komenda, cwd=None):
 def _nazwa_w_tle(komenda):
     """v480gy: krotka nazwa tego, co liczy ("mlp_bpe.py"), zamiast calej
     komendy z cd, rm, zmiennymi i przekierowaniem."""
-    m = re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", str(komenda or ""))
+    tekst = str(komenda or "")
+    # v480jh: rzecz liczona na laptopie dostaje dopisek, zeby w "Dalej w
+    # tle" / "Skonczone w tle" nie mylila sie z procesem na telefonie.
+    na_laptopie = ""
+    if _LAPTOP_SSH.strip() in tekst or _LAPTOP_RE.search(tekst):
+        na_laptopie = " (na laptopie)"
+    m = re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", tekst)
     if m:
-        return os.path.basename(m[-1])
-    return _komenda_jedna_linia(str(komenda or ""), 80)
+        return os.path.basename(m[-1]) + na_laptopie
+    return _komenda_jedna_linia(tekst, 80) + na_laptopie
 
 
 def _linia_dziala(nazwa, pid, start, postep, log_path, rozmiar, ostatnia,
-                  juz_czytal, blad):
+                  juz_czytal, blad, stoi_s=None):
     """v480gy: jedna linia o tym, co dalej liczy w tle — procent i ile
     zostalo na poczatku; koncowka logu tylko, gdy MAIN jej nie widzial i
     nie ma postepu."""
@@ -56711,6 +56737,9 @@ def _linia_dziala(nazwa, pid, start, postep, log_path, rozmiar, ostatnia,
         tekst += trwa
         if log_path and not juz_czytal:
             tekst += "; log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B), ostatnia linia: " + short(ostatnia, 160)
+    if stoi_s:
+        # v480jh: log od dawna nie rosnie — proces moze wisiec
+        tekst += "; log nie rośnie od " + _min_s(stoi_s) + " (proces może stać)"
     tekst += "."
     if blad:
         tekst += "\n  W ostatnich liniach logu jest: " + short(blad, 200)
@@ -56852,7 +56881,7 @@ def _raport_z_tla():
             continue
         try:
             os.killpg(grupa, 0)
-            _zyje = True
+            _zyje = _grupa_to_ta_komenda(grupa, komenda)
         except ProcessLookupError:
             _zyje = False
         except Exception:
@@ -56895,9 +56924,14 @@ def _raport_z_tla():
             _tlo_ostatnio_widziane[klucz] = (rozmiar, ostatnia)
             _bl = [l for l in linie[-40:] if _BLAD_W_LOGU_RE.search(l)]
             _postep = _postep_z_logu(_plik, linie, start, str(komenda))
+            try:
+                _stoi = time.time() - os.path.getmtime(_plik)
+            except Exception:
+                _stoi = 0
             _l = _linia_dziala(_nazwa_w_tle(komenda), None, float(start or 0) or None,
                                _postep, _plik, rozmiar, ostatnia,
-                               _log_juz_czytany(_plik, ostatnia), _bl[-1] if _bl else "")
+                               _log_juz_czytany(_plik, ostatnia), _bl[-1] if _bl else "",
+                               stoi_s=_stoi if _stoi >= 1800 else None)
             zdania.append(_l)
             if _zmiana:
                 _linie_tla_zmienione.add(_l)
@@ -56924,6 +56958,42 @@ def _raport_z_tla():
         _linie_tla_skonczone.add(_l)
         _linie_tla_zmienione.add(_l)
     return zdania
+
+
+def _grupa_to_ta_komenda(grupa, komenda):
+    """
+    v480jh: grupa procesow zyje, ale czy to jeszcze ta komenda? Numer grupy
+    moze po godzinach dostac zupelnie inny proces (Android szybko oddaje
+    numery), a stan sprzed przeladowania przenosi stary numer. Bieg
+    2026-10-31 22:57 (druzyna 1): MAIN dostawal "selfloop.py: dziala 3 h
+    47 min" ze starego biegu na sucho. Gdy w grupie widac procesy, a zaden
+    nie ma w komendzie nazwy uruchomionego skryptu — to nie ta komenda.
+    """
+    nazwy = [os.path.basename(x) for x in
+             re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", str(komenda or ""))]
+    if not nazwy:
+        return True
+    widziane = 0
+    try:
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open("/proc/" + d + "/stat", "r", errors="replace") as fh:
+                    st = fh.read()
+                pola = st[st.rindex(")") + 2:].split()
+                if int(pola[2]) != int(grupa):
+                    continue
+                with open("/proc/" + d + "/cmdline", "rb") as fh:
+                    cmd = fh.read().replace(b"\0", b" ").decode("utf-8", "replace")
+            except Exception:
+                continue
+            widziane += 1
+            if any(n in cmd for n in nazwy):
+                return True
+    except Exception:
+        return True
+    return widziane == 0
 
 
 def _jeszcze_zyje(pid):
