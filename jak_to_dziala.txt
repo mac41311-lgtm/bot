@@ -3853,3 +3853,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wyjaśnienie. Wspólny tekst ról, akapit MAIN „Laptop.” i opis laptopa
        przepisane w całości. Bieg 31.10 22:35–22:38 (drużyna 1): selfloop.py
        różnił się na obu maszynach, pkill -f zabił własną komendę.
+
+270. (v480jg) Laptop widać w terminalu i w dzienniku. Gdy coś z LAPTOP:
+       liczy, w terminalu co 5 minut jest jedna linia [LAPTOP]: wolna
+       pamięć laptopa i procesy każdej drużyny (ile, ile MB, największy).
+       Linia dziennika pracy (co minutę) ma kawałek „laptop: wolne X MB,
+       procesów drużyn N” albo „laptop niedostępny”. Wyjście komendy na
+       laptopie leci na żywo tak jak na telefonie („Leci 10 s: …”).
+       Usuwanie na laptopie jest oceniane po komendzie roli, nie po
+       komendzie ssh: rm plików i podfolderów w środku folderu drużyny
+       (względnie albo ~/MAIN_n/…, bez cd poza folder) idzie bez pytania;
+       reszta pyta w terminalu z czytelną komendą roli. Bieg 31.10 22:45
+       (drużyna 1): „rm -f .selfloop.lock” dał pytanie z cytatem ssh.

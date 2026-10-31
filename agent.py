@@ -14040,6 +14040,12 @@ def _dziennik_oddechu_dopisz():
         bat = _bateria_krotko()
         if bat:
             czesci.append(bat)
+        try:
+            _lp = _laptop_do_dziennika()
+            if _lp:
+                czesci.append(_lp)
+        except Exception:
+            pass
         PRZEBIEG_DIR.mkdir(parents=True, exist_ok=True)
         try:
             if _DZIENNIK_ODDECHU.stat().st_size > _DZIENNIK_MAKS_B:
@@ -15964,6 +15970,7 @@ def execute_shell(command, timeout=None):
 
     if (
         _looks_like_delete_command(command)
+        and not getattr(_laptop_tl, "usuwanie_ok", False)
         and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
         and not _usuwa_tylko_wlasne_katalogi(command)
         and not _usuwa_wlasny_plik_tymczasowy(command)
@@ -26602,6 +26609,37 @@ def _laptop_zatrzymaj_przy_braku_pamieci(wolne, procesy):
     return opis
 
 
+def _laptop_stan_linia(wolne, procesy):
+    """Jedna linia: wolna pamiec laptopa i procesy druzyn (najwiekszy, czas)."""
+    druzyny = {}
+    for pid, d, rss, cmd in procesy:
+        if "bash -lc" in cmd[:12]:
+            continue
+        druzyny.setdefault(d, []).append((rss, cmd))
+    czesci = []
+    for d in sorted(druzyny):
+        ps = sorted(druzyny[d], reverse=True)
+        czesci.append(("drużyna " + d if d not in ("", "0") else "zespół") + ": " + str(len(ps))
+                      + (" proces" if len(ps) == 1 else " procesy" if len(ps) < 5 else " procesów")
+                      + ", " + str(sum(r for r, _ in ps)) + " MB (najwięcej: "
+                      + short(ps[0][1].strip(), 60) + ")")
+    return ("laptop: wolne " + str(wolne) + " MB z " + str(_laptop.get("ram_mb") or "?") + " MB"
+            + ("; " + "; ".join(czesci) if czesci else "; nic z LAPTOP: nie liczy"))
+
+
+def _laptop_do_dziennika():
+    """Kawalek linii dziennika pracy o laptopie albo ""."""
+    if _laptop.get("ok") is None:
+        return ""
+    if _laptop.get("ok") is False:
+        return "laptop niedostępny"
+    od = _laptop.get("odczyt")
+    if od and time.time() - od[0] < 300:
+        n = len([p for p in od[2] if "bash -lc" not in p[3][:12]])
+        return "laptop: wolne " + str(od[1]) + " MB, procesów drużyn " + str(n)
+    return "laptop: wolne " + str(_laptop.get("wolne_mb") or "?") + " MB"
+
+
 def _straznik_pamieci_laptopa():
     nisko = 0
     while True:
@@ -26615,10 +26653,16 @@ def _straznik_pamieci_laptopa():
                 time.sleep(30)
                 continue
             wolne, procesy = odczyt
+            _laptop["odczyt"] = (time.time(), wolne, procesy)
             if not procesy:
                 nisko = 0
                 time.sleep(30)
                 continue
+            # v480jg: w terminalu uzytkownika co 5 min jedna linia, co liczy
+            # laptop (tylko gdy cos z LAPTOP: dziala)
+            if time.time() - float(_laptop.get("log_t") or 0) >= 300:
+                _laptop["log_t"] = time.time()
+                log("LAPTOP", _laptop_stan_linia(wolne, procesy))
             nisko = nisko + 1 if wolne < _LAPTOP_PAMIEC_PROG_MB else 0
             if nisko >= 2 or wolne < _LAPTOP_PAMIEC_KRYT_MB:
                 if _laptop_zatrzymaj_przy_braku_pamieci(wolne, procesy):
@@ -26894,6 +26938,48 @@ def _laptop_wyrownaj(druzyna=None):
     return wyslij, pobierz
 
 
+_laptop_tl = _threading.local()
+
+
+def _laptop_usuwa_w_folderze(polecenie):
+    """
+    v480jg: kazdy cel rm w komendzie na laptopie lezy w srodku folderu
+    druzyny (sciezka wzgledna bez .., albo ~/MAIN_n/…), nie jest calym
+    folderem (".", "*", "~/MAIN_n") i nie jest sciezka absolutna.
+    """
+    wlasny = _laptop_folder()
+    # cd poza folder druzyny zmienia, gdzie leza sciezki wzgledne
+    for m in re.finditer(r"(?:^|[;&|(\s])cd\s+([^\s;&|)]+)", str(polecenie or "")):
+        cel = m.group(1).strip("\"'")
+        cel2 = re.sub(r"^(?:~|\$HOME|\$\{HOME\})/" + re.escape(wlasny) + r"(?=/|$)", "", cel)
+        if (cel2 == cel and cel.startswith(("/", "~", "$", "-"))) or ".." in cel.split("/"):
+            return False
+    for czlon in _czlony_komendy(str(polecenie or "")):
+        if not _DELETE_COMMAND_PATTERN.search(czlon):
+            continue
+        try:
+            slowa = shlex.split(czlon)
+        except Exception:
+            return False
+        # bash -c '…' / sh -c '…' — oceniamy komende w srodku
+        if slowa and os.path.basename(slowa[0]) in ("bash", "sh") and "-c" in slowa[:-1]:
+            if not _laptop_usuwa_w_folderze(slowa[slowa.index("-c") + 1]):
+                return False
+            continue
+        if "rm" not in slowa:
+            return False
+        cele = [a for a in slowa[slowa.index("rm") + 1:] if not a.startswith("-")]
+        if not cele:
+            return False
+        for a in cele:
+            a2 = re.sub(r"^(?:~|\$HOME|\$\{HOME\})/" + re.escape(wlasny) + r"/", "", a)
+            if (a2 == a and a.startswith(("/", "~", "$"))) or ".." in a2.split("/"):
+                return False
+            if a2.strip("./*") == "" or a2.rstrip("/") in (wlasny, "~/" + wlasny):
+                return False
+    return True
+
+
 _LAPTOP_PROCESY_RE = re.compile(r"\b(?:ps|top|htop|pgrep|pstree|pidof|lsof|fuser)\b|/proc/")
 
 
@@ -26956,12 +27042,32 @@ def termux_run(command):
         return lap
     if not lap:
         return _termux_run_lokalnie(command)
-    log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_LAPTOP_RE.match(command_str).group(1), 200))
+    _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
+    log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
+    # v480jg: usuwanie na laptopie oceniamy po komendzie roli, nie po
+    # komendzie ssh. Bieg 2026-10-31 22:45 (druzyna 1): "rm -f .selfloop.lock"
+    # w folderze druzyny dalo pytanie w terminalu z nieczytelnym cytatem ssh.
+    _laptop_tl.usuwanie_ok = False
+    if _looks_like_delete_command(_polecenie_lap):
+        if _laptop_usuwa_w_folderze(_polecenie_lap):
+            _laptop_tl.usuwanie_ok = True
+        elif _confirm_destructive_action(
+                "Komenda usuwająca na laptopie (w ~/" + _laptop_folder() + "): " + _polecenie_lap):
+            _laptop_tl.usuwanie_ok = True
+        else:
+            return {"ok": False, "error": "USUWANIE_ODRZUCONE", "command": command_str,
+                    "message": ("Usunięcie na laptopie odrzucone — nikt nie potwierdził w terminalu. "
+                                "Bez pytania wolno usuwać pliki i podfoldery w środku folderu drużyny "
+                                "na laptopie (ścieżką względną albo ~/" + _laptop_folder() + "/…), "
+                                "ale nie cały folder naraz."), "duration_s": 0.0}
     try:
         _przed = _laptop_wyrownaj()
     except Exception:
         _przed = None
-    wynik = _termux_run_lokalnie(lap)
+    try:
+        wynik = _termux_run_lokalnie(lap)
+    finally:
+        _laptop_tl.usuwanie_ok = False
     _po = None
     if isinstance(wynik, dict) and wynik.get("status") != "AUTO_BACKGROUNDED" and _przed is not None:
         try:
