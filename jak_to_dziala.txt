@@ -3971,3 +3971,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        maszyn, proces liczy do końca także po zerwaniu połączenia i widać go
        w „Dalej w tle”, na laptopie bez sudo biblioteki w venv albo pip
        install --user. Reguła 9 wykonawcy mówi też o TELEFON:.
+
+280. (v480jq) Jedno trwałe połączenie ssh z laptopem (ControlMaster,
+       ~/.ssh/ael_cm_*) zamiast nowego logowania przy każdym sprawdzeniu
+       (co 10–60 s: strażnik, stan laptopa, wyrównanie plików, lista
+       procesów). Na laptopie każde logowanie budziło sesję konta ael
+       (systemd, pipewire), więc w top procesy „znikały i się pojawiały”.
+       Połączenie główne zakłada i pilnuje co minutę jeden proces programu
+       (nie drużyna 2); gdy go nie ma, komendy łączą się zwyczajnie.

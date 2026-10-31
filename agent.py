@@ -26410,8 +26410,14 @@ def _katalog_startu_komendy(command):
 # rusza, rola dostaje, co sie stalo i co dalej; program dziala dalej.
 # Uniwersalne: nic o celu.
 _LAPTOP_HOST = os.environ.get("AEL_LAPTOP_HOST", "laptop").strip() or "laptop"
+# v480jq: jedno trwale polaczenie (ControlMaster) zamiast nowego logowania
+# przy kazdym sprawdzeniu. Uzytkownik 2026-10-31: w top na laptopie "procesy
+# znikaja i sie pojawiaja" — to systemd/pipewire sesji logowania ael, ktora
+# startowala i konczyla sie przy kazdym ssh programu (co 10-60 s). Klienci
+# maja ControlMaster=no: gdy polaczenia glownego nie ma, lacza sie zwyczajnie.
+_LAPTOP_CM = "~/.ssh/ael_cm_%C"
 _LAPTOP_SSH = ("ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=30 "
-               "-o ServerAliveCountMax=4 ")
+               "-o ServerAliveCountMax=4 -o ControlMaster=no -o ControlPath=" + _LAPTOP_CM + " ")
 _LAPTOP_RE = re.compile(
     r"^\s*(?:cd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*&&\s*)?LAPTOP\s*:\s*(.+)$",
     re.IGNORECASE | re.DOTALL)
@@ -26722,6 +26728,37 @@ def _straznik_pamieci_laptopa():
             time.sleep(30)
 
 
+def _laptop_polaczenie_glowne():
+    """
+    v480jq: trzyma jedno trwale polaczenie ssh z laptopem (ControlMaster),
+    przez ktore ida wszystkie komendy programu — laptop widzi jedna sesje
+    logowania zamiast nowej co kilka sekund. Wejscie/wyjscie na /dev/null,
+    zeby nic nie czekalo na jego potoki. Tylko jeden proces programu (nie
+    druzyna 2) je zaklada; gdy go nie ma, komendy lacza sie zwyczajnie.
+    """
+    try:
+        (HOME / ".ssh").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    _baza = ["ssh", "-o", "BatchMode=yes", "-o", "ControlPath=" + _LAPTOP_CM]
+    try:
+        r = subprocess.run(_baza + ["-O", "check", _LAPTOP_HOST], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(_baza + ["-M", "-N", "-f", "-o", "ControlPersist=yes",
+                                    "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=30",
+                                    "-o", "ServerAliveCountMax=4", _LAPTOP_HOST],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def zacznij_pilnowanie_laptopa():
     if not _laptop_skonfigurowany():
         return
@@ -26731,6 +26768,11 @@ def zacznij_pilnowanie_laptopa():
 
     def _petla():
         while True:
+            if _DRUZYNA != "2":
+                try:
+                    _laptop_polaczenie_glowne()
+                except Exception:
+                    pass
             try:
                 _laptop_sprawdz()
             except Exception:
