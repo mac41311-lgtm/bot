@@ -27241,6 +27241,10 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
 
 
 _laptop_moje_cache = {"t": 0.0, "lista": []}
+# v480jv: procesy druzyny na laptopie widziane przy ostatnim odczycie
+# (pid -> nazwa, log, start) i te, ktore od tego czasu zniknely
+_laptop_moje_widziane = {}
+_laptop_moje_skonczone = []
 
 
 def _laptop_moje_procesy():
@@ -27248,6 +27252,10 @@ def _laptop_moje_procesy():
     v480jo: [(nazwa skryptu, ile trwa w s)] procesow tej druzyny na
     laptopie (AEL_DRUZYNA w srodowisku), bez opakowan programu. Raz na
     minute przez ssh, tylko gdy laptop jest dostepny.
+    v480jv: proces puszczony samodzielnie (setsid/nohup … &), ktory zniknal
+    od ostatniego odczytu, trafia do _laptop_moje_skonczone (z logiem, do
+    ktorego pisal) — MAIN dostaje o nim linie w "Skonczone w tle".
+    Procesy pod komenda programu (.ael_laptop) maja wlasny wynik.
     """
     if not _laptop_skonfigurowany() or _laptop.get("ok") is not True:
         return []
@@ -27257,18 +27265,26 @@ def _laptop_moje_procesy():
     moja = _DRUZYNA or "0"
     skrypt = ("for p in /proc/[0-9]*; do grep -qz '^AEL_DRUZYNA=" + moja + "$' $p/environ 2>/dev/null "
               "|| continue; i=${p#/proc/}; e=$(ps -o etimes= -p $i 2>/dev/null | tr -d ' '); "
-              "echo \"$i ${e:-0} $(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
+              "o=$(readlink $p/fd/1 2>/dev/null); case \"$o\" in /dev/*|'') o=$(readlink $p/fd/2 2>/dev/null);; esac; "
+              "w=0; q=$i; for k in 1 2 3 4; do q=$(ps -o ppid= -p $q 2>/dev/null | tr -d ' '); "
+              "{ [ -z \"$q\" ] || [ \"$q\" -le 1 ]; } && break; "
+              "tr '\\0' ' ' < /proc/$q/cmdline 2>/dev/null | grep -q '/[.]ael_laptop/' && { w=1; break; }; done; "
+              "printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$o\" "
+              "\"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=20, errors="replace")
     except Exception:
         return _laptop_moje_cache["lista"]
+    if r.returncode != 0:
+        return _laptop_moje_cache["lista"]
     naj = {}
+    teraz = {}
     for l in (r.stdout or "").splitlines():
-        cz = l.split(" ", 2)
-        if len(cz) < 3 or "/.ael_laptop/" in cz[2] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[2]):
+        cz = l.split("\t", 4)
+        if len(cz) < 5 or "/.ael_laptop/" in cz[4] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[4]):
             continue
-        k = _KLUCZ_SKRYPTU_RE.search(cz[2]) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", cz[2])
+        k = _KLUCZ_SKRYPTU_RE.search(cz[4]) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", cz[4])
         if not k:
             continue
         nazwa = os.path.basename(k.group(1))
@@ -27277,8 +27293,62 @@ def _laptop_moje_procesy():
         except ValueError:
             t = 0
         naj[nazwa] = max(naj.get(nazwa, 0), t)
+        if cz[2] != "1":
+            log_p = cz[3] if cz[3].startswith("/") and not cz[3].startswith(("/dev/", "/proc/")) else ""
+            teraz[cz[0]] = {"nazwa": nazwa, "log": log_p.replace(" (deleted)", ""),
+                            "start": time.time() - t}
+    for pid, d in list(_laptop_moje_widziane.items()):
+        if pid not in teraz:
+            _laptop_moje_skonczone.append(d)
+    _laptop_moje_widziane.clear()
+    _laptop_moje_widziane.update(teraz)
     _laptop_moje_cache["lista"] = sorted(naj.items(), key=lambda x: -x[1])[:8]
     return _laptop_moje_cache["lista"]
+
+
+def _laptop_skonczone_linie():
+    """
+    v480jv: linie "Skonczone w tle" o procesach druzyny na laptopie, ktore
+    zniknely od ostatniego odczytu (uzytkownik 2026-11-01: "ale jakies info
+    powinien dostac?" — mixer2_alpha.py skonczyl sie o 00:40:47 z wynikiem
+    w logu, a MAIN widzial tylko, ze linia "Na laptopie liczy" zniknela).
+    Kodu wyjscia program nie zna (to nie jego proces); daje koncowke logu.
+    """
+    if not _laptop_moje_skonczone:
+        return []
+    gotowe = list(_laptop_moje_skonczone)
+    del _laptop_moje_skonczone[:]
+    logi = sorted({d["log"] for d in gotowe if d.get("log")})
+    konce = {}
+    if logi:
+        skrypt = "; ".join(
+            "echo '@@@" + str(n) + "'; tail -n 6 " + shlex.quote(lp) + " 2>&1 | cut -c1-300"
+            for n, lp in enumerate(logi)) + "; true"
+        try:
+            r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                               capture_output=True, text=True, timeout=20, errors="replace")
+            for kaw in re.split(r"(?m)^@@@", r.stdout or "")[1:]:
+                nr, _, tresc = kaw.partition("\n")
+                if nr.strip().isdigit() and int(nr) < len(logi):
+                    konce[logi[int(nr)]] = [x for x in tresc.splitlines() if x.strip()][-6:]
+        except Exception:
+            pass
+    linie = []
+    for d in gotowe:
+        lp = d.get("log") or ""
+        krotko = re.sub(r"^/home/[^/]+/", "~/", lp)
+        koniec = konce.get(lp) or []
+        linia = ("• Na laptopie skończył się " + d["nazwa"] + " (liczył ok. "
+                 + _min_s(time.time() - d["start"]) + "). Kodu wyjścia program nie zna")
+        if lp and koniec:
+            linia += (" — log LAPTOP: " + krotko + ", końcówka:\n"
+                      + "\n".join("  " + short(x, 200) for x in koniec))
+        elif lp:
+            linia += " — log LAPTOP: " + krotko + " (pusty albo już go nie ma)."
+        else:
+            linia += " i nie widzi pliku, do którego pisał (brak przekierowania > plik)."
+        linie.append(linia)
+    return linie
 
 
 def _laptop_dolacz(ident, folder, polecenie, wynik_zerwany):
@@ -57493,6 +57563,10 @@ def _raport_z_tla():
         if len(_linie_tla_skonczone) != _skonczone_przed:
             _laptop_moje_cache["t"] = 0.0
         _lp = _laptop_moje_procesy()
+        for _l in _laptop_skonczone_linie():
+            zdania.append(_l)
+            _linie_tla_skonczone.add(_l)
+            _linie_tla_zmienione.add(_l)
         if _lp:
             zdania.append("• Na laptopie liczy (Wasze): " + ", ".join(
                 n + " — " + _min_s(t) for n, t in _lp)

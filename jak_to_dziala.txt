@@ -4014,3 +4014,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        działała, bo komendy wykonawcy liczą w osobnym wątku, a treść
        zadania była widoczna tylko w wątku wykonawcy. Teraz wątek komendy
        dostaje treść zadania i takie komendy idą na laptopa.
+
+285. (v480jv) Bieg 1.11 00:40 (drużyna 1): mixer2_alpha.py puszczony na
+       laptopie samodzielnie (setsid nohup … &) skończył się z wynikiem
+       w logu, a MAIN widział tylko, że linia „Na laptopie liczy”
+       zniknęła. Użytkownik: „ale jakieś info powinien dostać?”. Teraz
+       taki proces, gdy zniknie, daje w „Skończone w tle” linię „Na
+       laptopie skończył się x.py (liczył ok. N min)” z logiem, do którego
+       pisał (program czyta go z /proc na laptopie), i jego końcówką.
+       Procesy pod komendą programu mają swój wynik jak dotąd.
