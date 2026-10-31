@@ -3933,3 +3933,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        systemowe instaluje użytkownik (sudo), więc podpowiedź mówi, żeby
        napisać to w DLA_UZYTKOWNIKA.md. Własne pliki drużyny (./lib) i
        „LAPTOP:” w środku komendy nie dostają tej podpowiedzi.
+
+277. (v480jn) Proces puszczony przez rolę zespołu zwykłą komendą w tło
+       (nohup … &, setsid …) ma w „Dalej w tle” i „Skończone w tle” dopisek
+       „(komenda Bartka)” itp. — MAIN wie, czyja to robota, ile trwa i co
+       pisze. Długie komendy ról miały to już wcześniej; autor zostaje też po
+       przeładowaniu programu. Przegląd kodu (31.10): program zatrzymuje
+       procesy drużyn tylko w trzech sytuacjach — strażnik pamięci (telefon
+       i laptop), zamknięcie programu przez użytkownika (procesy w tle na
+       telefonie) i komenda, która nie może przejść w tło, po 2 h albo gdy
+       stoi. Krótka próba nowego pliku (30 s) i sprawdzenie Sędziego to
+       procesy samego programu.

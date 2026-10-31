@@ -13343,6 +13343,9 @@ def _przywroc_procesy_w_tle():
     for _grupa, _wpis in (_stan_przed_aktualizacja.get("grupy_z_komend") or {}).items():
         try:
             _grupy_z_komend[int(_grupa)] = (str(_wpis[0]), float(_wpis[1]))
+            _a = (_stan_przed_aktualizacja.get("autorzy_grup") or {}).get(str(_grupa))
+            if _a:
+                _autor_grupy[int(_grupa)] = str(_a)
         except Exception:
             pass
 
@@ -13431,6 +13434,7 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
         "grupy_z_komend": {
             str(k): list(v) for k, v in _grupy_z_komend.items()
         },
+        "autorzy_grup": {str(k): v for k, v in _autor_grupy.items()},
     }
 
     try:
@@ -24127,6 +24131,9 @@ _procesy_w_tle = {}
 # poza _procesy_w_tle, wiec przy zamknieciu programu nikt by go nie
 # zatrzymal, a uzytkownik chce, zeby zamkniecie konczylo wszystko.
 _grupy_z_komend = {}
+# v480jn: kto z zespolu puscil grupe (dopelniacz imienia, np. "Bartka") —
+# MAIN widzi w "Dalej w tle", czyja to robota. Grupy MAIN-a nie maja wpisu.
+_autor_grupy = {}
 
 
 def _poczekaj_na_komende_w_tle(bg, budzet_s=AUTO_BACKGROUND_WAIT):
@@ -25717,6 +25724,10 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             try:
                 os.killpg(pgid, 0)
                 _grupy_z_komend[pgid] = (short(command, 300), time.time())
+                _rola_g = getattr(_zespol_uruchamia, "rola", None)
+                if _rola_g:
+                    _autor_grupy[pgid] = (_IMIE_AUTORA.get(_rola_g, (None, None))[1]
+                                          or ("roli " + str(_rola_g)))
             except Exception:
                 pass
 
@@ -57043,6 +57054,7 @@ def _raport_z_tla():
     # nie znamy, ale wiemy, kiedy grupa zniknela.
     for grupa, (komenda, start) in list(_grupy_z_komend.items()):
         klucz = ("g", grupa)
+        _kto_grupy = (" (komenda " + _autor_grupy[grupa] + ")") if _autor_grupy.get(grupa) else ""
         if klucz in _tlo_zgloszone_konce:
             continue
         try:
@@ -57094,7 +57106,7 @@ def _raport_z_tla():
                 _stoi = time.time() - os.path.getmtime(_plik)
             except Exception:
                 _stoi = 0
-            _l = _linia_dziala(_nazwa_w_tle(komenda), None, float(start or 0) or None,
+            _l = _linia_dziala(_nazwa_w_tle(komenda) + _kto_grupy, None, float(start or 0) or None,
                                _postep, _plik, rozmiar, ostatnia,
                                _log_juz_czytany(_plik, ostatnia), _bl[-1] if _bl else "",
                                stoi_s=_stoi if _stoi >= 1800 else None)
@@ -57110,7 +57122,7 @@ def _raport_z_tla():
             if bledy and len(linie) > 10 else linie[-10:]
         )
         _l = (
-            "• " + _nazwa_w_tle(komenda) + " (komenda puszczona w tło) już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
+            "• " + _nazwa_w_tle(komenda) + _kto_grupy + " (komenda puszczona w tło) już nie działa, trwała ok. " + _czas_slownie(time.time() - float(start or time.time()))
             + ". Kodu wyjścia program nie zna"
             + (
                 " — log " + _sciezka_od_domu(_plik) + " (" + str(rozmiar)
