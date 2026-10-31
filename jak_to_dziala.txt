@@ -3742,3 +3742,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zamiany … Na:”, program nie widział pary i wpisał jedną linię jako
        cały eval/benchmark_matmul.py, więc Bartek uznał, że podmiana nie
        działa, i zaczął pisać całe pliki.
+
+260. (v480iw) Dwie rzeczy z biegu 31.10 18:49. (1) Ostatnia komenda
+       „ls/cat/stat … 2>/dev/null” z kodem 1 lub 2 (części plików z listy
+       jeszcze nie ma, reszta pokazana) to odpowiedź „tych plików nie ma”,
+       a nie błąd narzędzia — zadanie Gemini idzie dalej. Wcześniej
+       brakujący autoloop_summary.json przerwał całe zadanie
+       (GEMINI_TOOL_ERROR). (2) Log komendy w tle z nazwą liczoną
+       w powłoce („> log_$(date +%s).log”) jest odnajdywany (najnowszy
+       pasujący plik po starcie), więc MAIN dostaje końcówkę logu zamiast
+       „brak przekierowania > plik”.

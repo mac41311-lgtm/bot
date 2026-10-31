@@ -29926,6 +29926,23 @@ def _shell_exit_1_may_be_benign(tool_name, result):
 # "nie ma takiego pliku", nie sa awaria narzedzia -- sa negatywna
 # odpowiedzia. Rozne od _shell_exit_1_may_be_benign(), ktore wymaga
 # kodu 1 i PUSTEGO stderr.
+def _ostatnie_ls_bez_stderr(command, result):
+    """
+    v480iv: ostatnia komenda to ls/stat/test/cat/head/tail z "2>/dev/null"
+    i kod 1 albo 2, stderr pusty — czyli czesc plikow z listy nie istnieje,
+    a reszta zostala pokazana. Bieg 2026-10-31 18:49 (druzyna 1): "sleep 10
+    && cat log && ls -la ~/x/*.jsonl ~/x/summary.json 2>/dev/null" —
+    summary.json jeszcze nie bylo, ls dal kod 2 i cale zadanie Gemini
+    skonczylo sie GEMINI_TOOL_ERROR, choc wszystko inne wyszlo.
+    """
+    if result.get("returncode") not in (1, 2):
+        return False
+    ostatnia = re.split(r"&&|\|\||;", str(command or ""))[-1].strip()
+    return bool(re.match(r"(?:ls|stat|test|cat|head|tail|file|readlink)\b", ostatnia)
+                and re.search(r"2>\s*/dev/null", ostatnia)
+                and "|" not in ostatnia)
+
+
 _FILE_PROBE_COMMAND_RE = re.compile(
     r"\b(ls|stat|test|cat|head|tail|readlink|file)\b"
 )
@@ -30175,6 +30192,31 @@ def _detect_interactive_script(text):
     )
 
 
+def _plik_z_nazwy_powloki(cel, start=None):
+    """v480iv: "~/x/log_$(date +%s).log" -> najnowszy istniejacy plik
+    pasujacy do wzorca (zmieniony po starcie komendy); bez $( ` ${
+    zwraca cel bez zmian."""
+    cel = str(cel or "")
+    if not re.search(r"\$\(|`|\$\{?[A-Za-z_]", cel):
+        return cel
+    wzor = re.sub(r"\$\([^()]*\)|`[^`]*`|\$\{[^}]*\}|\$[A-Za-z_]\w*", "*", cel)
+    if wzor.replace("*", "").strip("/~. ") == "":
+        return cel
+    try:
+        import glob as _glob
+        pliki = [f for f in _glob.glob(os.path.expanduser(wzor)) if os.path.isfile(f)]
+        try:
+            t0 = float(start or 0) - 5
+        except (TypeError, ValueError):
+            t0 = 0
+        pliki = [f for f in pliki if os.path.getmtime(f) >= t0] or ([] if t0 > 0 else pliki)
+        if pliki:
+            return max(pliki, key=os.path.getmtime)
+    except Exception:
+        pass
+    return cel
+
+
 def _shell_failure_is_just_missing_file(tool_name, result):
     """
     Czy niezerowy kod wyjscia to w istocie ODPOWIEDZ "tego pliku nie
@@ -30205,6 +30247,9 @@ def _shell_failure_is_just_missing_file(tool_name, result):
         for line in str(result.get("stderr") or "").splitlines()
         if line.strip()
     ]
+
+    if not stderr_lines and _ostatnie_ls_bez_stderr(command, result):
+        return True
 
     if not stderr_lines:
         # v480fc: "ls x 2>&1" — blad trafia do stdout; kod wyjscia pochodzi
@@ -55866,10 +55911,14 @@ def _raport_z_tla():
         # Plik, do ktorego komenda pisala (ostatnie "> plik" / ">> plik" /
         # "&> plik" / "tee plik") — z niego bierzemy koncowke.
         _cele = re.findall(
-            r"(?:&>>?|(?<![0-9&])>>?|\btee(?:\s+-a)?)\s*[\"']?([^\s;&|\"'<>]+)",
+            r"(?:&>>?|(?<![0-9&])>>?|\btee(?:\s+-a)?)\s*[\"']?((?:\$\([^()]*\)|`[^`]*`|[^\s;&|\"'<>`])+)",
             str(komenda)
         )
         _cele = [c for c in _cele if not c.startswith("/dev/")]
+        # v480iv: nazwa liczona w powloce ("log_$(date +%s).log") — szukamy
+        # najnowszego pasujacego pliku zaczetego po starcie komendy. Bieg
+        # 2026-10-31 18:50 (druzyna 1): MAIN dostal "brak przekierowania".
+        _cele = [_plik_z_nazwy_powloki(c, start) for c in _cele]
         _plik = ""
         # v480ih: wzgledna sciezka po "cd X" lezy w X, nie w ~. Bieg
         # 2026-10-29 20:20 (druzyna 1): "cd ~/MAIN_1 && setsid python3 …
