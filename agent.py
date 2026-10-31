@@ -39597,6 +39597,41 @@ _NOWY_FRAGMENT_RE = re.compile(
 )
 
 
+_ETYKIETA_STARY = re.compile(
+    r"(?:szukaj|znajd[źz]|stary(?:\s+fragment|\s+kod)?|stare|stara(?:\s+wersja)?|by[łl]o"
+    r"|zamiast|przed(?:\s+zmian[aą])?|obecnie|teraz\s+jest|fragment\s+do\s+(?:zamiany|podmiany)"
+    r"|do\s+(?:zamiany|podmiany)|old|before|find|search|original)$", re.IGNORECASE)
+_ETYKIETA_NOWY = re.compile(
+    r"(?:zamie[ńn](?:\s+na)?|podmie[ńn](?:\s+na)?|nowy(?:\s+fragment|\s+kod)?|nowe|nowa(?:\s+wersja)?"
+    r"|na|na\s+to|ma\s+by[ćc]|b[ęe]dzie|po(?:\s+zmianie|\s+poprawce)?|poprawiony(?:\s+fragment)?"
+    r"|new|after|replace(?:\s+with)?|with)$", re.IGNORECASE)
+
+
+def _etykieta_bloku(tekst):
+    """
+    v480ja: ostatnia niepusta linia przed blokiem jako etykieta: bez
+    markdownu (* _ ` # >), bez nawiasu z dopiskiem i dwukropka. "**SZUKAJ**
+    (linie 111–112, 1:1 z `cat -A`):" -> "stary", "**ZAMIEŃ NA:**" -> "nowy".
+    Bieg 2026-10-31 21:54 (druzyna 1): Bartek pisal "**SZUKAJ** (linie …):"
+    i program mowil "Brak bloku SZUKAJ/ZAMIEŃ".
+    """
+    linie = [l for l in str(tekst or "").split("\n") if l.strip()]
+    if not linie:
+        return ""
+    l = re.sub(r"`[^`]*`", " ", linie[-1])
+    l = re.sub(r"\([^)]*\)", " ", l)
+    l = re.sub(r"[*_#>`\-\u2014\u2013]+", " ", l)
+    l = re.sub(r"\s+", " ", l).strip().rstrip(":").strip()
+    l = re.sub(r"^\d+[.)]\s*", "", l)
+    if len(l) > 40:
+        return ""
+    if _ETYKIETA_STARY.match(l):
+        return "stary"
+    if _ETYKIETA_NOWY.match(l):
+        return "nowy"
+    return ""
+
+
 def _pary_stary_nowy(text):
     """
     Poprawka fragmentu opisana slowami, a nie znacznikami.
@@ -39640,10 +39675,12 @@ def _pary_stary_nowy(text):
         # po jego zamknieciu.
         ogon = miedzy.rsplit("```", 1)[-1]
 
-        if not _STARY_FRAGMENT_RE.search(przed_starym):
+        if not (_STARY_FRAGMENT_RE.search(przed_starym)
+                or _etykieta_bloku(przed_starym) == "stary"):
             continue
 
-        if not _NOWY_FRAGMENT_RE.search(ogon):
+        if not (_NOWY_FRAGMENT_RE.search(ogon)
+                or _etykieta_bloku(ogon) == "nowy"):
             continue
 
         if stary == nowy:
@@ -40155,7 +40192,12 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
     bloki = extract_search_replace_blocks(engineer_text)
 
     if not bloki:
-        return {"applied": False, "reason": "Brak bloku SZUKAJ/ZAMIEŃ."}
+        return {"applied": False, "reason": (
+            "W odpowiedzi nie ma poprawki fragmentu, którą program umie nanieść. "
+            "Wzór: linia „Stary fragment:”, pod nią blok ```python z fragmentem "
+            "skopiowanym 1:1 z pliku, potem linia „Nowy fragment:” i blok z nową "
+            "wersją. Jeśli plik ma już tę zmianę, napisz to — poprawka nie jest "
+            "potrzebna.")}
 
     target = _resolve_home_relative_path(path)
 

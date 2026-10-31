@@ -3791,3 +3791,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        („</｜｜DSML｜｜ parameter>”) jest wycinany z PODGLĄD/URUCHOM.
        Bieg 31.10 21:49 (drużyna 1): Bartek 8 rund dostawał „nie weszła”,
        choć plik od dawna miał nową wersję.
+
+264. (v480ja) Etykieta nad blokiem poprawki czytana luźniej: ostatnia
+       linia przed blokiem bez markdownu, nawiasu z dopiskiem i dwukropka
+       — „**SZUKAJ** (linie 111–112, 1:1 z cat -A):”, „SZUKAJ”, „Było”,
+       „Old” = stary fragment; „**ZAMIEŃ NA:**”, „ZAMIEŃ (z komentarzem)”,
+       „Na”, „New” = nowy. Komunikat „Brak bloku SZUKAJ/ZAMIEŃ” zastąpiony
+       wzorem tym samym co we wspólnym tekście („Stary fragment:” +
+       blok, „Nowy fragment:” + blok) i zdaniem, że gdy plik ma już
+       zmianę, wystarczy to napisać. Bieg 31.10 21:54 (drużyna 1).
