@@ -13803,12 +13803,28 @@ def _zatrzymaj_przy_braku_pamieci(wolna):
     except Exception:
         pass
     plik_wyjscia = _plik_wyjscia_procesu(pid)
+    # v480js: kto go uruchomil (np. selfloop.py, ktory wola eval) — bieg
+    # 2026-11-01 00:24 (druzyna 1): eval_mix_old.py zatrzymany na telefonie,
+    # a MAIN szukal na laptopie, czemu selfloop_v6 "zniknal"
+    _rodzic = ""
+    try:
+        with open("/proc/" + str(pid) + "/stat", "r", errors="replace") as fh:
+            _st = fh.read()
+        _ppid = _st[_st.rindex(")") + 2:].split()[1]
+        with open("/proc/" + _ppid + "/cmdline", "rb") as fh:
+            _rc = fh.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        _k = re.findall(r"([\w.-]+\.(?:py|sh|js))\b", _rc)
+        if _k and os.path.basename(_k[-1]) not in str(komenda):
+            _rodzic = os.path.basename(_k[-1])
+    except Exception:
+        pass
     try:
         os.kill(pid, signal.SIGKILL)
     except Exception:
         return
     tekst = (
-        "Zatrzymałem proces " + str(pid) + " (" + short(komenda, 120)
+        "Zatrzymałem na telefonie proces " + str(pid) + " (" + short(komenda, 120)
+        + ((", uruchomiony przez " + _rodzic) if _rodzic else "")
         + "), bo zajmował " + str(mb) + " MB, a telefonowi zostało tylko "
         + str(wolna) + " MB wolnej pamięci"
         + ((" i " + str(int(_swap_wolny_proc())) + "% wolnego swapu")
@@ -57208,6 +57224,14 @@ def _nazwa_w_tle(komenda):
     na_laptopie = ""
     if _LAPTOP_SSH.strip() in tekst or _LAPTOP_RE.search(tekst):
         na_laptopie = " (na laptopie)"
+    else:
+        # v480js: gdy jest laptop, telefon tez ma dopisek — MAIN szukal na
+        # laptopie procesow, ktore liczyly na telefonie
+        try:
+            if _laptop_skonfigurowany():
+                na_laptopie = " (na telefonie)"
+        except Exception:
+            pass
     m = re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", tekst)
     if m:
         return os.path.basename(m[-1]) + na_laptopie

@@ -3991,3 +3991,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (laptop niedostępny od początku), zostaje zwykły komunikat o
        niedostępności. Komunikaty zerwania ssh (Broken pipe, „not
        responding”, client_loop, mux) są rozpoznawane jako brak połączenia.
+
+282. (v480js) Bieg 1.11 00:24 (drużyna 1): strażnik pamięci telefonu
+       zatrzymał eval_mix_old.py, który wołał selfloop_v6 uruchomiony na
+       telefonie; selfloop zapisał „baseline_fail”, a MAIN szukał na
+       laptopie, czemu procesy „zniknęły”. Teraz, gdy laptop jest podłączony,
+       pozycje w „Dalej w tle” / „Skończone w tle” mają dopisek „(na
+       telefonie)” albo „(na laptopie)”, a uwaga strażnika mówi „Zatrzymałem
+       na telefonie proces … (…, uruchomiony przez selfloop.py)”.
