@@ -2531,6 +2531,10 @@ def _znane_dodaj(tekst):
         if not t.strip():
             return
 
+        # v480iu: jeden ogromny tekst zostawal w pamieci na zawsze (petla
+        # nizej zostawia zawsze ostatni element).
+        if len(t) > _ZNANE_TEKSTY_MAX:
+            t = t[:_ZNANE_TEKSTY_MAX // 2] + t[-_ZNANE_TEKSTY_MAX // 2:]
         _ZNANE_TEKSTY.append(t)
 
         razem = sum(len(x) for x in _ZNANE_TEKSTY)
@@ -23245,11 +23249,14 @@ def termux_read_file(path, max_bytes=20000):
                 _wynik["podpowiedz"] = _podp
             return _wynik
 
-        data = p.read_bytes()
-
         limit = int(
             max_bytes or 20000
         )
+
+        # v480iu: tylko tyle, ile oddajemy (+1 bajt, zeby wiedziec, ze
+        # jest wiecej) — nie caly, choc wielki, plik do pamieci.
+        with open(p, "rb") as _f:
+            data = _f.read(limit + 1)
 
         truncated = len(data) > limit
 
@@ -48818,6 +48825,8 @@ _team_file_pytania = []
 # w wypowiedziach, wiec to jest teraz JEDYNA droga, zeby go
 # zobaczyc. Musi dowozic calosc.
 _FILE_ANSWER_MAX = 60000
+# v480iu: plik wiekszy od tego nie jest czytany w calosci (pamiec telefonu).
+_PLIK_CALY_DO_B = 2 * 1024 * 1024
 
 
 _KOPIA_W_SPISIE_RE = re.compile(
@@ -48871,6 +48880,37 @@ def _file_answer_body(p):
 
     if size == 0:
         return "JEST, ale PUSTY (0 B)."
+
+    # v480iu: zamkniecie 2026-10-31 11:23 (LOW_MEMORY, druzyna 1, krok 12):
+    # proces programu urosl w minute z 51 do 749 MB. Plik wspomniany przez
+    # osobe z zespolu byl czytany w calosci (dane uczace maja dziesiatki MB,
+    # pickle 141 MB) — jako tekst Pythona to kilka razy wiecej. Duzy plik:
+    # czytamy tylko poczatek i koniec, tyle, ile i tak pokazujemy.
+    if size > _PLIK_CALY_DO_B:
+        _pol = _FILE_ANSWER_MAX // 2
+        try:
+            with open(p, "rb") as _f:
+                _glowa = _f.read(_pol)
+                _f.seek(max(0, size - _pol))
+                _ogon = _f.read(_pol)
+            _glowa_t = None
+            if b"\0" not in _glowa:
+                # znak UTF-8 moze byc uciety na granicy odczytu
+                for _o in (0, 1, 2, 3):
+                    try:
+                        _glowa_t = _glowa[:len(_glowa) - _o].decode("utf-8", errors="strict")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+        except Exception:
+            _glowa_t = None
+        if _glowa_t is None:
+            return "JEST (" + str(size) + " B), plik binarny."
+        return (
+            "JEST (" + str(size) + " B). Środek pominięty:\n"
+            + _glowa_t.rstrip() + "\n…\n"
+            + _ogon.decode("utf-8", errors="ignore").lstrip()
+        )
 
     try:
         tresc = p.read_text(encoding="utf-8", errors="strict")
@@ -49485,6 +49525,16 @@ _tresc_znana_roli = {}
 
 def _skrot_pliku(p):
     try:
+        # v480iu: duzy plik — rozmiar, czas zmiany, poczatek i koniec
+        # zamiast czytania calosci przy kazdej wiadomosci.
+        st = p.stat()
+        if st.st_size > _PLIK_CALY_DO_B:
+            h = hashlib.sha1((str(st.st_size) + ":" + str(st.st_mtime_ns)).encode())
+            with open(p, "rb") as f:
+                h.update(f.read(65536))
+                f.seek(max(0, st.st_size - 65536))
+                h.update(f.read(65536))
+            return h.hexdigest()
         return hashlib.sha1(p.read_bytes().strip()).hexdigest()
     except Exception:
         return ""
@@ -49539,7 +49589,8 @@ def _znane_pliki_zmienione(rola, tresc=""):
             continue
         _zmiana_zgloszona[(r, c, sciezka)] = teraz
         try:
-            poczatek = p.read_text(encoding="utf-8", errors="replace").strip()[:300]
+            with open(p, "rb") as _f:
+                poczatek = _f.read(4096).decode("utf-8", errors="replace").strip()[:300]
         except Exception:
             poczatek = ""
         if poczatek and poczatek in str(tresc or ""):
@@ -57841,6 +57892,20 @@ def _kod_dla_sedziego(numer):
     for p in pliki:
         if zostalo < 300:
             break
+        # v480iu: duzy plik (dane uczace, wielki log) — Sedzia nie czyta
+        # dziesiatek MB kodu, a odczyt w calosci zajmowal setki MB pamieci.
+        try:
+            _rozm = p.stat().st_size
+        except Exception:
+            continue
+        if _rozm > _PLIK_CALY_DO_B:
+            _kd = "duzy" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + str(_rozm)
+            _sedzia_widzial["nowe"].add(_kd)
+            if _kd not in _sedzia_widzial["stare"]:
+                _wiersz = "--- " + str(p.relative_to(folder)) + " --- (" + str(_rozm) + " B, duży plik — treści nie pokazuję)"
+                bloki.append(_wiersz)
+                zostalo -= len(_wiersz)
+            continue
         try:
             tresc = p.read_text(encoding="utf-8", errors="replace")
         except Exception:

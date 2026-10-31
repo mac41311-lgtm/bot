@@ -3719,3 +3719,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zamknięcia pokaże wtedy, co zjadło pamięć. Zamknięcie 31.10 10:33
        (LOW_MEMORY): o 10:30 wolne było 1,8 GB, a dwie minuty później
        Android zabił cały Termux i nie było wiadomo, przez co.
+
+258. (v480iu) Program nie czyta już w całości dużych plików (powyżej
+       2 MB) tylko po to, żeby coś o nich powiedzieć. Gdy ktoś z zespołu
+       wspomni duży plik (dane uczące, pickle, wielki log), dostaje jego
+       początek i koniec — tyle samo, co dotąd. Sprawdzanie, czy znany
+       plik się zmienił, patrzy na rozmiar, czas zmiany oraz początek i
+       koniec pliku. termux_read_file czyta tylko tyle bajtów, ile oddaje.
+       Sędzia przy dużym pliku dostaje jedną linię „duży plik — treści nie
+       pokazuję”. Zamknięcie 31.10 11:23 (LOW_MEMORY): proces programu
+       drużyny 1 urósł w minutę z 51 do 749 MB, bo czytał takie pliki w
+       całości (jako tekst Pythona kilka razy więcej niż na dysku).
