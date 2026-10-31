@@ -25422,6 +25422,18 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             if proces.poll() is not None:
                 break
 
+            # v480ji: program nie ubija procesow druzyn (uzytkownik
+            # 2026-10-31: "to musi decydowac zespol", wyjatek tylko
+            # straznik pamieci). Cisza bez procesora ("stoi") i gadanie w
+            # kolko ubijaly tez komende, ktora przeszla w tlo albo zaraz
+            # przejdzie (MAIN i tak nie czeka). Komenda na laptopie: ssh na
+            # telefonie nie zuzywa procesora, wiec kazde 2 min ciszy
+            # skryptu na laptopie wygladalo jak "stoi" — bieg 31.10 22:04,
+            # procesy na laptopie znikaly.
+            _wt = _threading.current_thread()
+            _nie_ubijaj = (getattr(_wt, "w_tle", False) or getattr(_wt, "moze_w_tle", False)
+                           or _LAPTOP_SSH.strip() in str(command or ""))
+
             teraz = time.time()
             czuwa = time.monotonic()
 
@@ -25475,7 +25487,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
             # --- kiedy przerywamy ---
 
-            if (czuwa - ostatni_ruch) > limit:
+            if (czuwa - ostatni_ruch) > limit and not _nie_ubijaj:
                 powod = "stoi"
                 szczegol = (
                     "przez " + str(int(czuwa - ostatni_ruch))
@@ -25508,7 +25520,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
                 w_kolko = _kreci_sie_w_kolko(wy.name)
 
-                if w_kolko:
+                if w_kolko and not _nie_ubijaj:
                     powod = "w kolko"
                     szczegol = (
                         "w kółko wypisuje to samo: "
@@ -26808,7 +26820,31 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " && exec nice -n 5 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
-    return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
+    if limit_s:
+        return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
+    return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(_laptop_oderwane(zdalnie, _f))
+
+
+def _laptop_oderwane(zdalnie, folder):
+    """
+    v480ji: komenda na laptopie nie zalezy od polaczenia ssh. Biegnie w
+    osobnej sesji (setsid, nohup) i pisze do pliku w ~/<folder>/.ael_laptop;
+    ssh tylko pokazuje ten plik na biezaco (tail --pid) i na koniec oddaje
+    kod wyjscia. Gdy polaczenie padnie (telefon zasnie, Wi-Fi, przerwana
+    komenda na telefonie), proces na laptopie liczy dalej — wczesniej
+    ginal przy pierwszym print (zamkniety potok). Bieg 2026-10-31 22:04:
+    uzytkownik widzial, ze procesy na laptopie znikaja.
+    """
+    ident = datetime.now().strftime("%Y%m%d_%H%M%S_") + "%04x" % ((os.getpid() ^ int(time.time() * 1000)) % 0x10000)
+    d = "$HOME/" + folder + "/.ael_laptop"
+    plik = d + "/" + ident
+    wnetrze = zdalnie.replace(" && exec nice ", " && nice ", 1) + "; echo $? > \"" + plik + ".rc\""
+    return ("d=\"" + d + "\"; mkdir -p \"$d\"; find \"$d\" -type f -mmin +2880 -delete 2>/dev/null; "
+            ": > \"" + plik + ".log\"; "
+            "setsid -w nohup bash -c " + shlex.quote(wnetrze) + " > \"" + plik + ".log\" 2>&1 < /dev/null & "
+            "p=$!; tail -n +1 -f --pid=$p \"" + plik + ".log\"; wait $p 2>/dev/null; "
+            "if [ -s \"" + plik + ".rc\" ]; then r=$(cat \"" + plik + ".rc\"); "
+            "rm -f \"" + plik + ".rc\" \"" + plik + ".log\"; exit $r; fi; exit 1")
 
 
 # v480jf: pliki z kodem takie same na telefonie i laptopie. Uzytkownik
@@ -27067,7 +27103,9 @@ def termux_run(command):
     # v480jg: usuwanie na laptopie oceniamy po komendzie roli, nie po
     # komendzie ssh. Bieg 2026-10-31 22:45 (druzyna 1): "rm -f .selfloop.lock"
     # w folderze druzyny dalo pytanie w terminalu z nieczytelnym cytatem ssh.
-    _laptop_tl.usuwanie_ok = False
+    # v480ji: komenda roli bez usuwania — rm w opakowaniu programu
+    # (sprzatanie .ael_laptop) nie jest usuwaniem roli
+    _laptop_tl.usuwanie_ok = not _looks_like_delete_command(_polecenie_lap)
     if _looks_like_delete_command(_polecenie_lap):
         if _laptop_usuwa_w_folderze(_polecenie_lap):
             _laptop_tl.usuwanie_ok = True
@@ -36414,6 +36452,7 @@ def _uruchom_rzecz(rzecz, praca, cichy):
 
     watek = _threading.Thread(target=_cel, daemon=True)
     watek.cichy = cichy
+    watek.moze_w_tle = True
     rzecz["watek"] = watek
     watek.start()
     return watek

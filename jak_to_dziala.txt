@@ -3878,3 +3878,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        inny proces (w grupie nie ma uruchomionego skryptu), a gdy log nie
        rośnie od 30 min, linia mówi „log nie rośnie od … (proces może
        stać)”. Bieg 31.10 22:57 (drużyna 1).
+
+272. (v480ji) Program nie ubija procesów drużyn — decyduje zespół; jedyny
+       wyjątek to strażnik pamięci (telefon i laptop). Dotąd komenda, która
+       2 min nic nie wypisała i nie zużyła procesora („stoi”) albo pisała w
+       kółko to samo, była ubijana, także gdy liczyła już w tle. Teraz tak
+       jest tylko z komendą, która nie może przejść w tło. Na laptopie było
+       gorzej: ssh na telefonie nie zużywa procesora, więc każdy cichy
+       skrypt na laptopie po 2 min „stał”, program zrywał ssh, a skrypt
+       ginął przy pierwszym print. Teraz komenda LAPTOP: biegnie na
+       laptopie w osobnej sesji (setsid, nohup) i pisze do
+       ~/MAIN_n/.ael_laptop/<znacznik>.log; ssh tylko pokazuje ten plik na
+       bieżąco i na koniec oddaje kod wyjścia. Zerwane połączenie (sen
+       telefonu, Wi-Fi) nie zatrzymuje liczenia. Pliki starsze niż 2 dni
+       program kasuje sam. Usuwanie w tym opakowaniu nie pyta — pytanie
+       zależy tylko od komendy roli. Bieg 31.10 22:04: procesy na laptopie
+       znikały.
