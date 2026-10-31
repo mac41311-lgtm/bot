@@ -3752,3 +3752,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        w powłoce („> log_$(date +%s).log”) jest odnajdywany (najnowszy
        pasujący plik po starcie), więc MAIN dostaje końcówkę logu zamiast
        „brak przekierowania > plik”.
+
+261. (v480ix) Laptop jako dodatkowa moc (SSH). Gdy w ~/.ssh/config jest
+       „Host laptop”, program co minutę sprawdza laptopa (rdzenie, RAM,
+       Python, karta graficzna i czy konto ma do niej dostęp przez
+       /dev/dri). Komenda z przedrostkiem LAPTOP: — w RUN MAIN-a, w URUCHOM:
+       roli i w zadaniu — idzie przez ssh i wykonuje się w folderze drużyny
+       na laptopie (~/MAIN_<n>, poza rywalizacją ~/AEL), z niskim
+       priorytetem. W rywalizacji każda drużyna dostaje połowę rdzeni
+       (OMP/OPENBLAS/MKL/TORCH_NUM_THREADS), ścieżki poza własnym folderem
+       (~, ~/MAIN_rywala, /home/, ..) i scp do cudzego folderu są
+       blokowane z wyjaśnieniem. Komendy wyłączające laptopa (shutdown,
+       reboot, systemctl poweroff, kill -1 …) są blokowane. Laptop
+       niedostępny = komenda nie rusza, rola dostaje powód i co dalej
+       (telefon albo później); MAIN dostaje jedno zdanie raz na starcie
+       i przy każdej zmianie (dostępny/niedostępny). Opis też w
+       ~/AEL_SRODOWISKO.txt. Agent i DeepSeek zostają na telefonie.

@@ -26332,7 +26332,284 @@ def _katalog_startu_komendy(command):
     return str(HOME)
 
 
+# ============================================================
+# v480ix: LAPTOP — dodatkowa moc obliczeniowa przez SSH
+# ============================================================
+#
+# Uzytkownik (2026-10-31): agent i DeepSeek zostaja na telefonie, laptop
+# daje moc do ciezkich skryptow. Komenda z przedrostkiem "LAPTOP:" (w RUN
+# MAIN-a, w URUCHOM: roli, w zadaniu) wykonuje sie na laptopie przez
+# `ssh laptop`, w folderze druzyny (~/MAIN_<n> na laptopie, poza
+# rywalizacja ~/AEL). W rywalizacji: rdzenie laptopa po rowno (watki
+# BLAS/OpenMP = polowa), folder rywala zablokowany jak na telefonie,
+# zadna komenda nie wylacza laptopa. Laptop niedostepny = komenda nie
+# rusza, rola dostaje, co sie stalo i co dalej; program dziala dalej.
+# Uniwersalne: nic o celu.
+_LAPTOP_HOST = os.environ.get("AEL_LAPTOP_HOST", "laptop").strip() or "laptop"
+_LAPTOP_SSH = ("ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=30 "
+               "-o ServerAliveCountMax=4 ")
+_LAPTOP_RE = re.compile(
+    r"^\s*(?:cd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*&&\s*)?LAPTOP\s*:\s*(.+)$",
+    re.IGNORECASE | re.DOTALL)
+_LAPTOP_WYLACZA_RE = re.compile(
+    r"\b(?:shutdown|poweroff|halt|reboot|init\s+[06]|telinit\s+[06]"
+    r"|systemctl\s+(?:\S+\s+)*(?:poweroff|reboot|halt|suspend|hibernate|kexec)"
+    r"|loginctl\s+(?:terminate|kill)-(?:user|session)|pkill\s+(?:-\S+\s+)*-u\b"
+    r"|killall\s+(?:-\S+\s+)*-u\b|kill\s+(?:-\S+\s+)*-1\b|rtcwake)\b",
+    re.IGNORECASE)
+_LAPTOP_SSH_BLAD_RE = re.compile(
+    r"^ssh: |Could not resolve hostname|Connection (?:refused|timed out|closed)"
+    r"|No route to host|Network is unreachable|Permission denied \(publickey"
+    r"|Host key verification failed|kex_exchange_identification|Connection reset",
+    re.IGNORECASE | re.MULTILINE)
+_laptop = {"ok": None, "t": 0.0, "rdzenie": 0, "ram_mb": 0, "wolne_mb": 0,
+           "python": "", "blad": "", "powiedziane": None}
+_laptop_lock = _threading.Lock()
+
+
+def _laptop_skonfigurowany():
+    """Laptop jest w ~/.ssh/config (Host laptop) albo podany w AEL_LAPTOP_HOST."""
+    if os.environ.get("AEL_LAPTOP_HOST", "").strip():
+        return True
+    try:
+        cfg = (HOME / ".ssh" / "config").read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    return bool(re.search(r"^\s*Host\s+(?:.*\s)?" + re.escape(_LAPTOP_HOST) + r"(?:\s|$)",
+                          cfg, re.MULTILINE | re.IGNORECASE))
+
+
+def _laptop_folder():
+    return ("MAIN_" + _DRUZYNA) if _DRUZYNA else "AEL"
+
+
+def _laptop_watki():
+    r = int(_laptop.get("rdzenie") or 0) or 4
+    return max(1, r // 2) if _DRUZYNA else r
+
+
+def _laptop_sprawdz():
+    """Jedno sprawdzenie przez ssh: rdzenie, pamiec, python. Zapisuje stan."""
+    if not _laptop_skonfigurowany():
+        with _laptop_lock:
+            _laptop.update(ok=None, t=time.time())
+        return
+    try:
+        r = subprocess.run(
+            _LAPTOP_SSH.split() + [_LAPTOP_HOST,
+                                   "nproc; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; "
+                                   "python3 --version 2>&1; "
+                                   "echo GPU:$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -2 "
+                                   "| sed 's/^[^:]*: //' | tr '\\n' ';'); "
+                                   "for d in /dev/dri/renderD*; do [ -r \"$d\" ] && [ -w \"$d\" ] "
+                                   "&& echo DRI_OK && break; done; true"],
+            capture_output=True, text=True, timeout=20, errors="replace")
+        ok = r.returncode == 0
+        out, err = r.stdout or "", (r.stderr or "").strip()
+    except Exception as e:
+        ok, out, err = False, "", str(e)
+    with _laptop_lock:
+        _laptop["t"] = time.time()
+        _laptop["ok"] = ok
+        if ok:
+            linie = out.split("\n")
+            try:
+                _laptop["rdzenie"] = int(linie[0].strip())
+            except Exception:
+                pass
+            m = re.search(r"MemTotal:\s*(\d+)", out)
+            if m:
+                _laptop["ram_mb"] = int(m.group(1)) // 1024
+            m = re.search(r"MemAvailable:\s*(\d+)", out)
+            if m:
+                _laptop["wolne_mb"] = int(m.group(1)) // 1024
+            m = re.search(r"Python\s+[\d.]+", out)
+            _laptop["python"] = m.group(0) if m else ""
+            m = re.search(r"^GPU:(.*)$", out, re.MULTILINE)
+            _laptop["gpu"] = short(m.group(1).strip(" ;"), 160) if m else ""
+            _laptop["gpu_dostep"] = "DRI_OK" in out
+            _laptop["blad"] = ""
+        else:
+            _laptop["blad"] = short(err.splitlines()[-1] if err else "brak odpowiedzi", 200)
+    _laptop_do_srodowiska()
+
+
+def _laptop_opis():
+    """Jedno zdanie o laptopie dla MAIN-a / pliku srodowiska."""
+    if _laptop.get("ok"):
+        return ("Laptop (" + _LAPTOP_HOST + ") jest dostępny: Linux, "
+                + str(_laptop.get("rdzenie") or "?") + " rdzenie, "
+                + str(round((_laptop.get("ram_mb") or 0) / 1024, 1)).replace(".", ",") + " GB RAM"
+                + (" (wolne " + str(round((_laptop.get("wolne_mb") or 0) / 1024, 1)).replace(".", ",") + " GB)"
+                   if _laptop.get("wolne_mb") else "")
+                + (", " + _laptop["python"] if _laptop.get("python") else "")
+                + (", karta graficzna: " + _laptop["gpu"]
+                   + (" (konto ma do niej dostęp — /dev/dri, np. przez OpenCL albo Vulkan)"
+                      if _laptop.get("gpu_dostep") else
+                      " (konto nie ma jeszcze dostępu do /dev/dri — potrzebna grupa render/video, "
+                      "ustawia użytkownik)")
+                   if _laptop.get("gpu") else "")
+                + (", dla Waszej drużyny " + str(_laptop_watki())
+                   + (" wątek" if _laptop_watki() == 1 else " wątki" if _laptop_watki() < 5 else " wątków")
+                   + " procesora (drugą połowę ma rywal; kartę graficzną macie obie drużyny)"
+                   if _DRUZYNA else "")
+                + ". Komenda z przedrostkiem LAPTOP: (w RUN, w URUCHOM: albo w zadaniu) wykona się "
+                "na nim w Waszym folderze ~/" + _laptop_folder() + " na laptopie, np. "
+                "LAPTOP: python3 skrypt.py. Pliki przenosi scp: scp ~/"
+                + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "plik") + "/plik " + _LAPTOP_HOST + ":"
+                + _laptop_folder() + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + _laptop_folder()
+                + "/wynik.txt ~/" + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "") + ". Bez "
+                "przedrostka komenda leci na telefonie, jak dotąd.")
+    if _laptop.get("ok") is False:
+        return ("Laptop (" + _LAPTOP_HOST + ") jest teraz niedostępny (" + str(_laptop.get("blad") or "")
+                + "). Komendy LAPTOP: nie ruszą; liczcie na telefonie albo spróbujcie później — "
+                "program sprawdza go co minutę i powie, gdy wróci.")
+    return ""
+
+
+def _laptop_do_srodowiska():
+    """Sekcja o laptopie w ~/AEL_SRODOWISKO.txt (podmieniana)."""
+    try:
+        p = HOME / "AEL_SRODOWISKO.txt"
+        tresc = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
+        tresc = re.sub(r"\n*Laptop \(.*", "", tresc, flags=re.DOTALL).rstrip()
+        opis = _laptop_opis()
+        if opis:
+            tresc = (tresc + "\n\n" + opis).strip()
+        p.write_text(tresc + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _laptop_dla_maina():
+    """Raz przy pierwszym sprawdzeniu i przy kazdej zmianie (dostepny <->
+    niedostepny) jedno zdanie dla MAIN-a; inaczej ""."""
+    with _laptop_lock:
+        ok = _laptop.get("ok")
+        if ok is None or _laptop.get("powiedziane") == ok:
+            return ""
+        _laptop["powiedziane"] = ok
+    return _laptop_opis()
+
+
+def zacznij_pilnowanie_laptopa():
+    if not _laptop_skonfigurowany():
+        return
+
+    def _petla():
+        while True:
+            try:
+                _laptop_sprawdz()
+            except Exception:
+                pass
+            time.sleep(60)
+
+    _threading.Thread(target=_petla, daemon=True, name="laptop").start()
+
+
+def _laptop_odmowa(polecenie):
+    """Powod odmowy dla komendy na laptopie albo ""."""
+    if _LAPTOP_WYLACZA_RE.search(polecenie):
+        return ("Nie wykonałem — ta komenda wyłączyłaby laptopa albo zakończyła wszystko na "
+                "jego koncie, a laptop wyłącza tylko użytkownik. Swój proces zatrzymacie "
+                "po pid albo nazwie skryptu, np. LAPTOP: pkill -f mój_skrypt.py.")
+    if _DRUZYNA:
+        wlasny = "MAIN_" + _DRUZYNA
+        m = (re.search(r"(?<![\w/.])~(?!/" + wlasny + r"(?:/|\b))", polecenie)
+             or re.search(r"\$HOME\b|\$\{HOME\}|/home/|(?<![\w.])\.\.(?:/|\b)", polecenie))
+        if m:
+            return ("Nie wykonałem — na laptopie Wasza drużyna pracuje w ~/" + wlasny
+                    + " (tam program zaczyna każdą komendę LAPTOP:). „" + m.group(0)
+                    + "” sięga poza ten folder, a obok leży folder rywala. Podajcie ścieżkę "
+                    "w Waszym folderze (względną albo ~/" + wlasny + "/…).")
+    return ""
+
+
+def _scp_laptopa_odmowa(command_str):
+    """scp/rsync do laptopa w rywalizacji: tylko wlasny folder."""
+    if not _DRUZYNA or not re.search(r"\b(?:scp|rsync|sftp)\b", command_str):
+        return ""
+    wlasny = "MAIN_" + _DRUZYNA
+    for m in re.finditer(r"(?<![\w@.-])(?:[\w.-]+@)?" + re.escape(_LAPTOP_HOST) + r":(\S*)", command_str):
+        sciezka = m.group(1).strip("\"'")
+        if not re.match(r"(?:~/|/home/[^/]+/)?" + wlasny + r"(?:/|$)", sciezka) or ".." in sciezka:
+            return ("Nie wykonałem — na laptopie Wasza drużyna ma folder ~/" + wlasny
+                    + "; „" + m.group(0) + "” jest poza nim (obok leży folder rywala). "
+                    "Podajcie " + _LAPTOP_HOST + ":" + wlasny + "/… .")
+    return ""
+
+
+def _na_laptopa(command_str):
+    """
+    "LAPTOP: komenda" (tez po "cd X && ") -> komenda ssh; dict z odmowa;
+    None, gdy to nie jest komenda na laptopa.
+    """
+    m = _LAPTOP_RE.match(str(command_str or ""))
+    if not m:
+        return None
+    polecenie = m.group(1).strip()
+
+    def _odmowa(kod, tekst):
+        log("LAPTOP", tekst + " Komenda: " + short(polecenie, 200))
+        return {"ok": False, "error": kod, "command": command_str, "message": tekst,
+                "duration_s": 0.0}
+
+    if not _laptop_skonfigurowany():
+        return _odmowa("LAPTOP_BRAK", (
+            "Nie wykonałem — laptop nie jest podłączony (w ~/.ssh/config nie ma Host "
+            + _LAPTOP_HOST + "). Uruchomcie to na telefonie, bez przedrostka LAPTOP:; "
+            "laptopa podłącza użytkownik."))
+    if _laptop.get("ok") is False and time.time() - float(_laptop.get("t") or 0) < 60:
+        return _odmowa("LAPTOP_NIEDOSTEPNY", (
+            "Nie wykonałem — laptop jest teraz niedostępny (" + str(_laptop.get("blad") or "")
+            + "). Uruchomcie to na telefonie, bez przedrostka LAPTOP:, albo spróbujcie za "
+            "minutę — program sprawdza laptopa co minutę i powie MAIN-owi, gdy wróci."))
+    odm = _laptop_odmowa(polecenie)
+    if odm:
+        return _odmowa("LAPTOP_ODMOWA", odm)
+    k = str(_laptop_watki())
+    zdalnie = ("mkdir -p ~/" + _laptop_folder() + " && cd ~/" + _laptop_folder()
+               + " && export OMP_NUM_THREADS=" + k + " OPENBLAS_NUM_THREADS=" + k
+               + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
+               + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
+               + " && exec nice -n 5 bash -lc " + shlex.quote(polecenie))
+    return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
+
+
 def termux_run(command):
+    """
+    v480ix: komenda z przedrostkiem LAPTOP: idzie przez ssh na laptopa
+    (patrz _na_laptopa); reszta bez zmian (_termux_run_lokalnie).
+    """
+    command_str = str(command or "")
+    odm = _scp_laptopa_odmowa(command_str)
+    if odm:
+        log("LAPTOP", odm + " Komenda: " + short(command_str, 200))
+        return {"ok": False, "error": "LAPTOP_ODMOWA", "command": command_str,
+                "message": odm, "duration_s": 0.0}
+    lap = _na_laptopa(command_str)
+    if isinstance(lap, dict):
+        return lap
+    if not lap:
+        return _termux_run_lokalnie(command)
+    log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_LAPTOP_RE.match(command_str).group(1), 200))
+    wynik = _termux_run_lokalnie(lap)
+    if isinstance(wynik, dict):
+        wynik["command"] = command_str
+        wynik["na_laptopie"] = "~/" + _laptop_folder() + " na laptopie"
+        if wynik.get("returncode") == 255 and _LAPTOP_SSH_BLAD_RE.search(str(wynik.get("stderr") or "")):
+            with _laptop_lock:
+                _laptop.update(ok=False, t=time.time(),
+                               blad=short(str(wynik.get("stderr") or "").strip().splitlines()[-1], 200))
+            wynik["error"] = "LAPTOP_NIEDOSTEPNY"
+            wynik["message"] = (
+                "Komenda nie ruszyła — nie ma połączenia z laptopem (" + _laptop["blad"]
+                + "). Uruchomcie ją na telefonie, bez przedrostka LAPTOP:, albo spróbujcie "
+                "później — program sprawdza laptopa co minutę i powie MAIN-owi, gdy wróci.")
+    return wynik
+
+
+def _termux_run_lokalnie(command):
     try:
         command_str = str(command or "")
 
@@ -46414,6 +46691,10 @@ def main_decide(
         _uwagi_pamieci = _uwagi_pamieci_dla_maina()
     except Exception:
         _uwagi_pamieci = ""
+    try:
+        _laptop_zdanie = _laptop_dla_maina()
+    except Exception:
+        _laptop_zdanie = ""
 
     _sekcje = []
 
@@ -46450,7 +46731,7 @@ def main_decide(
     if (_powtorka and not asked_followup and not _jest_wynik and not _restart
             and not _uzytkownik_block.strip() and not _blok_zamkniecia
             and not _werdykty and not _burza and not team_block.strip()
-            and not _linia_zespolu and not _uwagi_pamieci):
+            and not _linia_zespolu and not _uwagi_pamieci and not _laptop_zdanie):
         # uzytkownik: samo pytanie, jedna wiadomosc w jednej linii; reszta
         # (wynik, blad, 25%) przychodzi osobno, gdy sie wydarzy.
         # v480hc: uzytkownik 2026-10-27: postep raz, potem tylko, ze wynik
@@ -46508,6 +46789,7 @@ def main_decide(
     _sekcja("Poprzedni bieg", _blok_zamkniecia)
     _sekcja("Skończone w tle", _tlo_skonczone)
     _sekcja("Pamięć telefonu", _uwagi_pamieci)
+    _sekcja("Laptop", _laptop_zdanie)
     _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
     _sekcja("Dalej w tle — wynik przyjdzie sam", _tlo_trwa)
     _sekcja("Zespół", team_block)
@@ -58436,6 +58718,7 @@ def main():
         agent_wake_lock()
     zacznij_oddech()
     zacznij_straznika_pamieci()
+    zacznij_pilnowanie_laptopa()
     _podstaw_sleep_zespolu()
     _podstaw_proot_distro()
 
