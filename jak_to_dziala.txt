@@ -3979,3 +3979,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (systemd, pipewire), więc w top procesy „znikały i się pojawiały”.
        Połączenie główne zakłada i pilnuje co minutę jeden proces programu
        (nie drużyna 2); gdy go nie ma, komendy łączą się zwyczajnie.
+
+281. (v480jr) Zerwane połączenie z laptopem w trakcie komendy LAPTOP: (brak
+       sieci, sen telefonu) nie kończy sprawy błędem. Proces na laptopie
+       liczy dalej (v480ji), a program co 30 s, bez limitu, próbuje się
+       znowu podłączyć; gdy laptop wróci, pokazuje log tej komendy od
+       początku na bieżąco i na koniec oddaje jej kod wyjścia — wynik
+       dostaje ten, kto komendę puścił (MAIN albo rola), tak jakby nic się
+       nie stało, z jednym zdaniem, że połączenie było zerwane. W tym czasie
+       komenda stoi w „Dalej w tle”. Gdy komenda w ogóle nie ruszyła
+       (laptop niedostępny od początku), zostaje zwykły komunikat o
+       niedostępności. Komunikaty zerwania ssh (Broken pipe, „not
+       responding”, client_loop, mux) są rozpoznawane jako brak połączenia.

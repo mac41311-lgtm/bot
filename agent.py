@@ -26430,7 +26430,8 @@ _LAPTOP_WYLACZA_RE = re.compile(
 _LAPTOP_SSH_BLAD_RE = re.compile(
     r"^ssh: |Could not resolve hostname|Connection (?:refused|timed out|closed)"
     r"|No route to host|Network is unreachable|Permission denied \(publickey"
-    r"|Host key verification failed|kex_exchange_identification|Connection reset",
+    r"|Host key verification failed|kex_exchange_identification|Connection reset"
+    r"|not responding|Broken pipe|client_loop: |mux_client_",
     re.IGNORECASE | re.MULTILINE)
 _laptop = {"ok": None, "t": 0.0, "rdzenie": 0, "ram_mb": 0, "wolne_mb": 0,
            "python": "", "blad": "", "powiedziane": None}
@@ -27264,6 +27265,58 @@ def _laptop_moje_procesy():
     return _laptop_moje_cache["lista"]
 
 
+def _laptop_dolacz(ident, folder, polecenie, wynik_zerwany):
+    """
+    v480jr: po zerwanym polaczeniu czeka, az laptop wroci (co 30 s, bez
+    limitu), i podlacza sie do tej samej komendy: pokazuje jej log od
+    poczatku i na koniec oddaje kod wyjscia. Uzytkownik 2026-10-31: "jak
+    stracę połączenie, mają chodzić, a jak powrócę do sieci, mają dalej
+    chodzić i informacje być wysłane". Gdy komenda w ogóle nie ruszyla
+    (laptop byl niedostepny od poczatku), oddaje pierwotny blad.
+    """
+    f = "$HOME/" + folder + "/.ael_laptop/" + ident
+    wzor = ident + "[.]kom"
+    skrypt = ("f=\"" + f + "\"; [ -e \"$f.log\" ] || { echo __AEL_BRAK__; exit 0; }; "
+              "echo __AEL_JEST__; p=$(pgrep -of '" + wzor + "'); "
+              "if [ -n \"$p\" ]; then tail -n +1 -f --pid=$p \"$f.log\"; else cat \"$f.log\"; fi; "
+              "if [ -s \"$f.rc\" ]; then r=$(cat \"$f.rc\"); rm -f \"$f.rc\" \"$f.log\" \"$f.kom\"; "
+              "exit $r; fi; echo __AEL_BEZ_KODU__; exit 1")
+    log("LAPTOP", "Połączenie z laptopem zerwane w trakcie komendy (" + short(polecenie, 120)
+        + ") — na laptopie liczy dalej; podłączę się znowu, gdy laptop wróci.")
+    proba = 0
+    while True:
+        proba += 1
+        # sprzatanie wlasnych plikow .ael_laptop to nie usuwanie roli
+        _laptop_tl.usuwanie_ok = True
+        try:
+            w = _termux_run_lokalnie(_LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(skrypt))
+        finally:
+            _laptop_tl.usuwanie_ok = False
+        if not isinstance(w, dict):
+            return wynik_zerwany
+        out = str(w.get("stdout") or "")
+        if "__AEL_BRAK__" in out:
+            return wynik_zerwany if proba == 1 else {
+                "ok": False, "returncode": 1, "command": polecenie,
+                "stdout": "", "stderr": "Na laptopie nie ma już śladu tej komendy (log zniknął)."}
+        if "__AEL_JEST__" in out:
+            out = out.split("__AEL_JEST__", 1)[1].lstrip("\n")
+            bez_kodu = "__AEL_BEZ_KODU__" in out
+            out = out.replace("__AEL_BEZ_KODU__\n", "").replace("__AEL_BEZ_KODU__", "")
+            kod = w.get("returncode")
+            if kod == 255 and _LAPTOP_SSH_BLAD_RE.search(str(w.get("stderr") or "")):
+                time.sleep(30)
+                continue
+            log("LAPTOP", "Laptop wrócił — komenda (" + short(polecenie, 120) + ") "
+                + ("skończyła się, kod " + str(kod) if not bez_kodu else "zakończyła się bez kodu wyjścia") + ".")
+            return {"ok": kod == 0 and not bez_kodu, "returncode": kod, "stdout": short(out, 6000),
+                    "stderr": ("Połączenie z laptopem było zerwane; komenda liczyła dalej, a to jest jej "
+                               "pełny wynik." + (" Kodu wyjścia nie zapisała (zatrzymana z zewnątrz)."
+                                                 if bez_kodu else "")),
+                    "command": polecenie}
+        time.sleep(30)
+
+
 _KLUCZ_SKRYPTU_RE = re.compile(r"\b(?:python3?|bash|sh|node|perl|ruby|Rscript)\s+(?:-\S+\s+)*([\w./~-]+\.(?:py|sh|js|pl|rb|R))\b")
 
 
@@ -27475,6 +27528,17 @@ def termux_run(command):
         wynik = _termux_run_lokalnie(lap)
     finally:
         _laptop_tl.usuwanie_ok = False
+    # v480jr: polaczenie zerwane w trakcie — proces na laptopie liczy dalej
+    # (v480ji), a program podlacza sie znowu, gdy laptop wroci, i oddaje
+    # pelny wynik
+    try:
+        _id = re.search(r"/\.ael_laptop/(\d{8}_\d{6}_[0-9a-f]{4})\.kom", lap)
+        if (_id and isinstance(wynik, dict) and wynik.get("returncode") == 255
+                and _LAPTOP_SSH_BLAD_RE.search(str(wynik.get("stderr") or "") + "\n"
+                                               + str(wynik.get("stdout") or "")[-500:])):
+            wynik = _laptop_dolacz(_id.group(1), _laptop_folder(), _polecenie_lap, wynik)
+    except Exception:
+        pass
     _po = None
     if isinstance(wynik, dict) and wynik.get("status") != "AUTO_BACKGROUNDED" and _przed is not None:
         try:
