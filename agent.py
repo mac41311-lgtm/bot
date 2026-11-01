@@ -25036,7 +25036,13 @@ def _kod_wyjscia_to_odpowiedz(command, result):
         return ""
 
     # grep/test/pgrep: 1 znaczy "nie ma", nie "nie zadzialalo".
-    if rc == 1 and _PYTAJACE_KOMENDY_RE.search(command):
+    # v480kl: ale nie gdy w wyjsciu jest blad (bieg 2026-11-01 10:48,
+    # druzyna 2: "pip install … | tail -5 && python3 -c 'import x'" —
+    # Traceback, a wynik mowil "kod 1 znaczy nie znaleziono").
+    _wy_kl = str(result.get("stdout") or "")[-3000:] + "\n" + str(result.get("stderr") or "")[-3000:]
+    if (rc == 1 and _PYTAJACE_KOMENDY_RE.search(command)
+            and not re.search(r"Traceback \(most recent call last\)|^\s*[\w.]*(?:Error|Exception):|^(?:ERROR|error|fatal):",
+                              _wy_kl, re.M)):
         result["ok"] = True
         return (
             "Kod wyjscia 1 przy tej komendzie znaczy 'nie znaleziono' "
@@ -31370,6 +31376,17 @@ def _dispatch_tool_inner(
         # 2026-10-21 18:17, druzyna 2, krok 21: {"tool": "ASK", ...}
         # dostalo samo "Nieznane narzędzie: ASK".
         _akcja = str(name or "").strip().upper()
+        if _akcja in ("ASK_ROLE",):
+            # v480kl: bieg 2026-11-01 07:09 (druzyna 2) — ask_role w RUN bez
+            # imienia (same ask_question); wynik nie mowil, co poprawic
+            return {
+                "ok": False,
+                "error": "Pytanie bez imienia — nie wiem, do kogo je wysłać.",
+                "podpowiedz": (
+                    "Pytanie do zespołu to osobna decyzja: {\"type\": \"ASK\", \"ask_role\": "
+                    "\"<imię>\", \"ask_question\": \"...\"} — w ask_role wpisz imię osoby, "
+                    "do której piszesz.")
+            }
         if _akcja in (
             "ASK", "ASK_DALEJ", "TASK", "RUN", "DONE", "FAILED",
             "NEED_USER_LOGIN",
@@ -48873,6 +48890,12 @@ def _ask_z_akcji(d):
         if not isinstance(a, dict):
             continue
         args = a.get("args") if isinstance(a.get("args"), dict) else a
+        # v480kl: imie bywa pod inna nazwa (role/rola/to/kto/name)
+        if isinstance(args, dict) and not str(args.get("ask_role") or "").strip():
+            for _kl in ("role", "rola", "to", "do", "kto", "name", "imie", "imię", "ask_to"):
+                if str(args.get(_kl) or "").strip():
+                    args = dict(args, ask_role=str(args[_kl]).strip())
+                    break
         if (str(a.get("tool") or "").strip().lower() in _NAZWY_ASK
                 and str(args.get("ask_role") or "").strip()
                 and str(args.get("ask_question") or "").strip()):
@@ -57644,9 +57667,9 @@ _INSTALACJA_RADY = (
     (re.compile(r"No matching distribution found for (\S+)|Could not find a version that satisfies the requirement (\S+)", re.I),
      "pip nie ma takiej wersji dla tego Pythona i procesora — sprawdźcie nazwę, zdejmijcie numer wersji "
      "albo sprawdźcie dostępne: pip index versions <nazwa>."),
-    (re.compile(r"externally-managed-environment", re.I),
-     "Python systemu nie pozwala instalować globalnie — użyjcie venv (python3 -m venv ~/venv && ~/venv/bin/pip install …) "
-     "albo pip install --user."),
+    (re.compile(r"externally-managed-environment|README\.venv|--break-system-packages", re.I),
+     "Python systemu nie pozwala tu instalować (także z --user) — użyjcie venv: python3 -m venv venv && "
+     "./venv/bin/pip install …, potem uruchamiajcie ./venv/bin/python."),
     (re.compile(r"No space left on device", re.I),
      "brak miejsca na dysku — sprawdźcie df -h i usuńcie własne niepotrzebne pliki (np. pip cache purge)."),
     (re.compile(r"Permission denied|are you root|EACCES", re.I),
@@ -57718,7 +57741,12 @@ def _podsumowanie_instalacji(tekst, kod):
             return ""
         blad = next((l for l in linie if re.match(r"(?:ERROR|E|error|fatal|curl: \(\d+\)|wget: )[:\s]", l)), "")
         if not blad:
-            blad = next((l for l in reversed(linie) if _BLAD_W_LOGU_RE.search(l)), "")
+            # v480kl: nie sam naglowek "Traceback (most recent call last):",
+            # tylko linia z bledem (np. ModuleNotFoundError: …)
+            blad = next((l for l in reversed(linie) if re.match(r"[\w.]*(?:Error|Exception)\b", l)), "")
+        if not blad:
+            blad = next((l for l in reversed(linie) if _BLAD_W_LOGU_RE.search(l)
+                         and not l.startswith("Traceback")), "")
         caly = "\n".join(linie[-200:])
         rada = next((r for wz, r in _INSTALACJA_RADY if wz.search(caly)), "")
         if not (blad or rada):
@@ -58068,17 +58096,33 @@ _BTIME = [None]
 
 
 def _start_procesu_telefon(pid):
+    """Czas startu procesu (epoch) albo None. v480kl: na Androidzie
+    /proc/stat bywa zamkniety — wtedy start liczony z /proc/uptime. Bylo:
+    przy bledzie "teraz", wiec kazdy odczyt dawal inny start, rejestr bral
+    ten sam proces za nowy (podwojne START) i pisal "po ok. <1 min" przy
+    przebiegach kilkuminutowych (bieg 2026-11-01, druzyna 2)."""
+    try:
+        with open("/proc/" + str(pid) + "/stat") as fh:
+            st = fh.read()
+        ticks = int(st[st.rindex(")") + 2:].split()[19])
+        sek = ticks / os.sysconf("SC_CLK_TCK")
+    except Exception:
+        return None
     try:
         if _BTIME[0] is None:
             for l in open("/proc/stat"):
                 if l.startswith("btime"):
                     _BTIME[0] = int(l.split()[1])
-        with open("/proc/" + str(pid) + "/stat") as fh:
-            st = fh.read()
-        ticks = int(st[st.rindex(")") + 2:].split()[19])
-        return int(_BTIME[0] + ticks / os.sysconf("SC_CLK_TCK"))
+        if _BTIME[0] is not None:
+            return int(_BTIME[0] + sek)
     except Exception:
-        return int(time.time())
+        pass
+    try:
+        with open("/proc/uptime") as fh:
+            up = float(fh.read().split()[0])
+        return int(time.time() - up + sek)
+    except Exception:
+        return None
 
 
 def _grupa_pid(pid):
@@ -58238,8 +58282,12 @@ def _rejestr_krok(stan):
     t = time.time()
     for k, d in teraz.items():
         stary = stan.get(k)
-        if stary and abs(int(stary.get("start") or 0) - int(d.get("start") or 0)) > 90:
+        if stary and not d.get("start"):
+            d["start"] = stary.get("start")
+        if stary and stary.get("start") and d.get("start") and abs(int(stary.get("start")) - int(d.get("start"))) > 90:
             stary = None  # ten sam pid, inny proces
+        if not d.get("start"):
+            d["start"] = int(t)
         if not stary:
             d["pierwszy"] = t
             _rejestr_zapisz("START   " + k.split(":")[0].ljust(7) + " " + d["nazwa"] + "  — "

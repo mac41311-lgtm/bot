@@ -4173,3 +4173,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      lowmemorykiller, oom, Excessive CPU). Koniec skryptu na laptopie
      łączy się z wynikiem komendy LAPTOP: także wtedy, gdy odczyt laptopa
      był sprzed 1–2 min.
+
+301. (v480kl) Poprawki z logów drużyny 2 (2026-11-01):
+     - Rejestr procesów: na Androidzie /proc/stat bywa zamknięty — czas
+       startu procesu liczony jest wtedy z /proc/uptime. Wcześniej każdy
+       odczyt dawał inny start: podwójne START i "po ok. <1 min" przy
+       przebiegach kilkuminutowych.
+     - "Kod wyjścia 1 znaczy 'nie znaleziono'" nie pojawia się, gdy w
+       wyjściu jest błąd (Traceback, …Error:, error:).
+     - Podsumowanie instalacji bierze linię błędu (ModuleNotFoundError…),
+       nie sam nagłówek "Traceback"; blokada pip z README.venv rozpoznana
+       (rada: venv, bo --user też jest blokowane).
+     - ask_role w RUN: imię także pod role/rola/to/kto/name; bez imienia
+       wynik mówi, co poprawić, zamiast "Nieznane narzędzie: ask_role".
