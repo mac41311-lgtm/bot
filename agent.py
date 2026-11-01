@@ -8951,6 +8951,14 @@ def _uruchom_podglad(komenda, rola=None):
     # to nie czesc komendy — bez niego "<" nie konczy sie odmowa.
     komenda = re.split(r"</?\s*[｜|]{1,2}\s*DSML|<[｜|]", str(komenda or ""))[0]
     komenda = _komenda_z_podgladu(komenda)
+    _brak_konca = _heredoc_bez_konca(komenda)
+    if _brak_konca:
+        return ("$ " + komenda.split("\n")[0] + "\n[Nie uruchomiłem: komenda otwiera heredoc "
+                "<<" + _brak_konca + ", ale w Twojej odpowiedzi nie ma pod nią linii z samym "
+                "„" + _brak_konca + "”, więc powłoka dostałaby tylko pierwszą linię. Napisz "
+                "URUCHOM: i pod nim kolejne linie skryptu, a na końcu osobną linię "
+                + _brak_konca + ". Prościej: zapisz kod jako plik (blok kodu z # nazwa.py w "
+                "pierwszej linii) i daj URUCHOM: python3 nazwa.py.]")
     # v480gl2: bieg 2026-10-27 00:16-00:59 — Bartek w jednej odpowiedzi dla
     # MAIN-a puszczal "sleep 240 ; cat kn_tune3.log" raz za razem i MAIN stal
     # 44 min w jednym pytaniu. Rola nie czeka w odpowiedzi: dluzszy sleep
@@ -9144,12 +9152,52 @@ def _cudzyslow_otwarty(k):
         return False
 
 
+_HEREDOC_URUCHOM_RE = re.compile(r"<<(-?)\s*['\"]?([A-Za-z_]\w*)['\"]?")
+
+
+def _heredoc_bez_konca(komenda):
+    """v480ll: znacznik konca heredoca, ktorego brakuje w komendzie (albo "")."""
+    k = str(komenda or "")
+    _hd = _HEREDOC_URUCHOM_RE.search(k)
+    if not _hd:
+        return ""
+    _zn = _hd.group(2)
+    for l in k[_hd.end():].split("\n")[1:]:
+        if (l.lstrip("\t") if _hd.group(1) else l).strip() == _zn:
+            return ""
+    return _zn
+
+
 def _komenda_do_konca(tekst, m):
     """v480gn: URUCHOM: python3 -c " ... w kilku liniach — bieg 2026-10-27
     03:48: brana byla tylko pierwsza linia i powloka zglaszala otwarty
     cudzyslow. Gdy cudzyslow nie jest domkniety, dokladamy kolejne linie,
     az bedzie (najwyzej 200)."""
     k = m.group(1)
+    # v480ll: "URUCHOM:" a pod nim blok ```bash — komenda to tresc bloku
+    # (wczesniej uruchamialo sie samo slowo "bash").
+    if re.fullmatch(r"`{3,}[\w+-]*", k.strip()):
+        _blok = re.match(r"[^\n]*\n(.*?)\n\s*`{3,}", tekst[m.start(1):], re.S)
+        if not _blok or not _blok.group(1).strip():
+            return ""
+        return _blok.group(1).strip()
+    # v480ll: URUCHOM: python3 - <<'PYEOF' ... PYEOF — bieg 2026-11-01
+    # 22:05 (druzyna 1): brana byla tylko pierwsza linia, bash pisal
+    # "here-document delimited by end-of-file", a skrypt sie nie wykonal.
+    # Dokladamy linie az do linii z samym znacznikiem konca (bez linii
+    # ``` z bloku markdown). Bez znacznika zostaje sama pierwsza linia,
+    # a _heredoc_bez_konca mowi roli, co dopisac.
+    _hd = _HEREDOC_URUCHOM_RE.search(k)
+    if _hd:
+        _zn = _hd.group(2)
+        linie = [k]
+        for l in tekst[m.end():].split("\n")[1:401]:
+            if re.match(r"^\s*```", l):
+                continue
+            linie.append(l)
+            if (l.lstrip("\t") if _hd.group(1) else l).strip() == _zn:
+                return "\n".join(linie)
+        return k
     if not _cudzyslow_otwarty(k):
         return k
     reszta = tekst[m.end():].split("\n")[1:201]
@@ -22652,10 +22700,25 @@ def _zastap_plik_autora(rola, p, kod, folder):
         stary = p.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return ""
-    if not _caly_plik_zamiast(stary, kod):
-        return ""
     imie_d = _IMIE_AUTORA.get(rola, (rola, rola))[1]
     sciezka = _sciezka_od_domu(str(p))
+    if not _caly_plik_zamiast(stary, kod):
+        # v480ll: blok podpisany pelna sciezka tego pliku w pierwszej linii
+        # to cala nowa wersja, takze krotsza (bieg 2026-11-01 22:05: stary
+        # save_wynik.py mial przez blad 2162 B cudzego kodu, nowy ~500 B
+        # przepadal bez slowa). Wycinek bez podpisu — autor dostaje zdanie.
+        _st, _nw = str(stary or "").strip(), str(kod or "").strip()
+        _podpisany = (_podpis_w_naglowku(kod, p.name) and "/" in (
+            [l for l in _nw.splitlines() if l.strip() and not l.startswith("#!")] or [""])[0])
+        if not (_podpisany and _nw and _znormalizuj_kod(_nw) != _znormalizuj_kod(_st)
+                and not _SKROT_W_KODZIE_RE.search(_nw)):
+            if _nw and _znormalizuj_kod(_nw) != _znormalizuj_kod(_st):
+                return ("[Nie zastąpiłem " + sciezka + " blokiem od " + imie_d + ": blok ma "
+                        + str(len(_nw.encode("utf-8"))) + " B, a plik " + str(len(_st.encode("utf-8")))
+                        + " B, więc wygląda na wycinek. Zmianę podaj jako poprawkę fragmentu "
+                        "(„Stary fragment:” / „Nowy fragment:”) albo całą nową wersję pliku z jego "
+                        "pełną ścieżką w pierwszej linii bloku (# ~/folder/" + p.name + ").]")
+            return ""
     _autor_pliku[p.name] = rola
     blad = _zapisz_poprawke_autora(p, kod)
     if str(blad).startswith("Twój blok ma "):
@@ -22793,8 +22856,9 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                 # — bieg 2026-10-25 23:39: "eval_bpb.py — nowa wersja
                 # (nadpisuje stary plik)" przepadla, a stary plik zostal.
                 zdanie = _zastap_plik_autora(rola, p, kod, _folder)
-                if zdanie:
+                if zdanie and not zdanie.startswith("[Nie zastąpiłem"):
                     _zapisane_teraz.append((p, "nie kompiluje" not in zdanie))
+                if zdanie:
                     odp = _wstaw_zdanie_za_blok(odp, kod, zdanie)
                 continue
             if not kod and len(sciezki) == 1 and p.name not in _podpisane:
@@ -37082,10 +37146,25 @@ def _blok_poprawki(text, start):
 
     ostatnia = linie[-1]
 
+    # v480ll: dlugi akapit prozy nad blokiem opowiada o tym, co bylo
+    # ("przyjal tylko poprawke fragmentu, a nowej wersji pliku juz nie.
+    # Wysylam … pod nowa nazwa:") — zapowiedzia poprawki jest tylko jego
+    # koncowka. Bieg 2026-11-01 22:05: write_wynik.py pominiety bez slowa.
+    if len(ostatnia) > 160:
+        ostatnia = ostatnia[-90:]
+
     # v480fw: naglowek zaczynajacy sie od nazwy pliku ("**`eval_bpb.py`**
     # — nowa wersja ...") zapowiada caly plik, nie kawalek poprawki.
     if (_nazwa_na_poczatku(ostatnia) and not _ZAPOWIEDZ_POPRAWKI_RE.search(ostatnia)
             and not re.search(r"fragment|linij|linie|blok|kawał", ostatnia, re.IGNORECASE)):
+        return False
+    # v480ll: "**Nowa wersja `save_wynik.py`:**" (pelna/cala wersja z nazwa
+    # pliku) zapowiada caly plik. Bieg 2026-11-01 22:05: w jednej
+    # odpowiedzi poprawka fragmentu baseline_bigram.py i nowa wersja
+    # save_wynik.py — program wzial ja za "nowy fragment" i pominal.
+    if (re.search(r"\b(?:now[aey]|pe[łl]n[aey]|ca[łl][aey])\s+wersj", ostatnia, re.IGNORECASE)
+            and re.search(r"[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt)\b", ostatnia)
+            and not re.search(r"fragment|linij|linie|kawał", ostatnia, re.IGNORECASE)):
         return False
 
     return bool(
@@ -39777,6 +39856,14 @@ def _blok_dokladnie_dla(text, sciezka):
         if z_heredoca:
             return _wyrownaj_blok(z_heredoca)
 
+        # v480ll: blok podpisany w pierwszym komentarzu INNYM plikiem nie
+        # jest tym plikiem, nawet gdy nazwa tego pliku stoi nad nim (bieg
+        # 2026-11-01 22:03: "URUCHOM: python3 save_wynik.py" nad blokiem
+        # "# ~/MAIN_1/code/checkpoint_baseline.py" — do save_wynik.py
+        # poszedl kod checkpointu, a checkpoint_baseline.py nie powstal)
+        if _podpisany_innym(kod, sciezka) and not _podpis_wyzej:
+            continue
+
         if (
             (
                 _podpis_wyzej
@@ -41633,7 +41720,10 @@ _STARY_FRAGMENT_RE = re.compile(
     # (druzyna 1): Bartek dal "Fragment do zamiany" + "Na:", program
     # nie widzial pary i wpisal jedna linie jako caly plik.
     r"|fragment\w*\s+(?:do\s+zamian|do\s+podmian|do\s+poprawy|kt[óo]ry\s+zamie)"
-    r"|(?:^|[\s*_>#])(?:do\s+zamiany|do\s+podmiany|zamie[ńn]\w*|podmie[ńn]\w*|zamiast|by[łl]o"
+    # v480ll: slowo-zapowiedz na poczatku linii (po znacznikach), nie w
+    # srodku zdania — "…żeby nie było kolizji:" to nie "Było:" (bieg
+    # 2026-11-01 22:05: nowy plik write_wynik.py pominiety)
+    r"|^[\s*_>#-]*(?:\d+[.)]\s*)?(?:do\s+zamiany|do\s+podmiany|zamie[ńn]\w*|podmie[ńn]\w*|zamiast|by[łl]o"
     r"|przed|old|before|find|search|replace)\b(?!\s+(?:na|with)\b)[^\n]{0,120}:\s*\**\s*$",
     re.IGNORECASE | re.MULTILINE
 )

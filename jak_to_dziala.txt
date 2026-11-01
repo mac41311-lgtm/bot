@@ -4381,3 +4381,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      z laptopa wracałyby przy wyrównaniu na telefon nowym drużynom. Gdy
      laptop jest niedostępny, program pisze, jak usunąć je ręcznie.
      Odpowiedź NIE zostawia wszystko, na telefonie i na laptopie.
+
+327. (v480ll) Zapis kodu z odpowiedzi roli. Każdy blok z nagłówkiem
+     ścieżki (# ~/MAIN_1/code/x.py) trafia do swojego pliku, nawet gdy
+     nad nim stoi nazwa innego pliku. Poprawka fragmentu i nowe pliki w
+     jednej odpowiedzi są obsłużone wszystkie: zdanie w rodzaju „było
+     kolizji:” w środku linii nie robi już z bloku „starego fragmentu”,
+     a „pełna nowa wersja x.py” nad blokiem to cały plik. Blok z pełną
+     ścieżką w pierwszej linii zastępuje plik; gdy wygląda na wycinek,
+     autor dostaje wyjaśnienie, jak podać zmianę. URUCHOM z heredokiem
+     (python3 - <<'PYEOF' ... PYEOF) idzie do powłoki w całości; bez
+     linii końca rola dostaje informację, co dopisać albo jak zapisać kod
+     jako plik. „URUCHOM:” z blokiem ```bash pod spodem uruchamia treść
+     bloku.
