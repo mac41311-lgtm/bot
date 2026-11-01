@@ -27404,7 +27404,17 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                # dysku dla obu druzyn i Sedziego: licza tyle samo, gdy laptop
                # jest wolny, a ustepuja uzytkownikowi.
                + " && { ionice -c 2 -n 7 -p $$ >/dev/null 2>&1 || true; }"
-               + " && exec nice -n 19 "
+               # v480kz: uczciwie po polowie bez limitu (uzytkownik 2026-11-01:
+               # "po połowie cały laptop, ale podzielony uczciwie", "nie chcę
+               # ich ograniczać"). Kazda druzyna ma wlasny wycinek systemd
+               # (cgroup) o tej samej wadze procesora: gdy licza obie, kazda
+               # dostaje polowe niezaleznie od liczby watkow i procesow; gdy
+               # liczy jedna, ma caly laptop. Bez systemd --user — jak dotad.
+               + " && AEL_S= && { command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope"
+               " --quiet --collect --slice=ael-druzyna" + (_d_eksport or "0") + ".slice true"
+               " >/dev/null 2>&1 && AEL_S=\"systemd-run --user --scope --quiet --collect --slice=ael-druzyna"
+               + (_d_eksport or "0") + ".slice\"; true; }"
+               + " && exec $AEL_S nice -n 19 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
     if limit_s:
@@ -27429,7 +27439,7 @@ def _laptop_oderwane(zdalnie, folder):
     # inaczej pgrep -f / ps druzyny widzialy opakowanie jako drugi proces
     # z ta sama nazwa (bieg 2026-10-31 23:31, druzyna 2), a pkill -f mogl
     # trafic w opakowanie.
-    wnetrze = (zdalnie.replace(" && exec nice ", " && nice ", 1)
+    wnetrze = (zdalnie.replace(" && exec $AEL_S nice ", " && $AEL_S nice ", 1)
                + "\necho $? > \"" + plik + ".rc\"\n")
     b64 = base64.b64encode(wnetrze.encode("utf-8")).decode("ascii")
     return ("d=\"" + d + "\"; mkdir -p \"$d\"; find \"$d\" -type f -mmin +2880 -delete 2>/dev/null; "

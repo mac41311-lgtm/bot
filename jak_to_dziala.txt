@@ -4282,3 +4282,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      priorytet procesora (nice 19) i dysku (ionice best-effort 7). Gdy
      laptop jest wolny, liczą tak samo szybko, a gdy użytkownik z niego
      korzysta (pulpit, przeglądarka), ustępują mu i laptop się nie zacina.
+
+315. (v480kz) Laptop dzielony uczciwie po połowie, bez ograniczania:
+     każda drużyna liczy we własnym wycinku systemd (ael-druzyna1.slice,
+     ael-druzyna2.slice) o tej samej wadze procesora. Gdy liczą obie,
+     każda dostaje połowę, niezależnie od tego, ile wątków i procesów
+     puści. Gdy liczy jedna, ma cały laptop. Pulpit użytkownika i system
+     mają pierwszeństwo (nice 19, ionice; osobne konto), a strażnik
+     pamięci pilnuje, żeby zostało co najmniej ok. 500 MB. Bez systemd
+     --user na laptopie komendy idą jak dotąd.
