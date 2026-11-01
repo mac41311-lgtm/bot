@@ -27469,7 +27469,7 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
                + " AEL_DRUZYNA=" + (_d_eksport or "0")
-               + ((" AEL_KOMENDA=" + _numer_komendy()) if _numer_komendy() and not limit_s else "")
+               + ((" AEL_KOMENDA=" + _numer_komendy()) if _numer_komendy() else "")
                + (" AEL_SEDZIA=1" if limit_s else "")
                # v480ky: laptop to tez pulpit uzytkownika (bieg 2026-11-01
                # 18:39: CPU 100%, swap 1,1 GB, nacisk na dysk 40-56% — pulpit
@@ -58800,11 +58800,12 @@ def _procesy_druzyny_telefon():
             if not _nz or _druzyna_procesu(wpis) != moja:
                 continue
             _lg = _plik_wyjscia_procesu(int(wpis)) or ""
-            if "/RYWALIZACJA/sprawdzanie_" in _lg:
+            _kid_p = _kid_procesu(wpis)
+            if "/RYWALIZACJA/sprawdzanie_" in _lg or _kid_p.startswith("s"):
                 _nz += " (sprawdzanie Sędziego)"
             wynik["telefon:" + wpis] = {
                 "nazwa": _nz, "kom": short(kom, 160),
-                "log": _lg, "kid": _kid_procesu(wpis),
+                "log": _lg, "kid": _kid_p,
                 "start": _start_procesu_telefon(wpis), "grupa": _grupa_pid(wpis)}
     except Exception:
         pass
@@ -60569,12 +60570,22 @@ def _sedzia_ocen(numer):
     stan = read_json(stan_plik, {})
     proces = None
     kod = None
+    # v480lh: sprawdzanie Sedziego ma swoj numer komendy ("s…"), jak komendy
+    # druzyn (v480ku) — rejestr procesow wie, ze skrypt liczyl dla Sedziego
+    # i jak sie skonczyl. Bieg 2026-11-01 18:26 i 18:56: skrypt ze
+    # sprawdzania Sedziego konczyl sie w rejestrze jako "nie wiadomo".
+    _kid_s = "s" + _nowy_numer_komendy()
+    _kid_s_przed = getattr(_kid_tl, "kid", None)
+    _na_lapie_s = False
     try:
         _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
         if (isinstance(stan, dict) and stan.get("klucz") == klucz
                 and _zyje(stan.get("pid"))):
             pid = int(stan["pid"])
             start = float(stan.get("start") or time.time())
+            _kid_s = str(stan.get("kid") or _kid_s)
+            _na_lapie_s = bool(stan.get("laptop"))
+            _komendy_trwajace[_kid_s] = komenda
             log("RYWALIZACJA", "Sędzia: to samo sprawdzenie drużyny " + str(numer)
                 + " już liczy (pid " + str(pid) + ", od " + _min_s(time.time() - start)
                 + ") — czekam na nie, nie puszczam drugiego.")
@@ -60589,7 +60600,11 @@ def _sedzia_ocen(numer):
             # (uzytkownik 2026-10-31: "sedzia ma byc dla kazdego zadania
             # uniwersalny" — nic o celu, ta sama zasada co LAPTOP: zespolu).
             _komenda_sedziego = komenda
-            _lap = _na_laptopa(komenda, druzyna=str(numer), limit_s=_SEDZIA_MAKS_S)
+            _kid_tl.kid = _kid_s
+            try:
+                _lap = _na_laptopa(komenda, druzyna=str(numer), limit_s=_SEDZIA_MAKS_S)
+            finally:
+                _kid_tl.kid = _kid_s_przed
             if isinstance(_lap, dict):
                 if _lap.get("error") == "LAPTOP_NIEDOSTEPNY" or _laptop.get("ok") is False:
                     werdykt.update(werdykt="nie sprawdzone", ponow="laptop", szczegol=(
@@ -60601,6 +60616,7 @@ def _sedzia_ocen(numer):
                 return werdykt
             if _lap:
                 _komenda_sedziego = _lap
+                _na_lapie_s = True
                 try:
                     _laptop_wyrownaj(druzyna=str(numer))
                 except Exception:
@@ -60613,9 +60629,12 @@ def _sedzia_ocen(numer):
                     cwd=str(folder), stdin=subprocess.DEVNULL,
                     stdout=_fh, stderr=subprocess.STDOUT,
                     start_new_session=True,
+                    env=dict(os.environ, AEL_KOMENDA=_kid_s),
                 )
             pid, start = proces.pid, time.time()
-            write_json(stan_plik, {"pid": pid, "klucz": klucz, "start": start})
+            _komendy_trwajace[_kid_s] = komenda
+            write_json(stan_plik, {"pid": pid, "klucz": klucz, "start": start,
+                                   "kid": _kid_s, "laptop": _na_lapie_s})
         while True:
             if proces is not None:
                 if proces.poll() is not None:
@@ -60665,9 +60684,19 @@ def _sedzia_ocen(numer):
             stan_plik.unlink()
         except Exception:
             pass
+        try:
+            _ost_s = [l for l in str(wyjscie or "").splitlines() if l.strip()]
+            _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="laptop" if _na_lapie_s else "telefon",
+                               grupa=pid, kid=_kid_s, druzyna=str(numer), kod=kod,
+                               komenda=short(komenda, 300),
+                               ostatnia=short(_ost_s[-1], 200) if _ost_s else "")
+        except Exception:
+            pass
     except Exception as e:
+        _komendy_trwajace.pop(_kid_s, None)
         werdykt.update(werdykt="nie wyszło", szczegol="komenda nie ruszyła: " + str(e)[:200])
         return werdykt
+    _komendy_trwajace.pop(_kid_s, None)
 
     # v480jb: brak polaczenia z laptopem to nie zly wynik
     if (kod == 255 and _LAPTOP_RE.match(komenda)

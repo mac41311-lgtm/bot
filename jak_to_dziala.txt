@@ -4350,3 +4350,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wyjścia 1 skryptu na laptopie nie jest już opisywany jako „nie
      znaleziono” (program patrzył na owiniętą komendę ssh, w której jest
      „command -v”); linia [ERROR…] w wyjściu też liczy się jako błąd.
+
+323. (v480lh) Sprawdzanie Sędziego ma swój numer komendy (jak komendy
+     drużyn, punkt 317) i po końcu zapisuje zdarzenie z kodem wyjścia
+     i ostatnią linią. Skrypt uruchomiony przez „sprawdz” Sędziego jest
+     w rejestrze procesów opisany jako sprawdzanie Sędziego i jego koniec
+     ma prawdziwy powód zamiast „nie wiadomo” (bieg 2026-11-01 18:26:
+     dwa eval_mix_old_prune_L6.py naraz — jeden od MAIN-a, drugi od
+     Sędziego, drugi kończył się jako „nie wiadomo”).
