@@ -60000,6 +60000,11 @@ def _zapytaj_o_foldery_druzyn():
                 opis.append("~/" + p.name + " (" + str(n) + " plików i folderów)")
         except Exception:
             opis.append("~/" + p.name)
+    try:
+        if _laptop_skonfigurowany() and opis:
+            opis.append("te same foldery ~/MAIN_1 i ~/MAIN_2 na laptopie")
+    except Exception:
+        pass
     if _poza:
         opis.append(
             "a poza nimi to, co drużyny założyły w ~: "
@@ -60087,6 +60092,7 @@ def _nowy_start_rywalizacji(usun_foldery=True):
         except Exception:
             pass
         _usun_pliki_druzyn_w_debianie()
+        _usun_foldery_druzyn_na_laptopie()
     else:
         # v480ff: nowe druzyny dowiaduja sie o plikach poprzednich
         # (_rywalizacja_tekst); flaga znika razem z ~/RYWALIZACJA.
@@ -60098,6 +60104,34 @@ def _nowy_start_rywalizacji(usun_foldery=True):
                         datetime.now().strftime("%Y-%m-%d %H:%M"), encoding="utf-8")
             except Exception:
                 pass
+
+
+def _usun_foldery_druzyn_na_laptopie():
+    """v480lk: uzytkownik (2026-11-01, "a usunie sie z laptopa jak nacisne
+    t?"): zgoda na usuniecie folderow druzyn obejmuje tez ich foldery na
+    laptopie (~/MAIN_1, ~/MAIN_2). Bez tego stare pliki z laptopa wracalyby
+    przy wyrownaniu na telefon nowym druzynom. Najpierw konczy procesy
+    starych druzyn w ich slice'ach. Laptop niedostepny = mowimy to i tyle."""
+    try:
+        if not _laptop_skonfigurowany():
+            return
+    except Exception:
+        return
+    f1, f2 = _laptop_folder("1"), _laptop_folder("2")
+    skrypt = ("systemctl --user stop ael-druzyna1.slice ael-druzyna2.slice 2>/dev/null; "
+              "rm -rf \"$HOME/" + f1 + "\" \"$HOME/" + f2 + "\" && echo USUNIETE")
+    try:
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=60, errors="replace")
+        if "USUNIETE" in (r.stdout or ""):
+            log("RYWALIZACJA", "Na laptopie usunąłem ~/" + f1 + " i ~/" + f2
+                + " (procesy starych drużyn zatrzymane).")
+            return
+        powod = short((r.stderr or r.stdout or "brak odpowiedzi").strip(), 200)
+    except Exception as e:
+        powod = str(e)[:200]
+    log("RYWALIZACJA", "Nie usunąłem folderów drużyn na laptopie (" + powod + ") — laptop był "
+        "niedostępny. Usuń je ręcznie: ssh " + _LAPTOP_HOST + " 'rm -rf ~/" + f1 + " ~/" + f2 + "'")
 
 
 # v480bq: DYSKWALIFIKACJA. Uzytkownik (2026-10-16): gdy cel przewiduje

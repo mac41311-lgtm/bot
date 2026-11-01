@@ -4373,3 +4373,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      położony. Wcześniej krok kończył się ENGINEER_CODE_MISSING („nie
      było bloku kodu”) albo „~/MAIN_1/ to katalog, a nie plik”, choć plik
      był już na dysku (bieg 2026-11-01 21:18 i 21:25).
+
+326. (v480lk) Zgoda na usunięcie folderów drużyn przy nowym starcie
+     rywalizacji (pytanie po „t”) usuwa też ~/MAIN_1 i ~/MAIN_2 na
+     laptopie, a przedtem zatrzymuje procesy starych drużyn w ich
+     częściach laptopa. Pytanie mówi o tym wprost. Bez tego stare pliki
+     z laptopa wracałyby przy wyrównaniu na telefon nowym drużynom. Gdy
+     laptop jest niedostępny, program pisze, jak usunąć je ręcznie.
+     Odpowiedź NIE zostawia wszystko, na telefonie i na laptopie.
