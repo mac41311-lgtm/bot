@@ -4260,3 +4260,6 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        „skończone w tle” z logiem, jak dotąd.
      Wcześniej program zgadywał po grupie procesów, nazwie i czasie, więc
      „timeout … | tail” i „bash x.sh” dawały fałszywe „nie wiadomo”.
+
+311. (v480kv) Uwaga strażnika laptopa idzie do MAIN-a pod nagłówkiem
+     „Pamięć laptopa” (było „Pamięć telefonu”).

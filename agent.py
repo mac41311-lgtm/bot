@@ -48676,7 +48676,10 @@ def main_decide(
     _sekcja("Od użytkownika", _bez_naglowka(_uzytkownik_block, "Użytkownik:"))
     _sekcja("Poprzedni bieg", _blok_zamkniecia)
     _sekcja("Skończone w tle", _tlo_skonczone)
-    _sekcja("Pamięć telefonu", _uwagi_pamieci)
+    # v480kv: tu trafiaja tez uwagi strażnika laptopa — naglowek wg tresci
+    _sekcja(("Pamięć laptopa" if "na laptopie" in str(_uwagi_pamieci) and "na telefonie" not in str(_uwagi_pamieci)
+             else "Pamięć telefonu i laptopa" if "na laptopie" in str(_uwagi_pamieci)
+             else "Pamięć telefonu"), _uwagi_pamieci)
     _sekcja("Laptop", _laptop_zdanie)
     _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
     _sekcja("Dalej w tle — wynik przyjdzie sam", _tlo_trwa)
