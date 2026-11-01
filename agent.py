@@ -13422,6 +13422,103 @@ class _ProcesPoAktualizacji:
         self.send_signal(signal.SIGKILL)
 
 
+def _komendy_w_tle_do_zapisu():
+    """v480kw: komendy, ktore licza w tle (watek czeka na powloke), do stanu
+    przeladowania: pid powloki, pliki wyjscia, kto puscil."""
+    lista = []
+    try:
+        for r in _w_tle_zywe():
+            if r.get("rodzaj") != "komenda" or r.get("wynik") is not None:
+                continue
+            kid = getattr(r.get("watek"), "ael_kid", None)
+            pr = _komendy_proc.get(kid) if kid else None
+            if not pr:
+                continue
+            lista.append({"kid": kid, "pid": pr["pid"], "wy": pr["wy"], "bl": pr["bl"],
+                          "czesc": pr.get("komenda", ""), "komenda": str(r.get("komenda") or "")[:4000],
+                          "start": r.get("start"), "autor": r.get("autor"),
+                          "autor_dop": r.get("autor_dop"), "cwd": r.get("cwd")})
+    except Exception:
+        pass
+    return lista
+
+
+def _przywroc_komendy_w_tle(lista):
+    """v480kw: po przeladowaniu czekamy na powloke (to wciaz nasze dziecko —
+    os.execv, ten sam pid programu) i oddajemy wynik jak zwykle w "Skonczone
+    w tle", z prawdziwym kodem wyjscia."""
+    for w in lista:
+        try:
+            pid, kid = int(w["pid"]), str(w.get("kid") or "")
+        except Exception:
+            continue
+        if kid:
+            _komendy_trwajace[kid] = str(w.get("czesc") or w.get("komenda") or "")
+
+        def _praca(w=w, pid=pid, kid=kid):
+            kod = None
+            try:
+                while True:
+                    try:
+                        _p, _st = os.waitpid(pid, 0)
+                        if _p == pid:
+                            kod = os.waitstatus_to_exitcode(_st)
+                        break
+                    except ChildProcessError:
+                        # nie nasze dziecko — czekamy, az zniknie; kodu nie znamy
+                        while _zyje(pid):
+                            time.sleep(2)
+                        break
+                    except InterruptedError:
+                        continue
+                tresc = {}
+                for k in ("wy", "bl"):
+                    try:
+                        with open(w[k], encoding="utf-8", errors="replace") as f:
+                            tresc[k] = f.read()
+                        os.unlink(w[k])
+                    except Exception:
+                        tresc[k] = ""
+                _czesc = str(w.get("czesc") or "")
+                _maszyna = "laptop" if "ssh" in _czesc[:200] and _LAPTOP_HOST in _czesc else "telefon"
+                if kod is not None:
+                    _ost = [l for l in (tresc["bl"] if kod else tresc["wy"] or tresc["bl"]).splitlines() if l.strip()]
+                    _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna=_maszyna, grupa=pid, kid=kid,
+                                       druzyna=_DRUZYNA or "1", kod=kod,
+                                       ostatnia=short(_ost[-1], 200) if _ost else "")
+                wynik = {"ok": kod == 0, "returncode": kod, "stdout": short(tresc["wy"], 6000),
+                         "stderr": short(tresc["bl"], 3000), "command": w.get("komenda")}
+                if kod is None:
+                    wynik["uwaga"] = ("program przeładował się (aktualizacja) w trakcie tej komendy; "
+                                      "jej wyjście jest pełne, ale kodu wyjścia nie dało się odebrać")
+                try:
+                    _wiele = bool(_czesci_maszyn(str(w.get("komenda") or "")))
+                except Exception:
+                    _wiele = False
+                if _wiele:
+                    wynik["uwaga_czesci"] = ("program przeładował się (aktualizacja) w trakcie tej "
+                                             "komendy — tu jest wynik części, która wtedy liczyła; "
+                                             "jeśli po niej były dalsze części, nie zostały uruchomione")
+                return wynik
+            finally:
+                if kid:
+                    _komendy_trwajace.pop(kid, None)
+
+        rzecz = _rzecz_w_tle("komenda", w.get("komenda") or w.get("czesc") or "", 0, [])
+        try:
+            rzecz["start"] = float(w.get("start") or time.time())
+        except Exception:
+            pass
+        for k in ("autor", "autor_dop", "cwd"):
+            if w.get(k):
+                rzecz[k] = w[k]
+        _uruchom_rzecz(rzecz, _praca, True)
+        with _w_tle_lock:
+            _do_listy_w_tle(rzecz)
+        log("AKTUALIZACJA", "Komenda z tła liczy dalej, wynik przyjdzie jak zwykle: "
+            + short(rzecz["komenda"], 120))
+
+
 def _przywroc_procesy_w_tle():
 
     for _wpis in _stan_przed_aktualizacja.get("procesy_w_tle") or []:
@@ -13430,6 +13527,11 @@ def _przywroc_procesy_w_tle():
             _procesy_w_tle[_p.pid] = _p
         except Exception:
             pass
+
+    try:
+        _przywroc_komendy_w_tle(_stan_przed_aktualizacja.get("komendy_w_tle") or [])
+    except Exception as e:
+        log("AKTUALIZACJA", "Nie odebrałem komend z tła: " + short(str(e), 200))
 
     for _sciezka, _wpis in (_stan_przed_aktualizacja.get("logi_w_tle") or {}).items():
         try:
@@ -13532,6 +13634,7 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
             str(k): list(v) for k, v in _grupy_z_komend.items()
         },
         "autorzy_grup": {str(k): v for k, v in _autor_grupy.items()},
+        "komendy_w_tle": _komendy_w_tle_do_zapisu(),
     }
 
     try:
@@ -25534,6 +25637,10 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             # zostawiac na telefonie sieroty, ktore dalej miela.
             start_new_session=True
         )
+        if _numer_komendy():
+            _komendy_proc[_numer_komendy()] = {
+                "pid": proces.pid, "wy": wy.name, "bl": bl.name,
+                "komenda": str(command or "")[:4000], "start": time.time()}
 
         try:
             pgid = os.getpgid(proces.pid)
@@ -28077,6 +28184,11 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
 
 # v480km: komendy, ktore wlasnie sie wykonuja (na wierzchu albo w watku)
 _komendy_trwajace = {}
+# v480kw: numer komendy -> {pid powloki, pliki wyjscia, komenda, start};
+# zapisywane przy przeladowaniu, zeby nowa wersja odebrala wynik komendy,
+# ktora liczyla w tle (bieg 2026-11-01 18:15: "telefon 2x prune L6"
+# przepadla przy aktualizacji, a MAIN dostal "nie wiadomo")
+_komendy_proc = {}
 
 
 # v480ku: kazda komenda programu ma swoj numer (AEL_KOMENDA w srodowisku,
@@ -28104,10 +28216,19 @@ def termux_run(command):
     _kid_tl.kid = _kid
     _komendy_trwajace[_kid] = str(command or "")
     try:
+        _threading.current_thread().ael_kid = _kid
+    except Exception:
+        pass
+    try:
         wynik = _termux_run_wew(command)
     finally:
         _komendy_trwajace.pop(_kid, None)
+        _komendy_proc.pop(_kid, None)
         _kid_tl.kid = _kid_przed
+        try:
+            _threading.current_thread().ael_kid = _kid_przed
+        except Exception:
+            pass
     try:
         if (isinstance(wynik, dict) and isinstance(wynik.get("returncode"), int)
                 and _to_instalacja(command) and not wynik.get("podsumowanie")):
@@ -60393,6 +60514,23 @@ def _sedzia_ocen(numer):
                     break
         except Exception:
             pass
+    # v480kw: strażnik na laptopie — jego uwaga dochodzi do telefonu co
+    # minute, a wyjscie skryptu w $(…) jej nie pokaze; przy sprawdzaniu na
+    # laptopie bez liczby czekamy chwile na jego zdarzenie
+    if (not _zatrzymal and _LAPTOP_RE.match(komenda) and kod != 255
+            and _ostatnia_liczba(wyjscie) is None):
+        _do = time.time() + 75
+        while time.time() < _do and not _zatrzymal:
+            try:
+                for _z in _zdarzenia_od(start):
+                    if (_z.get("rodzaj") == "program" and _z.get("maszyna") == "laptop"
+                            and _z.get("sedzia") and str(_z.get("druzyna") or "") == str(numer)):
+                        _zatrzymal = True
+                        break
+            except Exception:
+                break
+            if not _zatrzymal:
+                time.sleep(5)
     if _zatrzymal:
         werdykt.update(werdykt="nie sprawdzone", ponow="pamiec", szczegol=(
             "strażnik pamięci telefonu zatrzymał sprawdzanie, bo telefonowi kończyła się "
@@ -60403,7 +60541,14 @@ def _sedzia_ocen(numer):
         return werdykt
     wypisala = _ostatnia_liczba(wyjscie)
     werdykt["wypisala"] = wypisala
-    if wypisala is None:
+    if wypisala is None and kod == 124 and re.search(r"\btimeout\b", komenda):
+        # v480kw: kod 124 to "timeout" z komendy drużyny — nie "brak liczby"
+        werdykt.update(werdykt="nie wyszło", szczegol=(
+            "komenda przerwana po limicie czasu z jej własnego „timeout” (kod 124), zanim "
+            "wypisała liczbę" + ((": " + short(str(wyjscie).strip(), 160)) if str(wyjscie or "").strip() else "")
+            + " — liczy dłużej, niż pozwala limit (np. gdy maszyna jest zajęta innymi "
+            "przebiegami); większy limit albo szybsza komenda"))
+    elif wypisala is None:
         werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
                        + str(kod if kod is not None else "?") + "): " + short(str(wyjscie or "").strip(), 200))
     elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):

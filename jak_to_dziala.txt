@@ -4263,3 +4263,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 
 311. (v480kv) Uwaga strażnika laptopa idzie do MAIN-a pod nagłówkiem
      „Pamięć laptopa” (było „Pamięć telefonu”).
+
+312. (v480kw) Komenda, która liczyła w tle, przeżywa aktualizację
+     programu: nowa wersja czeka na nią dalej i oddaje MAIN-owi pełny
+     wynik z prawdziwym kodem wyjścia w „Skończone w tle”. Wcześniej
+     przepadała, a MAIN dostawał fałszywe „przestał działać — nie
+     wiadomo”. Sędzia: kod 124 jest opisany jako przerwanie przez własny
+     „timeout” komendy (a nie „brak liczby”); sprawdzenie na laptopie
+     zatrzymane przez strażnika pamięci to „nie sprawdzone, ponowię”.
