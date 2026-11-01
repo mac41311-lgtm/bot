@@ -58609,9 +58609,21 @@ def _raport_z_tla():
             _linie_tla_skonczone.add(_l)
             _linie_tla_zmienione.add(_l)
         if _lp:
-            zdania.append("• Na laptopie liczy (Wasze): " + ", ".join(
-                n + " — " + _min_s(t) for n, t in _lp)
-                + ". Postęp zobaczycie w ich logu (LAPTOP: tail …).")
+            # v480kp: zamiast "(LAPTOP: tail …)" — konkretny log albo to, że
+            # wynik przyjdzie z komendą (użytkownik 2026-11-01: "a to co to?")
+            _opisy = []
+            _wsz = list((_laptop_moje_wszystkie.get("procesy") or {}).values())
+            _samodz = {d.get("nazwa") for d in _laptop_moje_widziane.values()}
+            for n, t in _lp:
+                _lg = next((d.get("log") for d in _wsz if d.get("nazwa") == n and d.get("log")
+                            and "/.ael_laptop/" not in d.get("log")), "")
+                _o = n + " — " + _min_s(t)
+                if _lg:
+                    _o += ", log: LAPTOP: tail -n 5 " + re.sub(r"^/home/[^/]+/", "~/", _lg)
+                elif n not in _samodz:
+                    _o += ", wynik przyjdzie z komendą, która go puściła"
+                _opisy.append(_o)
+            zdania.append("• Na laptopie liczy (Wasze): " + "; ".join(_opisy) + ".")
     except Exception:
         pass
     return zdania

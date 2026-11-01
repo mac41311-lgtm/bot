@@ -4213,3 +4213,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        "(sprawdzanie Sędziego)"; koniec skryptu na laptopie łączy się też z
        komendą, która puszcza go przez plik .sh (np. bash sprawdz_old.sh →
        eval_mix_old.py).
+
+305. (v480kp) Linia "Na laptopie liczy (Wasze)" w "Dalej w tle" podaje przy
+     każdym skrypcie konkretną komendę do jego logu (LAPTOP: tail -n 5
+     ~/MAIN_n/log/…) albo mówi, że wynik przyjdzie z komendą, która go
+     puściła. Było niejasne "(LAPTOP: tail …)" bez ścieżki.
