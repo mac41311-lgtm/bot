@@ -27456,10 +27456,10 @@ def _laptop_moje_procesy():
         cz = cz[:3] + cz[4:]
         if "/.ael_laptop/" in cz[4] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[4]):
             continue
-        k = _KLUCZ_SKRYPTU_RE.search(cz[4]) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", cz[4])
-        if not k:
+        _nz = _nazwa_skryptu(cz[4])
+        if not _nz:
             continue
-        nazwa = os.path.basename(k.group(1)) + (" (sprawdzanie Sędziego)" if _sedzia else "")
+        nazwa = _nz + (" (sprawdzanie Sędziego)" if _sedzia else "")
         try:
             t = int(cz[1])
         except ValueError:
@@ -27581,6 +27581,21 @@ def _laptop_dolacz(ident, folder, polecenie, wynik_zerwany):
 
 
 _KLUCZ_SKRYPTU_RE = re.compile(r"\b(?:python3?|bash|sh|node|perl|ruby|Rscript)\s+(?:-\S+\s+)*([\w./~-]+\.(?:py|sh|js|pl|rb|R))\b")
+
+
+def _nazwa_skryptu(kom):
+    """v480ko: nazwa skryptu z linii polecen; "python3 -c" dla kodu podanego
+    wprost (bylo: nazwa pliku wyczytana z kodu, np. lstm_1h.py z
+    "python3 -c ast.parse(open('lstm_1h.py'))", bieg 2026-11-01 13:08)."""
+    kom = str(kom or "")
+    k = _KLUCZ_SKRYPTU_RE.search(kom)
+    if k:
+        return os.path.basename(k.group(1))
+    m = re.search(r"(?:^|/|\s)(python3?(?:\.\d+)?)\s+(?:-\S+\s+)*-c\b", kom)
+    if m:
+        return m.group(1) + " -c"
+    k = re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", kom)
+    return os.path.basename(k.group(1)) if k else ""
 
 
 def _laptop_z_zadania(command_str):
@@ -27951,8 +27966,21 @@ def _termux_run_wew(command):
             if isinstance(wynik.get("returncode"), int) and wynik.get("returncode") != 255:
                 _ost_l = [l for l in str((wynik.get("stderr") if wynik.get("returncode") else None)
                                          or wynik.get("stdout") or "").splitlines() if l.strip()]
+                # v480ko: skrypty .py uruchamiane przez .sh z komendy (kopia
+                # na telefonie w folderze druzyny) — np. "bash sprawdz_old.sh"
+                # puszcza eval_mix_old.py
+                _w_sh = []
+                for _sh in re.findall(r"[\w./~-]+\.sh\b", _polecenie_lap)[:3]:
+                    try:
+                        _psh = (Path(os.path.expanduser(_sh)) if _sh.startswith(("~", "/"))
+                                else _folder_druzyny(_DRUZYNA or "1") / _sh)
+                        if _psh.is_file() and _psh.stat().st_size < 200000:
+                            _w_sh += re.findall(r"[\w.-]+\.py\b", _psh.read_text(encoding="utf-8", errors="replace"))
+                    except Exception:
+                        pass
                 _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="laptop", druzyna=_DRUZYNA or "1",
-                                   komenda=short(_polecenie_lap, 300), kod=wynik.get("returncode"),
+                                   komenda=short(_polecenie_lap, 300) + (" [" + " ".join(sorted(set(_w_sh)))[:300] + "]" if _w_sh else ""),
+                                   kod=wynik.get("returncode"),
                                    ostatnia=short(_ost_l[-1], 200) if _ost_l else "")
         except Exception:
             pass
@@ -58184,12 +58212,15 @@ def _procesy_druzyny_telefon():
             if (not kom or program in kom or kom.startswith("com.") or "pow_helper" in kom
                     or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup|sleep)\b", kom)):
                 continue
-            k = _KLUCZ_SKRYPTU_RE.search(kom) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", kom)
-            if not k or _druzyna_procesu(wpis) != moja:
+            _nz = _nazwa_skryptu(kom)
+            if not _nz or _druzyna_procesu(wpis) != moja:
                 continue
+            _lg = _plik_wyjscia_procesu(int(wpis)) or ""
+            if "/RYWALIZACJA/sprawdzanie_" in _lg:
+                _nz += " (sprawdzanie Sędziego)"
             wynik["telefon:" + wpis] = {
-                "nazwa": os.path.basename(k.group(1)), "kom": short(kom, 160),
-                "log": _plik_wyjscia_procesu(int(wpis)) or "",
+                "nazwa": _nz, "kom": short(kom, 160),
+                "log": _lg,
                 "start": _start_procesu_telefon(wpis), "grupa": _grupa_pid(wpis)}
     except Exception:
         pass
@@ -61017,6 +61048,27 @@ def _kroki_oceny(o):
     return " (po kroku " + str(o.get("krok")) + ")" if o.get("krok") is not None else ""
 
 
+def _bez_rywala_w_ocenie(tekst, rywal, ocena_rywala=""):
+    """v480ko: zdania z wlasnej oceny druzyny, ktore mowia o rywalu albo
+    podaja jego liczby, wypadaja (zasada: o rywalu tylko procent i kto
+    prowadzi). Bieg 2026-11-01 09:05: Sedzia napisal druzynie 1 "luka do
+    2,1022 druzyny 2", a jej raport potem liczyl "luke do druzyny 2"."""
+    t = str(tekst or "")
+    if not t:
+        return t
+    liczby = set(re.findall(r"\d+[.,]\d{3,}", str(ocena_rywala or "")))
+    wlasne = set()
+    zdania = re.split(r"(?<=[.!?;])\s+(?=[A-ZĄĆĘŁŃÓŚŹŻ(\"„0-9])", t)
+    zostaja = []
+    for z in zdania:
+        if re.search(r"(?i)dru[żz]yn\w*\s+" + re.escape(rywal) + r"\b|\brywal|\bteam\s+" + re.escape(rywal) + r"\b", z):
+            continue
+        if any(l in z for l in liczby - wlasne):
+            continue
+        zostaja.append(z)
+    return " ".join(zostaja).strip() or t.split(".")[0]
+
+
 def _ocena_zdaniem(o, dla=None):
     """Ocena Sedziego jako zdania.
 
@@ -61037,7 +61089,11 @@ def _ocena_zdaniem(o, dla=None):
     def _druz(_n):
         d = o.get("druzyna_" + _n) or {}
         t = "drużyna " + _n + " — " + str(d.get("procent")) + "%"
-        return t + (": " + _zd(d.get("ocena")) if _cala(_n) else ".")
+        _oc = d.get("ocena")
+        if dla is not None and _cala(_n):
+            _oc = _bez_rywala_w_ocenie(_oc, "2" if _n == "1" else "1",
+                                       (o.get("druzyna_" + ("2" if _n == "1" else "1")) or {}).get("ocena"))
+        return t + (": " + _zd(_oc) if _cala(_n) else ".")
 
     return (
         "Ocena Sędziego z " + str(o.get("czas", "")) + _kroki_oceny(o)

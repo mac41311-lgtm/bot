@@ -4201,3 +4201,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      a "/" zawiera folder rywala — Bartek dostał trzy odmowy z rzędu na
      zwykłe czytanie własnego raportu. Ścieżki plików dalej są sprawdzane
      (grep -r x ~, ~/MAIN_2/… nadal odmowa).
+
+304. (v480ko)
+     - Ocena Sędziego dla drużyny: zdania z jej własnej oceny, które mówią
+       o rywalu albo podają jego liczby, program wycina (o rywalu tylko
+       procent i kto prowadzi). Bieg 2026-11-01 09:05: Sędzia napisał
+       drużynie 1 "luka do 2,1022 drużyny 2", a jej raport potem liczył
+       lukę do wyniku rywala.
+     - Rejestr procesów: "python3 -c …" ma nazwę "python3 -c" (nie nazwę
+       pliku wyczytaną z kodu); sprawdzanie Sędziego na telefonie ma dopisek
+       "(sprawdzanie Sędziego)"; koniec skryptu na laptopie łączy się też z
+       komendą, która puszcza go przez plik .sh (np. bash sprawdz_old.sh →
+       eval_mix_old.py).
