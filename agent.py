@@ -5880,8 +5880,14 @@ def start_session(name, system_prompt):
                     # przez limiter — patrz komentarz przy trzecim
                     # send_message w tej funkcji.
                     _deepseek_pace(name)
-                    _wyslano(name, _teraz_fakty)
-                    session.send_message(_teraz_fakty)
+                    # v480lf: rola, ktora juz rozmawia, dostaje ten sam
+                    # opis jeszcze raz — z jednym zdaniem, ze to nowa
+                    # wersja (inaczej wyglada jak powtorka bez powodu).
+                    _do_wyslania = (
+                        ("Opis na start w nowej wersji programu (zastępuje poprzedni):\n\n"
+                         + _teraz_fakty) if saved.get("fakty") else _teraz_fakty)
+                    _wyslano(name, _do_wyslania)
+                    session.send_message(_do_wyslania)
 
                     _save_session_state(
                         name, session, fakty=_teraz_fakty
@@ -5889,8 +5895,8 @@ def start_session(name, system_prompt):
 
                     log(
                         "DEEPSEEK",
-                        name + ": fakty o telefonie się zmieniły — "
-                        "powiedziałem je jeszcze raz."
+                        name + ": opis na start się zmienił — "
+                        "wysłałem nową wersję w tej samej rozmowie."
                     )
 
                 except Exception as _e:
@@ -26659,6 +26665,10 @@ def _gemini_program_w_komendzie(command_str):
             linie = [l for l in kod.splitlines() if l.strip()]
             if len(linie) < _INLINE_MIN_LINII:
                 continue
+            # v480lf: Python, ktory tylko czyta (jak w PODGLĄD — bez zapisu,
+            # procesow i sieci), przechodzi: to sprawdzenie, nie program.
+            if re.match(r"\s*python", m.group(0)) and not _PODGLAD_PY_ZMIANA_RE.search(kod):
+                continue
             if _kopia_kodu_zespolu(kod):
                 continue
             return kod
@@ -28550,16 +28560,19 @@ def _termux_run_lokalnie(command):
                 _msg = (
                     "Nie uruchomiłem tej komendy — ma w sobie program ("
                     + str(_ile) + " linii), którego nie ma w "
-                    "wypowiedziach zespołu. Kod pisze zespół: niech "
-                    "Bartek albo Ania napisze go w swojej wypowiedzi "
-                    "(wtedy kładę go do pliku i uruchamiam), albo MAIN "
-                    "w RUN. Krótkie jednolinijkowe sprawdzenia "
-                    "przechodzą normalnie."
+                    "wypowiedziach zespołu. Sprawdzenie zrób krótszą "
+                    "komendą (np. ls -la plik albo python3 -m py_compile "
+                    "a.py b.py) — takie przechodzą normalnie. Program, "
+                    "który coś liczy albo zmienia, pisze zespół: Bartek "
+                    "albo Ania w swojej wypowiedzi (wtedy kładę go do "
+                    "pliku i uruchamiam), albo MAIN w RUN."
                 )
                 log("GEMINI", _msg)
                 return {
                     "ok": False,
                     "error": "BRAK_KODU_DO_ZAPISU",
+                    # v480lf: wykonawca moze to sprawdzic inaczej — nie konczy zadania
+                    "program_w_komendzie": True,
                     "command": command_str,
                     "message": _msg,
                     "duration_s": 0.0
@@ -33917,7 +33930,11 @@ def _blad_wykonawcy_do_maina(task_id, name, args, result):
     MAIN-a), czy wykonawca poprawia sam (zwraca "").
     """
     kod = str(result.get("error") or "")
-    if kod in _BLEDY_ZAKAZY:
+    # v480lf: odmowa za program wklejony w komende to nie zakaz bez wyjscia —
+    # to samo sprawdzenie da sie zrobic krotsza komenda. Bieg 2026-11-01
+    # 19:49: wykonawca chcial sprawdzic skladnie trzech plikow 12-liniowym
+    # python3 -c, dostal odmowe i cale zadanie MAIN-a skonczylo sie od razu.
+    if kod in _BLEDY_ZAKAZY and not result.get("program_w_komendzie"):
         return "zakaz programu (" + kod + ") — ponowienie nic nie zmieni"
     tekst = str(result.get("stderr") or "") + "\n" + str(result.get("message") or "") + "\n" + (
         kod if kod not in ("", "None") else "")

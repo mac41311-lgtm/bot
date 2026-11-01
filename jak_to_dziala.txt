@@ -4333,3 +4333,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      powtarzania wspólnego opisu. MAIN w opisie laptopa ma stałą połowę
      procesora i pamięci oraz strażnika (było „połowa rdzeni”).
      Kamil, Wojtek, Ela i Igor bez zmian.
+
+321. (v480lf) Odmowa za program wklejony w komendę wykonawcy (python3 -c
+     na kilkanaście linii) nie kończy już całego zadania: wykonawca
+     dostaje ją z powrotem z przykładem krótszego sprawdzenia
+     (ls -la, python3 -m py_compile a.py b.py) i robi to inaczej; ta sama
+     komenda drugi raz wraca do MAIN-a. Python, który tylko czyta (bez
+     zapisu, procesów i sieci), przechodzi jak w PODGLĄD. Rola, która
+     już rozmawia, dostaje nowy opis na start z jednym zdaniem, że to
+     nowa wersja i zastępuje poprzedni.
