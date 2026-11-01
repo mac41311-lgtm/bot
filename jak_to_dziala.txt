@@ -4091,3 +4091,26 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        program sam puszcza ją na laptopie i oddaje tamten wynik z uwagą
        „przeczytane na laptopie — następnym razem LAPTOP: na początku”.
        Inne komendy dostają podpowiedź jak w v480kb.
+
+293. (v480kd) Użytkownik 2026-11-01: „rozpoznać, kto i jak wyłącza
+       procesy, żeby to zapisać na telefon”. Rejestr procesów: plik
+       AEL-MINI/druzyna_<n>/procesy.log (widoczny w menedżerze plików).
+       Co 30 s program patrzy na skrypty drużyny na telefonie i na
+       laptopie; każdy dostaje linię START (maszyna, komenda, log) i KONIEC
+       (ile trwał i jak się skończył):
+       – zatrzymał program: strażnik pamięci telefonu/laptopa (ile MB,
+         ile wolne), zamknięcie programu, przerwana komenda, która nie
+         mogła iść w tło;
+       – zatrzymał zespół: kto (rola, Gemini, MAIN) i jaką komendą
+         kill/pkill/killall;
+       – błąd w skrypcie (ostatnia linia błędu z logu);
+       – zabił system: ślad w logcat Androida (przez adb) albo w dzienniku
+         jądra laptopa; „Killed” w logu bez zatrzymania przez program ani
+         zespół też tak jest opisany;
+       – skończył się (ostatnia linia logu) albo „nie wiadomo”.
+       Zatrzymania i komendy kill zapisują się we wspólnym pliku obu
+       drużyn (~/.ael_procesy_zdarzenia.jsonl), bo strażnik pamięci jednej
+       drużyny może zatrzymać skrypt drugiej. Stan przeżywa restart
+       programu. MAIN dostaje linię tylko wtedy, gdy proces zabił system
+       albo nie wiadomo, czemu zniknął (na telefonie). Nic nie idzie do
+       DeepSeeka.

@@ -13093,6 +13093,8 @@ def _zatrzymaj_to_co_zostawilismy():
                 # ale gdyby to sie kiedys zmienilo, killpg zabilby
                 # terminal uzytkownika razem z agentem.
                 if _grupa and _grupa != os.getpgrp():
+                    _zdarzenie_procesu(rodzaj="program", maszyna="telefon", grupa=_grupa,
+                                       opis="zamknięcie programu (kończy to, co uruchomił w tle)")
                     os.killpg(_grupa, signal.SIGTERM)
                 else:
                     proces.terminate()
@@ -13129,6 +13131,8 @@ def _zatrzymaj_to_co_zostawilismy():
             "Zatrzymuje to, co zostalo w tle po komendzie (grupa "
             + str(_grupa) + ")."
         )
+        _zdarzenie_procesu(rodzaj="program", maszyna="telefon", grupa=_grupa,
+                           opis="zamknięcie programu (kończy to, co zostało w tle po komendach)")
         try:
             os.killpg(_grupa, signal.SIGTERM)
             for _ in range(50):
@@ -13879,6 +13883,9 @@ def _zatrzymaj_przy_braku_pamieci(wolna):
         os.kill(pid, signal.SIGKILL)
     except Exception:
         return
+    _zdarzenie_procesu(rodzaj="program", maszyna="telefon", pid=pid,
+                       opis="strażnik pamięci telefonu: zajmował " + str(mb) + " MB, wolne było "
+                       + str(wolna) + " MB")
     tekst = (
         "Zatrzymałem na telefonie proces " + str(pid) + " (" + short(komenda, 120)
         + ((", uruchomiony przez " + _rodzic) if _rodzic else "")
@@ -25176,6 +25183,9 @@ def _ubij_grupe(proces, pgid):
     """
 
     if pgid:
+        _zdarzenie_procesu(rodzaj="program", maszyna="telefon", grupa=pgid,
+                           opis="program przerwał komendę, która nie mogła iść w tło "
+                           "(stała bez wyjścia albo przekroczyła czas)")
         try:
             os.killpg(pgid, signal.SIGKILL)
         except Exception:
@@ -26716,6 +26726,9 @@ def _laptop_zatrzymaj_przy_braku_pamieci(wolne, procesy):
                        capture_output=True, text=True, timeout=15)
     except Exception:
         return ""
+    _zdarzenie_procesu(rodzaj="program", maszyna="laptop", pid=pid,
+                       opis="strażnik pamięci laptopa: zajmował " + str(rss) + " MB, wolne było "
+                       + str(wolne) + " MB")
     opis = ("Na laptopie kończyła się pamięć (wolne " + str(wolne) + " MB) — program zatrzymał "
             + short(cmd.strip() or ("pid " + str(pid)), 120) + " (" + str(rss) + " MB"
             + (", drużyna " + d if d not in ("", "0") else "") + "), zanim Linux zabiłby coś na "
@@ -27303,6 +27316,9 @@ _laptop_moje_cache = {"t": 0.0, "lista": []}
 # (pid -> nazwa, log, start) i te, ktore od tego czasu zniknely
 _laptop_moje_widziane = {}
 _laptop_moje_skonczone = []
+# v480kd: wszystkie procesy druzyny na laptopie z ostatniego odczytu (tez
+# pod komenda programu), dla rejestru procesow
+_laptop_moje_wszystkie = {"t": 0.0, "procesy": {}}
 
 
 def _laptop_moje_procesy():
@@ -27339,6 +27355,7 @@ def _laptop_moje_procesy():
         return _laptop_moje_cache["lista"]
     naj = {}
     teraz = {}
+    wszystkie = {}
     for l in (r.stdout or "").splitlines():
         cz = l.split("\t", 5)
         if len(cz) < 6:
@@ -27357,8 +27374,11 @@ def _laptop_moje_procesy():
         except ValueError:
             t = 0
         naj[nazwa] = max(naj.get(nazwa, 0), t)
+        log_p = cz[3] if cz[3].startswith("/") and not cz[3].startswith(("/dev/", "/proc/")) else ""
+        if not _sedzia:
+            wszystkie[cz[0]] = {"nazwa": nazwa, "log": log_p.replace(" (deleted)", ""),
+                                "start": round(time.time() - t), "kom": short(cz[4].strip(), 160)}
         if cz[2] != "1" and not _sedzia:
-            log_p = cz[3] if cz[3].startswith("/") and not cz[3].startswith(("/dev/", "/proc/")) else ""
             teraz[cz[0]] = {"nazwa": nazwa, "log": log_p.replace(" (deleted)", ""),
                             "start": time.time() - t}
     for pid, d in list(_laptop_moje_widziane.items()):
@@ -27366,6 +27386,8 @@ def _laptop_moje_procesy():
             _laptop_moje_skonczone.append(d)
     _laptop_moje_widziane.clear()
     _laptop_moje_widziane.update(teraz)
+    _laptop_moje_wszystkie["t"] = time.time()
+    _laptop_moje_wszystkie["procesy"] = wszystkie
     _laptop_moje_cache["lista"] = sorted(naj.items(), key=lambda x: -x[1])[:8]
     return _laptop_moje_cache["lista"]
 
@@ -27711,11 +27733,13 @@ def termux_run(command):
     if isinstance(lap, dict):
         return lap
     if not lap:
+        _zapisz_kill_zespolu(command_str, "telefon")
         return _plik_jest_na_laptopie(
             _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False),
             command_str)
     _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
+    _zapisz_kill_zespolu(_polecenie_lap, "laptop")
     # v480jt: komenda na laptopie mogła coś uruchomić lub zakończyć
     _laptop_moje_cache["t"] = 0.0
     # v480jg: usuwanie na laptopie oceniamy po komendzie roli, nie po
@@ -57579,6 +57603,324 @@ def _log_juz_czytany(log_path, ostatnia):
     return any(wzor.search(k) for k in komendy)
 
 
+# ============================================================
+# REJESTR PROCESOW (v480kd)
+# ============================================================
+# Uzytkownik 2026-11-01: "rozpoznac, kto i jak wylacza procesy, zeby to
+# zapisac na telefon". Kazdy proces zespolu (telefon i laptop) dostaje
+# w AEL-MINI/druzyna_<n>/procesy.log linie przy starcie i przy koncu, a
+# przy koncu — jak sie skonczyl: sam (wynik w logu), blad w skrypcie,
+# zatrzymal program (straznik pamieci, zamkniecie programu), zatrzymal
+# zespol (kto i jaka komenda), zabil system (logcat Androida / dziennik
+# jadra laptopa) albo "nie wiadomo". To zapis dla uzytkownika; MAIN
+# dostaje linie tylko, gdy proces zabil system albo nie wiadomo, czemu
+# zniknal. Zadnych wiadomosci do DeepSeeka.
+
+# wspolny dla obu druzyn: zatrzymania przez program i komendy kill zespolow
+_ZDARZENIA_PROCESOW = HOME / ".ael_procesy_zdarzenia.jsonl"
+_REJESTR_CO_S = 30
+_rejestr_watek = [None]
+_rejestr_dla_maina = []
+
+
+def _zdarzenie_procesu(**d):
+    """Dopisuje zdarzenie (kto zatrzymal) do wspolnego pliku obu druzyn."""
+    try:
+        d["t"] = time.time()
+        with open(_ZDARZENIA_PROCESOW, "a", encoding="utf-8") as f:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+        if _ZDARZENIA_PROCESOW.stat().st_size > 512 * 1024:
+            linie = _ZDARZENIA_PROCESOW.read_text(encoding="utf-8").splitlines()[-500:]
+            _ZDARZENIA_PROCESOW.write_text("\n".join(linie) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _zdarzenia_od(t0):
+    try:
+        wynik = []
+        for l in _ZDARZENIA_PROCESOW.read_text(encoding="utf-8").splitlines()[-500:]:
+            try:
+                d = json.loads(l)
+            except Exception:
+                continue
+            if float(d.get("t") or 0) >= t0:
+                wynik.append(d)
+        return wynik
+    except Exception:
+        return []
+
+
+def _kto_wykonuje():
+    rola = getattr(_zespol_uruchamia, "rola", None)
+    if rola and rola != "zespół":
+        return _ROLE_DISPLAY_NAME.get(rola, str(rola))
+    if rola:
+        return "zespół"
+    if getattr(_laptop_tl, "zadanie", ""):
+        return "Gemini (zadanie od MAIN-a)"
+    return "MAIN"
+
+
+_KILL_RE = re.compile(r"(?:^|[\s;&|(])(kill|pkill|killall)\b([^;&|\n]*)")
+
+
+def _zapisz_kill_zespolu(komenda, maszyna):
+    """Komenda z kill/pkill/killall — zapamietane, kto i co."""
+    try:
+        if _KILL_RE.search(str(komenda or "")):
+            _zdarzenie_procesu(rodzaj="zespol", maszyna=maszyna, kto=_kto_wykonuje(),
+                               komenda=short(str(komenda), 300), druzyna=_DRUZYNA or "1")
+    except Exception:
+        pass
+
+
+def _kill_trafia(komenda, pid, nazwa, kom):
+    """Czy ta komenda kill/pkill/killall mogla trafic w ten proces."""
+    for m in _KILL_RE.finditer(str(komenda or "")):
+        for tok in shlex.split(m.group(2), posix=True) if m.group(2).count("'") % 2 == 0 and m.group(2).count('"') % 2 == 0 else m.group(2).split():
+            if tok.startswith("-") or not tok:
+                continue
+            if tok.isdigit():
+                if tok == str(pid):
+                    return True
+                continue
+            if "$(" in tok or "`" in tok:
+                return True
+            wz = tok.replace("[", "").replace("]", "")
+            if wz and (wz in kom or wz in nazwa or os.path.splitext(nazwa)[0] == wz):
+                return True
+    return False
+
+
+def _rejestr_plik():
+    if (HOME / "storage" / "shared").exists():
+        return PRZEBIEG_NA_TELEFONIE / "procesy.log"
+    return AGENT_DIR / "procesy.log"
+
+
+def _rejestr_zapisz(linia):
+    try:
+        p = _rejestr_plik()
+        nowy = not p.exists()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            if nowy:
+                f.write("Rejestr procesów drużyny " + (_DRUZYNA or "") + " — kto i jak je kończy "
+                        "(zapisuje program, bez udziału DeepSeeka)\n")
+            f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "  " + linia + "\n")
+        if p.stat().st_size > 2 * 1024 * 1024:
+            linie = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            p.write_text("\n".join(linie[:1] + linie[-5000:]) + "\n", encoding="utf-8")
+        if nowy:
+            try:
+                subprocess.Popen(["termux-media-scan", str(p)], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _rejestr_stan_plik():
+    return HOME / (".ael_procesy_stan_" + (_DRUZYNA or "0") + ".json")
+
+
+_BTIME = [None]
+
+
+def _start_procesu_telefon(pid):
+    try:
+        if _BTIME[0] is None:
+            for l in open("/proc/stat"):
+                if l.startswith("btime"):
+                    _BTIME[0] = int(l.split()[1])
+        with open("/proc/" + str(pid) + "/stat") as fh:
+            st = fh.read()
+        ticks = int(st[st.rindex(")") + 2:].split()[19])
+        return int(_BTIME[0] + ticks / os.sysconf("SC_CLK_TCK"))
+    except Exception:
+        return int(time.time())
+
+
+def _grupa_pid(pid):
+    try:
+        return os.getpgid(int(pid))
+    except Exception:
+        return None
+
+
+def _procesy_druzyny_telefon():
+    """{"telefon:<pid>": {...}} skryptow tej druzyny na telefonie."""
+    wynik = {}
+    try:
+        nasze = _nasi_przodkowie()
+        program = os.path.basename(str(_SCIEZKA_PROGRAMU)) or "agent.py"
+        moja = _DRUZYNA or "1"
+        for wpis in os.listdir("/proc"):
+            if not wpis.isdigit() or int(wpis) in nasze:
+                continue
+            uid, _mb = _status_procesu(wpis)
+            if uid != os.getuid():
+                continue
+            try:
+                with open("/proc/" + wpis + "/cmdline", "rb") as f:
+                    kom = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            except Exception:
+                continue
+            if (not kom or program in kom or kom.startswith("com.") or "pow_helper" in kom
+                    or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup|sleep)\b", kom)):
+                continue
+            k = _KLUCZ_SKRYPTU_RE.search(kom) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", kom)
+            if not k or _druzyna_procesu(wpis) != moja:
+                continue
+            wynik["telefon:" + wpis] = {
+                "nazwa": os.path.basename(k.group(1)), "kom": short(kom, 160),
+                "log": _plik_wyjscia_procesu(int(wpis)) or "",
+                "start": _start_procesu_telefon(wpis), "grupa": _grupa_pid(wpis)}
+    except Exception:
+        pass
+    return wynik
+
+
+def _koniec_logu(maszyna, sciezka, n=4):
+    if not sciezka:
+        return []
+    try:
+        if maszyna == "telefon":
+            with open(sciezka, "rb") as f:
+                try:
+                    f.seek(-4000, 2)
+                except Exception:
+                    pass
+                tekst = f.read().decode("utf-8", "replace")
+        else:
+            r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, "tail -c 4000 " + shlex.quote(sciezka)],
+                               capture_output=True, text=True, timeout=15, errors="replace")
+            tekst = r.stdout or ""
+        return [l.strip() for l in tekst.splitlines() if l.strip()][-n:]
+    except Exception:
+        return []
+
+
+def _zabil_system(maszyna, pid):
+    """Slad w dzienniku systemu, ze system zabil ten proces, albo ""."""
+    try:
+        if maszyna == "telefon":
+            r = subprocess.run(["adb", "-s", _ADB_LOKALNY, "logcat", "-d", "-t", "5000"],
+                               capture_output=True, text=True, timeout=15, errors="replace")
+        else:
+            r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST,
+                               "journalctl -k --since '-30 min' --no-pager 2>/dev/null || dmesg 2>/dev/null"],
+                               capture_output=True, text=True, timeout=15, errors="replace")
+        for l in reversed((r.stdout or "").splitlines()):
+            if re.search(r"(?<!\d)" + str(pid) + r"(?!\d)", l) and re.search(
+                    r"(?i)kill|lowmem|lmk|phantom|oom|out of memory", l):
+                return short(l.strip(), 200)
+    except Exception:
+        pass
+    return ""
+
+
+def _jak_sie_skonczyl(klucz, d, widziany):
+    """(rodzaj, opis): sam / blad / program / zespol / system / nie_wiadomo."""
+    maszyna, pid = klucz.split(":", 1)
+    od = float(d.get("pierwszy") or widziany) - 5
+    for z in reversed(_zdarzenia_od(od)):
+        if z.get("rodzaj") == "program" and z.get("maszyna") == maszyna and (
+                str(z.get("pid")) == pid
+                or (z.get("grupa") and d.get("grupa") and str(z.get("grupa")) == str(d.get("grupa")))):
+            return "program", "zatrzymał program — " + str(z.get("opis") or "")
+    for z in reversed(_zdarzenia_od(widziany - 90)):
+        if (z.get("rodzaj") == "zespol" and z.get("maszyna") == maszyna
+                and str(z.get("druzyna") or "1") == (_DRUZYNA or "1")
+                and _kill_trafia(z.get("komenda"), pid, d.get("nazwa", ""), d.get("kom", ""))):
+            return "zespol", "zatrzymał zespół — " + str(z.get("kto")) + ": " + str(z.get("komenda"))
+    koniec = _koniec_logu(maszyna, d.get("log"))
+    tekst = "\n".join(koniec)
+    if "[program] Zatrzymałem" in tekst:
+        return "program", "zatrzymał program — strażnik pamięci (opis w jego logu)"
+    if re.search(r"Traceback \(most recent call last\)|^\w*(?:Error|Exception)\b|Segmentation fault",
+                 tekst, re.M):
+        return "blad", "błąd w skrypcie: " + short(koniec[-1], 200)
+    sys_slad = _zabil_system(maszyna, pid)
+    if sys_slad:
+        return "system", "zabił system — " + sys_slad
+    if re.search(r"(?m)^(?:.*: )?Killed$", tekst):
+        return "system", ("zabity sygnałem KILL (kill -9), a ani program, ani zespół tego nie zrobił "
+                          "— najpewniej system przy braku pamięci")
+    if koniec:
+        return "sam", "skończył się (ostatnia linia logu: " + short(koniec[-1], 160) + ")"
+    return "nie_wiadomo", ("nie wiadomo — nikt z programu ani zespołu go nie zatrzymał, system nic "
+                           "o nim nie zapisał" + (", a log jest pusty" if d.get("log") else
+                                                   ", a nie pisał do pliku (brak przekierowania > plik)"))
+
+
+def _rejestr_krok(stan):
+    teraz = _procesy_druzyny_telefon()
+    if _laptop_skonfigurowany() and _laptop.get("ok") is True:
+        _laptop_moje_procesy()
+        if time.time() - float(_laptop_moje_wszystkie.get("t") or 0) < 120:
+            for pid, d in (_laptop_moje_wszystkie.get("procesy") or {}).items():
+                teraz["laptop:" + pid] = dict(d)
+        else:
+            # brak swiezego odczytu laptopa — jego procesow nie oceniamy
+            for k, d in stan.items():
+                if k.startswith("laptop:"):
+                    teraz[k] = d
+    elif _laptop_skonfigurowany():
+        for k, d in stan.items():
+            if k.startswith("laptop:"):
+                teraz[k] = d
+    t = time.time()
+    for k, d in teraz.items():
+        stary = stan.get(k)
+        if stary and abs(int(stary.get("start") or 0) - int(d.get("start") or 0)) > 90:
+            stary = None  # ten sam pid, inny proces
+        if not stary:
+            d["pierwszy"] = t
+            _rejestr_zapisz("START   " + k.split(":")[0].ljust(7) + " " + d["nazwa"] + "  — "
+                            + d.get("kom", "") + (("  (log: " + re.sub(r"^/(?:home/[^/]+|data/data/com\.termux/files/home)/", "~/", d["log"]) + ")") if d.get("log") else ""))
+        else:
+            d["pierwszy"] = stary.get("pierwszy", t)
+        d["widziany"] = t
+    for k, d in list(stan.items()):
+        if k in teraz and abs(int(teraz[k].get("start") or 0) - int(d.get("start") or 0)) <= 90:
+            continue
+        rodzaj, opis = _jak_sie_skonczyl(k, d, float(d.get("widziany") or t))
+        trwal = _min_s(max(0, float(d.get("widziany") or t) - float(d.get("start") or t)))
+        _rejestr_zapisz("KONIEC  " + k.split(":")[0].ljust(7) + " " + d.get("nazwa", "?")
+                        + "  po ok. " + trwal + " — " + opis)
+        if rodzaj in ("system", "nie_wiadomo") and not (k.startswith("laptop:") and rodzaj == "nie_wiadomo"):
+            _rejestr_dla_maina.append(
+                "• " + d.get("nazwa", "?") + " (na " + ("laptopie" if k.startswith("laptop:") else "telefonie")
+                + ") przestał działać po ok. " + trwal + " — " + opis + ".")
+    return teraz
+
+
+def _rejestr_petla():
+    try:
+        stan = json.loads(_rejestr_stan_plik().read_text(encoding="utf-8"))
+        if not isinstance(stan, dict):
+            stan = {}
+    except Exception:
+        stan = {}
+    while True:
+        try:
+            stan = _rejestr_krok(stan)
+            _rejestr_stan_plik().write_text(json.dumps(stan, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            log("PROCESY", "Rejestr procesów: " + short(str(e), 200))
+        time.sleep(_REJESTR_CO_S)
+
+
+def zacznij_rejestr_procesow():
+    if _rejestr_watek[0] is not None:
+        return
+    _rejestr_watek[0] = _threading.Thread(target=_rejestr_petla, name="rejestr-procesow", daemon=True)
+    _rejestr_watek[0].start()
+
+
 def _raport_z_tla():
     zdania = []
     _skonczone_przed = len(_linie_tla_skonczone)
@@ -57762,6 +58104,11 @@ def _raport_z_tla():
         if len(_linie_tla_skonczone) != _skonczone_przed:
             _laptop_moje_cache["t"] = 0.0
         _lp = _laptop_moje_procesy()
+        while _rejestr_dla_maina:
+            _l = _rejestr_dla_maina.pop(0)
+            zdania.append(_l)
+            _linie_tla_skonczone.add(_l)
+            _linie_tla_zmienione.add(_l)
         for _l in _laptop_skonczone_linie():
             zdania.append(_l)
             _linie_tla_skonczone.add(_l)
@@ -60308,6 +60655,7 @@ def main():
     zacznij_oddech()
     zacznij_straznika_pamieci()
     zacznij_pilnowanie_laptopa()
+    zacznij_rejestr_procesow()
     _podstaw_sleep_zespolu()
     _podstaw_proot_distro()
 
