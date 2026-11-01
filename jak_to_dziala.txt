@@ -4037,3 +4037,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (~/api_token_2.txt, N znaków)”, albo „BRAK”, gdy plik jest pusty
        lub go nie ma, albo „UWAGA”, gdy w tokenie są spacje lub kilka
        linii. Program sprawdza tylko pliki, nic nie wysyła do DeepSeeka.
+
+288. (v480jy) Użytkownik 2026-11-01: przy pierwszej zwykłej odpowiedzi
+       każdego konta jedna linia „Klucz 1 (abcd…wxyz) odpowiada (pierwsza
+       odpowiedź: MAIN)”, bez żadnego dodatkowego zapytania do DeepSeeka.
+       W rywalizacji drużyna 2 liczy w tle, więc zostawia znacznik
+       ~/.ael_klucz_2_odpowiada, a terminal drużyny 1 pokazuje „Klucz 2
+       (…) odpowiada (drużyna 2)”. Linia startowa z v480jx też ma kawałek
+       klucza (4 pierwsze i 4 ostatnie znaki).

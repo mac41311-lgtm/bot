@@ -3592,7 +3592,7 @@ def init_deepseek():
             return "BRAK (pusty plik albo nie ma ~/" + plik.name + ")"
         if re.search(r"\s", t):
             return "UWAGA — w środku są spacje albo kilka linii (~/" + plik.name + ")"
-        return "OK (~/" + plik.name + ", " + str(len(t)) + " znaków)"
+        return "OK (~/" + plik.name + ", " + _kawalek_klucza(t) + ", " + str(len(t)) + " znaków)"
     log("DEEPSEEK", "Klucz 1: " + _stan_klucza(token, TOKEN_FILE)
         + " | Klucz 2: " + _stan_klucza(token2, TOKEN_FILE_2)
         + " — sprawdzone tylko pliki, bez wysyłania czegokolwiek.")
@@ -6338,12 +6338,52 @@ def _czat_testowy_odpowiada(name):
         return False
 
 
+_klucz_odpowiada = set()
+_klucz_start = time.time()
+# v480jy: druzyna 2 liczy w tle (wyjscie w terminal.log) — znaczy tu swoja
+# odpowiedz, a terminal druzyny 1 pokazuje "Klucz 2 odpowiada"
+_KLUCZ_2_ZNACZNIK = HOME / ".ael_klucz_2_odpowiada"
+
+
+def _kawalek_klucza(t):
+    """Poczatek i koniec tokena (uzytkownik: "i kawalek klucza")."""
+    t = str(t or "")
+    return (t[:4] + "…" + t[-4:]) if len(t) > 12 else "…"
+
+
+def _klucz_2_z_druzyny_2():
+    """Terminal druzyny 1: jedna linia, gdy druzyna 2 dostala odpowiedz."""
+    if _DRUZYNA != "1" or 2 in _klucz_odpowiada:
+        return
+    try:
+        if _KLUCZ_2_ZNACZNIK.stat().st_mtime >= _klucz_start:
+            _klucz_odpowiada.add(2)
+            log("DEEPSEEK", "Klucz 2 (" + _kawalek_klucza(read_text(TOKEN_FILE_2).strip())
+                + ") odpowiada (drużyna 2).")
+    except Exception:
+        pass
+
+
 def _zanotuj_odpowiedz_serwera(name, text):
     """Po kazdej odpowiedzi: 3 bledy serwera z rzedu = 2 h przerwy konta."""
     account = _account_of(name)
     if str(text or "").strip() or not _blad_serwera_w_strumieniu(_poczatek_strumienia):
         if str(text or "").strip():
             _bledy_serwera[account] = 0
+            # v480jy: uzytkownik 2026-11-01 — przy pierwszej zwyklej
+            # odpowiedzi kazdego konta jedna linia, ze klucz dziala (bez
+            # zadnego dodatkowego zapytania)
+            if _DRUZYNA == "2":
+                try:
+                    _KLUCZ_2_ZNACZNIK.touch()
+                except Exception:
+                    pass
+            if account not in _klucz_odpowiada:
+                _klucz_odpowiada.add(account)
+                if account == 1 or _account_tokens.get(2) != _account_tokens.get(1):
+                    log("DEEPSEEK", "Klucz " + str(account) + " ("
+                        + _kawalek_klucza(_account_tokens.get(account)) + ") odpowiada (pierwsza odpowiedź: "
+                        + _ROLE_DISPLAY_NAME.get(name, str(name)) + ").")
         return
     _bledy_serwera[account] = _bledy_serwera.get(account, 0) + 1
     if _bledy_serwera[account] < _BLEDY_SERWERA_PROG:
@@ -53982,6 +54022,7 @@ def run_agent(goal):
         dopisz_do_przebiegu("\n\n--- KROK " + str(step) + " ---")
 
         _poczta_uzytkownika(step)
+        _klucz_2_z_druzyny_2()
 
         try:
             _linie_tla_zmienione.clear()
