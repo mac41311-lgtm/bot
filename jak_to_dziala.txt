@@ -4358,3 +4358,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ma prawdziwy powód zamiast „nie wiadomo” (bieg 2026-11-01 18:26:
      dwa eval_mix_old_prune_L6.py naraz — jeden od MAIN-a, drugi od
      Sędziego, drugi kończył się jako „nie wiadomo”).
+
+324. (v480li) Kilka plików w jednej wypowiedzi: blok z samą ścieżką
+     („# ~/MAIN_1/x.py”) podpisuje blok tuż pod nim i sam nie jest treścią
+     pliku. Podpis w pierwszym komentarzu liczy się tylko wtedy, gdy ten
+     plik jest PIERWSZĄ nazwą w komentarzu — „# b.py — zmienia a.py” to
+     b.py, nie a.py. Bieg 2026-11-01 20:56: do hydraulic_language.py
+     poszedł kod hydraulic_ast_evolve.py, a prawdziwy hydraulic_language.py
+     przepadł.

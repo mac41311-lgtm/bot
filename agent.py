@@ -39750,11 +39750,23 @@ def _blok_dokladnie_dla(text, sciezka):
     # check.py" z "from baselines import main, load_text, ...") i dopiero
     # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
     # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
-    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))):
+    _bloki = list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))
+    for _ib in range(len(_bloki) - 1, -1, -1):
+        m = _bloki[_ib]
 
         kod = _wyrownaj_blok(m.group(2))
 
-        if not kod.strip() or _blok_poprawki(text, m.start()):
+        # v480li: blok z sama sciezka ("# ~/MAIN_1/x.py") tuz nad tym
+        # blokiem podpisuje go (bieg 2026-11-01 20:56, trzy pliki Bartka)
+        _podpis_wyzej = False
+        if _ib > 0:
+            _pop = _bloki[_ib - 1]
+            _kod_pop = _wyrownaj_blok(_pop.group(2))
+            if (not str(text)[_pop.end():m.start()].strip()
+                    and _blok_sam_komentarz(_kod_pop) and _podpis_w_naglowku(_kod_pop, sciezka)):
+                _podpis_wyzej = True
+
+        if not kod.strip() or _blok_poprawki(text, m.start()) or _blok_sam_komentarz(kod):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
@@ -39767,7 +39779,8 @@ def _blok_dokladnie_dla(text, sciezka):
 
         if (
             (
-                _nazwa_nad_blokiem(text, m.start(), sciezka)
+                _podpis_wyzej
+                or _nazwa_nad_blokiem(text, m.start(), sciezka)
                 or _podpis_w_naglowku(kod, sciezka)
             )
             and not _obcy_jezyk_dla(sciezka, m.group(1), kod)
@@ -39794,7 +39807,7 @@ def _blok_podpisany(text, sciezka):
 
         kod = _wyrownaj_blok(m.group(2))
 
-        if not kod.strip() or _blok_poprawki(text, m.start()):
+        if not kod.strip() or _blok_poprawki(text, m.start()) or _blok_sam_komentarz(kod):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
@@ -39966,9 +39979,27 @@ def _podpis_w_naglowku(kod, sciezka):
         if l.strip() and not l.startswith("#!")
     ][:2]
 
+    # v480li: liczy sie PIERWSZA nazwa pliku w komentarzu. Bieg 2026-11-01
+    # 20:56: "# hydraulic_ast_evolve.py — mutuje AST_MUTABLE w
+    # hydraulic_language.py" poszlo na dysk jako hydraulic_language.py
+    # (wzmianka o innym pliku), a prawdziwy hydraulic_language.py zginal.
+    def _pierwsza_nazwa(l):
+        m = re.search(r"(?<![\w.-])([\w.-]+\.[A-Za-z][A-Za-z0-9]{0,4})(?![\w-])",
+                      re.sub(r"^\s*(?:#|//)\s*", "", l).replace("~/", " ").replace("/", " "))
+        return m.group(1) if m else ""
+
     return any(
-        l.startswith(("#", "//")) and wzor.search(l) for l in linie
+        l.startswith(("#", "//")) and wzor.search(l)
+        and _pierwsza_nazwa(l) in ("", nazwa)
+        for l in linie
     )
+
+
+def _blok_sam_komentarz(kod):
+    """v480li: blok z samym komentarzem (np. "# ~/MAIN_1/x.py") to podpis
+    nastepnego bloku, nie tresc pliku."""
+    linie = [l.strip() for l in str(kod or "").splitlines() if l.strip()]
+    return bool(linie) and all(l.startswith(("#", "//")) for l in linie)
 
 
 # v480da: kod autora, ktory sie nie kompiluje, wraca do autora od razu,
