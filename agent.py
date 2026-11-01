@@ -663,6 +663,16 @@ def _za_duzo_watkow(name, args):
         if klucz in _powiedziane_o_watkach:
             return ""
         _powiedziane_o_watkach.add(klucz)
+        if _na_lap:
+            # v480lb: na laptopie stala polowa (v480la) — wiecej watkow nie
+            # zabiera rywalowi, tylko dzieli Wasza polowe na wiecej czesci
+            return (
+                "Program: \"" + short(m.group(0), 60) + "\" (w " + str(name)
+                + ") ustawia " + str(n) + " wątków, a Wasza stała połowa laptopa to ok. "
+                + str(granica) + " z " + str(wszystkie) + " rdzeni. Więcej wątków tego nie "
+                "zwiększy — będą się przepychać w tej samej połowie i zwykle liczą wolniej; "
+                "wpisanie " + str(granica) + " albo usunięcie tego ustawienia wykorzysta ją w pełni."
+            )
         return (
             "Program: \"" + short(m.group(0), 60) + "\" (w " + str(name)
             + ") ustawia " + str(n) + " wątków, a każda drużyna ma połowę "
@@ -26997,14 +27007,54 @@ def zatrzymaj(wolne, swap_wolny, psi, powod):
         pass
     return True
 
+def polowa_pamieci(stan):
+    """v480lb: wycinek druzyny doszedl do swojej polowy pamieci (MemoryHigh)
+    — system ja zwalnia; druzyna dostaje o tym jedno zdanie co 30 min."""
+    import glob
+    for sc in glob.glob("/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/**/ael-druzyna*.slice",
+                        recursive=True):
+        try:
+            d = sc.rsplit("ael-druzyna", 1)[1].split(".")[0]
+            with open(sc + "/memory.events") as f:
+                high = int([l.split()[1] for l in f if l.startswith("high ")][0])
+            with open(sc + "/memory.high") as f:
+                lim = f.read().strip()
+            with open(sc + "/memory.current") as f:
+                cur = int(f.read().strip())
+        except Exception:
+            continue
+        stary = stan.get(sc, high)
+        stan[sc] = high
+        if high <= stary or lim == "max" or time.time() - stan.get(sc + "_t", 0) < 1800:
+            continue
+        stan[sc + "_t"] = time.time()
+        gb = lambda b: str(round(b / 1073741824, 1)).replace(".", ",")
+        tekst = ("Na laptopie Wasze skrypty zajęły całą Waszą połowę pamięci laptopa ("
+                 + gb(int(lim)) + " GB; teraz " + gb(cur) + " GB). Nic nie zostało zatrzymane, ale "
+                 "system je zwalnia, odkładając część ich pamięci na dysk, więc liczą wolniej. "
+                 "Mniej procesów naraz albo mniejsze porcje danych pozwolą im liczyć pełną "
+                 "prędkością.")
+        try:
+            with open(PLIK, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"t": time.time(), "rodzaj": "polowa_pamieci", "druzyna": d,
+                                    "tekst": tekst}, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+
 def main():
     try:
         os.nice(-5)
     except Exception:
         pass
     nisko = 0
+    stan_pol = {}
+    nast_pol = 0
     while True:
         try:
+            if time.time() >= nast_pol:
+                nast_pol = time.time() + 30
+                polowa_pamieci(stan_pol)
             m = meminfo()
             wolne = m.get("MemAvailable", 0)
             sw_all, sw_free = m.get("SwapTotal", 0), m.get("SwapFree", 0)
@@ -27074,6 +27124,15 @@ def _laptop_uwagi_straznika(uwagi):
         d = d if d not in ("", "0") else (_DRUZYNA or "1")
         tekst = str(u.get("tekst") or "")
         if not tekst:
+            continue
+        if u.get("rodzaj") == "polowa_pamieci":
+            # v480lb: nic nie zatrzymano — tylko zdanie dla tej druzyny
+            log("LAPTOP", "Drużyna " + d + ": " + tekst)
+            try:
+                with open(_plik_uwag_pamieci(d), "a", encoding="utf-8") as fh:
+                    fh.write(tekst + "\n")
+            except Exception:
+                pass
             continue
         _zdarzenie_procesu(rodzaj="program", maszyna="laptop", pid=u.get("pid"), druzyna=d,
                            sedzia=bool(u.get("sedzia")),
@@ -48828,8 +48887,9 @@ def main_decide(
     _sekcja("Poprzedni bieg", _blok_zamkniecia)
     _sekcja("Skończone w tle", _tlo_skonczone)
     # v480kv: tu trafiaja tez uwagi strażnika laptopa — naglowek wg tresci
-    _sekcja(("Pamięć laptopa" if "na laptopie" in str(_uwagi_pamieci) and "na telefonie" not in str(_uwagi_pamieci)
-             else "Pamięć telefonu i laptopa" if "na laptopie" in str(_uwagi_pamieci)
+    _up = str(_uwagi_pamieci).lower()
+    _sekcja(("Pamięć laptopa" if "na laptopie" in _up and "na telefonie" not in _up
+             else "Pamięć telefonu i laptopa" if "na laptopie" in _up
              else "Pamięć telefonu"), _uwagi_pamieci)
     _sekcja("Laptop", _laptop_zdanie)
     _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)

@@ -4299,3 +4299,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      1 GB pamięci zostaje dla systemu i pulpitu. Ponad MemoryHigh skrypt
      nie jest zabijany, tylko zwalnia (system odkłada jego pamięć na dysk).
      Opis laptopa dla MAIN-a mówi o stałej połowie.
+
+317. (v480lb) Komunikaty przy stałej połowie laptopa:
+     - komenda LAPTOP: z większą liczbą wątków niż połowa dostaje raz
+       zdanie, że Wasza połowa to ok. 2 z 4 rdzeni i więcej wątków jej nie
+       zwiększy (tylko się przepychają);
+     - gdy skrypty drużyny dojdą do jej połowy pamięci, strażnik na
+       laptopie wysyła jej (co najwyżej raz na 30 min) zdanie, że nic nie
+       zatrzymano, ale system je zwalnia, i co z tym zrobić;
+     - zatrzymanie przez strażnika jak dotąd (punkt 308), pod nagłówkiem
+       „Pamięć laptopa”.
