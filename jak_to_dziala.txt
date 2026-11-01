@@ -4247,3 +4247,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      transport, a skrypt liczy się po stronie laptopa. Wcześniej MAIN
      dostał fałszywe "straznik.py (na telefonie) przestał działać — nie
      wiadomo".
+
+310. (v480ku) Każda komenda programu (MAIN, zespół, Gemini, na telefonie
+     i na laptopie) dostaje numer w zmiennej AEL_KOMENDA. Dziedziczy go
+     wszystko, co ona uruchomi (python, timeout, skrypt .sh, potok | tail).
+     Rejestr procesów rozpoznaje po nim, z której komendy jest proces:
+     - komenda jeszcze trwa → jej procesy należą do niej, koniec ocenia
+       się dopiero, gdy ona się skończy i zapisze kod;
+     - skończyła się na pierwszym planie → MAIN ma już jej wynik, jej
+       procesy nie dają osobnej linii „skończył się / nie wiadomo”;
+     - proces przeżył swoją komendę (puszczony w tło) → osobna linia
+       „skończone w tle” z logiem, jak dotąd.
+     Wcześniej program zgadywał po grupie procesów, nazwie i czasie, więc
+     „timeout … | tail” i „bash x.sh” dawały fałszywe „nie wiadomo”.

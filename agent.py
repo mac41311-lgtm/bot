@@ -25527,6 +25527,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             stderr=bl,
             cwd=_katalog_startu_komendy(command),
             stdin=subprocess.DEVNULL,
+            env=(dict(os.environ, AEL_KOMENDA=_numer_komendy()) if _numer_komendy() else None),
             # v293: wlasna grupa procesow. Dwa powody, oba realne:
             # umiemy dzieki temu policzyc CPU CALEJ roboty (wnuki
             # tez), a przy przerywaniu ubijamy grupe, zamiast
@@ -25914,6 +25915,7 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
             if not _grupa_dalej:
                 _ost_l = [l for l in (stderr if proces.returncode else stdout or stderr).splitlines() if l.strip()]
                 _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="telefon", grupa=proces.pid,
+                                   kid=_numer_komendy(),
                                    druzyna=_DRUZYNA or "1", kod=proces.returncode,
                                    ostatnia=short(_ost_l[-1], 200) if _ost_l else "")
         except Exception:
@@ -27287,6 +27289,7 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
                + " AEL_DRUZYNA=" + (_d_eksport or "0")
+               + ((" AEL_KOMENDA=" + _numer_komendy()) if _numer_komendy() and not limit_s else "")
                + (" AEL_SEDZIA=1" if limit_s else "")
                + " && exec nice -n 5 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
@@ -27669,7 +27672,8 @@ def _laptop_moje_procesy():
               "{ [ -z \"$q\" ] || [ \"$q\" -le 1 ]; } && break; "
               "tr '\\0' ' ' < /proc/$q/cmdline 2>/dev/null | grep -q '/[.]ael_laptop/' && { w=1; break; }; done; "
               "j=0; grep -qz '^AEL_SEDZIA=1$' $p/environ 2>/dev/null && j=1; "
-              "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$j\" \"$o\" "
+              "n=$(tr '\\0' '\\n' < $p/environ 2>/dev/null | sed -n 's/^AEL_KOMENDA=//p' | head -1); "
+              "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$j\" \"${n:--}\" \"$o\" "
               "\"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
@@ -27682,12 +27686,18 @@ def _laptop_moje_procesy():
     teraz = {}
     wszystkie = {}
     for l in (r.stdout or "").splitlines():
-        cz = l.split("\t", 5)
-        if len(cz) < 6:
+        cz = l.split("\t", 6)
+        if len(cz) < 7:
             continue
         # v480kb: [pid, czas, pod komenda programu, Sedzia, log, komenda]
+        # v480ku: + numer komendy programu; proces komendy, ktora jeszcze
+        # trwa, nalezy do niej (jej wynik MAIN dostanie z komenda) — tak jak
+        # przodek .ael_laptop, ktorego ps nie zawsze siega (timeout, .sh, |)
         _sedzia = cz[3] == "1"
-        cz = cz[:3] + cz[4:]
+        _kid = "" if cz[4] == "-" else cz[4]
+        cz = cz[:3] + cz[5:]
+        if _kid and _kid in _komendy_trwajace:
+            cz[2] = "1"
         if "/.ael_laptop/" in cz[4] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[4]):
             continue
         _nz = _nazwa_skryptu(cz[4])
@@ -27702,7 +27712,8 @@ def _laptop_moje_procesy():
         log_p = cz[3] if cz[3].startswith("/") and not cz[3].startswith(("/dev/", "/proc/")) else ""
         if not _sedzia:
             wszystkie[cz[0]] = {"nazwa": nazwa, "log": log_p.replace(" (deleted)", ""),
-                                "start": round(time.time() - t), "kom": short(cz[4].strip(), 160)}
+                                "start": round(time.time() - t), "kom": short(cz[4].strip(), 160),
+                                "kid": _kid}
         if cz[2] != "1" and not _sedzia:
             teraz[cz[0]] = {"nazwa": nazwa, "log": log_p.replace(" (deleted)", ""),
                             "start": time.time() - t}
@@ -28068,16 +28079,35 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
 _komendy_trwajace = {}
 
 
+# v480ku: kazda komenda programu ma swoj numer (AEL_KOMENDA w srodowisku,
+# dziedziczy go wszystko, co uruchomi — python, timeout, .sh, tez na
+# laptopie). Rejestr procesow rozpoznaje po nim, z ktorej komendy jest
+# proces i czy ta komenda jeszcze trwa, zamiast zgadywac po grupie, nazwie
+# i czasie (uzytkownik 2026-11-01: "żeby mieli to poukładane").
+_kid_tl = _threading.local()
+
+
+def _nowy_numer_komendy():
+    return "%x%s" % (int(time.time()), os.urandom(3).hex())
+
+
+def _numer_komendy():
+    return getattr(_kid_tl, "kid", None) or ""
+
+
 def termux_run(command):
     """v480kf: po instalacji/pobieraniu na wierzchu wynik dostaje jedno
     zdanie "podsumowanie": co zainstalowano albo pierwsza linia bledu i co
     z nia zrobic. Reszta w _termux_run_wew."""
-    _klucz_tr = object()
-    _komendy_trwajace[id(_klucz_tr)] = str(command or "")
+    _kid = _nowy_numer_komendy()
+    _kid_przed = getattr(_kid_tl, "kid", None)
+    _kid_tl.kid = _kid
+    _komendy_trwajace[_kid] = str(command or "")
     try:
         wynik = _termux_run_wew(command)
     finally:
-        _komendy_trwajace.pop(id(_klucz_tr), None)
+        _komendy_trwajace.pop(_kid, None)
+        _kid_tl.kid = _kid_przed
     try:
         if (isinstance(wynik, dict) and isinstance(wynik.get("returncode"), int)
                 and _to_instalacja(command) and not wynik.get("podsumowanie")):
@@ -28213,6 +28243,7 @@ def _termux_run_wew(command):
                     except Exception:
                         pass
                 _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="laptop", druzyna=_DRUZYNA or "1",
+                                   kid=_numer_komendy(),
                                    komenda=short(_polecenie_lap, 300) + (" [" + " ".join(sorted(set(_w_sh)))[:300] + "]" if _w_sh else ""),
                                    kod=wynik.get("returncode"),
                                    ostatnia=short(_ost_l[-1], 200) if _ost_l else "")
@@ -58418,6 +58449,18 @@ def _start_procesu_telefon(pid):
         return None
 
 
+def _kid_procesu(pid):
+    """v480ku: numer komendy programu (AEL_KOMENDA) ze srodowiska procesu."""
+    try:
+        with open("/proc/" + str(pid) + "/environ", "rb") as f:
+            for z in f.read().split(b"\0"):
+                if z.startswith(b"AEL_KOMENDA="):
+                    return z[12:].decode("ascii", "replace")
+    except Exception:
+        pass
+    return ""
+
+
 def _grupa_pid(pid):
     try:
         return os.getpgid(int(pid))
@@ -58460,7 +58503,7 @@ def _procesy_druzyny_telefon():
                 _nz += " (sprawdzanie Sędziego)"
             wynik["telefon:" + wpis] = {
                 "nazwa": _nz, "kom": short(kom, 160),
-                "log": _lg,
+                "log": _lg, "kid": _kid_procesu(wpis),
                 "start": _start_procesu_telefon(wpis), "grupa": _grupa_pid(wpis)}
     except Exception:
         pass
@@ -58529,7 +58572,11 @@ def _jak_sie_skonczyl(klucz, d, widziany):
     for z in reversed(_zdarzenia_od(od)):
         if (z.get("rodzaj") == "koniec_komendy" and z.get("maszyna") == maszyna
                 and str(z.get("druzyna") or "1") == (_DRUZYNA or "1")
-                and ((d.get("grupa") and str(z.get("grupa")) == str(d.get("grupa")))
+                # v480ku: ta sama komenda programu, a skonczyla sie, gdy
+                # proces jeszcze byl (nie przezyl jej — nie puszczony w tlo)
+                and ((d.get("kid") and z.get("kid") == d.get("kid")
+                      and float(z.get("t") or 0) >= widziany - 5)
+                     or (d.get("grupa") and str(z.get("grupa")) == str(d.get("grupa")))
                      or (maszyna == "laptop" and _nazwa_skr
                          and re.search(r"(?<![\w.-])" + re.escape(_nazwa_skr) + r"(?![\w-])",
                                        str(z.get("komenda") or ""))
@@ -58617,6 +58664,11 @@ def _rejestr_krok(stan):
         d["widziany"] = t
     for k, d in list(stan.items()):
         if k in teraz and abs(int(teraz[k].get("start") or 0) - int(d.get("start") or 0)) <= 90:
+            continue
+        # v480ku: jego komenda jeszcze trwa — koniec ocenimy, gdy ona sie
+        # skonczy i zapisze kod (np. python w "timeout … | tail" albo w .sh)
+        if d.get("kid") and d.get("kid") in _komendy_trwajace and k not in teraz:
+            teraz[k] = d
             continue
         rodzaj, opis = _jak_sie_skonczyl(k, d, float(d.get("widziany") or t))
         trwal = _min_s(max(0, float(d.get("widziany") or t) - float(d.get("start") or t)))
