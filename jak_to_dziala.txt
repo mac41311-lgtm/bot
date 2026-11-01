@@ -4125,3 +4125,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - ls/cat ... 2>/dev/null bez wyniku (kod 1/2, pusty stderr): program
        bierze nazwy z komendy i sprawdza laptopa, tak jak przy zwykłym
        "No such file" (v480kb/kc).
+
+295. (v480kf) Postęp instalacji i pobierania (użytkownik 2026-11-01), na
+     laptopie i na telefonie: pip/apt/pkg/conda/npm install, wget, curl -o,
+     git clone, huggingface download.
+     - W trakcie: zamiast poszarpanego paska jedna linia, np. "38% — pobiera
+       torch-2.4.1 (797.1 MB), 310.2/797.1 MB" — w terminalu ("Leci …") i w
+       "Dalej w tle" dla MAIN-a. Działa też, gdy komenda poszła w tło bez
+       "> log" (program czyta wyjście wątku). MAIN budzi się jak przy
+       innych procesach: co 25%, przy błędzie, przy końcu.
+     - Na koniec jedno zdanie: "Zainstalowane: numpy-2.1.0 torch-2.4.1."
+       albo "Instalacja nie wyszła: <pierwsza linia błędu>. Co zrobić: …"
+       (zła nazwa/wersja, externally-managed, brak miejsca, brak
+       uprawnień, sieć, budowanie ze źródeł, nieznany pakiet apt).

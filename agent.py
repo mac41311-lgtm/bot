@@ -25423,6 +25423,12 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
     bl = tempfile.NamedTemporaryFile(
         mode="w+", suffix=".err", delete=False, encoding="utf-8"
     )
+    # v480kf: komenda, ktora pojdzie w tlo jako watek (np. pip install na
+    # laptopie), ma postep tylko w tych plikach — watek je zapamietuje
+    try:
+        _threading.current_thread().ael_wyjscie = (wy.name, bl.name)
+    except Exception:
+        pass
 
     # v326: skrypt, ktory zabija sam siebie.
     #
@@ -25700,6 +25706,12 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
                     or _ostatnia_tresciwa_linia(wy.name)
                     or ""
                 )
+                # v480kf: instalacja/pobieranie — co sie pobiera i ile,
+                # zamiast poszarpanego paska postepu
+                if _to_instalacja(command):
+                    _inst = _postep_instalacji(_ogon_logu(wy.name)[1] + _ogon_logu(bl.name)[1])
+                    if _inst:
+                        na_czym = _inst
 
                 # v298: to samo zdanie w kolko to nie meldunek.
                 #
@@ -27743,6 +27755,24 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
 
 
 def termux_run(command):
+    """v480kf: po instalacji/pobieraniu na wierzchu wynik dostaje jedno
+    zdanie "podsumowanie": co zainstalowano albo pierwsza linia bledu i co
+    z nia zrobic. Reszta w _termux_run_wew."""
+    wynik = _termux_run_wew(command)
+    try:
+        if (isinstance(wynik, dict) and isinstance(wynik.get("returncode"), int)
+                and _to_instalacja(command) and not wynik.get("podsumowanie")):
+            _p = _podsumowanie_instalacji(str(wynik.get("stdout") or "") + "\n"
+                                          + str(wynik.get("stderr") or ""), wynik.get("returncode"))
+            if _p:
+                wynik["podsumowanie"] = _p
+                log("TERMUX", _p)
+    except Exception:
+        pass
+    return wynik
+
+
+def _termux_run_wew(command):
     """
     v480ix: komenda z przedrostkiem LAPTOP: idzie przez ssh na laptopa
     (patrz _na_laptopa); reszta bez zmian (_termux_run_lokalnie).
@@ -37467,7 +37497,7 @@ def _procesy_z_procentem(procesy=None):
                 continue
             _kom = str(r.get("komenda") or "")
             _cwd = _cwd_rzeczy(r)
-            _pz = _plik_z_przekierowania(_kom, _cwd)
+            _pz = _plik_z_przekierowania(_kom, _cwd) or _plik_watku_instalacji(r, _kom)
             if not _pz or os.path.realpath(_pz) in sledzone:
                 continue
             _pr = _procent_z_logu(_pz, _kom, _cwd, r.get("start"))
@@ -37502,7 +37532,7 @@ def _logi_liczace_w_tle():
                 continue
             _kom = str(r.get("komenda") or "")
             _cwd = _cwd_rzeczy(r)
-            _pz = _plik_z_przekierowania(_kom, _cwd)
+            _pz = _plik_z_przekierowania(_kom, _cwd) or _plik_watku_instalacji(r, _kom)
             if _pz:
                 wynik[os.path.realpath(_pz)] = {"kom": _kom, "cwd": _cwd, "start": r.get("start"), "plik": _pz}
     except Exception:
@@ -38235,10 +38265,13 @@ def _czekanie_blok(czesci=None):
                     r["anulowane"] = True
                     _w_tle.remove(r)
                     continue
+                # v480kf: instalacja/pobieranie — co sie pobiera i ile
+                _inst = _postep_instalacji_rzeczy(r) if r["rodzaj"] != "czekanie" else ""
                 linie.append(
                     "• " + co.capitalize() + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
                     + ": " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
-                    + " — " + (_zostalo.lstrip(", ") if _zostalo else "trwa " + _min_s(teraz - r["start"])) + "."
+                    + " — " + ((_inst + "; ") if _inst else "")
+                    + (_zostalo.lstrip(", ") if _zostalo else "trwa " + _min_s(teraz - r["start"])) + "."
                 )
     if linie:
         trwa.append("\n".join(linie))
@@ -57363,6 +57396,18 @@ def _log_procesu_w_tle(pid):
     return "", 0.0
 
 
+def _ogon_logu_tekst(sciezka, ile_bajtow=40000):
+    """v480kf: surowa koncowka pliku (bez obcinania pustych/\r)."""
+    try:
+        with open(sciezka, "rb") as f:
+            f.seek(0, 2)
+            r = f.tell()
+            f.seek(max(0, r - ile_bajtow))
+            return f.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
 def _ogon_logu(sciezka, ile_bajtow=6000):
     try:
         with open(sciezka, "rb") as f:
@@ -57444,10 +57489,209 @@ def _razem_z_kodu(komenda, cwd=None, jedn=None):
     return None
 
 
+# v480kf: uzytkownik 2026-11-01 — instalacja/pobieranie (na laptopie i na
+# telefonie): co jakis czas jedna linia, co sie pobiera i ile, tylko gdy
+# sie zmienilo; na koniec co zainstalowano albo pierwsza linia bledu i co
+# z nia zrobic. Paski postepu (\r) zbiera w liczbe.
+_INSTALACJA_RE = re.compile(
+    r"(?:^|[;&|(]\s*|\bLAPTOP:\s*|\s)(?:sudo\s+)?(?:"
+    r"(?:python3?\s+-m\s+)?pip3?\s+(?:install|download)\b|uv\s+pip\s+install\b|"
+    r"apt(?:-get)?\s+(?:install|upgrade|update)\b|pkg\s+(?:install|upgrade|update)\b|"
+    r"conda\s+install\b|npm\s+(?:install|i)\b|wget\b|curl\b[^\n;&|]*\s-(?:\w*[oO])\b|"
+    r"git\s+(?:clone|pull|lfs)\b|huggingface-cli\s+download\b|hf\s+download\b|aria2c\b)", re.I)
+_ROZMIAR_RE = r"\d+(?:[.,]\d+)?\s*[kKMGT]?i?B"
+_PROC_LINIA_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:[.,]\d)?)\s?%")
+_PARA_ROZMIARU_RE = re.compile(r"(\d+(?:[.,]\d+)?\s*[kKMGT]?i?B?)\s*/\s*(" + _ROZMIAR_RE + ")")
+_PIP_POBIERA_RE = re.compile(r"^\s*(?:Downloading|Collecting|Obtaining)\s+(\S+)(?:\s*\((" + _ROZMIAR_RE + r")\))?")
+_ETAP_RE = re.compile(
+    r"^\s*(?:(Installing collected packages):\s*(.*)|(Building wheels? for)\s+(\S+)|"
+    r"(Unpacking)\s+(\S+)|(Setting up)\s+(\S+)|(Get):\d+\s+\S+\s+\S+\s+\S+\s+(\S+)|"
+    r"(Receiving objects|Resolving deltas|Updating files|Filtering content)\b(.*))")
+
+
+def _to_instalacja(komenda):
+    return bool(_INSTALACJA_RE.search(" " + str(komenda or "")))
+
+
+def _postep_instalacji(linie):
+    """v480kf: "41% — pobiera torch-2.4.1 (797.1 MB), 310/797 MB" albo ""."""
+    try:
+        linie = [l for l in list(linie or [])[-60:] if l.strip()]
+        if not linie:
+            return ""
+        co = rozmiar = etap = ""
+        pakiety = 0
+        for l in linie:
+            m = _PIP_POBIERA_RE.match(l)
+            if m:
+                if l.lstrip().startswith("Collecting"):
+                    pakiety += 1
+                nazwa = m.group(1)
+                if nazwa.startswith("http"):
+                    nazwa = nazwa.rsplit("/", 1)[-1]
+                # torch-2.4.1-cp312-cp312-manylinux1_x86_64.whl -> torch-2.4.1
+                nazwa = re.sub(r"^([\w.]+-[\w.!+]+?)-(?:cp|py)\d.*\.whl$", r"\1", nazwa)
+                nazwa = re.sub(r"\.tar\.gz$", "", nazwa)
+                co, rozmiar, etap = nazwa, (m.group(2) or ""), ""
+                continue
+            m = _ETAP_RE.match(l)
+            if m:
+                g = [x for x in m.groups() if x is not None]
+                if g[0] == "Installing collected packages":
+                    etap = "instaluje: " + short(g[1], 120)
+                elif g[0].startswith("Building"):
+                    etap = "buduje " + g[1]
+                elif g[0] == "Unpacking":
+                    etap = "rozpakowuje " + g[1]
+                elif g[0] == "Setting up":
+                    etap = "konfiguruje " + g[1]
+                elif g[0] == "Get":
+                    co, rozmiar, etap = g[1], "", ""
+                else:
+                    _m2 = re.search(r"\((\d+/\d+)\)", g[1] if len(g) > 1 else "")
+                    etap = {"Receiving objects": "pobiera obiekty", "Resolving deltas": "składa zmiany",
+                            "Updating files": "zapisuje pliki", "Filtering content": "pobiera duże pliki"
+                            }.get(g[0], g[0]) + ((" " + _m2.group(1)) if _m2 else "")
+        ost = linie[-1]
+        proc = ""
+        para = ""
+        # curl bez terminala: "% Total % Received ... Time Left Speed"
+        mc = re.match(r"\s*(\d{1,3})\s+(\d+(?:\.\d+)?[kMG]?)\s+(\d{1,3})\s+(\d+(?:\.\d+)?[kMG]?)\s+\d+\s+\d+\s+\S+\s+\S+\s+[\d:-]+\s+[\d:-]+\s+([\d:-]+)\s+(\S+)", ost)
+        if mc and int(mc.group(3)) <= 100:
+            return short(mc.group(3) + "% — pobiera" + ((" " + co) if co else "") + ", " + mc.group(4) + "B/" + mc.group(2)
+                         + "B, " + mc.group(6) + "B/s" + (", zostało " + mc.group(5) if "-" not in mc.group(5) else ""), 220)
+        m = _PROC_LINIA_RE.search(ost)
+        if m and float(m.group(1).replace(",", ".")) <= 100:
+            proc = m.group(1).replace(",", ".").split(".")[0]
+        mp = _PARA_ROZMIARU_RE.search(ost)
+        if mp:
+            para = re.sub(r"\s+", " ", mp.group(1).strip() + "/" + mp.group(2).strip())
+        if mp and not proc:
+            try:
+                _j = lambda t: re.sub(r"[\d.,\s]", "", t) or "B"
+                _a, _b = mp.group(1), mp.group(2)
+                if _j(_a) == _j(_b) or _j(_a) == "B" and re.match(r"[\d.,]+\s*$", _a):
+                    _x = float(re.match(r"[\d.,]+", _a).group(0).replace(",", "."))
+                    _y = float(re.match(r"[\d.,]+", _b).group(0).replace(",", "."))
+                    if 0 < _y and _x <= _y:
+                        proc = str(int(100 * _x / _y))
+            except Exception:
+                pass
+        if not (co or etap or proc):
+            return ""
+        tekst = (proc + "% — ") if proc else ""
+        if etap:
+            tekst += etap
+        elif co:
+            tekst += "pobiera " + co + ((" (" + rozmiar + ")") if rozmiar else "")
+        else:
+            tekst += "pobiera"
+        if para:
+            tekst += ", " + para
+        if pakiety > 1 and not etap:
+            tekst += ", pakiet " + str(pakiety)
+        return short(tekst, 220)
+    except Exception:
+        return ""
+
+
+_INSTALACJA_RADY = (
+    (re.compile(r"No matching distribution found for (\S+)|Could not find a version that satisfies the requirement (\S+)", re.I),
+     "pip nie ma takiej wersji dla tego Pythona i procesora — sprawdźcie nazwę, zdejmijcie numer wersji "
+     "albo sprawdźcie dostępne: pip index versions <nazwa>."),
+    (re.compile(r"externally-managed-environment", re.I),
+     "Python systemu nie pozwala instalować globalnie — użyjcie venv (python3 -m venv ~/venv && ~/venv/bin/pip install …) "
+     "albo pip install --user."),
+    (re.compile(r"No space left on device", re.I),
+     "brak miejsca na dysku — sprawdźcie df -h i usuńcie własne niepotrzebne pliki (np. pip cache purge)."),
+    (re.compile(r"Permission denied|are you root|EACCES", re.I),
+     "brak uprawnień — bez sudo; instalujcie do siebie (pip install --user albo venv)."),
+    (re.compile(r"Could not resolve host|Temporary failure in name resolution|Connection (?:timed out|refused|reset)|Read timed out", re.I),
+     "brak połączenia z siecią albo serwer nie odpowiada — spróbujcie ponownie za chwilę."),
+    (re.compile(r"Failed building wheel|error: command .* failed|subprocess-exited-with-error", re.I),
+     "pakiet nie zbudował się ze źródeł — poszukajcie gotowej wersji (inna wersja pakietu) albo doinstalujcie kompilator/nagłówki."),
+    (re.compile(r"Unable to locate package|E: Package .* has no installation candidate", re.I),
+     "menedżer pakietów nie zna tej nazwy — sprawdźcie nazwę (apt search / pkg search)."),
+)
+
+
+def _plik_watku_instalacji(r, kom):
+    """v480kf: plik wyjscia watku instalacji/pobierania (w tle bez "> log")
+    — z niego program bierze postep i budzi MAIN-a co 25% / przy bledzie."""
+    try:
+        if not _to_instalacja(kom):
+            return None
+        wy, bl = getattr(r.get("watek"), "ael_wyjscie", (None, None))
+        if re.search(r"\b(?:curl|wget|aria2c|git)\b", kom) and bl and os.path.getsize(bl) > 0:
+            return bl
+        return wy if wy and os.path.exists(wy) else None
+    except Exception:
+        return None
+
+
+def _postep_instalacji_rzeczy(r):
+    """v480kf: postep instalacji komendy, ktora liczy w tle jako watek
+    (wyjscie w plikach tymczasowych watku) albo pisze do pliku."""
+    try:
+        kom = str(r.get("komenda") or "")
+        if not _to_instalacja(kom):
+            return ""
+        pliki = list(getattr(r.get("watek"), "ael_wyjscie", ()) or ())
+        _pz = _plik_z_przekierowania(kom, _cwd_rzeczy(r))
+        if _pz:
+            pliki.append(_pz)
+        linie = []
+        for p in pliki:
+            linie += _ogon_logu(p)[1]
+        return _postep_instalacji(linie)
+    except Exception:
+        return ""
+
+
+def _podsumowanie_instalacji(tekst, kod):
+    """v480kf: na koniec instalacji jedno zdanie: co zainstalowano albo
+    pierwsza prawdziwa linia bledu i co z nia zrobic. "" gdy nic nie
+    rozpoznano."""
+    try:
+        linie = [([c for c in l.split("\r") if c.strip()] or [""])[-1].strip()
+                 for l in str(tekst or "").split("\n")]
+        linie = [l for l in linie if l]
+        if kod == 0:
+            for l in reversed(linie):
+                m = re.match(r"Successfully installed\s+(.+)", l)
+                if m:
+                    return "Zainstalowane: " + short(m.group(1), 300) + "."
+            ustaw = [re.match(r"Setting up\s+(\S+)", l).group(1) for l in linie if re.match(r"Setting up\s+\S+", l)]
+            if ustaw:
+                return "Zainstalowane: " + short(", ".join(ustaw[-12:]), 300) + "."
+            juz = [l for l in linie if l.startswith("Requirement already satisfied")]
+            if juz and not any(l.startswith(("Collecting", "Downloading")) for l in linie):
+                return "Nic nowego — wszystko było już zainstalowane (pakietów: " + str(len(juz)) + ")."
+            zap = [l for l in linie if re.search(r"saved \[|‘.+’ saved|100%", l)]
+            if zap:
+                return "Pobrane: " + short(zap[-1], 200) + "."
+            return ""
+        blad = next((l for l in linie if re.match(r"(?:ERROR|E|error|fatal|curl: \(\d+\)|wget: )[:\s]", l)), "")
+        if not blad:
+            blad = next((l for l in reversed(linie) if _BLAD_W_LOGU_RE.search(l)), "")
+        caly = "\n".join(linie[-200:])
+        rada = next((r for wz, r in _INSTALACJA_RADY if wz.search(caly)), "")
+        if not (blad or rada):
+            return ""
+        return ("Instalacja nie wyszła" + (": " + short(blad, 220) if blad else "") + "."
+                + (" Co zrobić: " + rada if rada else ""))
+    except Exception:
+        return ""
+
+
 def _postep_z_logu(sciezka, linie, start=None, komenda=None, cwd=None):
     """v480gr/gy: "17% — iter 5000 z 29115, ok. 9 iter/s, do końca ok. 44 min"
     albo "" gdy w logu nie ma licznika."""
     try:
+        if komenda and _to_instalacja(komenda):
+            _inst = _postep_instalacji(linie)
+            if _inst:
+                return _inst
         wartosc = razem = jedn = None
         for l in reversed(list(linie or [])[-40:]):
             # "steps=2000" w naglowku to liczba calkowita, nie postep
@@ -58025,8 +58269,12 @@ def _raport_z_tla():
                     (bledy[-6:] + ["…"] + linie[-4:])
                     if bledy and len(linie) > 10 else linie[-10:]
                 )
+            _podsum_inst = ""
+            if log_path and _to_instalacja(str(getattr(proces, "args", ""))):
+                _podsum_inst = _podsumowanie_instalacji(_ogon_logu_tekst(log_path), kod)
             _l = (
                 "• " + _nazwa_w_tle(str(getattr(proces, "args", ""))) + " (proces " + str(pid) + ") " + jak
+                + ((" " + _podsum_inst) if _podsum_inst else "")
                 + (", trwał " + trwa if trwa else "")
                 + (". Log " + _sciezka_od_domu(log_path) + " (" + str(rozmiar) + " B)"
                    if log_path else "")
