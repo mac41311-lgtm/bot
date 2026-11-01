@@ -3585,6 +3585,18 @@ def init_deepseek():
     _account_tokens[1] = token
     _account_tokens[2] = token2 or token
 
+    # v480jx: uzytkownik 2026-11-01 — na starcie krotko, czy klucze sa w
+    # plikach; tylko odczyt plikow, bez zadnej wiadomosci do DeepSeeka
+    def _stan_klucza(t, plik):
+        if not t:
+            return "BRAK (pusty plik albo nie ma ~/" + plik.name + ")"
+        if re.search(r"\s", t):
+            return "UWAGA — w środku są spacje albo kilka linii (~/" + plik.name + ")"
+        return "OK (~/" + plik.name + ", " + str(len(t)) + " znaków)"
+    log("DEEPSEEK", "Klucz 1: " + _stan_klucza(token, TOKEN_FILE)
+        + " | Klucz 2: " + _stan_klucza(token2, TOKEN_FILE_2)
+        + " — sprawdzone tylko pliki, bez wysyłania czegokolwiek.")
+
     if token2:
         log(
             "DEEPSEEK",

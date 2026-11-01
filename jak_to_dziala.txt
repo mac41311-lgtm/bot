@@ -4031,3 +4031,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        z agent.py. Oba to tylko ostrzeżenia Pythona, nie błędy. Pierwsze
        jest wyciszone w samym programie (komendy zespołu ostrzeżenia
        widzą normalnie), drugie poprawione w kodzie.
+
+287. (v480jx) Użytkownik 2026-11-01: na starcie programu jedna linia
+       „Klucz 1: OK (~/api_token.txt, N znaków) | Klucz 2: OK
+       (~/api_token_2.txt, N znaków)”, albo „BRAK”, gdy plik jest pusty
+       lub go nie ma, albo „UWAGA”, gdy w tokenie są spacje lub kilka
+       linii. Program sprawdza tylko pliki, nic nie wysyła do DeepSeeka.
