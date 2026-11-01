@@ -4283,7 +4283,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      laptop jest wolny, liczą tak samo szybko, a gdy użytkownik z niego
      korzysta (pulpit, przeglądarka), ustępują mu i laptop się nie zacina.
 
-315. (v480kz) Laptop dzielony uczciwie po połowie, bez ograniczania:
+315. (v480kz, zastąpione przez 316 — stała połowa) Laptop dzielony po połowie:
      każda drużyna liczy we własnym wycinku systemd (ael-druzyna1.slice,
      ael-druzyna2.slice) o tej samej wadze procesora. Gdy liczą obie,
      każda dostaje połowę, niezależnie od tego, ile wątków i procesów
@@ -4309,3 +4309,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        zatrzymano, ale system je zwalnia, i co z tym zrobić;
      - zatrzymanie przez strażnika jak dotąd (punkt 308), pod nagłówkiem
        „Pamięć laptopa”.
+
+318. (v480lc) Porządki po zmianach z 1.11: usunięte czytanie skryptów .sh
+     z dysku przy końcu komendy na laptopie (zastąpił je numer komendy,
+     punkt 310); strażnik laptopa uznaje nacisk pamięci/pełny swap za brak
+     pamięci dopiero poniżej 1 GB wolnej (zapas systemu z punktu 316), żeby
+     nie zabijał skryptu tylko dlatego, że obie drużyny zajmują swoje
+     połowy; opisy 315/316 bez sprzeczności.

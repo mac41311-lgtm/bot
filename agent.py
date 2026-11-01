@@ -26913,7 +26913,10 @@ _LAPTOP_STRAZNIK_PY = r'''# AEL: straznik pamieci laptopa (v480ks) — dziala na
 # gdy pamieci braknie: z druzyny, ktora zajmuje wiecej (rowne szanse), jej
 # najwiekszy. Uwage dopisuje do wyjscia procesu i do ~/.ael_laptop_straznik.jsonl.
 import os, time, json, signal
-PROG_MB, KRYT_MB, PSI_PROG, ZAPAS_MB = 500, 250, 25.0, 1500
+# ZAPAS_MB (v480lc): ponizej tego nacisk/swap licza sie jako brak pamieci;
+# 1000 = zapas systemu z polowek druzyn (v480la) — gdy obie druzyny zajmuja
+# swoje polowy, ich wlasne zwalnianie (MemoryHigh) nie jest powodem do zabijania
+PROG_MB, KRYT_MB, PSI_PROG, ZAPAS_MB = 500, 250, 25.0, 1000
 PLIK = os.path.expanduser("~/.ael_laptop_straznik.jsonl")
 
 def meminfo():
@@ -27468,9 +27471,9 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                # v480kz: uczciwie po polowie bez limitu (uzytkownik 2026-11-01:
                # "po połowie cały laptop, ale podzielony uczciwie", "nie chcę
                # ich ograniczać"). Kazda druzyna ma wlasny wycinek systemd
-               # (cgroup) o tej samej wadze procesora: gdy licza obie, kazda
-               # dostaje polowe niezaleznie od liczby watkow i procesow; gdy
-               # liczy jedna, ma caly laptop. Bez systemd --user — jak dotad.
+               # (cgroup); od v480la ze stala polowa (CPUQuota, MemoryHigh —
+               # nizej), niezaleznie od liczby watkow i procesow. Bez
+               # systemd --user — jak dotad, bez podzialu.
                # v480la: "Nie po połowie mają zawsze" — stała połowa: każda
                # drużyna co najwyżej 45% procesora laptopa (CPUQuota
                # wycinka), 10% zostaje dla systemu i pulpitu.
@@ -28440,21 +28443,11 @@ def _termux_run_wew(command):
             if isinstance(wynik.get("returncode"), int) and wynik.get("returncode") != 255:
                 _ost_l = [l for l in str((wynik.get("stderr") if wynik.get("returncode") else None)
                                          or wynik.get("stdout") or "").splitlines() if l.strip()]
-                # v480ko: skrypty .py uruchamiane przez .sh z komendy (kopia
-                # na telefonie w folderze druzyny) — np. "bash sprawdz_old.sh"
-                # puszcza eval_mix_old.py
-                _w_sh = []
-                for _sh in re.findall(r"[\w./~-]+\.sh\b", _polecenie_lap)[:3]:
-                    try:
-                        _psh = (Path(os.path.expanduser(_sh)) if _sh.startswith(("~", "/"))
-                                else _folder_druzyny(_DRUZYNA or "1") / _sh)
-                        if _psh.is_file() and _psh.stat().st_size < 200000:
-                            _w_sh += re.findall(r"[\w.-]+\.py\b", _psh.read_text(encoding="utf-8", errors="replace"))
-                    except Exception:
-                        pass
+                # v480lc: skrypty z .sh rozpoznaje numer komendy (v480ku) —
+                # czytanie .sh z dysku (v480ko) usuniete
                 _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="laptop", druzyna=_DRUZYNA or "1",
                                    kid=_numer_komendy(),
-                                   komenda=short(_polecenie_lap, 300) + (" [" + " ".join(sorted(set(_w_sh)))[:300] + "]" if _w_sh else ""),
+                                   komenda=short(_polecenie_lap, 300),
                                    kod=wynik.get("returncode"),
                                    ostatnia=short(_ost_l[-1], 200) if _ost_l else "")
         except Exception:
