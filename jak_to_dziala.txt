@@ -4138,3 +4138,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        albo "Instalacja nie wyszła: <pierwsza linia błędu>. Co zrobić: …"
        (zła nazwa/wersja, externally-managed, brak miejsca, brak
        uprawnień, sieć, budowanie ze źródeł, nieznany pakiet apt).
+
+296. (v480kg) Rejestr procesów (procesy.log): komenda, która skończyła się
+     w programie (na wierzchu albo w tle jako wątek), zapisuje swój kod
+     wyjścia i ostatnią linię. Krótki skrypt bez "> log" dostaje teraz
+     "skończył się sam, kod 0 (ostatnia linia: …)" albo "skończył się z
+     kodem N", a nie "nie wiadomo" (bieg 2026-11-01 09:42). MAIN nie
+     dostaje już przez to zbędnej linii o "nie wiadomo".

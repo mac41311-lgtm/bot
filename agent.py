@@ -25855,6 +25855,24 @@ def _uruchom_z_podgladem(command, limit, started, gadaj=None):
 
         minut = int((datetime.now() - started).total_seconds() // 60)
 
+        # v480kg: rejestr procesow (procesy.log) — komenda skonczona tutaj
+        # ma znany kod wyjscia; bez tego krotkie skrypty bez "> log" dostawaly
+        # "nie wiadomo" (bieg 2026-11-01 09:42, druzyna 1) i linie do MAIN-a.
+        # Tylko gdy po powloce nic z jej grupy nie zostalo.
+        try:
+            try:
+                os.killpg(proces.pid, 0)
+                _grupa_dalej = True
+            except ProcessLookupError:
+                _grupa_dalej = False
+            if not _grupa_dalej:
+                _ost_l = [l for l in (stderr if proces.returncode else stdout or stderr).splitlines() if l.strip()]
+                _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="telefon", grupa=proces.pid,
+                                   druzyna=_DRUZYNA or "1", kod=proces.returncode,
+                                   ostatnia=short(_ost_l[-1], 200) if _ost_l else "")
+        except Exception:
+            pass
+
         if gadaj:
             log(
                 "TERMUX",
@@ -58129,6 +58147,17 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                 and str(z.get("druzyna") or "1") == (_DRUZYNA or "1")
                 and _kill_trafia(z.get("komenda"), pid, d.get("nazwa", ""), d.get("kom", ""))):
             return "zespol", "zatrzymał zespół — " + str(z.get("kto")) + ": " + str(z.get("komenda"))
+    # v480kg: komenda skonczyla sie w programie ze znanym kodem wyjscia
+    for z in reversed(_zdarzenia_od(od)):
+        if (z.get("rodzaj") == "koniec_komendy" and z.get("maszyna") == maszyna
+                and d.get("grupa") and str(z.get("grupa")) == str(d.get("grupa"))):
+            _kod = z.get("kod")
+            _ost = (" (ostatnia linia: " + short(str(z.get("ostatnia")), 160) + ")") if z.get("ostatnia") else ""
+            if _kod == 0:
+                return "sam", "skończył się sam, kod 0" + _ost
+            if isinstance(_kod, int) and _kod in (-9, 137):
+                break  # KILL — sprawdzamy dalej (system albo ktos)
+            return "blad", "skończył się z kodem " + str(_kod) + _ost
     koniec = _koniec_logu(maszyna, d.get("log"))
     tekst = "\n".join(koniec)
     if "[program] Zatrzymałem" in tekst:
