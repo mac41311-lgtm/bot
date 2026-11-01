@@ -26992,6 +26992,21 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
     # programu — nikt nie wiedzial, kiedy sie skonczyl. Bez "&" ssh trwa,
     # az proces sie skonczy: po 2 min program sam przenosi to w tlo, jak
     # na telefonie (lista "Dalej w tle", wynik i kod wyjscia na koniec).
+    # v480ki: komenda na laptopie startuje juz w ~/MAIN_n, wiec wzgledne
+    # "MAIN_n/..." albo "cd MAIN_n" trafialo w ~/MAIN_n/MAIN_n (bieg
+    # 2026-11-01 09:49, druzyna 1: "mkdir -p MAIN_1/log && cd MAIN_1 && nohup
+    # … >log/x.log" — log w ~/MAIN_1/MAIN_1/log, nikt go potem nie znalazl).
+    # Gdy takiego podfolderu nie ma, to znaczy folder druzyny: ~/MAIN_n.
+    try:
+        _fd = _laptop_folder()
+        if _fd:
+            polecenie = re.sub(r"(\bcd\s+)" + re.escape(_fd) + r"/?(?=\s|$|;|&|\))",
+                               lambda m: m.group(1) + "~/" + _fd, polecenie)
+            polecenie = re.sub(r"(?<![\w/~.$'-])(\"?)" + re.escape(_fd) + r"/",
+                               lambda m: m.group(1) + ("$HOME/" if m.group(1) else "~/") + _fd + "/",
+                               polecenie)
+    except Exception:
+        pass
     _bez_tla = re.sub(r"\s*&\s*(?:disown(?:\s+-h)?\s*)?;?\s*$", "", polecenie)
     if _bez_tla != polecenie and _bez_tla.strip() and not _bez_tla.rstrip().endswith(("&", "|")):
         polecenie = _bez_tla.strip()

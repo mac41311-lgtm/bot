@@ -4151,3 +4151,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      łączony po nazwie skryptu i czasie. Wcześniej skrypt na laptopie
      (wyjście przez ssh, bez logu tam) zawsze dostawał "nie wiadomo"
      (bieg 2026-11-01 09:53, mixer4_tiny_v2.py).
+
+298. (v480ki) Komenda LAPTOP: startuje już w ~/MAIN_n, więc względne
+     "MAIN_n/…" i "cd MAIN_n" program zamienia na ~/MAIN_n (w cudzysłowie
+     "$HOME/MAIN_n/…"). Bieg 2026-11-01 09:49 (drużyna 1): "mkdir -p
+     MAIN_1/log && cd MAIN_1 && nohup … >log/x.log" położyło log w
+     ~/MAIN_1/MAIN_1/log i nikt go potem nie znalazł.
