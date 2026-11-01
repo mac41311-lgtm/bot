@@ -4081,3 +4081,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        ma, ale na laptopie … jest: log/x.log — odczytasz to komendą
        z LAPTOP: na początku”. Wykonawca dostaje to jako błąd do
        poprawienia (v480ka), a nie jako „pliku nie ma”.
+
+292. (v480kc) Bieg 1.11 09:12 (drużyna 1): wykonawca dostał podpowiedź
+       „na laptopie jest: log/selfloop_v8…”, a i tak dwa razy powtórzył
+       to samo ls na telefonie (zadanie słusznie wróciło do MAIN-a po
+       drugim razie). Teraz, gdy komenda tylko czyta (ls, cat, tail, head,
+       grep, wc, stat…, bez zapisu i bez łańcucha komend) i nie znajdzie
+       na telefonie pliku, który jest na laptopie w folderze drużyny,
+       program sam puszcza ją na laptopie i oddaje tamten wynik z uwagą
+       „przeczytane na laptopie — następnym razem LAPTOP: na początku”.
+       Inne komendy dostają podpowiedź jak w v480kb.

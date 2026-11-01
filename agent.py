@@ -27632,7 +27632,10 @@ _BRAK_PLIKU_NAZWA_RE = re.compile(
     r"|['\"‘’]([\w./*?~-]+)['\"‘’][^\n]*No such file or directory")
 
 
-def _plik_jest_na_laptopie(wynik):
+_TYLKO_CZYTA_RE = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:ls|cat|tail|head|grep|egrep|wc|stat|du|file|md5sum|sha256sum)\b")
+
+
+def _plik_jest_na_laptopie(wynik, komenda=""):
     """
     v480kb: komenda na telefonie nie znalazla pliku, ktory jest na
     laptopie w folderze druzyny (logi z LAPTOP: nie wracaja na telefon) —
@@ -27659,6 +27662,23 @@ def _plik_jest_na_laptopie(wynik):
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=15, errors="replace")
         jest = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()][:5]
+        # v480kc: sama komenda czytajaca (ls/cat/tail/grep…, bez zapisu,
+        # bez potoku do innych programow) — program puszcza ja od razu na
+        # laptopie i oddaje tamten wynik. Bieg 2026-11-01 09:12: wykonawca
+        # dostal podpowiedz "jest na laptopie" i i tak powtorzyl to samo ls.
+        _k = str(komenda or "")
+        _bez_cd = re.sub(r"^\s*cd\s+\S+\s*&&\s*", "", _k)
+        if (jest and _TYLKO_CZYTA_RE.match(_k)
+                and not re.search(r"[>;`&]|\$\(|\|\|", _bez_cd)
+                and all(re.match(r"\s*(?:grep|egrep|head|tail|wc|sort|uniq|cut)\b", c)
+                        for c in _bez_cd.split("|")[1:])):
+            _na_lap = re.sub(r"/data/data/com\.termux/files/home/", "~/", _bez_cd)
+            log("LAPTOP", "Na telefonie tego nie ma, jest na laptopie — czytam tam: " + short(_na_lap, 160))
+            _lw = termux_run("LAPTOP: " + _na_lap)
+            if isinstance(_lw, dict) and _lw.get("returncode") == 0:
+                _lw["uwaga"] = ("Na telefonie tego nie było — program przeczytał to na laptopie (~/"
+                                + _laptop_folder() + "). Następnym razem: LAPTOP: na początku komendy.")
+                return _lw
         if jest:
             wynik["na_laptopie_jest"] = (
                 "Na telefonie tego nie ma, ale na laptopie w ~/" + _laptop_folder() + " jest: "
@@ -27692,7 +27712,8 @@ def termux_run(command):
         return lap
     if not lap:
         return _plik_jest_na_laptopie(
-            _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False))
+            _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False),
+            command_str)
     _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
     # v480jt: komenda na laptopie mogła coś uruchomić lub zakończyć
