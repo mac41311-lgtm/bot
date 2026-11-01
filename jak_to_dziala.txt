@@ -4366,3 +4366,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      b.py, nie a.py. Bieg 2026-11-01 20:56: do hydraulic_language.py
      poszedł kod hydraulic_ast_evolve.py, a prawdziwy hydraulic_language.py
      przepadł.
+
+325. (v480lj) Gdy MAIN zleca zapis kodu, a Bartek w trakcie odpowiedzi
+     (runda PODGLĄD/URUCHOM) już dał nową pełną wersję albo poprawkę
+     fragmentu, którą program od razu naniósł, ten plik liczy się jako
+     położony. Wcześniej krok kończył się ENGINEER_CODE_MISSING („nie
+     było bloku kodu”) albo „~/MAIN_1/ to katalog, a nie plik”, choć plik
+     był już na dysku (bieg 2026-11-01 21:18 i 21:25).

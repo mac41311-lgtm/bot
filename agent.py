@@ -40118,6 +40118,7 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     if _kat:
         _co.append("pliki z kodem mają leżeć w " + ", ".join(_sciezka_od_domu(str(_resolve_home_relative_path(x))) for x in _kat)
                    + " — każdy plik w osobnym bloku, z pełną ścieżką tuż nad nim")
+    _t0_bartka = time.time()
     odp = deepseek(
         "ENGINEER",
         "MAIN zlecił programowi poniższe zadanie. "
@@ -40194,6 +40195,27 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
                 polozone.append(_n + " (" + m.group(2) + " B)")
     except Exception as e:
         log("PROGRAM", "Nie zapisałem nowych plików Bartka: " + str(e))
+    # v480lj: pliki, ktore program polozyl albo poprawil z wypowiedzi
+    # Bartka JUZ W TRAKCIE tej rozmowy (runda PODGLĄD/URUCHOM: nowa pelna
+    # wersja, poprawka fragmentu), tez sa polozone. Bieg 2026-11-01 21:18
+    # i 21:25: plik byl juz na dysku, a krok konczyl sie
+    # ENGINEER_CODE_MISSING / "to katalog, a nie plik".
+    try:
+        _kandydaci = []
+        for x in pliki:
+            _kandydaci.append(_resolve_home_relative_path(x))
+        for x in _kat:
+            _d = _resolve_home_relative_path(x)
+            for _f in list(_d.rglob("*"))[:5000]:
+                if (_f.is_file() and _f.suffix.lower() in _KOD_SUFIKSY
+                        and not any(c in (".kopie", "__pycache__") or c.startswith(".") for c in _f.relative_to(_d).parts[:-1])):
+                    _kandydaci.append(_f)
+        for _f in _kandydaci:
+            if (_f.is_file() and _f.stat().st_mtime >= _t0_bartka - 1
+                    and not any(y.startswith(_f.name + " ") for y in polozone)):
+                polozone.append(_f.name + " (" + str(_f.stat().st_size) + " B)")
+    except Exception:
+        pass
     nie = [Path(x).name for x in pliki if not any(y.startswith(Path(x).name + " ") for y in polozone)]
 
     _pending_team_warnings.append(
@@ -56076,6 +56098,18 @@ def run_agent(goal):
             if write_target and not engineer_code:
 
                 _polozone_bartka = _zlec_kod_bartkowi(task_text, [write_target], team, step)
+
+                # v480lj: cel to katalog, a Bartek juz polozyl w nim pliki —
+                # zapis zrobiony, zadanie idzie do wykonania (wczesniej krok
+                # konczyl sie "to katalog, a nie plik", bieg 2026-11-01 21:18)
+                try:
+                    if _polozone_bartka and (str(write_target).rstrip().endswith(("/", "\\"))
+                                             or _resolve_home_relative_path(write_target).is_dir()):
+                        log("MAIN", "Bartek położył pliki w " + str(write_target) + " ("
+                            + ", ".join(_polozone_bartka) + ") — zadanie idzie do wykonania.")
+                        write_target = ""
+                except Exception:
+                    pass
 
                 engineer_code = _kod_z_wypowiedzi(
                     team.get("engineer_full", ""), write_target
