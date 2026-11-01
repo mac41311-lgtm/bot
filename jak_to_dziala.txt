@@ -4194,3 +4194,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - skrypt, który skończył się w trakcie dłuższej komendy (uruchamia go
        kilka razy po kolei albo robi coś dalej), dostaje to zdanie zamiast
        "nie wiadomo"; wynik i kod przyjdą z całą komendą.
+
+303. (v480kn) PODGLĄD w rywalizacji: wzorzec grep/sed/awk i tekst echo nie
+     są już brane za ścieżkę. Bieg 2026-11-01 12:59 (drużyna 1): sed -n
+     '/\*\*(c) 22 NEG/,/\*\*(d)/p' raport.md wyglądało jak ścieżka od "/",
+     a "/" zawiera folder rywala — Bartek dostał trzy odmowy z rzędu na
+     zwykłe czytanie własnego raportu. Ścieżki plików dalej są sprawdzane
+     (grep -r x ~, ~/MAIN_2/… nadal odmowa).

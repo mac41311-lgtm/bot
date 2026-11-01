@@ -8869,9 +8869,31 @@ def _podglad_siega_do_rywala(komenda):
         return p == rywal or rywal in p.parents or p in rywal.parents
 
     poprzedni = ""
+    # v480kn: wzorzec grep/sed/awk i tekst echo to nie sciezka. Bieg
+    # 2026-11-01 12:59 (druzyna 1): sed -n '/\*\*(c) 22 NEG/,/\*\*(d)/p'
+    # bylo brane za sciezke od "/", a "/" zawiera folder rywala — Bartek
+    # dostal trzy odmowy z rzedu na zwykle czytanie raportu.
+    _polecenie = ""
+    _wzorzec_byl = False
     for t in tokeny + [";"]:
         if t in (";", "&&", "||", "|"):
             poprzedni = ""
+            _polecenie = ""
+            _wzorzec_byl = False
+            continue
+        if not _polecenie:
+            _polecenie = os.path.basename(t)
+        elif _polecenie in ("echo", "printf"):
+            poprzedni = t
+            continue
+        elif (_polecenie in ("grep", "egrep", "fgrep", "rg", "sed", "awk") and not _wzorzec_byl
+              and not t.startswith("-") and poprzedni not in ("-f", "--file", "-m", "-A", "-B", "-C")):
+            _wzorzec_byl = True
+            poprzedni = t
+            continue
+        elif poprzedni in ("-e", "--regexp", "--expression") and _polecenie in ("grep", "egrep", "fgrep", "rg", "sed"):
+            _wzorzec_byl = True
+            poprzedni = t
             continue
         if poprzedni in ("python3", "python") or (poprzedni == "-c"):
             if poprzedni == "-c" and _PODGLAD_PY_RYWAL_RE.search(t):
