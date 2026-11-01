@@ -58152,8 +58152,12 @@ def _zabil_system(maszyna, pid):
                                "journalctl -k --since '-30 min' --no-pager 2>/dev/null || dmesg 2>/dev/null"],
                                capture_output=True, text=True, timeout=15, errors="replace")
         for l in reversed((r.stdout or "").splitlines()):
+            # v480kk: "Process PhantomProcessRecord {...} died" Android pisze
+            # przy KAZDYM koncu procesu Termuksa, tez zwyklym — to nie slad
+            # zabicia (bieg 2026-11-01 10:17-10:28: trzy falszywe "zabił
+            # system"). Liczy sie tylko wpis o zabiciu.
             if re.search(r"(?<!\d)" + str(pid) + r"(?!\d)", l) and re.search(
-                    r"(?i)kill|lowmem|lmk|phantom|oom|out of memory", l):
+                    r"(?i)\bkill|lowmem|\blmk|\boom\b|out of memory|trimming phantom|excessive cpu", l):
                 return short(l.strip(), 200)
     except Exception:
         pass
@@ -58183,7 +58187,9 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                      or (maszyna == "laptop" and _nazwa_skr
                          and re.search(r"(?<![\w.-])" + re.escape(_nazwa_skr) + r"(?![\w-])",
                                        str(z.get("komenda") or ""))
-                         and widziany - 15 <= float(z.get("t") or 0) <= widziany + 120))):
+                         # odczyt laptopa bywa sprzed 1-2 min, wiec "widziany"
+                         # moze byc pozniej niz prawdziwy koniec (v480kk)
+                         and widziany - 150 <= float(z.get("t") or 0) <= widziany + 120))):
             _kod = z.get("kod")
             _ost = (" (ostatnia linia: " + short(str(z.get("ostatnia")), 160) + ")") if z.get("ostatnia") else ""
             if _kod == 0:

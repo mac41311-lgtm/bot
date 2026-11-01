@@ -4165,3 +4165,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dostaje je znowu. Liczą się tylko te przy obecnym celu. Po aktualizacji
      program bierze też wiadomości z ostatniej doby z archiwów skrzynek.
      Wspólny plik: ~/.ael_sedzia_od_uzytkownika.jsonl.
+
+300. (v480kk) Rejestr procesów: wpis Androida "Process PhantomProcessRecord
+     … died" nie jest już brany za zabicie przez system — Android pisze go
+     przy każdym końcu procesu Termuksa (bieg 2026-11-01 10:17–10:28: trzy
+     fałszywe "zabił system"). Liczą się tylko wpisy o zabiciu (Killing,
+     lowmemorykiller, oom, Excessive CPU). Koniec skryptu na laptopie
+     łączy się z wynikiem komendy LAPTOP: także wtedy, gdy odczyt laptopa
+     był sprzed 1–2 min.
