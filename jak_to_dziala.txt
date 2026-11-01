@@ -4218,3 +4218,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      każdym skrypcie konkretną komendę do jego logu (LAPTOP: tail -n 5
      ~/MAIN_n/log/…) albo mówi, że wynik przyjdzie z komendą, która go
      puściła. Było niejasne "(LAPTOP: tail …)" bez ścieżki.
+
+306. (v480kq) Gdy strażnik pamięci telefonu zatrzyma coś ze sprawdzania
+     Sędziego albo laptop jest niedostępny, werdykt brzmi "nie sprawdzone"
+     (to nie Wasz błąd), a nie "nie wyszło", i Sędzia sprawdza ten sam
+     wynik ponownie po 10 min. Komunikat o niedostępnym laptopie mówi po
+     ludzku "laptop nie odpowiedział przez ssh w 20 s" zamiast surowego
+     błędu Pythona.

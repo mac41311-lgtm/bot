@@ -13902,10 +13902,14 @@ def _zatrzymaj_przy_braku_pamieci(wolna):
     except Exception:
         pass
     try:
+        _grupa_zab = os.getpgid(pid)
+    except Exception:
+        _grupa_zab = None
+    try:
         os.kill(pid, signal.SIGKILL)
     except Exception:
         return
-    _zdarzenie_procesu(rodzaj="program", maszyna="telefon", pid=pid,
+    _zdarzenie_procesu(rodzaj="program", maszyna="telefon", pid=pid, grupa=_grupa_zab,
                        opis="strażnik pamięci telefonu: zajmował " + str(mb) + " MB, wolne było "
                        + str(wolna) + " MB")
     tekst = (
@@ -26638,8 +26642,13 @@ def _laptop_sprawdz():
             capture_output=True, text=True, timeout=20, errors="replace")
         ok = r.returncode == 0
         out, err = r.stdout or "", (r.stderr or "").strip()
+    except subprocess.TimeoutExpired:
+        # v480kq: bylo surowe "Command '['ssh', '-n', …]' timed out after 20
+        # seconds" w wiadomosci do MAIN-a (bieg 2026-11-01)
+        ok, out, err = False, "", ("laptop nie odpowiedział przez ssh w 20 s (uśpiony, wyłączony "
+                                   "albo poza siecią Wi-Fi)")
     except Exception as e:
-        ok, out, err = False, "", str(e)
+        ok, out, err = False, "", short(str(e), 200)
     with _laptop_lock:
         _laptop["t"] = time.time()
         _laptop["ok"] = ok
@@ -59998,6 +60007,11 @@ def _sedzia_ocen(numer):
             _komenda_sedziego = komenda
             _lap = _na_laptopa(komenda, druzyna=str(numer), limit_s=_SEDZIA_MAKS_S)
             if isinstance(_lap, dict):
+                if _lap.get("error") == "LAPTOP_NIEDOSTEPNY" or _laptop.get("ok") is False:
+                    werdykt.update(werdykt="nie sprawdzone", ponow="laptop", szczegol=(
+                        "laptop jest teraz niedostępny — to nie Wasz błąd; sędzia sprawdzi "
+                        "ten sam wynik ponownie za " + str(_SEDZIA_PONOW_S // 60) + " min"))
+                    return werdykt
                 werdykt.update(werdykt="nie wyszło", szczegol=(
                     "komenda z LAPTOP: nie ruszyła — " + str(_lap.get("message") or "")))
                 return werdykt
@@ -60074,10 +60088,32 @@ def _sedzia_ocen(numer):
     # v480jb: brak polaczenia z laptopem to nie zly wynik
     if (kod == 255 and _LAPTOP_RE.match(komenda)
             and _LAPTOP_SSH_BLAD_RE.search(str(wyjscie or ""))):
-        werdykt.update(werdykt="nie wyszło", szczegol=(
+        werdykt.update(werdykt="nie sprawdzone", ponow="laptop", szczegol=(
             "laptop był niedostępny przy sprawdzaniu (" + short(str(wyjscie).strip().splitlines()[-1], 160)
-            + ") — sędzia sprawdzi ponownie przy następnej ocenie; komenda bez LAPTOP: "
-            "liczy na telefonie"))
+            + ") — to nie Wasz błąd; sędzia sprawdzi ten sam wynik ponownie za "
+            + str(_SEDZIA_PONOW_S // 60) + " min; komenda bez LAPTOP: liczy na telefonie"))
+        return werdykt
+    # v480kq: strażnik pamięci telefonu zatrzymał coś ze sprawdzania Sędziego
+    # (bieg 2026-11-01, drużyna 1: eval_mix_old.py 2273 MB przy 684 MB
+    # wolnych, a werdykt brzmiał "nie wyszło … nie ma liczby" i ocena 0%).
+    # To nie zły wynik — jak laptop niedostępny: ponowne sprawdzenie.
+    _zatrzymal = "[program] Zatrzymałem" in str(wyjscie or "")
+    if not _zatrzymal:
+        try:
+            for _z in _zdarzenia_od(start):
+                if (_z.get("rodzaj") == "program" and _z.get("grupa") is not None
+                        and str(_z.get("grupa")) == str(pid)):
+                    _zatrzymal = True
+                    break
+        except Exception:
+            pass
+    if _zatrzymal:
+        werdykt.update(werdykt="nie sprawdzone", ponow="pamiec", szczegol=(
+            "strażnik pamięci telefonu zatrzymał sprawdzanie, bo telefonowi kończyła się "
+            "pamięć (w tym samym czasie liczy też druga drużyna) — to nie ocena wyniku; "
+            "sędzia sprawdzi go ponownie za " + str(_SEDZIA_PONOW_S // 60) + " min. Jeśli "
+            "to się powtarza, komenda \"sprawdz\" może potrzebować mniej pamięci naraz "
+            "(np. mniejsze porcje danych) albo liczyć na laptopie (LAPTOP: …)"))
         return werdykt
     wypisala = _ostatnia_liczba(wyjscie)
     werdykt["wypisala"] = wypisala
@@ -60117,6 +60153,9 @@ def _werdykt_zdaniem(w, kto, z_opisem=True):
     )
 
 
+_SEDZIA_PONOW_S = 600
+
+
 def _sedzia_petla():
     moj_plik = _folder_druzyny(_DRUZYNA) / "wynik.json"
     moja_tablica = _RYWALIZACJA_DIR / ("druzyna_" + _DRUZYNA + ".json")
@@ -60149,10 +60188,18 @@ def _sedzia_petla():
         except Exception:
             return ""
     widziana_tablica_rywala = 0.0
+    ponow_o = [0.0]   # v480kq: kiedy sprawdzic ponownie "nie sprawdzone"
 
     while True:
         try:
             m = _mtime(moj_plik)
+            if ponow_o[0] and time.time() >= ponow_o[0]:
+                ponow_o[0] = 0.0
+                if _klucz() == ostatni_klucz:
+                    log("RYWALIZACJA", "Sędzia, drużyna " + _DRUZYNA
+                        + ": sprawdzam ponownie wynik, którego poprzednio nie dało się sprawdzić.")
+                    ostatni_klucz = ""
+                    widziany_wynik = 0.0
             if m and m != widziany_wynik:
                 time.sleep(5)   # niech druzyna skonczy zapis
                 m = _mtime(moj_plik)
@@ -60179,6 +60226,8 @@ def _sedzia_petla():
                 ostatni_klucz = _klucz() or k
                 w["_mtime_wyniku"] = widziany_wynik
                 w["_klucz_wyniku"] = ostatni_klucz
+                if w.get("ponow"):
+                    ponow_o[0] = time.time() + _SEDZIA_PONOW_S
                 _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
                 tmp = moja_tablica.with_suffix(".tmp")
                 tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
