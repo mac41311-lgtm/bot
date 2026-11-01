@@ -3751,16 +3751,13 @@ CRITIC_PROMPT = (
 # Piotr sam zaglada do kodu komendami.
 # v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
 # v480gi: przepisany w calosci — Piotr sam uruchamia kod (URUCHOM:).
+# v480le: przepisany w calosci — PODGLĄD/URUCHOM opisuje juz wspolny opis
+# (_jak_rozmawiamy), tu zostaje tylko robota Piotra.
 CODE_REVIEWER_PROMPT = (
-    "Jesteś Piotrem. Analizujesz błędy i szukasz ich "
-    "rzeczywistej przyczyny, a poprawia je Ania. Do kodu i środowiska "
-    "zaglądasz sam, linią PODGLĄD: z komendą do odczytu (grep -n, "
-    "sed -n 'od,dop' plik, head, ls, python3 --version, pip show "
-    "pakiet; kilka komend łączysz przez ; albo |), a błąd odtwarzasz "
-    "linią URUCHOM: z komendą, która uruchamia kod (np. URUCHOM: "
-    "python3 skrypt.py --test). Program wykonuje ją w folderze drużyny "
-    "i oddaje Ci wynik razem z błędem, więc sprawdzasz dokładnie to "
-    "miejsce, którego dotyczy błąd, i widzisz, czy po poprawce znika."
+    "Jesteś Piotrem. Gdy kod się wysypie, szukasz rzeczywistej przyczyny "
+    "błędu: zaglądasz do miejsca, którego błąd dotyczy, odtwarzasz go "
+    "i mówisz, co go powoduje i co trzeba zmienić. Poprawkę pisze Ania "
+    "albo autor pliku, a Ty sprawdzasz, czy po niej błąd znika."
 )
 
 
@@ -3785,15 +3782,11 @@ CODE_REVIEWER_PROMPT = (
 # v480ft: na prosbe uzytkownika (2026-10-25) przepisany w calosci.
 # v480fw: przepisany w calosci — PODGLĄD sprawdza tez srodowisko.
 # v480gi: przepisany w calosci — Ania sama sprawdza poprawke (URUCHOM:).
+# v480le: przepisany w calosci — jak wyzej, tylko robota Ani.
 CODE_FIXER_PROMPT = (
-    "Jesteś Anią. Pomagasz poprawiać kod, gdy coś nie działa. "
-    "Poprawkę w pliku, który już istnieje, piszesz jako samą zmianę, "
-    "tak jak zwykły patch: który fragment i na co go zamienić. "
-    "Fragment bierzesz z pliku, nie z pamięci: zaglądasz do niego "
-    "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
-    "plik), a to, czy poprawka działa, sprawdzasz linią URUCHOM: z "
-    "komendą, która uruchamia kod — program wykonuje ją w folderze "
-    "drużyny i oddaje Ci wynik albo błąd."
+    "Jesteś Anią. Poprawiasz kod, który nie działa. Fragment do zmiany "
+    "bierzesz z pliku, nie z pamięci, piszesz go jako poprawkę fragmentu "
+    "i uruchamiasz kod jeszcze raz, żeby zobaczyć, że błąd zniknął."
 )
 
 
@@ -50694,7 +50687,7 @@ def _pierwsza_wiadomosc(rola=None):
     # v424: kto nie dziala na telefonie, dostaje jedno zdanie o tym,
     # jak dziala rozmowa — patrz _JAK_ROZMAWIAMY. Kamil i Wojtek nie.
     if rola is not None and str(rola) not in _ROLE_NA_TELEFONIE:
-        return _jak_rozmawiamy() if str(rola) in _ROLE_ZNAJACE_PROGRAM else ""
+        return _jak_rozmawiamy_zespol(rola) if str(rola) in _ROLE_ZNAJACE_PROGRAM else ""
 
     # v422: MAIN dostaje na poczatek, jak dziala program.
     # v436: fakty o telefonie pod linia o platformie.
@@ -50749,12 +50742,28 @@ def _pierwsza_wiadomosc(rola=None):
 # v480ix2: na prosbe uzytkownika (2026-10-31, "napisz tak, jak ty bys
 # to najlepiej zrozumial") przepisany w calosci: laptop (gdy jest
 # podlaczony) i poprawka fragmentu jako dwa bloki "Stary/Nowy fragment".
+def _jak_rozmawiamy_laptop_krotko():
+    """v480le: dla rol, ktore nie pisza ani nie uruchamiaja kodu na co dzien
+    (Tomek, Marek, Ola) — dwa zdania zamiast calej instrukcji laptopa
+    (uzytkownik 2026-11-01: "nie wszystko na jedno kopyto")."""
+    try:
+        if not _laptop_skonfigurowany():
+            return ""
+    except Exception:
+        return ""
+    return ("Obok telefonu jest laptop z Linuksem: komenda poprzedzona LAPTOP: liczy na nim, "
+            "w folderze drużyny, i jej wynik wraca jak z telefonu"
+            + (", a drużyna ma tam stałą połowę procesora i pamięci. " if _DRUZYNA else ". "))
+
+
 def _jak_rozmawiamy_laptop():
     """Zdania o laptopie dla zespolu albo "" (laptop niepodlaczony).
     v480jp: przepisane w calosci — laczenie maszyn w jednej linii, tlo bez
     przerywania, instalacja bez sudo.
     v480ld: przepisane w calosci — stala polowa laptopa (v480la), strażnik
-    pamieci na laptopie (v480ks), skrypty uzytkownika maja pierwszenstwo."""
+    pamieci na laptopie (v480ks).
+    v480le: przepisane w calosci, krocej (uzytkownik: "nie dlugie prompty
+    startowe") — te same fakty, bez powtorzen."""
     try:
         if not _laptop_skonfigurowany():
             return ""
@@ -50762,30 +50771,19 @@ def _jak_rozmawiamy_laptop():
         return ""
     f = _laptop_folder()
     return (
-        "Obok telefonu jest laptop z Linuksem — więcej rdzeni i pamięci. "
-        "Komenda poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f
-        + " na laptopie, i zachowuje się jak na telefonie: wynik albo błąd wraca do was, "
-        "a dłuższa liczy dalej w tle, aż sama skończy — to, co tam liczy, widać w „Dalej "
-        "w tle” z dopiskiem „na laptopie”. Na przykład URUCHOM: LAPTOP: python3 test.py "
-        "albo PODGLĄD: LAPTOP: nproc; free -h. W jednej linii możecie przechodzić między "
-        "maszynami: po ; albo && wpiszcie LAPTOP: (dalej na laptopie) albo TELEFON: (z "
-        "powrotem na telefonie), np. URUCHOM: sleep 600; LAPTOP: tail -5 log.txt — program "
-        "wykona części po kolei, każdą na swojej maszynie, i odda jeden wynik. Pliki z kodem "
-        "i małe pliki tekstowe są na obu maszynach te same (przed każdą komendą LAPTOP: i po "
-        "niej program przenosi nowszą wersję w drugą stronę), więc kod piszecie i poprawiacie "
-        "jak zawsze. Duże pliki (dane, modele) przenosicie scp: URUCHOM: scp dane.bin "
-        + _LAPTOP_HOST + ":" + f + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":" + f
-        + "/model.bin . z powrotem. Na laptopie nie ma sudo, więc biblioteki instalujecie "
-        "w venv albo przez pip install --user. "
-        + ("Wasza drużyna ma na laptopie stałą połowę procesora i pamięci — drugą połowę ma "
-           "rywal, a trochę zostaje dla systemu — więc najszybciej liczy jeden skrypt naraz "
-           "z dwoma wątkami; więcej wątków czy procesów dzieli tę samą połowę. Gdy skrypty "
-           "drużyny dojdą do jej połowy pamięci, liczą wolniej, a gdy całemu laptopowi "
-           "kończy się pamięć, program zatrzymuje jeden największy skrypt i mówi, dlaczego. "
-           if _DRUZYNA else
-           "Gdy laptopowi kończy się pamięć, program zatrzymuje jeden największy skrypt "
-           "i mówi, dlaczego. ")
-        + "Bez LAPTOP: komenda wykonuje się na telefonie. "
+        "Obok telefonu jest laptop z Linuksem, z większą liczbą rdzeni i pamięci. Komenda "
+        "poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f + ", i działa "
+        "jak na telefonie — wynik albo błąd wraca do was, a długa liczy w tle z dopiskiem "
+        "„na laptopie” — np. URUCHOM: LAPTOP: python3 test.py. W jednej linii po ; albo && "
+        "przechodzicie na drugą maszynę słowem LAPTOP: albo TELEFON:. Kod i małe pliki "
+        "tekstowe program trzyma takie same na obu maszynach, a duże pliki przenosicie scp "
+        "(URUCHOM: scp dane.bin " + _LAPTOP_HOST + ":" + f + "/ i z powrotem). Na laptopie "
+        "nie ma sudo: biblioteki instalujecie w venv albo przez pip install --user. "
+        + ("Drużyna ma tam stałą połowę procesora i pamięci, więc najszybciej liczy jeden "
+           "skrypt naraz z dwoma wątkami, a gdy skrypty dojdą do tej połowy pamięci, zwalniają. "
+           if _DRUZYNA else "")
+        + "Gdy całemu laptopowi kończy się pamięć, program zatrzymuje największy skrypt "
+        "i mówi, dlaczego. "
     )
 
 
@@ -50836,6 +50834,45 @@ def _jak_rozmawiamy(laptop=True):
 _JAK_ROZMAWIAMY = _jak_rozmawiamy(laptop=False)
 
 
+# v480le: uzytkownik (2026-11-01: "nie maja dlugich promptow startowych…
+# dla kazdej roli swoje, nie wszystko na jedno kopyto"). Tomek, Marek i Ola
+# nie pisza kodu na co dzien, wiec zamiast calego opisu (pliki, poprawki
+# fragmentu, instalacja, laptop — ok. 2,4 tys. znakow) dostaja tylko to,
+# jak dziala rozmowa: kto jest w zespole (bez nich samych), jak zajrzec
+# i uruchomic, Igor, MAIN decyduje. Pelny opis zostaje dla rol kodu.
+_SKLAD_ZESPOLU = (
+    ("PLANNER", "Tomek (następny krok)"),
+    ("RESEARCHER", "Kamil (fakty i informacje)"),
+    ("CRITIC", "Marek (słabe punkty planów)"),
+    ("ENGINEER", "Bartek (kod i technika)"),
+    ("CODE_REVIEWER", "Piotr (przyczyna błędu w kodzie)"),
+    ("CODE_FIXER", "Ania (poprawka błędu w kodzie)"),
+    ("BROWSER", "Ola (porządkuje to, co się wydarzyło)"),
+    ("WOJTEK", "Wojtek (praktyczny sens)"),
+    ("PROGRESS_ESTIMATOR", "Ela (ile celu jest naprawdę zrobione)"),
+)
+
+
+def _jak_rozmawiamy_zespol(rola=None):
+    _inni = [opis for r, opis in _SKLAD_ZESPOLU if r != str(rola)]
+    return (
+        "Rozmawiacie przez program na telefonie z Androidem. Nikt z was nie ma "
+        "terminala: to, co zespół ustali, wykonuje program, a wy dostajecie, co z tego "
+        "wyszło. Do plików drużyny zaglądacie linią PODGLĄD: z komendą do odczytu (ls, "
+        "head, grep -n, cat wynik.json), a kod uruchamiacie linią URUCHOM: (np. URUCHOM: "
+        "python3 test.py) — program wykonuje to w folderze drużyny i oddaje wynik temu, "
+        "kto pytał. "
+        + _jak_rozmawiamy_laptop_krotko()
+        + "W zespole są: " + ", ".join(_inni[:-1]) + " i " + _inni[-1] + ". "
+        "Jest też Igor — niezależny, spoza zespołu: nie zna celu i dostaje tylko to, co "
+        "ktoś sam do niego napisze. Rozmowę prowadzi MAIN i pyta, kogo potrzebuje; gdy "
+        "odpowiadacie i zwrócicie się do kogoś po imieniu, dostanie to od razu i odpowie, "
+        "a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i decyduje, co zespół "
+        "robi dalej. Użytkownik chce, żeby program działał sam: loguje się, daje dostęp "
+        "do kont i podaje dane, których nikt z was nie ma — resztę ustala zespół."
+    )
+
+
 # v480ix2: akapit MAIN-a o laptopie (cały, nowy), tylko gdy laptop jest podłączony.
 def _laptop_dla_maina_akapit():
     """v480jp: przepisane w calosci (laczenie maszyn, tlo, instalacja)."""
@@ -50862,7 +50899,11 @@ def _laptop_dla_maina_akapit():
         + ":" + f + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + f + "/model.bin " + tel + "/. "
         "Na laptopie nie ma sudo — biblioteki instaluje się tam w venv albo przez pip install "
         "--user. "
-        + ("Połowa jego rdzeni jest dla Waszej drużyny. " if _DRUZYNA else "")
+        + ("Wasza drużyna ma tam stałą połowę procesora i pamięci (drugą ma rywal, trochę "
+           "zostaje dla systemu), więc najszybciej liczy jeden skrypt naraz z dwoma wątkami. "
+           if _DRUZYNA else "")
+        + "Gdy laptopowi kończy się pamięć, program zatrzymuje jeden największy skrypt i mówi, "
+        "dlaczego. "
         + "Bez LAPTOP: wszystko dzieje się na telefonie. Gdy laptop jest niedostępny, komenda "
         "nie rusza, a program mówi dlaczego."
     )

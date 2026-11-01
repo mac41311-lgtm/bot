@@ -4322,3 +4322,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      najszybciej jeden skrypt naraz z dwoma wątkami, wolniej po dojściu do
      połowy pamięci, zatrzymanie największego skryptu, gdy laptopowi
      kończy się pamięć (z wyjaśnieniem). MAIN ma to samo w opisie laptopa.
+
+320. (v480le) Pierwsze wiadomości ról krótsze i dopasowane do roli.
+     Tomek, Marek i Ola dostają tylko, jak działa rozmowa (PODGLĄD,
+     URUCHOM, laptop w jednym zdaniu, skład zespołu bez nich samych,
+     Igor, MAIN decyduje) — ok. 1,3 tys. znaków zamiast 2,4 tys.
+     Bartek, Piotr i Ania mają pełny opis (pliki, poprawki, instalacja,
+     laptop), z krótszym akapitem o laptopie (3,2 tys. zamiast 3,8 tys.).
+     Prompty Piotra i Ani przepisane w całości: sama ich robota, bez
+     powtarzania wspólnego opisu. MAIN w opisie laptopa ma stałą połowę
+     procesora i pamięci oraz strażnika (było „połowa rdzeni”).
+     Kamil, Wojtek, Ela i Igor bez zmian.
