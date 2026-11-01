@@ -4186,3 +4186,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (rada: venv, bo --user też jest blokowane).
      - ask_role w RUN: imię także pod role/rola/to/kto/name; bez imienia
        wynik mówi, co poprawić, zamiast "Nieznane narzędzie: ask_role".
+
+302. (v480km) Rejestr procesów:
+     - ostatnia linia z wyjątkiem (IndexError…, …Error:) to "błąd w
+       skrypcie" także przy kodzie 0 — "| tail" w komendzie gubi kod
+       skryptu (bieg 2026-11-01 12:02, mixer4_norm.py);
+     - skrypt, który skończył się w trakcie dłuższej komendy (uruchamia go
+       kilka razy po kolei albo robi coś dalej), dostaje to zdanie zamiast
+       "nie wiadomo"; wynik i kod przyjdą z całą komendą.

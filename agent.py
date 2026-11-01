@@ -27793,11 +27793,20 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
     return wynik
 
 
+# v480km: komendy, ktore wlasnie sie wykonuja (na wierzchu albo w watku)
+_komendy_trwajace = {}
+
+
 def termux_run(command):
     """v480kf: po instalacji/pobieraniu na wierzchu wynik dostaje jedno
     zdanie "podsumowanie": co zainstalowano albo pierwsza linia bledu i co
     z nia zrobic. Reszta w _termux_run_wew."""
-    wynik = _termux_run_wew(command)
+    _klucz_tr = object()
+    _komendy_trwajace[id(_klucz_tr)] = str(command or "")
+    try:
+        wynik = _termux_run_wew(command)
+    finally:
+        _komendy_trwajace.pop(id(_klucz_tr), None)
     try:
         if (isinstance(wynik, dict) and isinstance(wynik.get("returncode"), int)
                 and _to_instalacja(command) and not wynik.get("podsumowanie")):
@@ -58236,6 +58245,12 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                          and widziany - 150 <= float(z.get("t") or 0) <= widziany + 120))):
             _kod = z.get("kod")
             _ost = (" (ostatnia linia: " + short(str(z.get("ostatnia")), 160) + ")") if z.get("ostatnia") else ""
+            # v480km: "| tail" w komendzie gubi kod skryptu — ostatnia linia
+            # z wyjatkiem to blad, nawet przy kodzie 0 (bieg 2026-11-01
+            # 12:02, mixer4_norm.py: "kod 0 (ostatnia linia: IndexError …)")
+            if re.match(r"\s*[\w.]*(?:Error|Exception)\b.*:", str(z.get("ostatnia") or "")):
+                return "blad", ("błąd w skrypcie" + _ost
+                                + (" — kod 0 to kod potoku (| tail …), nie skryptu" if _kod == 0 else ""))
             if _kod == 0:
                 return "sam", "skończył się sam, kod 0" + _ost
             if isinstance(_kod, int) and _kod in (-9, 137):
@@ -58256,6 +58271,18 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                           "— najpewniej system przy braku pamięci")
     if koniec:
         return "sam", "skończył się (ostatnia linia logu: " + short(koniec[-1], 160) + ")"
+    # v480km: komenda, ktora uruchamia skrypt kilka razy po kolei (albo robi
+    # cos dalej), jeszcze trwa — jej kod przyjdzie z nia (bieg 2026-11-01
+    # 11:43-12:24: "nie wiadomo" przy pierwszym z dwoch przebiegow)
+    try:
+        if _nazwa_skr:
+            _wz = re.compile(r"(?<![\w.-])" + re.escape(_nazwa_skr) + r"(?![\w-])")
+            for _kt in list(_komendy_trwajace.values()):
+                if _wz.search(_kt):
+                    return "sam", ("skończył się w trakcie komendy, która dalej trwa (uruchamia go kilka "
+                                   "razy po kolei albo robi coś dalej) — jej wynik i kod przyjdą, gdy się skończy")
+    except Exception:
+        pass
     return "nie_wiadomo", ("nie wiadomo — nikt z programu ani zespołu go nie zatrzymał, system nic "
                            "o nim nie zapisał" + (", a log jest pusty" if d.get("log") else
                                                    (", a jego wyjście szło przez ssh, nie do pliku na laptopie"
