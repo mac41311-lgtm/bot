@@ -4114,3 +4114,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        programu. MAIN dostaje linię tylko wtedy, gdy proces zabił system
        albo nie wiadomo, czemu zniknął (na telefonie). Nic nie idzie do
        DeepSeeka.
+
+294. (v480ke) Trzy poprawki z logów 2026-11-01 08:32:
+     - Proces rywala w "ps aux" jest rozpoznawany także po zmiennej
+       AEL_DRUZYNA w jego środowisku i po numerze procesu w drugiej
+       kolumnie — wcześniej pełna linia python3 -c "..." drużyny 2,
+       uruchomionego z ~, przeciekała do drużyny 1.
+     - Błąd basha "syntax error near unexpected token `('" dostaje radę:
+       nawias poza cudzysłowem, tekst weź w '...', albo zapisz do pliku.
+     - ls/cat ... 2>/dev/null bez wyniku (kod 1/2, pusty stderr): program
+       bierze nazwy z komendy i sprawdza laptopa, tak jak przy zwykłym
+       "No such file" (v480kb/kc).

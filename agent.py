@@ -24735,6 +24735,23 @@ def _zatrzymalaby_program(command):
         return ""
 
 
+def _druzyna_wprost(pid):
+    """
+    v480ke: AEL_DRUZYNA ze srodowiska procesu, gdy jest wpisane wprost,
+    inaczej "". Proces druzyny 2 typu python3 -c "..." uruchomiony z ~
+    nie ma MAIN_2 ani w cwd, ani w komendzie — bez tego jego pelna linia
+    trafiala do ps druzyny 1 (bieg 2026-11-01 09:16).
+    """
+    try:
+        with open("/proc/" + str(pid) + "/environ", "rb") as f:
+            for zmienna in f.read().split(b"\0"):
+                if zmienna.startswith(b"AEL_DRUZYNA="):
+                    return zmienna.split(b"=", 1)[1].decode("utf-8", "replace").strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _procesy_rywala():
     """
     v480dv: [(pid, pgid, cmdline, comm)] procesow drugiej druzyny — z
@@ -24774,6 +24791,7 @@ def _procesy_rywala():
         if not (
             any(cwd == k or cwd.startswith(k + os.sep) for k in foldery)
             or any(re.search(r"(?<![\w])" + re.escape(z) + r"(?![\w])", cmd) for z in znaki)
+            or _druzyna_wprost(pid) == oni
         ):
             continue
         try:
@@ -27670,9 +27688,22 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
                 or _laptop.get("ok") is not True):
             return wynik
         tekst = str(wynik.get("stderr") or "") + "\n" + str(wynik.get("stdout") or "")[-2000:]
-        if "No such file" not in tekst and "cannot open" not in tekst:
-            return wynik
         nazwy = []
+        if "No such file" not in tekst and "cannot open" not in tekst:
+            # v480ke: ls/cat ... 2>/dev/null — blad schowany, puste wyjscie,
+            # kod 1/2 (bieg 2026-11-01 09:1x: ls -la ~/MAIN_1/log/mixer4_tiny_v2*.log
+            # 2>/dev/null, log byl na laptopie). Nazwy bierzemy z komendy.
+            _k0 = str(komenda or "")
+            if not (wynik.get("returncode") in (1, 2) and not str(wynik.get("stderr") or "").strip()
+                    and not str(wynik.get("stdout") or "").strip() and _TYLKO_CZYTA_RE.match(_k0)
+                    and "2>/dev/null" in _k0):
+                return wynik
+            _pierwsza = re.sub(r"^\s*cd\s+\S+\s*&&\s*", "", _k0).split("|")[0]
+            _pierwsza = re.sub(r"\d?>\s*/dev/null", " ", _pierwsza)
+            for _t in _pierwsza.split()[1:]:
+                if _t.startswith("-") or not re.search(r"[./*]", _t):
+                    continue
+                tekst += "\ncannot access '" + _t.strip("'\"") + "'"
         for m in _BRAK_PLIKU_NAZWA_RE.finditer(tekst):
             n = (m.group(1) or m.group(2) or "").strip()
             n = re.sub(r"^(?:~|/data/data/com\.termux/files/home)/" + re.escape(_laptop_folder()) + "/", "", n)
@@ -27688,7 +27719,7 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
         # bez potoku do innych programow) — program puszcza ja od razu na
         # laptopie i oddaje tamten wynik. Bieg 2026-11-01 09:12: wykonawca
         # dostal podpowiedz "jest na laptopie" i i tak powtorzyl to samo ls.
-        _k = str(komenda or "")
+        _k = re.sub(r"\s2>\s*/dev/null", "", str(komenda or ""))
         _bez_cd = re.sub(r"^\s*cd\s+\S+\s*&&\s*", "", _k)
         if (jest and _TYLKO_CZYTA_RE.match(_k)
                 and not re.search(r"[>;`&]|\$\(|\|\|", _bez_cd)
@@ -28284,6 +28315,22 @@ def _termux_run_lokalnie(command):
                 " Prościej: dłuższy program zapisz przez termux_write_file "
                 "do pliku i uruchom plik (np. python3 plik.py) — wtedy "
                 "cudzysłowy nie muszą przechodzić przez powłokę."
+            )
+            result["podpowiedz"] = _rada
+            log("TERMUX", _rada)
+
+        # v480ke: bash "syntax error near unexpected token `('" — nawias
+        # poza cudzyslowem (bieg 2026-11-01 09:20 i 09:23, MAIN RUN:
+        # echo tekst (cos) ...). Sam blad nie mowil, co poprawic.
+        _wy_b = str(result.get("stdout") or "") + str(result.get("stderr") or "") if isinstance(result, dict) else ""
+        if "syntax error near unexpected token" in _wy_b and "podpowiedz" not in result:
+            _tok = re.search(r"unexpected token [`']([^'`]*)'", _wy_b)
+            _t = _tok.group(1) if _tok else ""
+            _rada = (
+                "Powłoka nie wykonała komendy: znak " + (repr(_t) if _t else "specjalny")
+                + " stoi poza cudzysłowem, a w bashu ( ) ; & | < > mają własne znaczenie. "
+                "Tekst z takimi znakami weź w pojedynczy cudzysłów, np. echo 'wynik (bpc): 1.97', "
+                "albo zapisz dłuższą treść do pliku przez termux_write_file."
             )
             result["podpowiedz"] = _rada
             log("TERMUX", _rada)
@@ -30349,8 +30396,10 @@ def _ukryj_rywala_w_wyniku(result):
                 pierwsze = l.split(None, 1)[0] if l.split() else ""
                 if procesy and (pierwsze in pidy or any(c in l for c in cmdy)):
                     ukryj = _proc = True
-                elif procesy and ukryj and (l.split()[1:2] and l.split()[1] in pidy):
-                    _proc = True  # ps aux: pid w drugiej kolumnie
+                elif procesy and (l.split()[1:2] and l.split()[1] in pidy):
+                    # ps aux: pid w drugiej kolumnie. v480ke: takze bez sciezki
+                    # rywala w linii (python3 -c "..." druzyny 2 wyciekal).
+                    ukryj = _proc = True
                 if ukryj:
                     if _proc:
                         if _podsum is None:
