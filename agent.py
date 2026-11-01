@@ -26815,7 +26815,9 @@ def _laptop_opis():
                    if _laptop.get("gpu") else "")
                 + (", dla Waszej drużyny " + str(_laptop_watki())
                    + (" wątek" if _laptop_watki() == 1 else " wątki" if _laptop_watki() < 5 else " wątków")
-                   + " procesora (drugą połowę ma rywal; kartę graficzną macie obie drużyny)"
+                   + " procesora — Wasza stała połowa laptopa, także gdy rywal nic nie liczy, a pamięć "
+                   "też po połowie (drugą połowę ma rywal, trochę zostaje dla systemu; kartę "
+                   "graficzną macie obie drużyny)"
                    if _DRUZYNA else "")
                 + ". Komenda z przedrostkiem LAPTOP: (w RUN, w URUCHOM: albo w zadaniu) wykona się "
                 "na nim w Waszym folderze ~/" + _laptop_folder() + " na laptopie, np. "
@@ -27410,16 +27412,28 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                # (cgroup) o tej samej wadze procesora: gdy licza obie, kazda
                # dostaje polowe niezaleznie od liczby watkow i procesow; gdy
                # liczy jedna, ma caly laptop. Bez systemd --user — jak dotad.
+               # v480la: "Nie po połowie mają zawsze" — stała połowa: każda
+               # drużyna co najwyżej 45% procesora laptopa (CPUQuota
+               # wycinka), 10% zostaje dla systemu i pulpitu.
                + " && AEL_S= && { command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope"
                " --quiet --collect --slice=ael-druzyna" + (_d_eksport or "0") + ".slice true"
                " >/dev/null 2>&1 && AEL_S=\"systemd-run --user --scope --quiet --collect --slice=ael-druzyna"
-               + (_d_eksport or "0") + ".slice\"; true; }"
+               + (_d_eksport or "0") + ".slice\" && systemctl --user set-property --runtime ael-druzyna"
+               + (_d_eksport or "0") + ".slice CPUQuota=$(( $(nproc) * " + str(_LAPTOP_UDZIAL_PROC) + " ))%"
+               " MemoryHigh=$(( ($(awk '/^MemTotal:/{print $2}' /proc/meminfo) - 1048576) / 2 ))K"
+               " >/dev/null 2>&1; true; }"
                + " && exec $AEL_S nice -n 19 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
     if limit_s:
         return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(zdalnie)
     return _LAPTOP_SSH + _LAPTOP_HOST + " " + shlex.quote(_laptop_oderwane(zdalnie, _f))
+
+
+# v480la: staly udzial jednej druzyny w procesorze laptopa (procent calego
+# laptopa, przez CPUQuota wycinka systemd); reszta (2 x 45 = 90) zostawia
+# 10% dla systemu i pulpitu uzytkownika.
+_LAPTOP_UDZIAL_PROC = 45
 
 
 def _laptop_oderwane(zdalnie, folder):

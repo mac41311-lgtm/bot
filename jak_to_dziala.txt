@@ -4291,3 +4291,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      mają pierwszeństwo (nice 19, ionice; osobne konto), a strażnik
      pamięci pilnuje, żeby zostało co najmniej ok. 500 MB. Bez systemd
      --user na laptopie komendy idą jak dotąd.
+
+316. (v480la) Na życzenie użytkownika („po połowie mają zawsze”) każda
+     drużyna ma na laptopie stałą połowę, także gdy rywal nic nie liczy:
+     wycinek systemd drużyny ma CPUQuota 45% całego laptopa (na 4 rdzeniach
+     180%) i MemoryHigh równe połowie pamięci bez 1 GB. 10% procesora i
+     1 GB pamięci zostaje dla systemu i pulpitu. Ponad MemoryHigh skrypt
+     nie jest zabijany, tylko zwalnia (system odkłada jego pamięć na dysk).
+     Opis laptopa dla MAIN-a mówi o stałej połowie.
