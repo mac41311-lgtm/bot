@@ -27892,6 +27892,18 @@ def _termux_run_wew(command):
                 if isinstance(_t, str) and "/.ael_laptop/" in _t:
                     wynik[_k] = "\n".join(l for l in _t.split("\n") if "/.ael_laptop/" not in l)
         wynik["na_laptopie"] = "~/" + _laptop_folder() + " na laptopie"
+        # v480kh: rejestr procesow — skrypt na laptopie pisze przez ssh na
+        # telefon, nie do logu, wiec bez tego jego koniec byl "nie wiadomo"
+        # (bieg 2026-11-01 09:53, mixer4_tiny_v2.py)
+        try:
+            if isinstance(wynik.get("returncode"), int) and wynik.get("returncode") != 255:
+                _ost_l = [l for l in str((wynik.get("stderr") if wynik.get("returncode") else None)
+                                         or wynik.get("stdout") or "").splitlines() if l.strip()]
+                _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="laptop", druzyna=_DRUZYNA or "1",
+                                   komenda=short(_polecenie_lap, 300), kod=wynik.get("returncode"),
+                                   ostatnia=short(_ost_l[-1], 200) if _ost_l else "")
+        except Exception:
+            pass
         # v480jc: sciezka telefonu w komendzie albo w skrypcie na laptopie
         _tel_dom = "/data/data/com.termux/files/home"
         if (wynik.get("returncode") not in (0, None)
@@ -58148,9 +58160,15 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                 and _kill_trafia(z.get("komenda"), pid, d.get("nazwa", ""), d.get("kom", ""))):
             return "zespol", "zatrzymał zespół — " + str(z.get("kto")) + ": " + str(z.get("komenda"))
     # v480kg: komenda skonczyla sie w programie ze znanym kodem wyjscia
+    _nazwa_skr = re.sub(r"\s*\(.*\)$", "", str(d.get("nazwa") or ""))
     for z in reversed(_zdarzenia_od(od)):
         if (z.get("rodzaj") == "koniec_komendy" and z.get("maszyna") == maszyna
-                and d.get("grupa") and str(z.get("grupa")) == str(d.get("grupa"))):
+                and str(z.get("druzyna") or "1") == (_DRUZYNA or "1")
+                and ((d.get("grupa") and str(z.get("grupa")) == str(d.get("grupa")))
+                     or (maszyna == "laptop" and _nazwa_skr
+                         and re.search(r"(?<![\w.-])" + re.escape(_nazwa_skr) + r"(?![\w-])",
+                                       str(z.get("komenda") or ""))
+                         and widziany - 15 <= float(z.get("t") or 0) <= widziany + 120))):
             _kod = z.get("kod")
             _ost = (" (ostatnia linia: " + short(str(z.get("ostatnia")), 160) + ")") if z.get("ostatnia") else ""
             if _kod == 0:
@@ -58175,7 +58193,9 @@ def _jak_sie_skonczyl(klucz, d, widziany):
         return "sam", "skończył się (ostatnia linia logu: " + short(koniec[-1], 160) + ")"
     return "nie_wiadomo", ("nie wiadomo — nikt z programu ani zespołu go nie zatrzymał, system nic "
                            "o nim nie zapisał" + (", a log jest pusty" if d.get("log") else
-                                                   ", a nie pisał do pliku (brak przekierowania > plik)"))
+                                                   (", a jego wyjście szło przez ssh, nie do pliku na laptopie"
+                                                    if maszyna == "laptop" else
+                                                    ", a nie pisał do pliku (brak przekierowania > plik)")))
 
 
 def _rejestr_krok(stan):
