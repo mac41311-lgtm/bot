@@ -4157,3 +4157,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      "$HOME/MAIN_n/…"). Bieg 2026-11-01 09:49 (drużyna 1): "mkdir -p
      MAIN_1/log && cd MAIN_1 && nohup … >log/x.log" położyło log w
      ~/MAIN_1/MAIN_1/log i nikt go potem nie znalazł.
+
+299. (v480kj) Sędzia dostaje wiadomości użytkownika ze skrzynki
+     (OD_UZYTKOWNIKA.txt obu drużyn) jako jego słowa, które wyjaśniają albo
+     uzupełniają cel (użytkownik 2026-11-01: "tak, niech dostaje"). Każdą
+     raz w swojej rozmowie, przy ocenie co kwadrans; nowa rozmowa Sędziego
+     dostaje je znowu. Liczą się tylko te przy obecnym celu. Po aktualizacji
+     program bierze też wiadomości z ostatniej doby z archiwów skrzynek.
+     Wspólny plik: ~/.ael_sedzia_od_uzytkownika.jsonl.

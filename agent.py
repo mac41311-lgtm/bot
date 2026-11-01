@@ -58707,6 +58707,15 @@ def _odbierz_od_uzytkownika(od, step):
         USER_SAID_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(USER_SAID_FILE, "a", encoding="utf-8") as f:
             f.write(jedna + "\n")
+        # v480kj: uzytkownik 2026-11-01 ("tak, niech dostaje") — Sedzia tez
+        # dostaje wiadomosci ze skrzynki jako slowa uzytkownika o celu
+        try:
+            with open(_SEDZIA_OD_UZYTKOWNIKA, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"t": time.time(), "druzyna": _DRUZYNA or "1", "tekst": jedna,
+                                    "cel": hashlib.sha1(str(_current_goal_text or "").encode("utf-8")).hexdigest()[:16]},
+                                   ensure_ascii=False) + "\n")
+        except Exception:
+            pass
         log(
             "UŻYTKOWNIK",
             "Przekazałem zespołowi Twoją wiadomość (krok " + str(step)
@@ -60501,6 +60510,59 @@ _SEDZIA_WIDZIAL_FILE = STATE_DIR / "sedzia_widzial.json"
 _sedzia_widzial = {"stare": set(), "nowe": set(), "czas": ""}
 
 
+_SEDZIA_OD_UZYTKOWNIKA = HOME / ".ael_sedzia_od_uzytkownika.jsonl"
+
+
+def _od_uzytkownika_dla_sedziego():
+    """v480kj: wiadomosci uzytkownika ze skrzynki (obu druzyn) przy tym
+    samym celu — Sedzia dostaje je raz w rozmowie, jako slowa uzytkownika,
+    ktore wyjasniaja albo uzupelniaja cel. "" gdy nic nowego."""
+    try:
+        cel = hashlib.sha1(str(_current_goal_text or "").encode("utf-8")).hexdigest()[:16]
+        if not _SEDZIA_OD_UZYTKOWNIKA.exists():
+            # pierwszy raz po aktualizacji: wiadomosci z ostatniej doby z
+            # archiwow skrzynek, zeby Sedzia nie przegapil tych sprzed wersji
+            _zasiew = []
+            for _n in ("1", "2"):
+                for _a in ((HOME / ("MAIN_" + _n) / "archiwum_od_uzytkownika"),
+                           (PRZEBIEG_NA_TELEFONIE.parent / ("druzyna_" + _n) / "archiwum_od_uzytkownika")):
+                    try:
+                        for _f in _a.glob("OD_UZYTKOWNIKA_*.txt"):
+                            _t = _f.stat().st_mtime
+                            if time.time() - _t < 86400:
+                                _tx = " ".join(_f.read_text(encoding="utf-8", errors="replace").split())
+                                if _tx and not _WYGLADA_NA_SEKRET_RE.search(_tx):
+                                    _zasiew.append({"t": _t, "druzyna": _n, "tekst": _tx, "cel": cel})
+                    except Exception:
+                        pass
+            with open(_SEDZIA_OD_UZYTKOWNIKA, "a", encoding="utf-8") as f:
+                for _z in sorted(_zasiew, key=lambda z: z["t"]):
+                    f.write(json.dumps(_z, ensure_ascii=False) + "\n")
+        wpisy = {}
+        for l in _SEDZIA_OD_UZYTKOWNIKA.read_text(encoding="utf-8").splitlines()[-40:]:
+            try:
+                d = json.loads(l)
+            except Exception:
+                continue
+            if d.get("cel") != cel or not str(d.get("tekst") or "").strip():
+                continue
+            w = wpisy.setdefault(d["tekst"], {"t": d.get("t") or 0, "dr": set()})
+            w["dr"].add(str(d.get("druzyna") or "1"))
+        if not wpisy:
+            return ""
+        linie = []
+        for tekst, w in sorted(wpisy.items(), key=lambda x: x[1]["t"]):
+            linie.append(datetime.fromtimestamp(float(w["t"])).strftime("%Y-%m-%d %H:%M")
+                         + " (do drużyny " + " i ".join(sorted(w["dr"])) + "): " + short(tekst, 600))
+        nowe = _sedzia_tylko_nowe("\n".join(linie), "U", 0)
+        if not nowe or not any(l.strip() and not l.startswith("(") for l in nowe.split("\n")):
+            return ""
+        return ("Użytkownik napisał do drużyn (to jego słowa — wyjaśniają albo uzupełniają jego cel "
+                "i oceniasz zgodnie z nimi):\n" + nowe + "\n\n")
+    except Exception:
+        return ""
+
+
 def _sedzia_klucz(rodzaj, numer, tekst):
     return rodzaj + str(numer) + ":" + hashlib.sha1(
         str(tekst)[:300].encode("utf-8", "replace")).hexdigest()[:12]
@@ -60729,6 +60791,7 @@ def ocen_rywalizacje(kroki):
                 + ") — to nowy zespół, z nowymi krokami.\n\n"
                 for _n, _cz in sorted(_nowe_po_dyskwalifikacji.items())
             )
+            + _od_uzytkownika_dla_sedziego()
             + _stan_druzyny_dla_sedziego("1")
             + (_ostrzezenia_dla_sedziego("1") if _jest_dyskwalifikacja() else "") + "\n"
             + _stan_druzyny_dla_sedziego("2")
