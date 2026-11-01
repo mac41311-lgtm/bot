@@ -33145,7 +33145,44 @@ def _stan_telefonu_dla_wykonawcy():
     return "TERAZ NA TELEFONIE:\n" + "\n".join(linie)
 
 
-_zgubione_w_zadaniu = {}
+_bledy_w_zadaniu = {}
+# zakazy programu: ponowienie nic nie zmieni, MAIN musi wiedziec od razu
+_BLEDY_ZAKAZY = {
+    "BRAK_KODU_DO_ZAPISU", "ZATRZYMALABY_PROGRAM", "PROCES_RYWALA",
+    "FOLDER_RYWALA", "PLIK_UZYTKOWNIKA", "USUWANIE_ODRZUCONE",
+    "LAPTOP_ODMOWA", "LAPTOP_NIEDOSTEPNY", "TOOL_LIMIT", "PRZERWANE",
+    "KOD_POLOZYL_PYTHON", "KOD_NIE_KOMPILUJE_SIE",
+}
+
+
+def _blad_wykonawcy_do_maina(task_id, name, args, result):
+    """
+    v480ka: czy blad narzedzia wykonawcy konczy zadanie (zwraca powod dla
+    MAIN-a), czy wykonawca poprawia sam (zwraca "").
+    """
+    kod = str(result.get("error") or "")
+    if kod in _BLEDY_ZAKAZY:
+        return "zakaz programu (" + kod + ") — ponowienie nic nie zmieni"
+    tekst = str(result.get("stderr") or "") + "\n" + str(result.get("message") or "") + "\n" + (
+        kod if kod not in ("", "None") else "")
+    if re.search(r'File "[^"]*/MAIN_\d+/[^"]+\.py", line \d+', tekst) or re.search(
+            r'File "' + re.escape(str(HOME)) + r'/[^"]+\.py", line \d+', tekst):
+        return "błąd w kodzie skryptu — to sprawa autora i MAIN-a, nie wykonawcy"
+    linie = [l.strip() for l in tekst.splitlines() if l.strip()]
+    znak = re.sub(r"\d+", "#", (kod + " | " + (linie[-1] if linie else ""))[:300])
+    try:
+        klucz = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        klucz = str(args)
+    st = _bledy_w_zadaniu.setdefault(task_id, {"ostatni": None, "znak": None, "seria": 0})
+    ta_sama = st["ostatni"] == (name, klucz, znak)
+    st["seria"] = st["seria"] + 1 if st["znak"] == znak else 1
+    st["ostatni"], st["znak"] = (name, klucz, znak), znak
+    if ta_sama:
+        return "ta sama komenda dała ten sam błąd co poprzednio"
+    if st["seria"] >= 3:
+        return "ten sam błąd trzeci raz z rzędu, mimo różnych komend"
+    return ""
 
 
 def gemini_execute_task(task_id, task, success_condition=''):
@@ -33430,10 +33467,14 @@ Jak się tu pracuje:
 3. Po każdym działaniu — uruchomieniu programu, serwera, aplikacji,
    zapisie, kliknięciu — sprawdzasz faktyczny rezultat.
 
-4. Gdy narzędzie zwróci błąd, zadanie się kończy i MAIN dostaje jego
-   dokładną treść — to on zmienia strategię. Gdy czegoś po prostu
-   nie ma (elementu na stronie, pliku, fragmentu w pliku, strony),
-   dostajesz to jako zwykły wynik i działasz dalej.
+4. Gdy komenda się nie uda, dostajesz błąd z powrotem (czasem z
+   podpowiedzią programu, np. gdzie naprawdę leży plik) — popraw ją
+   i spróbuj jeszcze raz. Zadanie wraca do MAIN-a, gdy ta sama komenda
+   da ten sam błąd, gdy ten sam błąd wraca trzeci raz z rzędu, przy
+   zakazie programu albo przy błędzie w kodzie skryptu zespołu — wtedy
+   MAIN dostaje dokładną treść i zmienia strategię. Gdy czegoś po
+   prostu nie ma (elementu na stronie, pliku, fragmentu w pliku,
+   strony), to zwykły wynik — działasz dalej.
 
 {rule_6_block}
 
@@ -34433,23 +34474,29 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 if tool_failed and _brak_to_odpowiedz(name, args, result):
                     tool_failed = False
 
-                # v480jz: plik szukany nie tam, gdzie lezy, a program wie,
-                # gdzie jest (gdzie_ten_plik_jest) — wykonawca dostaje
-                # sciezke i poprawia komende sam, zamiast konczyc zadanie
-                # (bieg 2026-11-01 08:42, druzyna 1: patch_mixer4_crc32.py
-                # w eval/, zadanie przerwane po pierwszym ls). Dwa razy na
-                # zadanie, potem jak dotad do MAIN-a.
-                if (tool_failed and isinstance(result, dict)
-                        and result.get("gdzie_ten_plik_jest")
-                        and _zgubione_w_zadaniu.get(task_id, 0) < 2):
-                    _zgubione_w_zadaniu[task_id] = _zgubione_w_zadaniu.get(task_id, 0) + 1
-                    tool_failed = False
-                    result["popraw_sciezke"] = (
-                        "Plik leży gdzie indziej niż w komendzie — "
-                        + str(result["gdzie_ten_plik_jest"])
-                        + ". Uruchom komendę jeszcze raz z tą ścieżką.")
-                    log("GEMINI", "termux_run: zła ścieżka do pliku, który program zna — "
-                        "wykonawca dostaje właściwą i próbuje dalej.")
+                # v480ka (uzytkownik 2026-11-01: "jak bedzie blad niech
+                # powracaja, ale zeby sie nikt nie zapetlil"; zastepuje
+                # v480jz): pomylka wykonawcy w komendzie nie konczy
+                # zadania — dostaje blad (i podpowiedz programu) i poprawia
+                # sam, bez limitu prob. Do MAIN-a wraca, gdy: ta sama
+                # komenda daje ten sam blad co poprzednio, ten sam blad
+                # trzeci raz z rzedu, zakaz programu (tam ponowienie nic
+                # nie da) albo blad w kodzie skryptu zespolu (to sprawa
+                # autora i MAIN-a, nie wykonawcy).
+                if tool_failed and isinstance(result, dict):
+                    _stop = _blad_wykonawcy_do_maina(task_id, name, args, result)
+                    if _stop:
+                        result["dlaczego_do_maina"] = _stop
+                    else:
+                        tool_failed = False
+                        result["popraw_i_sprobuj"] = (
+                            ("Plik leży gdzie indziej niż w komendzie — "
+                             + str(result["gdzie_ten_plik_jest"]) + ". "
+                             if result.get("gdzie_ten_plik_jest") else "")
+                            + "To się nie udało — popraw komendę i spróbuj jeszcze raz "
+                            "(ta sama komenda z tym samym błędem kończy zadanie).")
+                        log("GEMINI", str(name) + ": błąd — wykonawca dostaje go z powrotem "
+                            "i poprawia sam.")
 
                 if tool_failed:
 
@@ -34501,7 +34548,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                         # v429: bez "Narzedzie zakonczylo sie bledem." —
                         # to nic nie mowi; zostaje tylko podpowiedz przy
                         # grep/test z kodem 1, gdy jest.
-                        "message": benign_exit_hint.strip(),
+                        "message": (benign_exit_hint.strip() + (
+                            " Zadanie wraca do MAIN-a: " + str(result.get("dlaczego_do_maina")) + "."
+                            if isinstance(result, dict) and result.get("dlaczego_do_maina") else "")).strip(),
                         "interaction_id": interaction_id,
                         "tool_warnings": collected_warnings,
                         "tool_trace": collected_tool_trace,

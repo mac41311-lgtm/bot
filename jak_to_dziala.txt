@@ -4054,3 +4054,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        leży gdzie indziej… Uruchom komendę jeszcze raz z tą ścieżką”)
        i próbuje dalej — do dwóch razy w jednym zadaniu, potem jak dotąd
        wynik idzie do MAIN-a.
+
+290. (v480ka) Użytkownik 2026-11-01: „jak będzie błąd, niech powracają,
+       ale żeby się nikt nie zapętlił”. Błąd narzędzia wykonawcy (Gemini)
+       nie kończy już zadania od razu: wykonawca dostaje błąd z podpowiedzią
+       programu (np. gdzie leży plik) i poprawia komendę sam, bez limitu
+       prób. Zadanie wraca do MAIN-a, gdy: ta sama komenda daje ten sam
+       błąd co poprzednio; ten sam błąd wraca trzeci raz z rzędu; to zakaz
+       programu (folder/proces rywala, kod bez autora, usuwanie bez zgody,
+       laptop niedostępny itp.); albo błąd jest w kodzie skryptu zespołu
+       (sprawa autora i MAIN-a). MAIN dostaje wtedy powód w wyniku.
+       Poprawki nie zużywają wiadomości DeepSeeka. Zasada 4 w opisie
+       wykonawcy przepisana w całości. Zastępuje v480jz.
