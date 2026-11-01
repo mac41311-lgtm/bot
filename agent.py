@@ -58446,6 +58446,12 @@ def _procesy_druzyny_telefon():
             if (not kom or program in kom or kom.startswith("com.") or "pow_helper" in kom
                     or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup|sleep)\b", kom)):
                 continue
+            # v480kt: ssh programu na laptopa (to samo ControlPath) to
+            # transport — skrypt liczy na laptopie i tam jest liczony. Bieg
+            # 2026-11-01 17:57: wgrywanie straznika laptopa trafilo do MAIN-a
+            # jako "straznik.py (na telefonie) przestał działać — nie wiadomo".
+            if re.match(r"\s*(?:\S*/)?ssh\b", kom) and _LAPTOP_CM in kom:
+                continue
             _nz = _nazwa_skryptu(kom)
             if not _nz or _druzyna_procesu(wpis) != moja:
                 continue

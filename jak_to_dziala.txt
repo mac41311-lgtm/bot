@@ -4241,3 +4241,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      z drużyny, która zajmuje więcej pamięci. Sprawdzanie Sędziego idzie
      na końcu. Uwaga trafia do logu procesu i do MAIN-a tej drużyny, a
      Sędzia sprawdza wtedy ponownie (punkt 306).
+
+309. (v480kt) Rejestr procesów nie liczy na telefonie połączeń ssh
+     programu z laptopem (wgrywanie strażnika, komendy LAPTOP:) — to tylko
+     transport, a skrypt liczy się po stronie laptopa. Wcześniej MAIN
+     dostał fałszywe "straznik.py (na telefonie) przestał działać — nie
+     wiadomo".
