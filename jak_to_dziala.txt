@@ -4271,3 +4271,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wiadomo”. Sędzia: kod 124 jest opisany jako przerwanie przez własny
      „timeout” komendy (a nie „brak liczby”); sprawdzenie na laptopie
      zatrzymane przez strażnika pamięci to „nie sprawdzone, ponowię”.
+
+313. (v480kx) Gdy drużyna zapisała już nowy wynik.json, a Sędzia ma
+     werdykt tylko o poprzednim, w materiale do oceny stoi, że werdykt
+     dotyczy poprzedniej wersji, a nowa jest właśnie sprawdzana. Wcześniej
+     stary „kod 124” został przypięty do nowego wyniku i MAIN szukał
+     błędu w skrypcie, który działał.

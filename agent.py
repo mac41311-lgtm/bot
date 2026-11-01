@@ -61378,6 +61378,19 @@ def _stan_druzyny_dla_sedziego(numer):
     try:
         w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
         wynik = _werdykt_zdaniem(w, "Ostatni wynik.json")
+        # v480kx: druzyna zapisala juz nowy wynik.json, a werdykt jest
+        # o poprzednim (bieg 2026-11-01 18:26: ocena "kod 124" przypieta do
+        # nowego 2,291341, MAIN szukal, czemu jego dzialajacy skrypt "pada")
+        try:
+            _d = json.loads((_folder_druzyny(numer) / "wynik.json").read_text(encoding="utf-8"))
+            _k = json.dumps([str(_d.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")], ensure_ascii=False)
+            if w.get("_klucz_wyniku") and _k != w.get("_klucz_wyniku"):
+                wynik = ("ten werdykt dotyczy POPRZEDNIEJ wersji wynik.json: " + wynik
+                         + " Obecny wynik.json (ogłoszony " + str(_d.get("wynik"))
+                         + ") jest właśnie sprawdzany albo czeka na sprawdzenie — jego werdykt "
+                         "przyjdzie osobno; na razie nie ma ani potwierdzenia, ani odrzucenia.")
+        except Exception:
+            pass
     except Exception:
         wynik = "jeszcze żadnego"
     return (
