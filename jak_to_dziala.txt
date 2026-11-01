@@ -4316,3 +4316,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      pamięci dopiero poniżej 1 GB wolnej (zapas systemu z punktu 316), żeby
      nie zabijał skryptu tylko dlatego, że obie drużyny zajmują swoje
      połowy; opisy 315/316 bez sprzeczności.
+
+319. (v480ld) Opis laptopa w pierwszej wiadomości ról zespołu
+     przepisany w całości: stała połowa procesora i pamięci dla drużyny,
+     najszybciej jeden skrypt naraz z dwoma wątkami, wolniej po dojściu do
+     połowy pamięci, zatrzymanie największego skryptu, gdy laptopowi
+     kończy się pamięć (z wyjaśnieniem). MAIN ma to samo w opisie laptopa.

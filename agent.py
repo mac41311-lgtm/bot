@@ -50752,7 +50752,9 @@ def _pierwsza_wiadomosc(rola=None):
 def _jak_rozmawiamy_laptop():
     """Zdania o laptopie dla zespolu albo "" (laptop niepodlaczony).
     v480jp: przepisane w calosci — laczenie maszyn w jednej linii, tlo bez
-    przerywania, instalacja bez sudo."""
+    przerywania, instalacja bez sudo.
+    v480ld: przepisane w calosci — stala polowa laptopa (v480la), strażnik
+    pamieci na laptopie (v480ks), skrypty uzytkownika maja pierwszenstwo."""
     try:
         if not _laptop_skonfigurowany():
             return ""
@@ -50775,7 +50777,14 @@ def _jak_rozmawiamy_laptop():
         + _LAPTOP_HOST + ":" + f + "/ tam i URUCHOM: scp " + _LAPTOP_HOST + ":" + f
         + "/model.bin . z powrotem. Na laptopie nie ma sudo, więc biblioteki instalujecie "
         "w venv albo przez pip install --user. "
-        + ("Połowa rdzeni laptopa jest dla Waszej drużyny. " if _DRUZYNA else "")
+        + ("Wasza drużyna ma na laptopie stałą połowę procesora i pamięci — drugą połowę ma "
+           "rywal, a trochę zostaje dla systemu — więc najszybciej liczy jeden skrypt naraz "
+           "z dwoma wątkami; więcej wątków czy procesów dzieli tę samą połowę. Gdy skrypty "
+           "drużyny dojdą do jej połowy pamięci, liczą wolniej, a gdy całemu laptopowi "
+           "kończy się pamięć, program zatrzymuje jeden największy skrypt i mówi, dlaczego. "
+           if _DRUZYNA else
+           "Gdy laptopowi kończy się pamięć, program zatrzymuje jeden największy skrypt "
+           "i mówi, dlaczego. ")
         + "Bez LAPTOP: komenda wykonuje się na telefonie. "
     )
 
