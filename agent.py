@@ -26949,6 +26949,7 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
                + " AEL_DRUZYNA=" + (_d_eksport or "0")
+               + (" AEL_SEDZIA=1" if limit_s else "")
                + " && exec nice -n 5 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
@@ -27326,7 +27327,8 @@ def _laptop_moje_procesy():
               "w=0; q=$i; for k in 1 2 3 4; do q=$(ps -o ppid= -p $q 2>/dev/null | tr -d ' '); "
               "{ [ -z \"$q\" ] || [ \"$q\" -le 1 ]; } && break; "
               "tr '\\0' ' ' < /proc/$q/cmdline 2>/dev/null | grep -q '/[.]ael_laptop/' && { w=1; break; }; done; "
-              "printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$o\" "
+              "j=0; grep -qz '^AEL_SEDZIA=1$' $p/environ 2>/dev/null && j=1; "
+              "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$j\" \"$o\" "
               "\"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
@@ -27338,19 +27340,24 @@ def _laptop_moje_procesy():
     naj = {}
     teraz = {}
     for l in (r.stdout or "").splitlines():
-        cz = l.split("\t", 4)
-        if len(cz) < 5 or "/.ael_laptop/" in cz[4] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[4]):
+        cz = l.split("\t", 5)
+        if len(cz) < 6:
+            continue
+        # v480kb: [pid, czas, pod komenda programu, Sedzia, log, komenda]
+        _sedzia = cz[3] == "1"
+        cz = cz[:3] + cz[4:]
+        if "/.ael_laptop/" in cz[4] or re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[4]):
             continue
         k = _KLUCZ_SKRYPTU_RE.search(cz[4]) or re.search(r"([\w.-]+\.(?:py|sh|js|pl|rb|R))\b", cz[4])
         if not k:
             continue
-        nazwa = os.path.basename(k.group(1))
+        nazwa = os.path.basename(k.group(1)) + (" (sprawdzanie Sędziego)" if _sedzia else "")
         try:
             t = int(cz[1])
         except ValueError:
             t = 0
         naj[nazwa] = max(naj.get(nazwa, 0), t)
-        if cz[2] != "1":
+        if cz[2] != "1" and not _sedzia:
             log_p = cz[3] if cz[3].startswith("/") and not cz[3].startswith(("/dev/", "/proc/")) else ""
             teraz[cz[0]] = {"nazwa": nazwa, "log": log_p.replace(" (deleted)", ""),
                             "start": time.time() - t}
@@ -27620,6 +27627,48 @@ def _laptop_w_srodku_odmowa(command_str):
     return ""
 
 
+_BRAK_PLIKU_NAZWA_RE = re.compile(
+    r"(?:cannot (?:open|access|stat)|can't open file|No such file or directory:?)\s*['\"‘’]?([\w./*?~-]+)['\"‘’]?"
+    r"|['\"‘’]([\w./*?~-]+)['\"‘’][^\n]*No such file or directory")
+
+
+def _plik_jest_na_laptopie(wynik):
+    """
+    v480kb: komenda na telefonie nie znalazla pliku, ktory jest na
+    laptopie w folderze druzyny (logi z LAPTOP: nie wracaja na telefon) —
+    wynik mowi, gdzie jest i jak go odczytac. Bieg 2026-11-01 08:54
+    (druzyna 1): wykonawca dwa razy szukal log/mixer4_lite_*.log na
+    telefonie, a potem puscil mixer4_lite.py drugi raz.
+    """
+    try:
+        if (not isinstance(wynik, dict) or not _laptop_skonfigurowany()
+                or _laptop.get("ok") is not True):
+            return wynik
+        tekst = str(wynik.get("stderr") or "") + "\n" + str(wynik.get("stdout") or "")[-2000:]
+        if "No such file" not in tekst and "cannot open" not in tekst:
+            return wynik
+        nazwy = []
+        for m in _BRAK_PLIKU_NAZWA_RE.finditer(tekst):
+            n = (m.group(1) or m.group(2) or "").strip()
+            n = re.sub(r"^(?:~|/data/data/com\.termux/files/home)/" + re.escape(_laptop_folder()) + "/", "", n)
+            if (n and n not in nazwy and not n.startswith(("/", "~", "..")) and ".." not in n.split("/")):
+                nazwy.append(n)
+        if not nazwy:
+            return wynik
+        skrypt = "cd ~/" + _laptop_folder() + " 2>/dev/null && ls -d -- " + " ".join(nazwy[:5]) + " 2>/dev/null; true"
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=15, errors="replace")
+        jest = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()][:5]
+        if jest:
+            wynik["na_laptopie_jest"] = (
+                "Na telefonie tego nie ma, ale na laptopie w ~/" + _laptop_folder() + " jest: "
+                + ", ".join(jest) + " — odczytasz to komendą z LAPTOP: na początku, np. "
+                "LAPTOP: tail -n 20 " + jest[0] + ".")
+    except Exception:
+        pass
+    return wynik
+
+
 def termux_run(command):
     """
     v480ix: komenda z przedrostkiem LAPTOP: idzie przez ssh na laptopa
@@ -27642,7 +27691,8 @@ def termux_run(command):
     if isinstance(lap, dict):
         return lap
     if not lap:
-        return _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False)
+        return _plik_jest_na_laptopie(
+            _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False))
     _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
     # v480jt: komenda na laptopie mogła coś uruchomić lub zakończyć
@@ -34448,7 +34498,7 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # mimo ze pytanie zostalo wlasnie rozstrzygniete.
                 if tool_failed and _shell_failure_is_just_missing_file(
                     name, result
-                ):
+                ) and not (isinstance(result, dict) and result.get("na_laptopie_jest")):
                     tool_failed = False
 
                     if isinstance(result, dict):

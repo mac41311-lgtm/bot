@@ -4066,3 +4066,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (sprawa autora i MAIN-a). MAIN dostaje wtedy powód w wyniku.
        Poprawki nie zużywają wiadomości DeepSeeka. Zasada 4 w opisie
        wykonawcy przepisana w całości. Zastępuje v480jz.
+
+291. (v480kb) Bieg 1.11 08:42–08:56 (drużyna 1), dwie rzeczy:
+       a) MAIN dwa razy dostał „Na laptopie skończył się mixer4.py …
+       nie widzi pliku”, choć to było sprawdzanie Sędziego (sprawdz
+       uruchamia mixer4.py). Sędzia na laptopie ma teraz w środowisku
+       znacznik AEL_SEDZIA=1: na liście „Na laptopie liczy” jego proces
+       ma dopisek „(sprawdzanie Sędziego)”, a jego koniec nie trafia do
+       „Skończone w tle”.
+       b) Wykonawca szukał log/mixer4_lite_*.log na telefonie (logi
+       z LAPTOP: nie wracają na telefon), a potem puścił mixer4_lite.py
+       drugi raz. Gdy komenda na telefonie nie znajdzie pliku, który jest
+       na laptopie w folderze drużyny, wynik mówi: „Na telefonie tego nie
+       ma, ale na laptopie … jest: log/x.log — odczytasz to komendą
+       z LAPTOP: na początku”. Wykonawca dostaje to jako błąd do
+       poprawienia (v480ka), a nie jako „pliku nie ma”.
