@@ -4231,3 +4231,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zdanie co na telefonie: każda drużyna ma połowę laptopa (2 z 4).
      Robota idzie dalej, nic nie jest blokowane. Wcześniej miarą była
      połowa telefonu (4), więc 4 wątki na laptopie przechodziły bez słowa.
+
+308. (v480ks) Strażnik pamięci działa teraz na samym laptopie
+     (~/.ael_laptop_straznik.py, program stawia go i odświeża co minutę).
+     Zapchany laptop nie odpowiada na ssh, więc strażnik z telefonu nic
+     nie mógł zrobić. Co 2 s sprawdza pamięć. Gdy wolnej jest poniżej
+     500 MB, swap jest prawie pełny albo system prawie stoi na
+     przerzucaniu pamięci na dysk, zatrzymuje jeden proces: największy
+     z drużyny, która zajmuje więcej pamięci. Sprawdzanie Sędziego idzie
+     na końcu. Uwaga trafia do logu procesu i do MAIN-a tej drużyny, a
+     Sędzia sprawdza wtedy ponownie (punkt 306).

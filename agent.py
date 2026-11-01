@@ -26780,6 +26780,209 @@ _LAPTOP_PAMIEC_PROG_MB = 500
 _LAPTOP_PAMIEC_KRYT_MB = 250
 
 
+# v480ks: straznik pamieci DZIALA NA LAPTOPIE (uzytkownik 2026-11-01:
+# "Tak"). Bieg 2026-11-01 13:35-13:55 (druzyna 1): dwa eval_mix_mlp.py
+# zajely 4,7 GB z 7,6 GB, swap prawie pelny, load 51 — ssh nie odpowiadal
+# ("timed out during banner exchange"), wiec straznik z telefonu (przez
+# ssh) nie mogl nic zrobic. Ten skrypt czyta /proc na miejscu co 2 s, ta
+# sama zasada co na telefonie (rowne szanse druzyn, jeden proces), plus
+# nacisk pamieci (PSI) i pelny swap, bo laptop zamarzal przy 1,2 GB wolnych.
+_LAPTOP_STRAZNIK_PY = r'''# AEL: straznik pamieci laptopa (v480ks) — dziala na laptopie, bo zapchany
+# laptop nie odpowiada na ssh. Zatrzymuje JEDEN proces druzyn (AEL_DRUZYNA),
+# gdy pamieci braknie: z druzyny, ktora zajmuje wiecej (rowne szanse), jej
+# najwiekszy. Uwage dopisuje do wyjscia procesu i do ~/.ael_laptop_straznik.jsonl.
+import os, time, json, signal
+PROG_MB, KRYT_MB, PSI_PROG, ZAPAS_MB = 500, 250, 25.0, 1500
+PLIK = os.path.expanduser("~/.ael_laptop_straznik.jsonl")
+
+def meminfo():
+    d = {}
+    with open("/proc/meminfo") as f:
+        for l in f:
+            k, v = l.split(":", 1)
+            d[k] = int(v.split()[0]) // 1024
+    return d
+
+def psi_full():
+    try:
+        with open("/proc/pressure/memory") as f:
+            for l in f:
+                if l.startswith("full"):
+                    return float(l.split("avg10=")[1].split()[0])
+    except Exception:
+        pass
+    return 0.0
+
+def procesy():
+    wynik = []
+    moj = os.getpid()
+    for p in os.listdir("/proc"):
+        if not p.isdigit() or int(p) == moj:
+            continue
+        try:
+            with open("/proc/" + p + "/environ", "rb") as f:
+                env = f.read().split(b"\0")
+            d = s = None
+            for e in env:
+                if e.startswith(b"AEL_DRUZYNA="):
+                    d = e[12:].decode("utf-8", "replace")
+                elif e == b"AEL_SEDZIA=1":
+                    s = True
+            if not d:
+                continue
+            rss = 0
+            with open("/proc/" + p + "/status") as f:
+                for l in f:
+                    if l.startswith("VmRSS:"):
+                        rss = int(l.split()[1]) // 1024
+            with open("/proc/" + p + "/cmdline", "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            if rss > 0 and not cmd.startswith(("bash", "sh ", "nice", "timeout", "setsid", "nohup", "tail", "sshd")):
+                wynik.append((int(p), d, rss, cmd, bool(s)))
+        except Exception:
+            continue
+    return wynik
+
+def zatrzymaj(wolne, swap_wolny, psi, powod):
+    ps = procesy()
+    if not ps:
+        return False
+    # sprawdzanie Sedziego tylko gdy nic innego nie ma
+    kand = [p for p in ps if not p[4]] or ps
+    suma = {}
+    for p in kand:
+        suma[p[1]] = suma.get(p[1], 0) + p[2]
+    druzyna = max(suma, key=lambda d: suma[d])
+    pid, d, rss, cmd, sedzia = max((p for p in kand if p[1] == druzyna), key=lambda p: p[2])
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        return False
+    tekst = ("Zatrzymałem na laptopie proces " + str(pid) + " (" + cmd[:120] + "), bo zajmował "
+             + str(rss) + " MB, a laptopowi zostało " + str(wolne) + " MB wolnej pamięci"
+             + (" i " + str(swap_wolny) + " MB swapu" if swap_wolny is not None else "")
+             + " (" + powod + "). Zaraz laptop by zamarzł i obie drużyny straciłyby do niego "
+             "dostęp. Ten skrypt może ruszyć ponownie, gdy będzie potrzebował mniej pamięci naraz "
+             "(mniejsze porcje danych, mniej procesów naraz, wyniki pośrednie na dysk).")
+    for fd in ("1", "2"):
+        try:
+            cel = os.readlink("/proc/" + str(pid) + "/fd/" + fd)
+            if cel.startswith("/dev/null"):
+                continue
+            h = os.open("/proc/" + str(pid) + "/fd/" + fd, os.O_WRONLY | os.O_APPEND | os.O_NONBLOCK)
+            try:
+                os.write(h, ("\n[program] " + tekst + "\n").encode("utf-8"))
+            finally:
+                os.close(h)
+            break
+        except Exception:
+            continue
+    try:
+        with open(PLIK, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.time(), "pid": pid, "druzyna": d, "rss": rss, "wolne": wolne,
+                                "sedzia": sedzia, "cmd": cmd[:200], "tekst": tekst},
+                               ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    return True
+
+def main():
+    try:
+        os.nice(-5)
+    except Exception:
+        pass
+    nisko = 0
+    while True:
+        try:
+            m = meminfo()
+            wolne = m.get("MemAvailable", 0)
+            sw_all, sw_free = m.get("SwapTotal", 0), m.get("SwapFree", 0)
+            psi = psi_full()
+            powod = ""
+            if wolne < KRYT_MB:
+                powod = "krytycznie mało pamięci"
+            elif wolne < PROG_MB:
+                powod = "mało pamięci"
+            elif psi >= PSI_PROG and wolne < ZAPAS_MB:
+                powod = "system prawie stoi na przerzucaniu pamięci na dysk"
+            elif sw_all and sw_free < 0.15 * sw_all and wolne < ZAPAS_MB:
+                powod = "swap prawie pełny"
+            nisko = nisko + 1 if powod else 0
+            if powod and (nisko >= 2 or wolne < KRYT_MB):
+                if zatrzymaj(wolne, sw_free if sw_all else None, psi, powod):
+                    nisko = 0
+                    time.sleep(15)
+                    continue
+            time.sleep(2)
+        except Exception:
+            time.sleep(5)
+
+if __name__ == "__main__":
+    main()
+'''
+_LAPTOP_STRAZNIK_PLIK = ".ael_laptop_straznik.py"
+
+
+def _laptop_straznik_postaw():
+    """Stawia/odswieza straznika na laptopie i odbiera jego uwagi.
+    Zwraca (dziala, [uwagi]) albo None, gdy laptop nie odpowiedzial."""
+    b64 = base64.b64encode(_LAPTOP_STRAZNIK_PY.encode("utf-8")).decode("ascii")
+    h = hashlib.md5(_LAPTOP_STRAZNIK_PY.encode("utf-8")).hexdigest()
+    # nazwa rozcieta ("…_\"\"straznik.py"), zeby pgrep/pkill -f nie trafialy
+    # w sama te komende (bash -c z tym tekstem)
+    f = "$HOME/" + _LAPTOP_STRAZNIK_PLIK.replace("_straznik", "_\"\"straznik")
+    skrypt = (
+        "f=\"" + f + "\"; if [ \"$(md5sum \"$f\" 2>/dev/null | cut -c1-32)\" != " + h + " ]; then "
+        "echo " + b64 + " | base64 -d > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"; "
+        "pkill -f '[.]ael_laptop_straznik[.]py' 2>/dev/null; sleep 1; fi; "
+        "pgrep -f '[.]ael_laptop_straznik[.]py' >/dev/null || "
+        "(setsid nohup python3 \"$f\" >/dev/null 2>&1 </dev/null &); sleep 1; "
+        "pgrep -f '[.]ael_laptop_straznik[.]py' >/dev/null && echo STRAZNIK_OK; "
+        "u=\"$HOME/.ael_laptop_straznik.jsonl\"; if [ -s \"$u\" ]; then cat \"$u\"; : > \"$u\"; fi; true")
+    try:
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=30, errors="replace")
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    uwagi = []
+    for l in (r.stdout or "").splitlines():
+        if l.startswith("{"):
+            try:
+                uwagi.append(json.loads(l))
+            except Exception:
+                pass
+    return "STRAZNIK_OK" in (r.stdout or ""), uwagi
+
+
+def _laptop_uwagi_straznika(uwagi):
+    """Uwagi straznika z laptopa -> drużyna (MAIN), dziennik, rejestr procesow."""
+    for u in uwagi:
+        d = str(u.get("druzyna") or "")
+        d = d if d not in ("", "0") else (_DRUZYNA or "1")
+        tekst = str(u.get("tekst") or "")
+        if not tekst:
+            continue
+        _zdarzenie_procesu(rodzaj="program", maszyna="laptop", pid=u.get("pid"), druzyna=d,
+                           sedzia=bool(u.get("sedzia")),
+                           opis="strażnik pamięci laptopa: zajmował " + str(u.get("rss")) + " MB, wolne było "
+                           + str(u.get("wolne")) + " MB")
+        log("LAPTOP", tekst)
+        if not u.get("sedzia"):
+            try:
+                with open(_plik_uwag_pamieci(d), "a", encoding="utf-8") as fh:
+                    fh.write(tekst + "\n")
+            except Exception:
+                pass
+        try:
+            with open(_DZIENNIK_ODDECHU, "a", encoding="utf-8") as fh:
+                fh.write(datetime.fromtimestamp(float(u.get("t") or time.time())).strftime("%Y-%m-%d %H:%M:%S")
+                         + " | [laptop] " + tekst + "\n")
+        except Exception:
+            pass
+
+
 def _laptop_pamiec_odczyt():
     """(wolne_mb, [(pid, druzyna, rss_mb, komenda)]) z laptopa albo None."""
     skrypt = (
@@ -26882,12 +27085,19 @@ def _laptop_do_dziennika():
 
 def _straznik_pamieci_laptopa():
     nisko = 0
+    na_miejscu = [False, 0.0]   # v480ks: straznik dziala na laptopie
     while True:
         try:
             if not _laptop.get("ok"):
                 nisko = 0
                 time.sleep(30)
                 continue
+            if time.time() - na_miejscu[1] >= 60:
+                na_miejscu[1] = time.time()
+                st = _laptop_straznik_postaw()
+                if st is not None:
+                    na_miejscu[0] = st[0]
+                    _laptop_uwagi_straznika(st[1])
             odczyt = _laptop_pamiec_odczyt()
             if not odczyt:
                 time.sleep(30)
@@ -26904,7 +27114,8 @@ def _straznik_pamieci_laptopa():
                 _laptop["log_t"] = time.time()
                 log("LAPTOP", _laptop_stan_linia(wolne, procesy))
             nisko = nisko + 1 if wolne < _LAPTOP_PAMIEC_PROG_MB else 0
-            if nisko >= 2 or wolne < _LAPTOP_PAMIEC_KRYT_MB:
+            # zapasowo z telefonu tylko, gdy straznik na laptopie nie ruszyl
+            if (nisko >= 2 or wolne < _LAPTOP_PAMIEC_KRYT_MB) and not na_miejscu[0]:
                 if _laptop_zatrzymaj_przy_braku_pamieci(wolne, procesy):
                     nisko = 0
                     time.sleep(20)
