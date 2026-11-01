@@ -4342,3 +4342,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      zapisu, procesów i sieci), przechodzi jak w PODGLĄD. Rola, która
      już rozmawia, dostaje nowy opis na start z jednym zdaniem, że to
      nowa wersja i zastępuje poprzedni.
+
+322. (v480lg) Ten sam skrypt Pythona (ta sama ścieżka i argumenty), który
+     już liczy w tle, nie rusza drugi raz, nawet gdy reszta komendy jest
+     inna (inne cd, free -m przed nim, LAPTOP:). Wcześniej porównywana
+     była cała komenda i druga kopia padała na braku pamięci. Kod
+     wyjścia 1 skryptu na laptopie nie jest już opisywany jako „nie
+     znaleziono” (program patrzył na owiniętą komendę ssh, w której jest
+     „command -v”); linia [ERROR…] w wyjściu też liczy się jako błąd.

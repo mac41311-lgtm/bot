@@ -25156,6 +25156,12 @@ def _kod_wyjscia_to_odpowiedz(command, result):
     rc = result.get("returncode")
     stderr = str(result.get("stderr") or "").strip()
     command = str(command or "")
+    # v480lf: komenda na laptopie przychodzi tu juz owinieta w ssh (z
+    # "command -v systemd-run"), wiec wyglada na pytajaca. Bieg 2026-11-01
+    # 20:04: skrypt wypisal [ERROR_RAM] i kod 1, a wynik mowil "kod 1 znaczy
+    # nie znaleziono". Liczy sie komenda, ktora napisal wykonawca.
+    if result.get("na_laptopie") and result.get("command"):
+        command = str(result.get("command"))
 
     if stderr:
         return ""
@@ -25193,7 +25199,7 @@ def _kod_wyjscia_to_odpowiedz(command, result):
     # Traceback, a wynik mowil "kod 1 znaczy nie znaleziono").
     _wy_kl = str(result.get("stdout") or "")[-3000:] + "\n" + str(result.get("stderr") or "")[-3000:]
     if (rc == 1 and _PYTAJACE_KOMENDY_RE.search(command)
-            and not re.search(r"Traceback \(most recent call last\)|^\s*[\w.]*(?:Error|Exception):|^(?:ERROR|error|fatal):",
+            and not re.search(r"Traceback \(most recent call last\)|^\s*[\w.]*(?:Error|Exception):|^(?:ERROR|error|fatal):|^\[ERROR",
                               _wy_kl, re.M)):
         result["ok"] = True
         return (
@@ -38438,6 +38444,24 @@ def _rdzen_komendy(cmd):
     return re.sub(r"\s+", " ", c).strip()
 
 
+_SKRYPT_W_KOMENDZIE_RE = re.compile(
+    r"\bpython3?\s+(?:-[uBO]+\s+)*([\w./~-]+\.py)((?:\s+(?!\d*>)[^\s;&|<>]+)*)")
+
+
+def _skrypty_komendy(cmd):
+    """v480lf: uruchomienia skryptow Pythona w komendzie ("eval/x.py --a"),
+    bez sciezki do folderu druzyny i bez LAPTOP:. Bieg 2026-11-01 20:04:
+    wykonawca puscil "LAPTOP: ... python3 -u eval/paired_bootstrap_l12.py",
+    gdy ten sam skrypt liczyl juz w tle z "cd ~/MAIN_1 && free -m; ..." —
+    caly tekst komendy byl inny, wiec program puscil druga kopie, a ta
+    padla na braku pamieci."""
+    wynik = set()
+    for m in _SKRYPT_W_KOMENDZIE_RE.finditer(str(cmd or "")):
+        sk = re.sub(r"^(?:~/|\./)?(?:MAIN_\d+/)?", "", m.group(1))
+        wynik.add((sk + " " + " ".join(m.group(2).split())).strip())
+    return wynik
+
+
 def _juz_liczy_w_tle(cmd):
     """v480gn: ta sama robota juz liczy w tle — opis dla tego, kto chce ja
     puscic drugi raz (bieg 2026-10-26 22:44: wykonawca TASK puscil
@@ -38445,8 +38469,11 @@ def _juz_liczy_w_tle(cmd):
     rdzen = _rdzen_komendy(cmd)
     if not rdzen:
         return ""
+    _skr = _skrypty_komendy(cmd)
     for r in _w_tle_zywe():
-        if r.get("rodzaj") == "komenda" and _rdzen_komendy(r.get("komenda")) == rdzen:
+        if r.get("rodzaj") == "komenda" and (
+                _rdzen_komendy(r.get("komenda")) == rdzen
+                or (_skr and _skr & _skrypty_komendy(r.get("komenda")))):
             kto = ("Komenda " + r["autor_dop"]) if r.get("autor_dop") else "Ta komenda"
             return (kto + " (" + short(rdzen, 120) + ") liczy już w tle od "
                     + _min_s(time.time() - r["start"]) + " — nie puściłem jej drugi raz, żeby dwie kopie "
