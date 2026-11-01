@@ -33145,6 +33145,9 @@ def _stan_telefonu_dla_wykonawcy():
     return "TERAZ NA TELEFONIE:\n" + "\n".join(linie)
 
 
+_zgubione_w_zadaniu = {}
+
+
 def gemini_execute_task(task_id, task, success_condition=''):
     """v480jo: zadanie wykonawcy znane w tym watku (patrz _laptop_z_zadania)."""
     _laptop_tl.zadanie = str(task or "")
@@ -34429,6 +34432,24 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                 # awaria — patrz _brak_to_odpowiedz().
                 if tool_failed and _brak_to_odpowiedz(name, args, result):
                     tool_failed = False
+
+                # v480jz: plik szukany nie tam, gdzie lezy, a program wie,
+                # gdzie jest (gdzie_ten_plik_jest) — wykonawca dostaje
+                # sciezke i poprawia komende sam, zamiast konczyc zadanie
+                # (bieg 2026-11-01 08:42, druzyna 1: patch_mixer4_crc32.py
+                # w eval/, zadanie przerwane po pierwszym ls). Dwa razy na
+                # zadanie, potem jak dotad do MAIN-a.
+                if (tool_failed and isinstance(result, dict)
+                        and result.get("gdzie_ten_plik_jest")
+                        and _zgubione_w_zadaniu.get(task_id, 0) < 2):
+                    _zgubione_w_zadaniu[task_id] = _zgubione_w_zadaniu.get(task_id, 0) + 1
+                    tool_failed = False
+                    result["popraw_sciezke"] = (
+                        "Plik leży gdzie indziej niż w komendzie — "
+                        + str(result["gdzie_ten_plik_jest"])
+                        + ". Uruchom komendę jeszcze raz z tą ścieżką.")
+                    log("GEMINI", "termux_run: zła ścieżka do pliku, który program zna — "
+                        "wykonawca dostaje właściwą i próbuje dalej.")
 
                 if tool_failed:
 

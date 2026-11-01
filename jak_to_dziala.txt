@@ -4045,3 +4045,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        ~/.ael_klucz_2_odpowiada, a terminal drużyny 1 pokazuje „Klucz 2
        (…) odpowiada (drużyna 2)”. Linia startowa z v480jx też ma kawałek
        klucza (4 pierwsze i 4 ostatnie znaki).
+
+289. (v480jz) Bieg 1.11 08:42 (drużyna 1): wykonawca szukał
+       patch_mixer4_crc32.py w ~/MAIN_1, a plik leżał w ~/MAIN_1/eval.
+       Program wiedział, gdzie jest (napisał to w logu), ale zadanie i tak
+       skończyło się po pierwszej komendzie błędem narzędzia. Teraz, gdy
+       program zna właściwą ścieżkę, wykonawca dostaje ją w wyniku („Plik
+       leży gdzie indziej… Uruchom komendę jeszcze raz z tą ścieżką”)
+       i próbuje dalej — do dwóch razy w jednym zadaniu, potem jak dotąd
+       wynik idzie do MAIN-a.
