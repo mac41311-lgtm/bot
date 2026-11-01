@@ -4225,3 +4225,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      wynik ponownie po 10 min. Komunikat o niedostępnym laptopie mówi po
      ludzku "laptop nie odpowiedział przez ssh w 20 s" zamiast surowego
      błędu Pythona.
+
+307. (v480kr) Komenda z LAPTOP:, która ustawia więcej wątków niż połowa
+     laptopa (np. OMP_NUM_THREADS=4 na 4 rdzeniach), dostaje raz to samo
+     zdanie co na telefonie: każda drużyna ma połowę laptopa (2 z 4).
+     Robota idzie dalej, nic nie jest blokowane. Wcześniej miarą była
+     połowa telefonu (4), więc 4 wątki na laptopie przechodziły bez słowa.

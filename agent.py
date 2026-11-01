@@ -641,25 +641,39 @@ def _za_duzo_watkow(name, args):
     tekst = "\n".join(
         str(args.get(k) or "") for k in ("command", "content", "code", "script")
     )
+    # v480kr: komenda LAPTOP: — miara to polowa laptopa (bieg 2026-11-01
+    # 13:35, druzyna 1: dwa eval_mix_mlp.py z OMP_NUM_THREADS=4 na 4-rdzeniowym
+    # laptopie, load 51, ssh nie odpowiadal; na telefonie 4 to akurat polowa,
+    # wiec program nic nie mowil).
+    _na_lap = bool(_LAPTOP_RE.match(str(args.get("command") or "")))
+    if _na_lap:
+        try:
+            granica, wszystkie = _laptop_watki(), int(_laptop.get("rdzenie") or 0) or 4
+        except Exception:
+            granica, wszystkie = 2, 4
+        gdzie = "laptopa"
+    else:
+        granica, wszystkie, gdzie = _WATKI_DRUZYNY, (os.cpu_count() or 2), "telefonu"
     for m in _WATKI_RE.finditer(tekst):
         surowe = next((g for g in m.groups() if g), "")
-        n = (os.cpu_count() or 2) if not surowe.isdigit() else int(surowe)
-        if n <= _WATKI_DRUZYNY:
+        n = wszystkie if not surowe.isdigit() else int(surowe)
+        if n <= granica:
             continue
-        klucz = m.group(0)
+        klucz = gdzie + ":" + m.group(0)
         if klucz in _powiedziane_o_watkach:
             return ""
         _powiedziane_o_watkach.add(klucz)
         return (
-            "Program: \"" + short(klucz, 60) + "\" (w " + str(name)
+            "Program: \"" + short(m.group(0), 60) + "\" (w " + str(name)
             + ") ustawia " + str(n) + " wątków, a każda drużyna ma połowę "
-            "telefonu: " + str(_WATKI_DRUZYNY) + " z "
-            + str(os.cpu_count() or 2) + ". Więcej wątków nie przyspieszy "
+            + gdzie + ": " + str(granica) + " z " + str(wszystkie)
+            + ". Więcej wątków nie przyspieszy "
             "tej roboty, tylko zabierze procesor drugiej drużynie i obie "
             "będą liczyć wolniej. Program ustawia już OMP_NUM_THREADS="
-            + str(_WATKI_DRUZYNY) + " itp. dla wszystkiego, co uruchamiacie; "
+            + str(granica) + " itp. dla wszystkiego, co uruchamiacie"
+            + (" na laptopie" if _na_lap else "") + "; "
             "wystarczy usunąć to ustawienie albo wpisać "
-            + str(_WATKI_DRUZYNY) + "."
+            + str(granica) + "."
         )
     return ""
 
