@@ -4277,3 +4277,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      dotyczy poprzedniej wersji, a nowa jest właśnie sprawdzana. Wcześniej
      stary „kod 124” został przypięty do nowego wyniku i MAIN szukał
      błędu w skrypcie, który działał.
+
+314. (v480ky) Komendy na laptopie (obu drużyn i Sędziego) mają najniższy
+     priorytet procesora (nice 19) i dysku (ionice best-effort 7). Gdy
+     laptop jest wolny, liczą tak samo szybko, a gdy użytkownik z niego
+     korzysta (pulpit, przeglądarka), ustępują mu i laptop się nie zacina.

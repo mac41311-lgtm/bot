@@ -27398,7 +27398,13 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " AEL_DRUZYNA=" + (_d_eksport or "0")
                + ((" AEL_KOMENDA=" + _numer_komendy()) if _numer_komendy() and not limit_s else "")
                + (" AEL_SEDZIA=1" if limit_s else "")
-               + " && exec nice -n 5 "
+               # v480ky: laptop to tez pulpit uzytkownika (bieg 2026-11-01
+               # 18:39: CPU 100%, swap 1,1 GB, nacisk na dysk 40-56% — pulpit
+               # i Firefox sie zacinaly). Najnizszy priorytet procesora i
+               # dysku dla obu druzyn i Sedziego: licza tyle samo, gdy laptop
+               # jest wolny, a ustepuja uzytkownikowi.
+               + " && { ionice -c 2 -n 7 -p $$ >/dev/null 2>&1 || true; }"
+               + " && exec nice -n 19 "
                + (("timeout -k 10 " + str(int(limit_s)) + " ") if limit_s else "")
                + "bash -lc " + shlex.quote(polecenie))
     if limit_s:
