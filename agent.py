@@ -6005,6 +6005,8 @@ def start_session(name, system_prompt):
                 _role_seen_blocks.pop(_slot, None)
 
         sessions[name] = session
+        if session is not None and _token_czeka.pop(_account_of(name), None):
+            log("DEEPSEEK", "Konto " + str(_account_of(name)) + " znowu działa — wracam do pracy.")
 
         return session
 
@@ -6040,16 +6042,14 @@ def start_session(name, system_prompt):
                 else TOKEN_FILE_2.name
             )
 
-            log(
-                "DEEPSEEK",
-                f"Sesja {name} (konto {account}) — token "
-                "prawdopodobnie WYGASŁ lub jest nieprawidłowy "
-                "(serwer nie zwrócił poprawnej sesji zamiast "
-                "błędu). Zaloguj się ponownie na "
-                "chat.deepseek.com na TYM koncie, wyciągnij "
-                "świeży userToken z localStorage i zaktualizuj "
-                f"~/{token_file_name}, potem zrestartuj program."
-            )
+            # v480lm: bieg 2026-11-02 17:05-17:40 (druzyna 2): po tym
+            # komunikacie program szedl do nastepnego kroku i probowal od
+            # nowa — 1022 puste kroki w 35 min, kazdy z dwiema nowymi
+            # probami rozmowy. Teraz czekamy (bez limitu) na nowy token w
+            # pliku; co 10 min jedna proba na wypadek, gdyby to jednak
+            # nie byl token.
+            if _czekaj_na_nowy_token(name, account, token_file_name):
+                return start_session(name, system_prompt)
 
         else:
 
@@ -6263,6 +6263,54 @@ def _internet_jest(timeout=5):
         except Exception:
             continue
     return False
+
+
+_token_czeka = {}
+
+
+def _czekaj_na_nowy_token(name, account, token_file_name):
+    """v480lm: token konta nie dziala — czekamy, az uzytkownik wpisze nowy
+    do pliku (program bierze go sam, bez restartu). Najdluzej 10 min na
+    raz, potem jedna proba tym samym tokenem. Zawsze True (ponow)."""
+    plik = HOME / token_file_name
+    stary = _account_tokens.get(account) or ""
+    pierwszy = account not in _token_czeka
+    if pierwszy:
+        _token_czeka[account] = time.time()
+        log(
+            "DEEPSEEK",
+            f"Sesja {name} (konto {account}): serwer nie założył rozmowy — token "
+            "prawdopodobnie WYGASŁ albo jest nieprawidłowy. Wstrzymuję pracę na tym "
+            "koncie i czekam. Jak naprawić: zaloguj się na chat.deepseek.com na TYM "
+            "koncie, skopiuj świeży userToken z localStorage i wpisz go do "
+            f"~/{token_file_name} — program weźmie go sam, bez restartu. Co 10 min "
+            "spróbuję jeszcze raz obecnym tokenem."
+        )
+        try:
+            subprocess.run(
+                ["termux-notification", "--id", "ael_token_" + str(account),
+                 "-t", "AEL: token konta " + str(account) + " nie działa",
+                 "-c", "Wpisz nowy userToken do ~/" + token_file_name
+                 + " — program czeka i weźmie go sam."],
+                capture_output=True, timeout=15)
+        except Exception:
+            pass
+    od = time.time()
+    while time.time() - od < 600:
+        time.sleep(15)
+        nowy = read_text(plik).strip()
+        if nowy and nowy != stary and not re.search(r"\s", nowy):
+            _account_tokens[account] = nowy
+            if account == 1 and not read_text(TOKEN_FILE_2).strip():
+                _account_tokens[2] = nowy
+            log("DEEPSEEK", "Nowy token konta " + str(account) + " ("
+                + _kawalek_klucza(nowy) + ") — zakładam rozmowę od nowa.")
+            _token_czeka.pop(account, None)
+            return True
+    log("DEEPSEEK", "Konto " + str(account) + ": nadal czekam na nowy token w ~/"
+        + token_file_name + " (od " + str(int((time.time() - _token_czeka.get(account, od)) / 60))
+        + " min) — jedna próba obecnym tokenem.")
+    return True
 
 
 def _czekaj_na_internet(name, blad):
@@ -22712,7 +22760,15 @@ def _zastap_plik_autora(rola, p, kod, folder):
             [l for l in _nw.splitlines() if l.strip() and not l.startswith("#!")] or [""])[0])
         if not (_podpisany and _nw and _znormalizuj_kod(_nw) != _znormalizuj_kod(_st)
                 and not _SKROT_W_KODZIE_RE.search(_nw)):
-            if _nw and _znormalizuj_kod(_nw) != _znormalizuj_kod(_st):
+            # v480lm: bieg 2026-11-02 17:10 (druzyna 1) — blok z komendami
+            # ps/grep (nazwa diagnose.py w zdaniu nad nim) dostal "Nie
+            # zastapilem diagnose.py". Zdanie tylko, gdy blok wyglada na
+            # kawalek tego pliku: ma z nim wspolna linie albo nazwe def/class.
+            _linie_st = {l.strip() for l in _st.splitlines() if len(l.strip()) >= 8}
+            _wspolne = any(l.strip() in _linie_st for l in _nw.splitlines() if len(l.strip()) >= 8)
+            _nazwy = re.findall(r"(?m)^\s*(?:def|class|function|fn|func)\s+(\w+)", _nw)
+            _wycinek = _wspolne or any(re.search(r"\b" + re.escape(n) + r"\b", _st) for n in _nazwy)
+            if _wycinek and _nw and _znormalizuj_kod(_nw) != _znormalizuj_kod(_st):
                 return ("[Nie zastąpiłem " + sciezka + " blokiem od " + imie_d + ": blok ma "
                         + str(len(_nw.encode("utf-8"))) + " B, a plik " + str(len(_st.encode("utf-8")))
                         + " B, więc wygląda na wycinek. Zmianę podaj jako poprawkę fragmentu "
@@ -27867,6 +27923,25 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
             return wynik
         tekst = str(wynik.get("stdout") or "") + "\n" + str(wynik.get("stderr") or "")
         gdzie = "Na laptopie" if na_laptopie else "Na telefonie"
+        # v480lm: bieg 2026-11-02 17:34 (druzyna 1): "mv a b c ... kod/ppm_c_mut"
+        # bez folderu docelowego na koncu — nic sie nie przenioslo, a przez
+        # "| tail -5" kod wyjscia byl 0. Zdanie mowi, co sie stalo i jak dalej.
+        m = re.search(r"\b(mv|cp|ln): (?:target|nazwa docelowa) ['‘’`\"]?([^'’`\"\n:]+)['’`\"]?:?\s*"
+                      r"(?:is not a directory|Nie jest katalogiem)", tekst)
+        if m:
+            wynik["podpowiedz"] = (
+                m.group(1) + " z kilkoma plikami bierze ostatni argument jako folder docelowy, a „"
+                + m.group(2).strip() + "” nie jest folderem — nic nie zostało przeniesione ani "
+                "skopiowane. Dopisz folder docelowy na końcu (np. " + m.group(1)
+                + " plik1 plik2 kod/archiwum/) i sprawdź wynik przez ls.")
+            return wynik
+        _brak = re.findall(r"\b(?:mv|cp): (?:cannot stat|nie można wykonać stat dla) ['‘`\"]?([^'’`\"\n:]+)", tekst)
+        if _brak:
+            wynik["podpowiedz"] = (
+                "Tych plików nie ma, więc nie zostały przeniesione ani skopiowane: " + ", ".join(_brak[:8])
+                + (" i " + str(len(_brak) - 8) + " innych" if len(_brak) > 8 else "")
+                + ". Sprawdź nazwy przez ls; reszta plików z tej komendy poszła normalnie.")
+            return wynik
         m = _BRAK_MODULU_RE.search(tekst)
         if m:
             modul = m.group(1)

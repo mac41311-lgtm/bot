@@ -4394,3 +4394,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      linii końca rola dostaje informację, co dopisać albo jak zapisać kod
      jako plik. „URUCHOM:” z blokiem ```bash pod spodem uruchamia treść
      bloku.
+
+328. (v480lm) Wygasły token konta: gdy serwer DeepSeeka nie zakłada
+     rozmowy, program nie idzie już do następnego kroku (wcześniej 1022
+     puste kroki w 35 min), tylko wstrzymuje pracę na tym koncie,
+     pisze raz w terminalu i powiadomieniu, co zrobić, i czeka. Nowy
+     token wpisany do ~/api_token.txt albo ~/api_token_2.txt bierze sam,
+     bez restartu; co 10 min próbuje jeszcze raz obecnym tokenem.
+     Pliki: blok z komendami (ps, grep) pod zdaniem z nazwą pliku nie
+     dostaje już uwagi „Nie zastąpiłem … wycinek” — ta uwaga przychodzi
+     tylko, gdy blok ma wspólną linię albo funkcję z tym plikiem. Błąd
+     mv/cp „nie jest katalogiem” (brak folderu docelowego na końcu) i
+     „cannot stat” (nie ma takiego pliku) dostają podpowiedź, co się
+     stało i jak poprawić.
