@@ -28495,6 +28495,8 @@ def termux_run(command):
         _threading.current_thread().ael_kid = _kid
     except Exception:
         pass
+    _t_start = time.time()
+    _kid_tl.wykonana = None
     try:
         wynik = _termux_run_wew(command)
     finally:
@@ -28505,6 +28507,7 @@ def termux_run(command):
             _threading.current_thread().ael_kid = _kid_przed
         except Exception:
             pass
+    _zapisz_widziana(getattr(_kid_tl, "wykonana", None) or command, wynik, _t_start)
     try:
         if (isinstance(wynik, dict) and isinstance(wynik.get("returncode"), int)
                 and _to_instalacja(command) and not wynik.get("podsumowanie")):
@@ -28537,6 +28540,7 @@ def _termux_run_wew(command):
         if _z_zadania:
             command_str = command = _z_zadania
     lap = _na_laptopa(command_str)
+    _kid_tl.wykonana = command_str
     if isinstance(lap, dict):
         return lap
     if not lap:
@@ -60875,6 +60879,171 @@ def _laptop_zabij_komende(kid):
         pass
 
 
+# v480lp: Sedzia przyjmuje liczbe, ktora program sam widzial. Bieg
+# 2026-11-02 (druzyna 1): ppm_c_v3 liczyl ~20 min na laptopie i wypisal
+# wynik na oczach programu, a Sedzia i tak puszczal to samo od nowa (i
+# przerywal po 5 min) — druzyna zaczela pisac szybsza wersje tylko dla
+# Sedziego. Teraz kazda komenda druzyny zakonczona liczba w ostatniej linii
+# zostaje zapisana (komenda, liczba, czas startu). Sedzia przyjmuje taka
+# liczbe bez ponownego liczenia, gdy jego "sprawdz" to ta sama komenda w
+# tym samym katalogu i na tej samej maszynie, a pliki, ktore wymienia,
+# nie zmienily sie od startu tamtego przebiegu. Liczbom z plikow
+# zapisanych przez sama druzyne Sedzia nie ufa — tylko temu, co widzial.
+_WIDZIANE_MAKS = 300
+_RDZEN_POMIJA = {"cd", "echo", "printf", "tail", "head", "grep", "egrep", "cat", "true",
+                 "ps", "ls", "sleep", "date", "wc", "sort", "uniq", "awk", "sed", "tee",
+                 "pwd", "export", "set", "free", "nproc", "uptime", "du", "df", "mkdir",
+                 "touch", "which", "type", ":"}
+
+
+def _widziane_plik(numer):
+    return _RYWALIZACJA_DIR / ("widziane_" + str(numer) + ".jsonl")
+
+
+def _zapisz_widziana(komenda, wynik, start):
+    try:
+        if not _DRUZYNA or not isinstance(wynik, dict) or wynik.get("returncode") != 0:
+            return
+        if str(getattr(_kid_tl, "kid", "") or "").startswith("s"):
+            return
+        liczba = _ostatnia_liczba(wynik.get("stdout"))
+        if liczba is None or not _rdzen_komendy(komenda)[2]:
+            return
+        plik = _widziane_plik(_DRUZYNA)
+        plik.parent.mkdir(parents=True, exist_ok=True)
+        linie = []
+        if plik.exists():
+            linie = plik.read_text(encoding="utf-8", errors="replace").splitlines()[-(_WIDZIANE_MAKS - 1):]
+        linie.append(json.dumps({"start": float(start), "koniec": time.time(),
+                                 "komenda": str(komenda)[:3000], "liczba": liczba},
+                                ensure_ascii=False))
+        plik.write_text("\n".join(linie) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _rdzen_komendy(komenda, katalog_tel="~"):
+    """(laptop?, katalog, [segmenty liczace]) — bez cd/echo/tail/…,
+    timeout/nice/time i przekierowan. Komenda druzyny na telefonie startuje
+    w ~, sprawdzanie Sedziego w ~/MAIN_n (katalog_tel)."""
+    k = str(komenda or "").strip()
+    laptop = False
+    m = _LAPTOP_RE.match(k)
+    if m:
+        laptop = True
+        k = m.group(1).strip()
+    katalog = ("~/" + _laptop_folder()) if laptop else katalog_tel
+    segmenty = []
+    for seg in re.split(r"&&|\|\||[;|\n]", k):
+        seg = re.sub(r"\s*\d*>>?\s*(?:&\s*\d+|\S+)", " ", seg)
+        seg = re.sub(r"\s*<\s*\S+", " ", seg).strip()
+        slowa = seg.split()
+        if not slowa:
+            continue
+        if slowa[0] == "cd" and len(slowa) > 1:
+            cel = slowa[1].strip("\"'")
+            katalog = cel if cel.startswith(("~", "/")) else (katalog.rstrip("/") + "/" + cel)
+            continue
+        while slowa:
+            if slowa[0] in ("time", "nohup", "setsid", "command", "exec", "env"):
+                slowa = slowa[1:]
+            elif slowa[0] == "nice":
+                slowa = slowa[1:]
+                if slowa[:1] == ["-n"]:
+                    slowa = slowa[2:]
+                elif slowa and re.fullmatch(r"-\d+", slowa[0]):
+                    slowa = slowa[1:]
+            elif slowa[0] == "timeout":
+                slowa = slowa[1:]
+                while slowa and slowa[0].startswith("-"):
+                    slowa = slowa[2:] if slowa[0] in ("-k", "-s") else slowa[1:]
+                slowa = slowa[1:]
+            elif re.fullmatch(r"[A-Za-z_]\w*=\S*", slowa[0]):
+                slowa = slowa[1:]
+            else:
+                break
+        if not slowa or slowa[0] in _RDZEN_POMIJA:
+            continue
+        slowa = [w[2:] if w.startswith("./") else w for w in slowa]
+        if slowa[0] == "python":
+            slowa[0] = "python3"
+        segmenty.append(" ".join(slowa))
+    return laptop, katalog.rstrip("/") or "~", segmenty
+
+
+def _pliki_bez_zmian(laptop, katalog, segmenty, start, numer):
+    """True, gdy kazdy plik wymieniony w komendzie istnieje i nie byl
+    zmieniany po `start`; inaczej tekst powodu."""
+    nazwy = []
+    for seg in segmenty:
+        for w in seg.split():
+            w = w.strip("\"'")
+            if (not w or w.startswith("-") or "=" in w or re.fullmatch(r"[\d.,eE+-]+", w)
+                    or not ("/" in w or re.search(r"\.\w{1,5}$", w))):
+                continue
+            if w not in nazwy:
+                nazwy.append(w)
+    if not nazwy:
+        return "komenda nie wymienia żadnego pliku"
+    if not laptop:
+        baza = Path(os.path.expanduser(katalog.replace("~", str(HOME), 1) if katalog.startswith("~") else katalog))
+        for n in nazwy:
+            p = Path(os.path.expanduser(n)) if n.startswith(("~", "/")) else baza / n
+            try:
+                if p.stat().st_mtime > start:
+                    return "plik " + n + " zmieniony po tamtym przebiegu"
+            except OSError:
+                return "nie ma pliku " + n
+        return True
+    if not _laptop_skonfigurowany():
+        return "laptop niedostępny"
+    cel = ("~" + shlex.quote(katalog[1:] or "/")) if katalog.startswith("~") else shlex.quote(katalog)
+    skrypt = ("cd ~/" + _laptop_folder(str(numer)) + " && cd " + cel
+              + " && date +%s && stat -c '%Y' -- " + " ".join(shlex.quote(n) for n in nazwy))
+    try:
+        r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                           capture_output=True, text=True, timeout=30)
+        wy = r.stdout.split()
+        if r.returncode != 0 or len(wy) != len(nazwy) + 1:
+            return "na laptopie brak któregoś pliku"
+        przesuniecie = float(wy[0]) - time.time()
+        for n, t in zip(nazwy, wy[1:]):
+            if float(t) - przesuniecie > start:
+                return "plik " + n + " zmieniony po tamtym przebiegu"
+        return True
+    except Exception as e:
+        return "laptop nie odpowiedział (" + type(e).__name__ + ")"
+
+
+def _widziana_liczba(numer, komenda, ogloszony):
+    """(wpis, None) gdy program widzial te komende z ta liczba, a pliki sie
+    nie zmienily; (None, powod) gdy nie."""
+    laptop, katalog, rdzen = _rdzen_komendy(komenda, "~/MAIN_" + str(numer))
+    if not rdzen:
+        return None, "komenda bez części liczącej"
+    try:
+        linie = _widziane_plik(numer).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None, "brak widzianych przebiegów"
+    powod = "program nie widział tej komendy z tą liczbą"
+    for linia in reversed(linie):
+        try:
+            w = json.loads(linia)
+            liczba = float(w.get("liczba"))
+        except Exception:
+            continue
+        if abs(liczba - ogloszony) > 0.005 * max(1.0, abs(ogloszony)):
+            continue
+        l2, k2, r2 = _rdzen_komendy(w.get("komenda"))
+        if l2 != laptop or k2 != katalog or not all(s in r2 for s in rdzen):
+            continue
+        ok = _pliki_bez_zmian(laptop, katalog, rdzen, float(w.get("start") or 0), numer)
+        if ok is True:
+            return w, None
+        powod = ok
+    return None, powod
+
+
 def _sedzia_ocen(numer):
     """Sprawdza wynik.json druzyny i zapisuje werdykt na tablicy."""
 
@@ -60962,6 +61131,19 @@ def _sedzia_ocen(numer):
             return w2
     except Exception:
         pass
+    try:
+        _wid, _wid_powod = _widziana_liczba(numer, komenda, ogloszony)
+        if _wid and not _liczba_wpisana(komenda, folder, str(_wid.get("liczba"))):
+            _godz = datetime.fromtimestamp(float(_wid.get("koniec") or time.time())).strftime("%H:%M")
+            werdykt.update(werdykt="potwierdzone", wypisala=_wid.get("liczba"), szczegol=(
+                "program sam widział, jak ta komenda wypisała " + str(_wid.get("liczba"))
+                + " (o " + _godz + "), a pliki, których używa, się od tego czasu nie zmieniły "
+                "— nie liczyłem drugi raz"))
+            write_json(_liczba_plik, {"klucz": _klucz_liczby, "czas": werdykt["czas"], "werdykt": werdykt})
+            log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": " + werdykt["szczegol"] + ".")
+            return werdykt
+    except Exception as e:
+        log("RYWALIZACJA", "Sędzia: sprawdzenie widzianych przebiegów nie wyszło: " + str(e)[:200])
     stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
     wyj_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".out")
     klucz = json.dumps([str(dane.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")],

@@ -4431,3 +4431,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      stałej części danych, a „wynik” to liczba z tej krótszej komendy.
      Wynik potwierdzony wcześniej tą samą komendą (także przed tą
      wersją) nie jest liczony drugi raz.
+
+331. (v480lp) Sędzia przyjmuje liczbę, którą program sam widział. Każda
+     komenda drużyny, która skończyła się liczbą w ostatniej linii, jest
+     zapisywana (komenda, liczba, czas). Gdy „sprawdz” to ta sama komenda
+     (bez echo/tail/timeout i przekierowań) w tym samym katalogu i na tej
+     samej maszynie, a pliki, które wymienia (program, dane, skrypt), nie
+     zmieniły się od startu tamtego przebiegu, Sędzia potwierdza wynik bez
+     liczenia drugi raz. Liczbom z plików zapisanych przez samą drużynę
+     nie ufa, a liczba wpisana wprost w komendę albo skrypt dalej idzie
+     do zwykłego sprawdzenia.
