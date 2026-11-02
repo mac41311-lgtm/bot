@@ -4407,3 +4407,19 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      mv/cp „nie jest katalogiem” (brak folderu docelowego na końcu) i
      „cannot stat” (nie ma takiego pliku) dostają podpowiedź, co się
      stało i jak poprawić.
+
+329. (v480ln) Sędzia i pliki.
+     - Sama zmiana „opis” w wynik.json nie uruchamia już drugi raz tej
+       samej komendy „sprawdz” (wcześniej każde dopisanie do opisu to
+       kolejne 20 min liczenia na laptopie). Potwierdzona liczba z tej
+       samej komendy i tego samego wyniku zostaje, ocena dostaje nowy opis.
+     - Przerwane sprawdzanie Sędziego na laptopie (za długie albo
+       zastąpione nowym) jest zatrzymywane też na laptopie, nie tylko
+       połączenie ssh na telefonie.
+     - TASK „Bartku, popraw plik” nie kładzie już starej wersji Bartka z
+       wcześniejszego kroku, gdy ta jest identyczna z plikiem na dysku
+       albo plik zmienił się po niej — Bartek dostaje zadanie i pisze
+       nową wersję.
+     - Na telefonie „cd MAIN_1 && …” (ścieżka względna) działa; gdy
+       komenda na telefonie nie znajduje pliku, który leży w folderze
+       drużyny, wynik mówi, gdzie on jest i jak go wskazać.

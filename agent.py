@@ -4006,6 +4006,7 @@ def _zapamietaj_kod_autora(rola, tekst):
             "krok": _biezacy_krok,
             "rola": str(rola),
             "tekst": tresc,
+            "czas": time.time(),
         })
 
         del _kod_autorow[:-_PAMIEC_AUTOROW]
@@ -28355,6 +28356,41 @@ _BRAK_PLIKU_NAZWA_RE = re.compile(
 _TYLKO_CZYTA_RE = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:ls|cat|tail|head|grep|egrep|wc|stat|du|file|md5sum|sha256sum)\b")
 
 
+def _plik_jest_w_folderze_druzyny(wynik, komenda=""):
+    """
+    v480ln: na telefonie komenda startuje w ~ (na laptopie w ~/MAIN_n).
+    Bieg 2026-11-02 18:27 (druzyna 1): "cat >> ~/MAIN_1/NOTES.md …; ls
+    PODSUMOWANIE.md NOTES.md wynik.json" — "No such file" na plikach,
+    ktore leza w ~/MAIN_1, i MAIN uznal, ze ich nie ma. Wynik mowi teraz,
+    gdzie sa i jak je wskazac.
+    """
+    try:
+        if not isinstance(wynik, dict) or not _DRUZYNA or wynik.get("podpowiedz"):
+            return wynik
+        tekst = str(wynik.get("stderr") or "") + "\n" + str(wynik.get("stdout") or "")[-3000:]
+        if "No such file" not in tekst and "cannot access" not in tekst and "Nie ma takiego" not in tekst:
+            return wynik
+        if _katalog_startu_komendy(komenda) != str(HOME):
+            return wynik
+        folder = _folder_druzyny(_DRUZYNA)
+        jest = []
+        for m in _BRAK_PLIKU_NAZWA_RE.finditer(tekst):
+            n = (m.group(1) or m.group(2) or "").strip()
+            if (n and not n.startswith(("/", "~", "..")) and ".." not in n.split("/")
+                    and n not in jest and (Path(folder) / n).exists() and not (HOME / n).exists()):
+                jest.append(n)
+        if jest:
+            wynik["podpowiedz"] = (
+                "Na telefonie komenda startuje w ~, a nie w folderze drużyny (na laptopie "
+                "startuje w ~/" + Path(folder).name + "). " + ", ".join(jest[:5])
+                + (" leży" if len(jest) == 1 else " leżą") + " w ~/" + Path(folder).name
+                + "/. Zacznij komendę od cd ~/" + Path(folder).name + " && albo podaj pełną "
+                "ścieżkę (~/" + Path(folder).name + "/" + jest[0] + ").")
+    except Exception:
+        pass
+    return wynik
+
+
 def _plik_jest_na_laptopie(wynik, komenda=""):
     """
     v480kb: komenda na telefonie nie znalazla pliku, ktory jest na
@@ -28505,9 +28541,9 @@ def _termux_run_wew(command):
         return lap
     if not lap:
         _zapisz_kill_zespolu(command_str, "telefon")
-        return _plik_jest_na_laptopie(
+        return _plik_jest_na_laptopie(_plik_jest_w_folderze_druzyny(
             _z_podpowiedzia_biblioteki(_termux_run_lokalnie(command), command_str, False),
-            command_str)
+            command_str), command_str)
     _polecenie_lap = _LAPTOP_RE.match(command_str).group(1)
     log("LAPTOP", "Na laptopie (~/" + _laptop_folder() + "): " + short(_polecenie_lap, 200))
     _zapisz_kill_zespolu(_polecenie_lap, "laptop")
@@ -28623,6 +28659,14 @@ def _termux_run_wew(command):
 def _termux_run_lokalnie(command):
     try:
         command_str = str(command or "")
+        # v480ln: "cd MAIN_1 && …" (wzgledna sciezka) — powloka startuje juz
+        # w tym katalogu (_katalog_startu_komendy), wiec jej wlasne "cd
+        # MAIN_1" szukalo ~/MAIN_1/MAIN_1 i cala komenda padala (bieg
+        # 2026-11-02 18:50, wykonawca: "cd: MAIN_1: No such file").
+        _cd = re.match(r"(\s*cd\s+)([\"']?)([^\s;&|\"'~/$][^\s;&|\"']*)\2(\s*(?:&&|;))", command_str)
+        if _cd and (HOME / _cd.group(3)).is_dir():
+            command_str = command = (_cd.group(1) + "~/" + _cd.group(3).rstrip("/")
+                                     + _cd.group(4) + command_str[_cd.end():])
 
         # v480di: tylko prawdziwy zapis DO tego pliku. Bieg 2026-10-21
         # 23:22 (druzyna 2): `ls ...OD_UZYTKOWNIKA.txt; cat ... 2>&1`
@@ -56242,6 +56286,38 @@ def run_agent(goal):
                         )
                         _z_pamieci = None
 
+                # v480ln: kod z pamieci identyczny z plikiem na dysku nic nie
+                # wnosi. Bieg 2026-11-02 18:49 (druzyna 1, krok 53): TASK
+                # "Bartku, popraw tiny_lm.py (v3)" — program polozyl wersje
+                # Bartka z kroku 24 (ta sama, co na dysku), Bartek nie dostal
+                # zadania, a MAIN uruchomil stara v2 jako "v3".
+                if _z_pamieci:
+                    try:
+                        _np = _resolve_home_relative_path(write_target)
+                        _chce_zmiany = bool(re.search(
+                            r"\b(?:popraw|napraw|zmie[nń]|przer[oó]b|przepisz|fix|now[aą]\s+wersj)",
+                            str(task_text or ""), re.IGNORECASE)) or (step - int(_z_pamieci[2] or 0) >= 3)
+                        if _chce_zmiany and _np.is_file() and _znormalizuj_kod(
+                                _np.read_text(encoding="utf-8", errors="replace")
+                        ) == _znormalizuj_kod(str(_z_pamieci[0])):
+                            log("MAIN", Path(str(write_target)).name + ": kod z kroku "
+                                + str(_z_pamieci[2]) + " już jest na dysku — to nie nowa "
+                                "wersja, proszę Bartka o kod do tego zadania.")
+                            _z_pamieci = None
+                        elif _np.is_file():
+                            # plik zmieniony po tamtej wypowiedzi (latka,
+                            # nowsza wersja) — stary kod by go cofnal
+                            _czas = max([w.get("czas", 0) for w in _kod_autorow
+                                         if w.get("krok") == _z_pamieci[2]
+                                         and w.get("rola") == _z_pamieci[1]] or [0])
+                            if _czas and _np.stat().st_mtime > _czas + 5:
+                                log("MAIN", Path(str(write_target)).name + ": plik na dysku "
+                                    "zmienił się po kodzie z kroku " + str(_z_pamieci[2])
+                                    + " — nie cofam go starą wersją, proszę Bartka o kod.")
+                                _z_pamieci = None
+                    except Exception:
+                        pass
+
                 if _z_pamieci:
 
                     engineer_code = _z_pamieci[0]
@@ -60545,6 +60621,7 @@ def zdyskwalifikuj(numer, powod, ocena):
             pass
         _do_archiwum_po_dyskwalifikacji("2", (
             _folder_druzyny(2), _RYWALIZACJA_DIR / "druzyna_2.json", _DRUZYNA2_DIR,
+            _RYWALIZACJA_DIR / "potwierdzone_2.json",
         ))
         try:
             _folder_druzyny(2).mkdir(parents=True, exist_ok=True)
@@ -60563,7 +60640,8 @@ def wykonaj_dyskwalifikacje_1():
         return False
     _dyskwalifikacja_1[0] = False
     try:
-        do_archiwum = [_folder_druzyny(1), _RYWALIZACJA_DIR / "druzyna_1.json"]
+        do_archiwum = [_folder_druzyny(1), _RYWALIZACJA_DIR / "druzyna_1.json",
+                       _RYWALIZACJA_DIR / "potwierdzone_1.json"]
         archiwum = _do_archiwum_po_dyskwalifikacji("1", do_archiwum)
         for _katalog in (RESULTS_DIR, QUEUE_DIR):
             for f in list(_katalog.glob("*.json")):
@@ -60777,6 +60855,23 @@ def _liczba_wpisana(komenda, folder, wyjscie):
     return ""
 
 
+def _laptop_zabij_komende(kid):
+    """v480ln: zabicie ssh na telefonie nie konczy procesu na laptopie (bez
+    terminala nie dostaje sygnalu) — konczymy go po numerze komendy
+    (AEL_KOMENDA w srodowisku). Bez tego przerwane sprawdzanie Sedziego
+    liczylo dalej na laptopie."""
+    kid = str(kid or "")
+    if not re.fullmatch(r"[\w.-]+", kid) or not _laptop_skonfigurowany():
+        return
+    skrypt = ("for p in /proc/[0-9]*; do grep -qz '^AEL_KOMENDA=" + kid + "$' $p/environ 2>/dev/null "
+              "&& kill -9 ${p#/proc/} 2>/dev/null; done; true")
+    try:
+        subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
+                       capture_output=True, timeout=20)
+    except Exception:
+        pass
+
+
 def _sedzia_ocen(numer):
     """Sprawdza wynik.json druzyny i zapisuje werdykt na tablicy."""
 
@@ -60827,6 +60922,26 @@ def _sedzia_ocen(numer):
     # "test..." zamiast liczby. Teraz stan sprawdzania jest w pliku, a
     # wyjscie idzie do pliku: nowy proces programu czeka na to samo
     # sprawdzanie, zamiast puszczac drugie.
+    # v480ln: sama zmiana "opis" nie zmienia liczby — Sedzia nie puszcza
+    # drugi raz tej samej komendy. Bieg 2026-11-02 (druzyna 1): opis
+    # dopisywany co kilka krokow, a kazda zmiana to kolejne 20 min
+    # ppm_c_v3 na laptopie ("proces Sedziego caly czas chodzi").
+    _liczba_plik = _RYWALIZACJA_DIR / ("potwierdzone_" + str(numer) + ".json")
+    _klucz_liczby = json.dumps([str(dane.get(k)) for k in ("wynik", "lepiej", "sprawdz")],
+                               ensure_ascii=False)
+    try:
+        _pop = read_json(_liczba_plik, {})
+        if (isinstance(_pop, dict) and _pop.get("klucz") == _klucz_liczby
+                and isinstance(_pop.get("werdykt"), dict)
+                and _pop["werdykt"].get("werdykt") == "potwierdzone"):
+            w2 = dict(_pop["werdykt"])
+            w2.update(czas=werdykt["czas"], opis=werdykt["opis"])
+            log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": zmienił się tylko opis — "
+                "liczbę z tej samej komendy potwierdziłem już " + str(_pop.get("czas") or "")
+                + ", nie uruchamiam jej drugi raz.")
+            return w2
+    except Exception:
+        pass
     stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
     wyj_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".out")
     klucz = json.dumps([str(dane.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")],
@@ -60859,6 +60974,8 @@ def _sedzia_ocen(numer):
                     os.killpg(int(stan["pid"]), signal.SIGKILL)  # stare zgloszenie
                 except Exception:
                     pass
+                if stan.get("laptop") and stan.get("kid"):
+                    _laptop_zabij_komende(stan.get("kid"))
             # v480jb: "LAPTOP: …" w sprawdz — Sedzia liczy na laptopie, w
             # folderze tej druzyny, z jej polowa rdzeni i tym samym limitem
             # (uzytkownik 2026-10-31: "sedzia ma byc dla kazdego zadania
@@ -60918,6 +61035,8 @@ def _sedzia_ocen(numer):
                     os.killpg(pid, signal.SIGKILL)
                 except Exception:
                     pass
+                if _na_lapie_s:
+                    _laptop_zabij_komende(_kid_s)
                 if proces is not None:
                     try:
                         proces.wait(timeout=10)
@@ -61024,6 +61143,11 @@ def _sedzia_ocen(numer):
     elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):
         werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala)
                        + _liczba_wpisana(komenda, folder, wyjscie))
+        try:
+            write_json(_liczba_plik, {"klucz": _klucz_liczby, "czas": werdykt.get("czas"),
+                                      "werdykt": werdykt})
+        except Exception:
+            pass
     else:
         werdykt.update(werdykt="nie wyszło", szczegol="komenda wypisała " + str(wypisala)
                        + ", a ogłoszone było " + str(ogloszony))
