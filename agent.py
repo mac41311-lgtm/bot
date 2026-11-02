@@ -58304,7 +58304,10 @@ def _run_permission_bootstrap():
 _RYWALIZACJA_DIR = HOME / "RYWALIZACJA"
 _PLIK_PID_DRUZYNY2 = _DRUZYNA2_DIR / "pid.txt"
 _SEDZIA_CO_S = 30
-_SEDZIA_MAKS_S = 20 * 60
+# v480lo: uzytkownik 2026-11-02 ("nie moze tez duzo procesu zajmowac") —
+# 5 min zamiast 20. "sprawdz" ma odczytac wynik z gotowego modelu albo
+# policzyc go na malej, stalej probce, nie trenowac ani liczyc wszystkiego.
+_SEDZIA_MAKS_S = 5 * 60
 _druzyna2 = {"pid": 0, "cel": "", "starty": []}
 _druzyna2_lock = _threading.Lock()
 _sedzia_wiadomosci = []
@@ -60942,6 +60945,23 @@ def _sedzia_ocen(numer):
             return w2
     except Exception:
         pass
+    # v480lo: werdykt sprzed v480ln (na tablicy druzyny) — ta sama liczba,
+    # ta sama komenda, potwierdzone: nie liczymy drugi raz.
+    try:
+        _tab = read_json(_RYWALIZACJA_DIR / ("druzyna_" + str(numer) + ".json"), {})
+        if (isinstance(_tab, dict) and _tab.get("werdykt") == "potwierdzone"
+                and str(_tab.get("sprawdz") or "") == komenda[:500]
+                and str(_tab.get("lepiej") or "") == werdykt["lepiej"]
+                and _tab.get("wynik") is not None
+                and abs(float(_tab.get("wynik")) - ogloszony) < 1e-12):
+            w2 = {k: v for k, v in _tab.items() if not str(k).startswith("_")}
+            w2.update(czas=werdykt["czas"], opis=werdykt["opis"])
+            write_json(_liczba_plik, {"klucz": _klucz_liczby, "czas": _tab.get("czas"), "werdykt": w2})
+            log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": tę liczbę z tej samej "
+                "komendy potwierdziłem już " + str(_tab.get("czas") or "") + " — nie uruchamiam jej drugi raz.")
+            return w2
+    except Exception:
+        pass
     stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
     wyj_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".out")
     klucz = json.dumps([str(dane.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")],
@@ -61046,10 +61066,15 @@ def _sedzia_ocen(numer):
                     stan_plik.unlink()
                 except Exception:
                     pass
-                werdykt.update(werdykt="nie wyszło", szczegol="komenda nie skończyła się w "
-                               + str(_SEDZIA_MAKS_S // 60) + " min — komenda w wynik.json ma "
-                               "tylko przeliczyć wynik z gotowego modelu; skróćcie ją albo "
-                               "wskażcie szybszą")
+                werdykt.update(werdykt="nie wyszło", szczegol=(
+                    "komenda \"sprawdz\" nie skończyła się w " + str(_SEDZIA_MAKS_S // 60)
+                    + " min, więc Sędzia jej nie potwierdził. Sędzia daje na sprawdzenie "
+                    "najwyżej " + str(_SEDZIA_MAKS_S // 60) + " min, żeby nie zabierać "
+                    "Wam mocy. Jak naprawić: niech \"sprawdz\" nie liczy wszystkiego od nowa, "
+                    "tylko odczyta wynik z zapisanego modelu albo pliku wyników, który "
+                    "da się powtórzyć, albo policzy go na mniejszej, stałej części danych; "
+                    "wtedy wpiszcie w \"wynik\" liczbę, którą ta krótsza komenda wypisuje "
+                    "w ostatniej linii"))
                 return werdykt
             time.sleep(2)
         # v480jo: Sedzia niczego nie zostawia — to, co komenda sprawdz

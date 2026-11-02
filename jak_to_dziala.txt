@@ -4423,3 +4423,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Na telefonie „cd MAIN_1 && …” (ścieżka względna) działa; gdy
        komenda na telefonie nie znajduje pliku, który leży w folderze
        drużyny, wynik mówi, gdzie on jest i jak go wskazać.
+
+330. (v480lo) Sędzia daje komendzie „sprawdz” najwyżej 5 minut (było
+     20), żeby ocena nie zabierała drużynom mocy. Gdy komenda nie zdąży,
+     drużyna dostaje wyjaśnienie: „sprawdz” ma odczytać wynik z
+     zapisanego modelu albo pliku wyników albo policzyć go na mniejszej,
+     stałej części danych, a „wynik” to liczba z tej krótszej komendy.
+     Wynik potwierdzony wcześniej tą samą komendą (także przed tą
+     wersją) nie jest liczony drugi raz.
