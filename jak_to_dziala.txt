@@ -4441,3 +4441,24 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      liczenia drugi raz. Liczbom z plików zapisanych przez samą drużynę
      nie ufa, a liczba wpisana wprost w komendę albo skrypt dalej idzie
      do zwykłego sprawdzenia.
+
+332. (v480lq) Poprawka fragmentu trafia do pliku po treści. Program
+     szuka pliku, w którym stary fragment stoi dokładnie raz: najpierw
+     wśród plików wymienionych w odpowiedzi (najbliżej nad poprawką),
+     potem plików tej osoby, potem wszystkich plików z kodem w folderze
+     drużyny. Fragment pasuje też z innym wcięciem, bez spacji na
+     końcach linii, z innymi pustymi liniami i z numerami linii
+     skopiowanymi z grep -n. Poprawkę może dać każdy z zespołu, nie
+     tylko autor pliku, a pamięć, kto napisał który plik, przeżywa
+     restart programu (zmienia się tylko przy nowym celu). Kilka
+     poprawek w jednej odpowiedzi wchodzi wszystkie albo żadna. Każda
+     poprawka kończy się zdaniem: naniesiona, już jest w pliku, albo
+     wraca do autora z dokładnym powodem (którego fragmentu nie ma, w
+     jakich plikach szukano, najbliższy tekst, fragment w kilku plikach
+     albo kilka razy w jednym) — nigdy cisza. Nowy plik z kodem, który
+     ma prawie te same linie co plik już leżący w folderze, dostaje
+     jedno zdanie o tym. Skrzynka OD_UZYTKOWNIKA nie bierze już długich
+     nazw plików (RAPORT_ZASOBOW_I_STRUKTURY.md) za klucz — kluczem jest
+     znany początek (sk-, AIza, ghp_, eyJ…, Bearer …) albo długi ciąg z
+     wymieszanymi małymi i wielkimi literami i cyframi. python3 -c z
+     dosłownym \n w kodzie dostaje podpowiedź, jak to poprawić.

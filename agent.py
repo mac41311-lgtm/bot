@@ -5407,7 +5407,15 @@ def _set_current_goal(goal):
     _reset_irreversible_memory()
     _reset_powody_zakonczenia()
     _role_inbox.clear()
-    _autor_pliku.clear()
+    # v480lq: autorzy plikow zostaja po restarcie na tym samym celu
+    try:
+        _cel_plik = Path(str(_autor_pliku._plik) + ".cel")
+        _cel_h = hashlib.sha1(_current_goal_text.encode("utf-8")).hexdigest()
+        if not _cel_plik.exists() or _cel_plik.read_text(encoding="utf-8").strip() != _cel_h:
+            _autor_pliku.clear()
+            _cel_plik.write_text(_cel_h, encoding="utf-8")
+    except Exception:
+        _autor_pliku.clear()
     _reset_watkow()
     _role_response_cache.clear()
     _role_response_step.clear()
@@ -21878,7 +21886,16 @@ def termux_write_file(path, content, append=False):
                                 "\"path\" pełną ścieżkę pliku, np. " + _kat.rstrip("/") + "/nazwa.md.")}
     except Exception:
         pass
+    try:
+        _nowy_plik = not append and not _resolve_home_relative_path(str(path or "~")).exists()
+    except Exception:
+        _nowy_plik = False
     wynik = _termux_write_file(path, content, append)
+    if _nowy_plik and isinstance(wynik, dict) and wynik.get("ok") is not False:
+        _kopia = _prawie_kopia(wynik.get("path") or path, content)
+        if _kopia:
+            wynik["prawie_kopia"] = _kopia
+            log("PROGRAM", "Nowy plik " + _sciezka_od_domu(str(wynik.get("path") or path)) + ": " + _kopia)
     try:
         if isinstance(wynik, dict) and not append:
             _sprawdz_skladnie_kodu_autora(wynik)
@@ -22002,6 +22019,53 @@ def _zapisz_poprawke_autora(path, kod):
     except Exception:
         pass
     return _py_compile_blad(p) if p.suffix.lower() == ".py" else ""
+
+
+def _prawie_kopia(p, kod):
+    """
+    v480lq: uzytkownik 2026-11-02 ("Duplikaty plików"): nowy plik z kodem,
+    ktory ma prawie te same linie co plik, ktory juz lezy w folderze
+    (ppm_d.py obok ppm.py, _v2/_v3, obejscia, gdy poprawka nie wchodzila).
+    Jedno zdanie faktu dla autora i MAIN-a albo "". Nic nie blokuje.
+    """
+    try:
+        p = _resolve_home_relative_path(str(p))
+        if p.suffix.lower() not in _KOD_SUFIKSY:
+            return ""
+        nowe = {l.strip() for l in str(kod or "").splitlines() if len(l.strip()) >= 4}
+        if len(nowe) < 8:
+            return ""
+        if _DRUZYNA:
+            foldery = [_folder_druzyny(_DRUZYNA)]
+        elif p.parent.resolve() != HOME.resolve():
+            foldery = [p.parent]
+        else:
+            return ""
+        najlepszy = (0.0, None)
+        for q in _pliki_kodu_w(foldery):
+            try:
+                if q.resolve() == p.resolve() or q.suffix.lower() != p.suffix.lower():
+                    continue
+                if q.stat().st_size > _LATKA_MAKS_B:
+                    continue
+                stare = {l.strip() for l in q.read_text(encoding="utf-8", errors="ignore").splitlines()
+                         if len(l.strip()) >= 4}
+            except OSError:
+                continue
+            if not stare:
+                continue
+            wsp = len(nowe & stare)
+            r = wsp / len(nowe)
+            if r >= 0.8 and wsp / len(stare) >= 0.6 and r > najlepszy[0]:
+                najlepszy = (r, q)
+        if najlepszy[1] is None:
+            return ""
+        return ("ten plik ma w " + str(int(najlepszy[0] * 100)) + "% te same linie co "
+                + _sciezka_od_domu(str(najlepszy[1])) + " — zmianę w pliku, który już jest, program "
+                "nanosi od razu z poprawki fragmentu („Stary fragment:” / „Nowy fragment:”), bez "
+                "nowego pliku obok")
+    except Exception:
+        return ""
 
 
 def _py_compile_blad(sciezka):
@@ -22399,103 +22463,403 @@ def _pliki_w_folderze(folder, nazwa, limit=3000):
     return out
 
 
+# v480lq: poprawka fragmentu trafia do pliku po TRESCI, nie po pamieci, kto
+# go napisal. Bieg 2026-11-02 19:58-20:51 (druzyna 2): program pamietal
+# autorow plikow tylko do restartu (a restartuje sie co 15 min przy
+# aktualizacji), wiec poprawki Bartka do word_ppm.py i zadanie.py
+# przepadaly bez slowa — Bartek trzy razy sprawdzal md5sum, pisal cale
+# pliki od nowa i obejscia (_top5_zlib.py). Poprawka do ppm_d.py poszla
+# do zadanie.py ("juz jest w pliku"), bo to zadanie.py bylo wymienione
+# wyzej w tej samej odpowiedzi, a zadanie.py z poprawka do zadanie.py
+# poszlo do ppm.py ("nie weszla"). Teraz: plik, w ktorym stary fragment
+# stoi dokladnie raz (takze z innym wcieciem albo innymi bialymi znakami),
+# wsrod plikow wymienionych w odpowiedzi, potem plikow tej osoby, potem
+# wszystkich plikow z kodem w folderze druzyny. Kazda poprawka konczy sie
+# zdaniem: naniesiona, juz jest, albo co nie pasuje i gdzie jest
+# najblizszy tekst — nigdy cisza.
+_ROLE_KODU = ("ENGINEER", "CODE_FIXER", "CODE_REVIEWER")
+_SUFIKSY_TEKSTU = (
+    ".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash", ".java", ".kt", ".kts", ".gradle",
+    ".c", ".h", ".cpp", ".cc", ".hpp", ".go", ".rs", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
+    ".php", ".swift", ".dart", ".cs",
+    ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".csv", ".tsv")
+_PLIK_W_TEKSCIE_RE = re.compile(
+    r"(?<![\w/.~$-])((?:~/|/data/data/com\.termux/files/home/)?(?:[\w.-]+/)*[\w-][\w.-]*"
+    r"(?:" + "|".join(re.escape(x) for x in _SUFIKSY_TEKSTU) + r"))(?![\w-])",
+    re.IGNORECASE)
+_POPRAWKA_JAWNA_RE = re.compile(
+    r"star[aeyąą]\w*\s+(?:fragment|kod|wersj|blok|linij)|\bSZUKAJ\b|\bZAMIE[ŃN]\b|<{5,}|^@@",
+    re.IGNORECASE | re.MULTILINE)
+_LATKA_MAKS_B = 1024 * 1024
+_LATKA_SKAN_MAKS = 800
+
+
+def _wolno_latac(p, foldery):
+    """Plik, ktory poprawka fragmentu moze zmienic: w folderze druzyny /
+    projektu (bez ukrytych podfolderow, np. .kopie), poza rywalizacja tez
+    inny plik w ~ — ale nigdy program, jego pliki i ukryte foldery."""
+    try:
+        rp = Path(p).resolve()
+        if not rp.is_file():
+            return False
+        if _siega_do_rywala("termux_write_file", {"path": str(rp)}):
+            return False
+        try:
+            if rp.parent == Path(__file__).resolve().parent:
+                return False
+        except Exception:
+            pass
+        for f in foldery or ():
+            try:
+                fr = Path(f).resolve()
+            except Exception:
+                continue
+            if rp.is_relative_to(fr):
+                return not any(c.startswith(".") for c in rp.relative_to(fr).parts)
+        if _DRUZYNA:
+            return False
+        rel = rp.relative_to(HOME.resolve())
+        if any(c.startswith(".") for c in rel.parts) or rel.parts[0] in ("agent", "test", "gpu_libs", "storage"):
+            return False
+        return not rp.name.startswith(("api_token", "update_agent"))
+    except Exception:
+        return False
+
+
+def _pliki_wymienione(odp, foldery, _poza=None):
+    """[(pozycja w tekscie, Path)] istniejacych plikow wymienionych w
+    odpowiedzi: ~/sciezka, sciezka wzgledna w folderze albo gola nazwa
+    znaleziona w folderze. _poza (lista) dostaje sciezki ~/…, ktorych
+    poprawka nie zmienia (poza folderem druzyny, pliki programu) — bez
+    sprawdzania, czy istnieja."""
+    out, pamiec = [], {}
+    if _poza is None:
+        _poza = []
+    for m in _PLIK_W_TEKSCIE_RE.finditer(str(odp or "")):
+        s = m.group(1).rstrip(".")
+        if s not in pamiec:
+            znal = []
+            try:
+                if s.startswith(("~", "/")):
+                    p = _resolve_home_relative_path(s)
+                    if p.is_file():
+                        znal.append(p)
+                else:
+                    for f in foldery or ():
+                        p = Path(f) / s
+                        if p.is_file():
+                            znal.append(p)
+                        elif "/" not in s:
+                            znal.extend(_pliki_w_folderze(f, s))
+            except Exception:
+                znal = []
+            pamiec[s] = [p for p in znal if _wolno_latac(p, foldery)]
+            if s.startswith(("~", "/")) and not pamiec[s] and s not in _poza:
+                _poza.append(s)
+        for p in pamiec[s]:
+            out.append((m.start(), p))
+    return out
+
+
+def _pliki_kodu_w(foldery):
+    """Pliki z kodem w folderach (bez ukrytych, venv, __pycache__)."""
+    out = []
+    for f in foldery or ():
+        n = 0
+        try:
+            for root, dirs, files in os.walk(str(f)):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                    "__pycache__", "node_modules", "venv", "site-packages", "archiwum_od_uzytkownika")]
+                for fn in files:
+                    n += 1
+                    if fn.lower().endswith(_KOD_SUFIKSY):
+                        out.append(Path(root) / fn)
+                if n > _LATKA_SKAN_MAKS:
+                    break
+        except Exception:
+            pass
+    return out
+
+
+def _pozycja_pary(tekst, stary):
+    for l in str(stary or "").split("\n"):
+        if l.strip():
+            i = tekst.find(l.strip())
+            return i if i >= 0 else len(tekst)
+    return len(tekst)
+
+
+def _poczatek_fragmentu(stary):
+    l = next((l.strip() for l in str(stary or "").split("\n") if l.strip()), "")
+    return "„" + short(l, 80) + "”"
+
+
+def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
+    """
+    v480lq: dla kazdej pary (stary, nowy) plik, w ktorym stary fragment
+    stoi dokladnie raz. Zwraca (cele, juz, bledy): cele — lista
+    (Path, [pary]) w kolejnosci, juz — [Path], bledy — [zdanie].
+    """
+    tekst = str(odp or "")
+    pamiec = {}
+
+    def _tresc(p):
+        k = str(p)
+        if k not in pamiec:
+            try:
+                pamiec[k] = (p.read_text(encoding="utf-8", errors="ignore")
+                             if p.stat().st_size <= _LATKA_MAKS_B else None)
+            except OSError:
+                pamiec[k] = None
+        return pamiec[k]
+
+    def _stany(pliki, stary, nowy):
+        out = {}
+        for p in pliki:
+            t = _tresc(p)
+            if t is not None:
+                out[p] = _naloz_pare(t, stary, nowy)[1]
+        return out
+
+    poza = []
+    wym = [] if tylko_autorskie else _pliki_wymienione(tekst, foldery, poza)
+    autorskie = []
+    for nazwa, kto in list(_autor_pliku.items()):
+        if kto != rola or not nazwa:
+            continue
+        for f in foldery or ():
+            for p in _pliki_w_folderze(f, nazwa):
+                if p not in autorskie and _wolno_latac(p, foldery):
+                    autorskie.append(p)
+    skan = None
+    cele, juz, bledy = [], [], []
+    for stary, nowy in pary:
+        poz = _pozycja_pary(tekst, stary)
+        nad = [p for q, p in wym if q < poz]
+        pod = [p for q, p in wym if q > poz]
+        nazwany = nad[-1] if nad else (pod[0] if pod else None)
+        wymienione = []
+        for p in ([nazwany] if nazwany else []) + [p for _q, p in wym]:
+            if p not in wymienione:
+                wymienione.append(p)
+        kolejnosc = wymienione + [p for p in autorskie if p not in wymienione]
+        if tylko_autorskie:
+            kolejnosc = list(autorskie)
+        st = _stany(kolejnosc, stary, nowy)
+        ok = [p for p in kolejnosc if st.get(p) == "ok"]
+        cel = None
+        if nazwany in ok:
+            cel = nazwany
+        elif ok:
+            cel = ok[0]
+        elif nazwany is not None and st.get(nazwany) == "wiele":
+            bledy.append("Fragment " + _poczatek_fragmentu(stary) + " stoi w "
+                         + _sciezka_od_domu(str(nazwany)) + " kilka razy — nie wiadomo, które miejsce "
+                         "zmienić. Weź dłuższy fragment (z linią przed albo po), tak żeby był jeden.")
+            continue
+        else:
+            jest = [p for p in kolejnosc if st.get(p) == "juz"]
+            if jest:
+                if jest[0] not in juz:
+                    juz.append(jest[0])
+                continue
+            if not tylko_autorskie:
+                if skan is None:
+                    skan = [p for p in _pliki_kodu_w(foldery) if _wolno_latac(p, foldery)]
+                reszta = [p for p in skan if p not in kolejnosc]
+                st2 = _stany(reszta, stary, nowy)
+                ok2 = [p for p in reszta if st2.get(p) == "ok"]
+                _krotki = len("".join(str(stary).split())) < 20 and len(
+                    [l for l in str(stary).split("\n") if l.strip()]) < 2
+                if len(ok2) == 1 and _krotki:
+                    # krotka linia w pliku, ktorego nikt nie wymienil — moze
+                    # stac tam przypadkiem; autor wskazuje plik
+                    bledy.append("Fragment " + _poczatek_fragmentu(stary) + " jest krótki, a odpowiedź "
+                                 "nie mówi, którego pliku dotyczy (stoi np. w "
+                                 + _sciezka_od_domu(str(ok2[0])) + ") — napisz nad poprawką ścieżkę pliku.")
+                    continue
+                if len(ok2) == 1:
+                    cel = ok2[0]
+                elif len(ok2) > 1:
+                    bledy.append("Fragment " + _poczatek_fragmentu(stary) + " stoi w kilku plikach: "
+                                 + ", ".join(_sciezka_od_domu(str(p)) for p in ok2[:5])
+                                 + " — napisz nad poprawką, którego pliku dotyczy (np. „Poprawka do "
+                                 + _sciezka_od_domu(str(ok2[0])) + "”).")
+                    continue
+                else:
+                    jest2 = [p for p in reszta if st2.get(p) == "juz"]
+                    if len(jest2) == 1:
+                        if jest2[0] not in juz:
+                            juz.append(jest2[0])
+                        continue
+                    st.update(st2)
+            if cel is None:
+                wiele = [p for p, v in st.items() if v == "wiele"]
+                if wiele:
+                    bledy.append("Fragment " + _poczatek_fragmentu(stary) + " stoi w "
+                                 + _sciezka_od_domu(str(wiele[0])) + " kilka razy — nie wiadomo, które "
+                                 "miejsce zmienić. Weź dłuższy fragment (z linią przed albo po), tak "
+                                 "żeby był jeden.")
+                    continue
+                # najblizszy tekst: w pliku wymienionym, inaczej w tym, ktory
+                # ma najwiecej wspolnych linii z fragmentem
+                linie_st = {l.strip() for l in str(stary).split("\n") if len(l.strip()) >= 6}
+                kand = [p for p in kolejnosc if _tresc(p) is not None]
+                if not kand and skan:
+                    wsp = []
+                    for p in skan:
+                        t = _tresc(p)
+                        if t:
+                            n = sum(1 for l in linie_st if l in t)
+                            if n:
+                                wsp.append((n, p))
+                    kand = [p for _n, p in sorted(wsp, key=lambda x: -x[0])[:3]]
+                blisko = ""
+                for p in kand[:3]:
+                    b = _najblizszy_fragment(_tresc(p), stary)
+                    if b:
+                        blisko = "W " + _sciezka_od_domu(str(p)) + ": " + b[0].lower() + b[1:]
+                        break
+                gdzie = (", ".join(_sciezka_od_domu(str(p)) for p in kolejnosc[:3])
+                         if kolejnosc else "plikach z kodem w " + ", ".join(
+                             _sciezka_od_domu(str(f)) for f in (foldery or ())[:2]))
+                bledy.append("Fragment " + _poczatek_fragmentu(stary) + " nie stoi w " + gdzie
+                             + " (program szukał też z innym wcięciem i bez spacji na końcach linii)."
+                             + (("\n" + ", ".join(poza[:3]) + " — to poza folderem "
+                                 + ", ".join(_sciezka_od_domu(str(f)) for f in (foldery or ())[:2])
+                                 + "; program nanosi poprawki tylko na pliki w nim.") if poza else "")
+                             + ("\n" + blisko if blisko else "")
+                             + "\nSkopiuj fragment 1:1 z pliku (PODGLĄD: sed -n 'od,dop' plik) i napisz "
+                             "nad poprawką ścieżkę pliku.")
+                continue
+        for i, (p, lista) in enumerate(cele):
+            if p == cel:
+                lista.append((stary, nowy))
+                break
+        else:
+            cele.append((cel, [(stary, nowy)]))
+    return cele, juz, bledy
+
+
+def _nanies_plan(rola, odp, foldery, tylko_autorskie=False):
+    """Plan + nalozenie (wszystko albo nic). Zwraca (zdania_ok, juz, bledy)."""
+    pary = extract_search_replace_blocks(odp)
+    if not pary:
+        return [], [], []
+    cele, juz, bledy = _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie)
+    if bledy:
+        return [], juz, bledy
+    proby = []
+    for p, lista in cele:
+        w = _naloz_pary_na_plik(str(p), lista, zapisz=False)
+        if w.get("applied"):
+            proby.append((p, w))
+        elif w.get("already"):
+            if p not in juz:
+                juz.append(p)
+        else:
+            bledy.append(_sciezka_od_domu(str(p)) + ": " + str(w.get("reason") or "poprawka nie weszła"))
+    if bledy:
+        return [], juz, bledy
+    zrobione = []
+    for p, w in proby:
+        w2 = _zapisz_poprawiony_plik(p, w["original"], w["content"], w.get("blocks", 0))
+        if w2.get("applied"):
+            zrobione.append((p, w2))
+            if not _autor_pliku.get(p.name):
+                _autor_pliku[p.name] = rola
+            try:
+                _record_python_written_file(w2["path"])
+                _rola_poznala_plik(rola, p)
+            except Exception:
+                pass
+        else:
+            bledy.append(_sciezka_od_domu(str(p)) + ": " + str(w2.get("reason") or "nie zapisałem"))
+    return zrobione, juz, bledy
+
+
 def _naniesc_poprawke_autora(rola, odp, foldery):
     """
-    v480ft: poprawka fragmentu (SZUKAJ/ZAMIEN, patch, STARY/NOWY) od
-    autora pliku idzie na jego plik od razu — z kopia, sprawdzeniem
-    skladni i cofnieciem, gdy nie przejdzie (apply_engineer_patch_to_
-    project_file). Uzytkownik (2026-10-25): "swobodnie poprawiac", "nie
-    pisac calego kodu od nowa i przepisywac go ciagle", "ta osoba, co
-    pisze i poprawia". Tylko plik, ktorego autorem jest ta osoba; reszte
-    dalej kladzie MAIN przez write_engineer_code_to.
-    Zwraca zdania dla MAIN-a.
+    v480ft/v480lq: poprawka fragmentu (SZUKAJ/ZAMIEN, patch, STARY/NOWY)
+    od kogos z zespolu idzie od razu na plik, w ktorym stary fragment
+    stoi — z kopia w .kopie/, sprawdzeniem skladni i bez zapisu, gdy
+    nie przejdzie. Uzytkownik (2026-10-25): "swobodnie poprawiac", "nie
+    pisac calego kodu od nowa". Gdy nie wchodzi — wraca do autora z
+    dokladnym powodem (dopoki jest postep). Zwraca zdania dla MAIN-a.
     """
     if not extract_search_replace_blocks(odp):
         return []
-    kandydaci = []
-    for m in _SCIEZKA_KODU_RE.finditer(odp):
+    foldery = [f for f in (foldery or []) if f]
+    if not foldery and not _DRUZYNA:
+        # poza rywalizacja: foldery, ktore program zalozyl dla celu
         try:
-            p = _resolve_home_relative_path(m.group(1).rstrip("."))
+            foldery = [Path(str(x)) for x in (read_json(PROJECT_DIRS_FILE, []) or [])
+                       if Path(str(x)).is_dir()][-5:]
         except Exception:
-            continue
-        if p.is_file() and _autor_pliku.get(p.name) == rola and p not in kandydaci:
-            kandydaci.append(p)
-    for nazwa, kto in list(_autor_pliku.items()):
-        if kto != rola or not nazwa or not re.search(r"(?<![\w-])" + re.escape(nazwa) + r"(?![\w-])", odp):
-            continue
-        for f in foldery:
-            for p in _pliki_w_folderze(f, nazwa):
-                if p not in kandydaci:
-                    kandydaci.append(p)
+            foldery = []
+    # "Było:/Jest:" w relacji kogos spoza kodu to zwykle opis, nie poprawka
+    # — wtedy tylko jego wlasne pliki (jak przed v480lq).
+    tylko_autorskie = rola not in _ROLE_KODU and not _POPRAWKA_JAWNA_RE.search(str(odp or ""))
     imie_d = _IMIE_AUTORA.get(rola, (rola, rola))[1]
-    powod = ""
-    for p in kandydaci[:6]:
-        if _siega_do_rywala("termux_write_file", {"path": str(p)}):
-            continue
-        w = apply_engineer_patch_to_project_file(str(p), odp)
-        if w.get("applied"):
-            _record_python_written_file(w["path"])
+
+    def _zdania(zrobione, juz, runda=0):
+        out = []
+        for p, w in zrobione:
             sciezka = _sciezka_od_domu(str(p))
-            log("PROGRAM", "Poprawka " + imie_d + " naniesiona od razu na " + sciezka
-                + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B).")
-            return ["[Program od razu naniósł poprawkę " + imie_d + " na jego plik " + sciezka
-                    + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
-                    + "kopia: .kopie/" + Path(w["backup"]).name + "). Plik jest gotowy do uruchomienia"
-                    + (": " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
-        if w.get("already"):
+            log("PROGRAM", "Poprawka " + imie_d + " naniesiona na " + sciezka + " ("
+                + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B"
+                + (", " + str(runda + 1) + ". próba" if runda else "") + ").")
+            _jak = _jak_uruchomic(p)
+            out.append("[Program od razu naniósł poprawkę " + imie_d + " na " + sciezka
+                       + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
+                       + "kopia: .kopie/" + Path(w["backup"]).name + "). Plik jest gotowy do uruchomienia"
+                       + (": " + _jak if _jak else "") + ".]")
+        for p in juz:
             sciezka = _sciezka_od_domu(str(p))
             log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + " już jest w pliku — bez zmian.")
-            return ["[Zmiana z poprawki " + imie_d + " już jest w pliku " + sciezka
-                    + " — program niczego nie zmieniał.]"]
-        powod = powod or str(w.get("reason") or "")
+            out.append("[Zmiana z poprawki " + imie_d + " już jest w pliku " + sciezka
+                       + " — program niczego nie zmieniał.]")
+        return out
+
+    zrobione, juz, bledy = _nanies_plan(rola, odp, foldery, tylko_autorskie)
+    if not bledy:
+        return _zdania(zrobione, juz)
+    if tylko_autorskie and not zrobione and not juz:
+        return []
     # Poprawka nie weszla — wraca do autora (v480ie: dopoki jest postep), zanim
     # cokolwiek dostanie MAIN; autor moze zajrzec do pliku PODGLĄDEM.
+    powod = "\n".join(bledy)
     runda = 0
-    if kandydaci and powod and not _siega_do_rywala("termux_write_file", {"path": str(kandydaci[0])}):
-        p = kandydaci[0]
-        sciezka = _sciezka_od_domu(str(p))
-        _historia = []
-        while True:
-            runda += 1
-            log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + " nie weszła — wraca do autora (runda "
-                + str(runda) + ").")
-            odp2 = str(deepseek(rola, (
-                "Twoja poprawka do " + sciezka + " nie weszła: " + short(powod, 800)
-                + "\n\nZajrzyj do pliku (np. PODGLĄD: grep -n \"…\" " + sciezka
-                + " albo PODGLĄD: sed -n 'od,dop' " + sciezka + ") i podaj poprawkę z fragmentem "
-                "skopiowanym 1:1 z pliku. Program naniesie ją od razu."
-            )) or "")
-            _zapamietaj_kod_autora(rola, odp2)
-            w = apply_engineer_patch_to_project_file(str(p), odp2)
-            # v480iz: zmiana juz jest w pliku albo autor odpowiada bez
-            # poprawki ("patch juz jest na dysku") — koniec rund. Bieg
-            # 2026-10-31 21:49: Bartek trzy razy pisal, ze plik ma juz
-            # nowa wersje, a program odsylal "nie weszla" (runda 5, 6, 7).
-            if w.get("already") or not extract_search_replace_blocks(odp2):
-                log("PROGRAM", "Poprawka " + imie_d + " do " + sciezka + ": "
-                    + ("zmiana już jest w pliku" if w.get("already") else "autor odpowiedział bez poprawki")
-                    + " — koniec rund.")
-                return ["[Poprawka " + imie_d + " do " + sciezka + ": "
-                        + ("zmiana już jest w pliku, program niczego nie zmieniał."
-                           if w.get("already") else
-                           "autor odpowiedział bez nowej poprawki: " + short(" ".join(odp2.split()), 300))
-                        + "]"]
-            if w.get("applied"):
-                _record_python_written_file(w["path"])
-                log("PROGRAM", "Poprawka " + imie_d + " naniesiona na " + sciezka + " po " + str(runda) + ". próbie.")
-                return ["[Program naniósł poprawkę " + imie_d + " na jego plik " + sciezka
-                        + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B, składnia OK, "
-                        + "za " + str(runda + 1) + ". razem, kopia: .kopie/" + Path(w["backup"]).name + ")"
-                        + (". Uruchomienie: " + _jak_uruchomic(p) if _jak_uruchomic(p) else "") + ".]"]
-            _powod_przed = powod
-            powod = str(w.get("reason") or powod)
-            if _bez_postepu(_historia, _powod_przed, odp2):
-                break
-    if kandydaci and powod:
-        return ["[Poprawki " + imie_d + " nie dało się nanieść na " + _sciezka_od_domu(str(kandydaci[0]))
-                + " (autor próbował " + str(runda + 1) + " razy): " + short(powod, 300)
-                + " Plik jest bez zmian.]"]
-    return []
+    _historia = []
+    zapisane = []
+    while True:
+        runda += 1
+        log("PROGRAM", "Poprawka " + imie_d + " nie weszła — wraca do autora (runda " + str(runda) + "): "
+            + short(" ".join(powod.split()), 200))
+        odp2 = str(deepseek(rola, (
+            "Twoja poprawka nie weszła, plik jest bez zmian:\n" + short(powod, 1600)
+            + "\n\nPodaj poprawkę jeszcze raz. Program naniesie ją od razu."
+        )) or "")
+        _zapamietaj_kod_autora(rola, odp2)
+        if not extract_search_replace_blocks(odp2):
+            # autor dal cala nowa wersje pliku albo odpowiedzial bez poprawki
+            try:
+                _po = _poloz_nowy_plik_autora(rola, odp2, "")
+                zapisane = [l.strip() for l in str(_po).split("\n") if l.strip().startswith("[Program")]
+            except Exception as e:
+                log("PROGRAM", "Pliki z odpowiedzi " + imie_d + ": " + str(e))
+            log("PROGRAM", "Poprawka " + imie_d + ": autor odpowiedział bez nowej poprawki — koniec rund.")
+            return zapisane or ["[Poprawka " + imie_d + ": autor odpowiedział bez nowej poprawki: "
+                                + short(" ".join(odp2.split()), 300) + "]"]
+        zrobione, juz, bledy = _nanies_plan(rola, odp2, foldery)
+        if not bledy:
+            return _zdania(zrobione, juz, runda)
+        _powod_przed = powod
+        powod = "\n".join(bledy)
+        if _bez_postepu(_historia, _powod_przed, odp2):
+            break
+    return ["[Poprawki " + imie_d + " nie dało się nanieść (autor próbował " + str(runda + 1)
+            + " razy): " + short(" ".join(powod.split()), 400) + " Pliki są bez zmian.]"]
 
 
 _PROBA_URUCHOMIENIA_S = 30
@@ -22936,6 +23300,8 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             else:
                 stan = "składnia OK" + (" po poprawce " + imie_d if w.get("poprawil_autor") else "")
             _jak = _jak_uruchomic(p)
+            if w.get("prawie_kopia"):
+                stan += "; " + str(w["prawie_kopia"])
             zdanie = ("[Program od razu zapisał ten plik " + imie_d + " w " + sciezka + " ("
                       + str(p.stat().st_size) + " B, " + stan + "{proba:" + str(p) + "}). Kod jest w pliku — "
                       + ("uruchomienie: " + _jak + "; " if _jak else "można go uruchomić; ")
@@ -24642,7 +25008,53 @@ _uruchomienia_kroku = []
 #
 # To jest fakt, ktory Python ustala przy zapisie (patrz _skad w
 # termux_write_file), a nie zgadywanie z tekstu.
-_autor_pliku = {}
+#
+# v480lq: na dysku, nie tylko w pamieci — program restartuje sie przy
+# kazdej aktualizacji (co 15 min) i wtedy zapominal, kto napisal ktory
+# plik (bieg 2026-11-02 19:58, druzyna 2: poprawki Bartka do jego
+# word_ppm.py przepadaly bez slowa).
+class _SlownikNaDysku(dict):
+    def __init__(self, plik):
+        super().__init__()
+        self._plik = plik
+        try:
+            d = json.loads(Path(plik).read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                super().update({str(k): str(v) for k, v in d.items()})
+        except Exception:
+            pass
+
+    def _zapisz(self):
+        try:
+            Path(self._plik).write_text(json.dumps(dict(self), ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def __setitem__(self, k, v):
+        zmiana = self.get(k) != v
+        super().__setitem__(k, v)
+        if zmiana:
+            self._zapisz()
+
+    def __delitem__(self, k):
+        super().__delitem__(k)
+        self._zapisz()
+
+    def pop(self, k, *d):
+        r = super().pop(k, *d)
+        self._zapisz()
+        return r
+
+    def clear(self):
+        super().clear()
+        self._zapisz()
+
+    def update(self, *a, **kw):
+        super().update(*a, **kw)
+        self._zapisz()
+
+
+_autor_pliku = _SlownikNaDysku(HOME / (".ael_autorzy_plikow_" + (_DRUZYNA or "0") + ".json"))
 
 
 def _zapisz_uruchomienie(nazwa, args, result):
@@ -27942,6 +28354,15 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
                 "Tych plików nie ma, więc nie zostały przeniesione ani skopiowane: " + ", ".join(_brak[:8])
                 + (" i " + str(len(_brak) - 8) + " innych" if len(_brak) > 8 else "")
                 + ". Sprawdź nazwy przez ls; reszta plików z tej komendy poszła normalnie.")
+            return wynik
+        # v480lq: bieg 2026-11-02 21:22 (druzyna 2): python3 -c "…;\ntry: …"
+        # — w komendzie byly znaki \n (ukosnik + n), a nie nowe linie.
+        if ("unexpected character after line continuation character" in tekst
+                and re.search(r"\bpython3?\s+-c\b", str(command_str or "")) and "\\n" in str(command_str or "")):
+            wynik["podpowiedz"] = (
+                "Kod w python3 -c ma znaki \\n (ukośnik i n) zamiast prawdziwych nowych linii — "
+                "Python bierze ukośnik za przedłużenie linii. Daj kod w kilku liniach przez heredoc "
+                "(python3 - <<'PY' … PY) albo zapisz go do pliku .py i uruchom.")
             return wynik
         m = _BRAK_MODULU_RE.search(tekst)
         if m:
@@ -39389,6 +39810,7 @@ _NAZWY_POL = {
     "bytes": "zapisane bajty", "pid": "proces", "log_file": "log",
     "exists": "istnieje", "size": "rozmiar", "message": "komunikat",
     "error": "błąd", "status": "stan", "workdir": "folder",
+    "prawie_kopia": "uwaga",
 }
 
 
@@ -42442,6 +42864,102 @@ def _dodaj_wciecie(kod, wc):
     return "\n".join((wc + l) if l.strip() else l for l in linie) + "\n"
 
 
+_NUMER_LINII_RE = re.compile(r"^\s*\d+\s*(?:[:|]\s?|\t)")
+
+
+def _bez_numerow(stary, nowy):
+    """v480lq: fragment skopiowany z wyniku grep -n ("76:    return x") albo
+    z "Najbliższy tekst w pliku" (" 9 | import x") — bez numerow linii,
+    gdy maja je wszystkie niepuste linie starego fragmentu."""
+    ls = [l for l in str(stary or "").split("\n") if l.strip()]
+    if not ls or not all(_NUMER_LINII_RE.match(l) for l in ls):
+        return stary, nowy
+    zdejmij = lambda t: "\n".join(_NUMER_LINII_RE.sub("", l, count=1) for l in str(t or "").split("\n"))
+    return zdejmij(stary), zdejmij(nowy)
+
+
+def _fragment_luzno(tekst, frag):
+    """
+    v480lq: miejsca, gdzie niepuste linie fragmentu (bez wciecia i spacji
+    na koncach) stoja w pliku jedna po drugiej, puste linie miedzy nimi
+    dowolne. Bieg 2026-11-02 19:58 (druzyna 2): Bartek myslal, ze jego
+    poprawka nie trafia przez biale znaki. [(start, koniec, wciecie
+    pliku, wciecie fragmentu)]; koniec obejmuje znak nowej linii.
+    """
+    fl = [l.rstrip() for l in str(frag or "").split("\n") if l.strip()]
+    if not fl:
+        return []
+    klucz = [l.strip() for l in fl]
+    linie = str(tekst or "").split("\n")
+    poz = [0]
+    for l in linie:
+        poz.append(poz[-1] + len(l) + 1)
+    niepuste = [(i, l.strip()) for i, l in enumerate(linie) if l.strip()]
+    k = len(klucz)
+    out = []
+    for j in range(len(niepuste) - k + 1):
+        if niepuste[j][1] != klucz[0]:
+            continue
+        if all(niepuste[j + t][1] == klucz[t] for t in range(1, k)):
+            i0, i1 = niepuste[j][0], niepuste[j + k - 1][0]
+            l0 = linie[i0]
+            out.append((poz[i0], min(poz[i1 + 1], len(tekst)),
+                        l0[:len(l0) - len(l0.lstrip())], fl[0][:len(fl[0]) - len(fl[0].lstrip())]))
+    return out
+
+
+def _przenies_wciecie(kod, wc_z, wc_do):
+    out = []
+    for l in str(kod or "").strip("\n").split("\n"):
+        if not l.strip():
+            out.append("")
+            continue
+        lead = l[:len(l) - len(l.lstrip())]
+        out.append(wc_do + (lead[len(wc_z):] if lead.startswith(wc_z) else "") + l.lstrip())
+    return "\n".join(out) + "\n"
+
+
+def _naloz_pare(tekst, stary, nowy):
+    """
+    v480lq: jedna para (stary, nowy) na tekst. Zwraca (tekst_po, stan,
+    ile): stan "ok" (jedno miejsce, podmienione), "juz" (zmiana juz jest),
+    "wiele" (stary stoi kilka razy), "brak" (nie stoi).
+    """
+    tekst = str(tekst or "")
+    # dopisanie (nowy zawiera stary), ktore juz jest — nie drugi raz
+    if stary.strip() and stary in nowy and nowy.strip() and (
+            nowy in tekst or _fragment_z_wcieciem(tekst, nowy)):
+        return tekst, "juz", 0
+    n = tekst.count(stary)
+    if n == 1:
+        return tekst.replace(stary, nowy, 1), "ok", 1
+    if n > 1:
+        return tekst, "wiele", n
+    traf = _fragment_z_wcieciem(tekst, stary)
+    if len(traf) == 1:
+        a, b, wc = traf[0]
+        nw = _dodaj_wciecie(nowy, wc)
+        if tekst[b - 1:b] != "\n" and nw.endswith("\n"):
+            nw = nw[:-1]
+        return tekst[:a] + nw + tekst[b:], "ok", 1
+    if len(traf) > 1:
+        return tekst, "wiele", len(traf)
+    st2, nw2 = _bez_numerow(stary, nowy)
+    luz = _fragment_luzno(tekst, st2)
+    if len(luz) == 1:
+        a, b, wc_pl, wc_fr = luz[0]
+        nw = _przenies_wciecie(nw2, wc_fr, wc_pl) if nw2.strip() else ""
+        if not (b > a and tekst[b - 1:b] == "\n"):
+            nw = nw.rstrip("\n")
+        return tekst[:a] + nw + tekst[b:], "ok", 1
+    if len(luz) > 1:
+        return tekst, "wiele", len(luz)
+    if nowy.strip() and (tekst.count(nowy) == 1 or len(_fragment_z_wcieciem(tekst, nowy)) == 1
+                         or len(_fragment_luzno(tekst, nw2)) == 1):
+        return tekst, "juz", 0
+    return tekst, "brak", 0
+
+
 def apply_engineer_patch_to_project_file(path, engineer_text):
     """
     Naklada poprawke SZUKAJ/ZAMIEN Bartka na PLIK PROJEKTU.
@@ -42466,6 +42984,13 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
             "wersją. Jeśli plik ma już tę zmianę, napisz to — poprawka nie jest "
             "potrzebna.")}
 
+    return _naloz_pary_na_plik(path, bloki)
+
+
+def _naloz_pary_na_plik(path, bloki, zapisz=True):
+    """Pary (stary, nowy) na jeden plik: wszystkie albo zadna. zapisz=False
+    — tylko sprawdzenie (tresc po zmianie w "content")."""
+
     target = _resolve_home_relative_path(path)
 
     if not target.exists():
@@ -42488,60 +43013,41 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
 
     for stary, nowy in bloki:
 
-        wystapienia = zmieniony.count(stary)
-
         # v480iz: fragment z bloku ```…``` ma zdjete wspolne wciecie, a w
-        # pliku siedzi w funkcji (8 spacji). Bieg 2026-10-31 21:49
-        # (druzyna 1): dwulinijkowy fragment Bartka z wcieciem nie
-        # pasowal nigdy, a "juz jest w pliku" tez nie (nowy bez wciecia),
-        # wiec poprawka wracala do niego runda po rundzie.
-        if wystapienia == 0:
-            _traf = _fragment_z_wcieciem(zmieniony, stary)
-            if len(_traf) == 1:
-                _a, _b, _wc = _traf[0]
-                _nowy_wc = _dodaj_wciecie(nowy, _wc)
-                if zmieniony[_b - 1:_b] != "\n" and _nowy_wc.endswith("\n"):
-                    _nowy_wc = _nowy_wc[:-1]
-                zmieniony = zmieniony[:_a] + _nowy_wc + zmieniony[_b:]
-                naniesione += 1
-                continue
-            if len(_traf) > 1:
-                wystapienia = len(_traf)
+        # pliku siedzi w funkcji (8 spacji) — _naloz_pare szuka tez z
+        # wcieciem; v480lq: i bez bialych znakow / numerow linii.
+        zmieniony, stan, ile = _naloz_pare(zmieniony, stary, nowy)
+
+        if stan == "ok":
+            naniesione += 1
+            continue
 
         # v480ft: ta zmiana juz jest w pliku (autor naniosl ja od razu,
         # a MAIN zlecil ten sam zapis) — nie blad "fragmentu nie ma".
-        if wystapienia == 0 and nowy.strip() and (
-                zmieniony.count(nowy) == 1 or len(_fragment_z_wcieciem(zmieniony, nowy)) == 1):
+        if stan == "juz":
             juz_byly += 1
             continue
 
-        if wystapienia == 0:
+        if stan == "brak":
             _blisko = _najblizszy_fragment(zmieniony, stary)
             return {
                 "applied": False,
                 "reason": (
-                    "Fragment SZUKAJ nie występuje w pliku dokładnie "
-                    "tak, jak go podano (prawdopodobnie inne wcięcia "
-                    "albo skopiowany z pamięci, nie z pliku). Nic nie "
-                    "zmieniono. Poproś o odczytanie pliku i skopiowanie "
-                    "fragmentu 1:1."
+                    "Fragment " + _poczatek_fragmentu(stary) + " nie występuje w pliku "
+                    + target.name + " (program szukał też z innym wcięciem i bez spacji "
+                    "na końcach linii). Nic nie zmieniono. Skopiuj fragment 1:1 z pliku."
                     + ("\n" + _blisko if _blisko else "")
                 ),
             }
 
-        if wystapienia > 1:
-            return {
-                "applied": False,
-                "reason": (
-                    "Fragment SZUKAJ występuje w pliku "
-                    + str(wystapienia) + " razy — nie wiadomo, które "
-                    "miejsce poprawić. Nic nie zmieniono. Podaj dłuższy, "
-                    "jednoznaczny fragment."
-                ),
-            }
-
-        zmieniony = zmieniony.replace(stary, nowy, 1)
-        naniesione += 1
+        return {
+            "applied": False,
+            "reason": (
+                "Fragment " + _poczatek_fragmentu(stary) + " występuje w pliku " + target.name + " "
+                + str(ile) + " razy — nie wiadomo, które miejsce poprawić. Nic nie "
+                "zmieniono. Podaj dłuższy, jednoznaczny fragment."
+            ),
+        }
 
     if zmieniony == original:
         return {
@@ -42557,12 +43063,21 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
         return {
             "applied": False,
             "reason": (
-                "Po naniesieniu poprawki plik ma BŁĄD SKŁADNI: "
+                "Po naniesieniu poprawki plik " + target.name + " ma BŁĄD SKŁADNI: "
                 + short(blad, 600) + ". Nic nie zapisano — plik "
                 "pozostaje w poprzedniej, działającej wersji."
             ),
         }
 
+    if not zapisz:
+        return {"applied": True, "path": str(target), "original": original,
+                "content": zmieniony, "blocks": naniesione}
+
+    return _zapisz_poprawiony_plik(target, original, zmieniony, naniesione)
+
+
+def _zapisz_poprawiony_plik(target, original, zmieniony, naniesione):
+    target = Path(target)
     # v480ft: kopie w ukrytym .kopie/ obok pliku — folder z kodem zostaje
     # uporzadkowany (uzytkownik 2026-10-25: "w plikach najgorzej").
     kopia = target.parent / ".kopie" / (
@@ -42570,6 +43085,8 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
     )
 
     try:
+        if target.read_text(encoding="utf-8", errors="ignore") != original:
+            return {"applied": False, "reason": "plik zmienił się w międzyczasie — nic nie zapisano"}
         kopia.parent.mkdir(parents=True, exist_ok=True)
         kopia.write_text(original, encoding="utf-8")
         target.write_text(zmieniony, encoding="utf-8")
@@ -42592,7 +43109,6 @@ def apply_engineer_patch_to_project_file(path, engineer_text):
         "size_before": len(original),
         "size_after": len(zmieniony),
     }
-
 
 # ============================================================
 # v454: BEZ LATANIA agent.py W TRAKCIE BIEGU
@@ -50599,10 +51115,48 @@ def _czego_nikt_nie_tknal(goal, punkty, ile=5):
 # Cos, co wyglada na sekret, NIGDY nie trafia do pamieci zdan — ta
 # pamiec idzie do wszystkich rol, a wartosci sa przed nimi celowo
 # redagowane (patrz last_result_for_team w consult_team).
-_WYGLADA_NA_SEKRET_RE = re.compile(
-    r"\bsk-|\borg_|\bBearer\b|\bAIza|[A-Za-z0-9_\-]{24,}",
-    re.IGNORECASE
-)
+# v480lq: bieg 2026-11-02 20:28 i 21:07 — wiadomosc uzytkownika do obu
+# druzyn ("DYREKTYWA ORGANIZACYJNA: … RAPORT_ZASOBOW_I_STRUKTURY.md …")
+# nie doszla, bo dluga nazwa pliku z podkreslnikami wygladala jak klucz
+# (kazdy ciag 24+ liter/cyfr/_ byl "sekretem"). Klucz to: znany poczatek
+# (sk-, AIza, ghp_, eyJ…, Bearer …) albo dlugi ciag, w ktorym litery
+# male, wielkie i cyfry sa wymieszane (token, base64) — nie nazwa pliku,
+# sciezka czy identyfikator zlozony ze slow.
+_SEKRET_POCZATEK_RE = re.compile(
+    r"(?<![\w-])(?:sk-[A-Za-z0-9_-]{8,}|org_[A-Za-z0-9]{8,}|AIza[0-9A-Za-z_-]{20,}"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|xox[abprs]-[\w-]{10,}"
+    r"|eyJ[\w-]{10,}\.[\w-]{10,})|\bBearer\s+[\w.+/=-]{16,}")
+_SEKRET_CIAG_RE = re.compile(r"[A-Za-z0-9_\-+/=]{24,}")
+
+
+def _wyglada_na_sekret(tekst):
+    t = str(tekst or "")
+    if _SEKRET_POCZATEK_RE.search(t):
+        return True
+    for m in _SEKRET_CIAG_RE.finditer(t):
+        c = m.group(0)
+        czesci = [x for x in re.split(r"[_\-./+=]", c) if x]
+        # nazwa pliku, sciezka, identyfikator ze slow, data: kazda czesc to
+        # litery (moze z numerem na koncu) albo same cyfry
+        if czesci and all(re.fullmatch(r"[A-Za-z]+\d*|\d+", x) for x in czesci):
+            continue
+        if re.fullmatch(r"[0-9a-f]+", c):
+            continue  # skrot md5/sha z wyniku komendy
+        if re.search(r"[a-z]", c) and re.search(r"[A-Z]", c) and len(re.findall(r"\d", c)) >= 2:
+            return True
+        if len(c) >= 40 and re.search(r"\d", c) and re.search(r"[A-Za-z]", c):
+            return True
+    return False
+
+
+class _SekretWzor:
+    """Zgodnosc wstecz: _WYGLADA_NA_SEKRET_RE.search(t)."""
+
+    def search(self, t):
+        return _wyglada_na_sekret(t) or None
+
+
+_WYGLADA_NA_SEKRET_RE = _SekretWzor()
 
 
 def _zapamietaj_co_powiedzial_uzytkownik(tekst):
@@ -50649,9 +51203,11 @@ def _zapamietaj_co_powiedzial_uzytkownik_(tekst):
     # zostaje i dalej pilnuje tego naprawde.
     najdluzsze = max((len(w) for w in slowa), default=0)
 
+    # v480lq: dlugie slowo w zdaniu (nazwa pliku z podkreslnikami) to nie
+    # klucz — klucz rozpoznaje _wyglada_na_sekret
     if (
         len(slowa) < 3
-        or najdluzsze >= 24
+        or (najdluzsze >= 24 and len(slowa) < 5)
         or _WYGLADA_NA_SEKRET_RE.search(tekst)
     ):
         return False
