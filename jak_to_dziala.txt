@@ -4462,3 +4462,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      znany początek (sk-, AIza, ghp_, eyJ…, Bearer …) albo długi ciąg z
      wymieszanymi małymi i wielkimi literami i cyframi. python3 -c z
      dosłownym \n w kodzie dostaje podpowiedź, jak to poprawić.
+
+333. (v480lr) Zatrzymana wiadomość od użytkownika nie znika bez słowa.
+     Gdy w OD_UZYTKOWNIKA.txt jest fragment, który wygląda na klucz albo
+     hasło, użytkownik dostaje w terminalu ramkę i powiadomienie na
+     telefonie: który fragment (pierwsze 4 znaki i długość), gdzie leży
+     wiadomość i co zrobić (usunąć albo zmienić fragment i zapisać jeszcze
+     raz). Taka wiadomość idzie do ~/.ael_skrzynka_zatrzymana, nie do
+     folderu drużyny, więc nie czyta jej ani zespół, ani Sędzia. Sędzia
+     nie dostaje już skrzynki z folderu drużyny (OD_UZYTKOWNIKA.txt,
+     archiwum_od_uzytkownika): słowa użytkownika ma tylko te, które
+     drużyna naprawdę dostała, więc nie wytyka zaległości w poleceniu,
+     którego drużyna nie widziała. Kopia notatki dla użytkownika w
+     AEL-MINI, której nie ma już w folderze drużyny (nowy start z
+     usuniętymi folderami albo drużyna przeniosła plik), idzie do
+     AEL-MINI/…/stare/ — żeby nie odpowiadać drużynie, której już nie ma.

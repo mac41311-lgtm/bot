@@ -51129,10 +51129,13 @@ _SEKRET_POCZATEK_RE = re.compile(
 _SEKRET_CIAG_RE = re.compile(r"[A-Za-z0-9_\-+/=]{24,}")
 
 
-def _wyglada_na_sekret(tekst):
+def _sekret_w_tekscie(tekst):
+    """v480lr: fragment, ktory wyglada na klucz/haslo, albo "" — zeby
+    powiedziec uzytkownikowi, KTORY kawalek zatrzymal wiadomosc."""
     t = str(tekst or "")
-    if _SEKRET_POCZATEK_RE.search(t):
-        return True
+    m = _SEKRET_POCZATEK_RE.search(t)
+    if m:
+        return m.group(0)
     for m in _SEKRET_CIAG_RE.finditer(t):
         c = m.group(0)
         czesci = [x for x in re.split(r"[_\-./+=]", c) if x]
@@ -51143,10 +51146,14 @@ def _wyglada_na_sekret(tekst):
         if re.fullmatch(r"[0-9a-f]+", c):
             continue  # skrot md5/sha z wyniku komendy
         if re.search(r"[a-z]", c) and re.search(r"[A-Z]", c) and len(re.findall(r"\d", c)) >= 2:
-            return True
+            return c
         if len(c) >= 40 and re.search(r"\d", c) and re.search(r"[A-Za-z]", c):
-            return True
-    return False
+            return c
+    return ""
+
+
+def _wyglada_na_sekret(tekst):
+    return bool(_sekret_w_tekscie(tekst))
 
 
 class _SekretWzor:
@@ -60187,6 +60194,42 @@ def _na_telefon_dla_uzytkownika(plik):
         return ""
 
 
+def _odloz_stare_kopie_dla_uzytkownika():
+    """v480lr: kopia notatki zespolu w AEL-MINI, ktorej nie ma juz w folderze
+    druzyny (nowy start z usunietymi folderami albo druzyna przeniosla plik),
+    idzie do AEL-MINI/…/stare/. Bieg 2026-11-02: w AEL-MINI/druzyna_2 zostal
+    70 KB DLA_UZYTKOWNIKA.md poprzedniej druzyny 2 (sprzed nowego startu
+    1.11) — uzytkownik odpowiedzial na jej pytanie o LoRA, a odpowiedz
+    poszla do nowej druzyny, ktora o nic takiego nie pytala."""
+    try:
+        if not PRZEBIEG_NA_TELEFONIE.is_dir():
+            return
+        dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+        obecne = set()
+        if dla.parent.is_dir():
+            obecne = {p.name for p in dla.parent.iterdir() if p.is_file()}
+        for k in sorted(PRZEBIEG_NA_TELEFONIE.iterdir()):
+            n = k.name.upper()
+            if (not k.is_file() or "UZYTKOWNIK" not in n or "OD_UZYTKOWNIKA" in n
+                    or k.suffix.lower() not in (".md", ".txt") or k.name in obecne):
+                continue
+            stare = PRZEBIEG_NA_TELEFONIE / "stare"
+            stare.mkdir(parents=True, exist_ok=True)
+            _baza = k.stem + "_" + datetime.fromtimestamp(k.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+            cel = stare / (_baza + k.suffix)
+            _i = 2
+            while cel.exists():
+                cel = stare / (_baza + "_" + str(_i) + k.suffix)
+                _i += 1
+            shutil.move(str(k), str(cel))
+            log("UŻYTKOWNIK", "Przeniosłem " + _dla_oka_uzytkownika(k, False) + " do "
+                + _dla_oka_uzytkownika(cel) + " — w folderze drużyny tego pliku już nie ma "
+                "(notatka poprzedniego zespołu albo drużyna go przeniosła), więc nie trzeba na "
+                "nią odpowiadać.")
+    except Exception as e:
+        log("UŻYTKOWNIK", "Nie odłożyłem starej kopii notatki w AEL-MINI: " + str(e))
+
+
 def _poczta_uzytkownika(step):
     _kto = ("Drużyna " + _DRUZYNA) if _DRUZYNA in ("1", "2") else "Zespół"
 
@@ -60279,6 +60322,7 @@ def _poczta_uzytkownika(step):
             write_json(_POCZTA_WIDZIANE_FILE, widziane)
     except Exception as e:
         log("UŻYTKOWNIK", "Nie sprawdziłem plików dla użytkownika: " + str(e))
+    _odloz_stare_kopie_dla_uzytkownika()
 
     # 2) Uzytkownik odpisal — w folderze druzyny albo (v480dm) w AEL-MINI,
     #    gdzie moze utworzyc plik z menedzera plikow telefonu.
@@ -60289,29 +60333,69 @@ def _poczta_uzytkownika(step):
         _odbierz_od_uzytkownika(od, step)
 
 
+# v480lr: wiadomosc zatrzymana jako mozliwy klucz nie lezy w folderze
+# druzyny — zespol czyta ten folder komendami, a Sedzia dostawal jego pliki
+# (bieg 2026-11-02 21:07: zatrzymana skrzynka druzyny 2 poszla w calosci do
+# Sedziego, ktory wytknal druzynie "zalegla dyrektywe", ktorej nie dostala).
+_SKRZYNKA_ZATRZYMANA = HOME / ".ael_skrzynka_zatrzymana"
+
+
+def _dla_oka_uzytkownika(p, gdzie=True):
+    """Sciezka tak, jak ja widzi uzytkownik: AEL-MINI/… w menedzerze
+    plikow telefonu albo ~/… w Termuksie."""
+    try:
+        s = str(p)
+        _wsp = str(HOME / "storage" / "shared") + "/"
+        if s.startswith(_wsp):
+            return s[len(_wsp):] + (" (w menedżerze plików telefonu)" if gdzie else "")
+        return s.replace(str(HOME), "~", 1)
+    except Exception:
+        return str(p)
+
+
 def _odbierz_od_uzytkownika(od, step):
     try:
         if not od.is_file():
             return
         tresc = od.read_text(encoding="utf-8", errors="replace").strip()
+        jedna = " ".join(tresc.split())
+        teraz = datetime.now().strftime("%Y%m%d_%H%M%S")
+        sekret = _sekret_w_tekscie(jedna) if jedna else ""
+        if sekret:
+            # v480lr: uzytkownik (2026-11-02, "jakas tam komenda nie dzialala,
+            # nie wiem") nie wiedzial, ze wiadomosc nie doszla ani dlaczego —
+            # mowimy, ktory kawalek ja zatrzymal (4 znaki, nie caly) i co zrobic
+            _SKRZYNKA_ZATRZYMANA.mkdir(parents=True, exist_ok=True)
+            zatrzymana = _SKRZYNKA_ZATRZYMANA / (
+                "OD_UZYTKOWNIKA_" + (_DRUZYNA or "0") + "_" + teraz + ".txt")
+            shutil.move(str(od), str(zatrzymana))
+            linia = (
+                "Twoja wiadomość z " + _dla_oka_uzytkownika(od) + " nie doszła: fragment „"
+                + sekret[:4] + "…” (" + str(len(sekret)) + " znaków) wygląda na klucz albo "
+                "hasło, więc nie dałem jej ani zespołowi, ani Sędziemu. Leży w "
+                + _dla_oka_uzytkownika(zatrzymana) + ". Jeśli to nie klucz, usuń albo zmień "
+                "ten fragment i zapisz wiadomość jeszcze raz w " + _dla_oka_uzytkownika(od, False) + "."
+            )
+            print()
+            print("=" * 60)
+            print("  " + linia)
+            print("=" * 60)
+            log("UŻYTKOWNIK", linia)
+            try:
+                subprocess.run(
+                    ["termux-notification", "--id", "ael_skrzynka_" + (_DRUZYNA or "0"),
+                     "-t", (("Drużyna " + _DRUZYNA) if _DRUZYNA else "Zespół")
+                     + ": Twoja wiadomość nie doszła",
+                     "-c", "Fragment „" + sekret[:4] + "…” wygląda na klucz albo hasło — "
+                     "zmień go i zapisz wiadomość jeszcze raz."],
+                    capture_output=True, timeout=15)
+            except Exception:
+                pass
+            return
         archiwum = od.parent / "archiwum_od_uzytkownika"
         archiwum.mkdir(parents=True, exist_ok=True)
-        od.rename(
-            archiwum / (
-                "OD_UZYTKOWNIKA_"
-                + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
-            )
-        )
+        od.rename(archiwum / ("OD_UZYTKOWNIKA_" + teraz + ".txt"))
         if not tresc:
-            return
-        jedna = " ".join(tresc.split())
-        if _WYGLADA_NA_SEKRET_RE.search(jedna):
-            log(
-                "UŻYTKOWNIK",
-                "Twoja wiadomość z " + od.name + " wygląda "
-                "na klucz albo hasło — nie przekazałem jej zespołowi "
-                "(leży w archiwum_od_uzytkownika)."
-            )
             return
         USER_SAID_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(USER_SAID_FILE, "a", encoding="utf-8") as f:
@@ -62418,11 +62502,14 @@ def _pliki_druzyny(numer, ile=40):
     kopii = 0
     try:
         for korzen, katalogi, pliki in os.walk(folder):
-            katalogi[:] = sorted(k for k in katalogi if not k.startswith("."))
+            # v480lr: skrzynka od uzytkownika to nie praca druzyny — slowa
+            # uzytkownika Sedzia dostaje osobno, tylko te dostarczone
+            katalogi[:] = sorted(k for k in katalogi
+                                 if not k.startswith(".") and k != "archiwum_od_uzytkownika")
             if len(Path(korzen).relative_to(folder).parts) >= 2:
                 katalogi[:] = []
             for nazwa in sorted(pliki):
-                if nazwa.startswith("."):
+                if nazwa.startswith(".") or nazwa.startswith("OD_UZYTKOWNIKA"):
                     continue
                 # v480ex: kopie zapasowe (.bak_…, .przed_…) to szum — bieg
                 # 2026-10-24 21:29: 15 kopii PLATEAU_B_RAPORT.md.bak_… w spisie
@@ -62601,10 +62688,15 @@ def _kod_dla_sedziego(numer):
     """Tresc ostatnio zmienionych plikow tekstowych z ~/MAIN_N."""
     folder = HOME / ("MAIN_" + str(numer))
     try:
+        # v480lr: bez skrzynki od uzytkownika (OD_UZYTKOWNIKA.txt czeka na
+        # krok druzyny, archiwum ma tez wiadomosci zatrzymane sprzed v480lr)
+        # — Sedzia bral czekajaca albo zatrzymana wiadomosc za polecenie,
+        # ktore druzyna zlekcewazyla; dostarczone ma z _od_uzytkownika_dla_sedziego
         pliki = [
             p for p in folder.rglob("*")
             if p.is_file() and p.suffix.lower() in _SEDZIA_TEKSTOWE
-            and not any(cz.startswith(".") or cz == "__pycache__"
+            and not p.name.startswith("OD_UZYTKOWNIKA")
+            and not any(cz.startswith(".") or cz in ("__pycache__", "archiwum_od_uzytkownika")
                         for cz in p.relative_to(folder).parts)
         ]
         pliki.sort(key=lambda p: p.stat().st_mtime, reverse=True)
