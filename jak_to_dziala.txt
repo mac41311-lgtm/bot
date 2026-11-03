@@ -4477,3 +4477,34 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      AEL-MINI, której nie ma już w folderze drużyny (nowy start z
      usuniętymi folderami albo drużyna przeniosła plik), idzie do
      AEL-MINI/…/stare/ — żeby nie odpowiadać drużynie, której już nie ma.
+
+334. (v480ls) Poprawki, Sędzia i rozmowy po nocnym biegu 2–3.11.
+     Jednoliniowy stary fragment z bloku bez wcięcia trafia w całą wciętą
+     linię, a kolejne linie nowego fragmentu dostają jej wcięcie (w nocy
+     cztery dobre poprawki wracały do autora z „unindent does not
+     match”). Program pamięta (także po restarcie), które poprawki już
+     naniósł i na jaki plik: ta sama poprawka, która wraca (stary głos,
+     cytat), nie idzie na inny, podobny plik, gdy jej plik już ma tę
+     zmianę; gdy część poprawki już jest w jednym pliku, a reszta pasuje
+     tylko do innego, którego odpowiedź nie wymienia, autor dostaje
+     zdanie, jak wskazać plik. Stary głos z kodem nie przechodzi zapisu
+     drugi raz, także gdy ostatnia odpowiedź tej osoby jest bez kodu.
+     Sędzia porównuje ogłoszoną liczbę z wypisaną z dokładnością do
+     zaokrąglenia ostatniej cyfry zapisu, najwyżej 0,1% (wcześniej 0,005
+     bezwzględnie — 0.182737 przeszło jako 0.186015); przy niezgodności
+     mówi, co jest przyjmowane. Liczba z przebiegu, który program sam
+     widział, liczy się tylko wtedy, gdy „sprawdz” jest końcem tamtej
+     komendy i nic po nim nie dopisuje nowych liczb. Stare potwierdzenie
+     na innej liczbie jest sprawdzane jeszcze raz. Potwierdzony wynik
+     dostaje zdanie, że potwierdzenie zostaje, dopóki w wynik.json nie
+     zmieni się „wynik”, „lepiej” ani „sprawdz”, a obie formy werdyktu
+     znaczą to samo (drużyna całą noc pilnowała md5 i powtarzała tę samą
+     komendę). Błąd DeepSeeka (np. za dużo wiadomości naraz) nie trafia
+     do MAIN-a jako słowa Igora czy Bartka, tylko jako zdanie programu,
+     co się stało, i nie zastępuje ostatniego kodu Bartka. Dalszy ciąg
+     urwanego kodu, który zaczyna się od zdania („Kontynuuję … od
+     miejsca przerwania:”) i nowego bloku, łączy się w jeden blok bez
+     zdania i bez powtórzonych linii. Gdy osoba w trakcie zapisu
+     poprawiała swój kod w rozmowie z programem, komendy URUCHOM/PODGLĄD
+     z jej wcześniejszej odpowiedzi nie są już uruchamiane (w nocy
+     „pkill” sprzed 16 minut zabił liczące procesy).

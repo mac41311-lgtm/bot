@@ -5413,9 +5413,11 @@ def _set_current_goal(goal):
         _cel_h = hashlib.sha1(_current_goal_text.encode("utf-8")).hexdigest()
         if not _cel_plik.exists() or _cel_plik.read_text(encoding="utf-8").strip() != _cel_h:
             _autor_pliku.clear()
+            _naniesione_pary.clear()
             _cel_plik.write_text(_cel_h, encoding="utf-8")
     except Exception:
         _autor_pliku.clear()
+        _naniesione_pary.clear()
     _reset_watkow()
     _role_response_cache.clear()
     _role_response_step.clear()
@@ -8493,6 +8495,30 @@ def _stitch_continuation(text, tail):
     if poczatek and tail[:200] == poczatek:
         return text
 
+    # v480ls: urwany blok kodu, a dalszy ciag zaczyna sie od zdania i
+    # NOWEGO bloku ("Kontynuuję `x.c` od miejsca przerwania:\n\n```c\n…").
+    # Bieg 2026-11-03 03:43 (druzyna 1): zdanie weszlo do pliku jako linia
+    # 129 ppm_c_v3_match.c, a druga czesc kodu poszla do osobnego bloku —
+    # plik sie nie kompilowal. Kod laczy sie w jeden blok, bez zdania i bez
+    # linii, ktore autor powtorzyl dla ciaglosci.
+    if text.count("```") % 2 == 1:
+        # otwarcie z nazwa jezyka (```c, ```python) — zamkniecie jest gole;
+        # przed nim najwyzej kilka linii zdania, bez sladu kodu
+        _m_bl = re.match(r"((?:[^\n]*\n){0,4}?)[ \t]*```[A-Za-z][\w+-]*[ \t]*\n", tail)
+        _wstep = _m_bl.group(1).strip() if _m_bl else ""
+        if _m_bl and len(_wstep) <= 300 and not re.search(r"[;{}]|```", _wstep):
+            kod_dalej = tail[_m_bl.end():]
+            linie_t = text.rstrip().split("\n")
+            linie_d = kod_dalej.split("\n")
+            for k in range(min(12, len(linie_t) - 1, len(linie_d)), 0, -1):
+                ost = linie_t[-k:]
+                if (all(ost[j].rstrip() == linie_d[j].rstrip() for j in range(k - 1))
+                        and ost[-1].strip()
+                        and linie_d[k - 1].rstrip().startswith(ost[-1].rstrip())):
+                    linie_t = linie_t[:-k]
+                    break
+            return "\n".join(linie_t).rstrip("\n") + "\n" + kod_dalej
+
     okno = text[-_CONTINUATION_OVERLAP:]
 
     # Najdluzszy sufiks `okno`, ktory jest prefiksem `tail`.
@@ -8672,6 +8698,13 @@ def _bez_stopki_deepseeka(text):
 _KOLEJKA_KONTA = _threading.RLock()
 
 
+# v480ls: ile wiadomosci poszlo do kazdej roli i jej ostatnia odpowiedz —
+# zeby PODGLĄD/URUCHOM ze starszej odpowiedzi nie lecialy po tym, jak
+# rozmowa z ta osoba poszla dalej (rundy poprawki w srodku).
+_wiadomosci_do_roli = {}
+_ostatnia_odp_roli = {}
+
+
 def deepseek(name, message):
     if name in _ROLE_Z_PODGLADEM:
         try:
@@ -8689,6 +8722,7 @@ def deepseek(name, message):
             odp = _podglad_dla_roli(name, odp, message)
         except Exception as e:
             log("PROGRAM", "Podgląd dla " + str(name) + " nie wyszedł: " + str(e))
+    _ostatnia_odp_roli[name] = odp
     return odp
 
 
@@ -9354,6 +9388,7 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         # Bartek pisal wszystko drugi raz. Pliki z tej odpowiedzi ida na
         # dysk najpierw, a podglad widzi je juz na miejscu.
         zapis = []
+        _n_przed = _wiadomosci_do_roli.get(rola, 0)
         if "```" in str(odp or ""):
             try:
                 _po = _poloz_nowy_plik_autora(rola, odp, "")
@@ -9362,6 +9397,21 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
             except Exception as e:
                 log("PROGRAM", "Pliki z odpowiedzi " + imie + " przed podglądem: " + str(e))
         zapisane.extend(zapis)
+        # v480ls: w trakcie zapisu autor dostal rundy (poprawka nie weszla,
+        # proba uruchomienia padla) i rozmowa poszla dalej — komendy z tej,
+        # starszej odpowiedzi sa nieaktualne. Bieg 2026-11-03 02:37 (druzyna
+        # 2): "URUCHOM: … pkill -f self_improve_cli.py" z odpowiedzi sprzed
+        # 16 minut (pisane "jesli poprawka wejdzie") zabilo liczace procesy,
+        # a Bartek dostal ten wynik i nie wiedzial, skad sie wzial.
+        if _wiadomosci_do_roli.get(rola, 0) != _n_przed:
+            log("PROGRAM", imie + " w międzyczasie poprawiał swój kod w rozmowie z programem — komend "
+                "z jego wcześniejszej odpowiedzi nie uruchamiam (są już nieaktualne); dalej liczy się "
+                "jego ostatnia odpowiedź.")
+            _ost = _ostatnia_odp_roli.get(rola)
+            if _ost and str(_ost).strip():
+                return _ost
+            return re.sub(r"(?im)^([ \t>*_`-]*)(?:URUCHOM|PODGL[AĄ]D)[*_]*\s*:",
+                          r"\1Komenda do uruchomienia później:", str(odp or ""))
         # v480hb: uzytkownik 2026-10-27 ("oddajemy mu wladze, jak juz dobrze
         # sie kompiluje"): rola, ktora od drugiej rundy juz tylko pilnuje
         # procesu liczacego w tle (tail/ps jego logu), konczy swoja
@@ -9495,6 +9545,7 @@ def _deepseek_jedna_rozmowa(name, message):
             str(message))
     except Exception:
         pass
+    _wiadomosci_do_roli[name] = _wiadomosci_do_roli.get(name, 0) + 1
 
     # v278: jedno gardlo, przez ktore idzie KAZDE pytanie do roli —
     # wiec jedyne miejsce, gdzie da sie uczciwie zmierzyc, ile
@@ -22633,6 +22684,7 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
                     autorskie.append(p)
     skan = None
     cele, juz, bledy = [], [], []
+    ukryte = []
     for stary, nowy in pary:
         poz = _pozycja_pary(tekst, stary)
         nad = [p for q, p in wym if q < poz]
@@ -22648,6 +22700,20 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
         st = _stany(kolejnosc, stary, nowy)
         ok = [p for p in kolejnosc if st.get(p) == "ok"]
         cel = None
+        if nazwany not in ok:
+            # v480ls: te pare program juz naniosl, a jej plik ma te zmiane —
+            # nie szukamy dla niej innego pliku. Bieg 2026-11-03 02:59
+            # (druzyna 2): stary glos Bartka z poprawka do self_improve_cli.py
+            # (weszla 02:30) trafil drugi raz, a program wzial podobny
+            # self_improve_v2.py, bo tam stary fragment jeszcze stal.
+            _pb = _naniesione_pary.get(_klucz_pary(stary, nowy))
+            if _pb:
+                _pb = Path(_pb)
+                _t = _tresc(_pb)
+                if _t is not None and _naloz_pare(_t, stary, nowy)[1] == "juz":
+                    if _pb not in juz:
+                        juz.append(_pb)
+                    continue
         if nazwany in ok:
             cel = nazwany
         elif ok:
@@ -22732,12 +22798,29 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
                              + "\nSkopiuj fragment 1:1 z pliku (PODGLĄD: sed -n 'od,dop' plik) i napisz "
                              "nad poprawką ścieżkę pliku.")
                 continue
+        if cel not in [p for _q, p in wym]:
+            ukryte.append((stary, cel))
         for i, (p, lista) in enumerate(cele):
             if p == cel:
                 lista.append((stary, nowy))
                 break
         else:
             cele.append((cel, [(stary, nowy)]))
+    # v480ls: czesc tej poprawki juz jest w jednym pliku, a reszta pasuje
+    # tylko do innego, ktorego odpowiedz nie wymienia — to nie jest ta sama
+    # zmiana (stara poprawka wrocila albo plik podobny przez kopie). Autor
+    # wskazuje plik, zamiast program rozkladac ja po kilku plikach.
+    if juz:
+        for stary, cel in ukryte:
+            if cel not in juz:
+                bledy.append("Część tej poprawki już jest w " + ", ".join(
+                    _sciezka_od_domu(str(p)) for p in juz[:2]) + ", a fragment "
+                    + _poczatek_fragmentu(stary) + " stoi tylko w " + _sciezka_od_domu(str(cel))
+                    + ", którego odpowiedź nie wymienia — program nie rozkłada jednej poprawki "
+                    "po różnych plikach na domysł. Jeśli to zmiana dla " + _sciezka_od_domu(str(cel))
+                    + ", napisz nad nią jego ścieżkę (np. „Poprawka do " + _sciezka_od_domu(str(cel))
+                    + "”); jeśli dla tamtego pliku — skopiuj fragment 1:1 z niego (PODGLĄD: sed -n "
+                    "'od,dop' plik).")
     return cele, juz, bledy
 
 
@@ -22753,6 +22836,7 @@ def _nanies_plan(rola, odp, foldery, tylko_autorskie=False):
     for p, lista in cele:
         w = _naloz_pary_na_plik(str(p), lista, zapisz=False)
         if w.get("applied"):
+            w["pary"] = lista
             proby.append((p, w))
         elif w.get("already"):
             if p not in juz:
@@ -22766,6 +22850,7 @@ def _nanies_plan(rola, odp, foldery, tylko_autorskie=False):
         w2 = _zapisz_poprawiony_plik(p, w["original"], w["content"], w.get("blocks", 0))
         if w2.get("applied"):
             zrobione.append((p, w2))
+            _zapamietaj_naniesione(p, w.get("pary"))
             if not _autor_pliku.get(p.name):
                 _autor_pliku[p.name] = rola
             try:
@@ -23033,6 +23118,47 @@ def _jak_skonczyl_proces(kod):
 _zapis_dla_maina = {}
 
 
+_BLAD_DS_RE = re.compile(r"^[ \t]*DEEPSEEK ERROR \[([^\]\n]*)\]:[ \t]*(.*)$", re.MULTILINE)
+
+
+def _jest_blad_ds(tekst):
+    """v480ls: odpowiedz roli to blad wysylki do DeepSeeka, nie jej slowa."""
+    return bool(_BLAD_DS_RE.match(str(tekst or "").lstrip()))
+
+
+def _blad_roli_zdaniem(rola, tekst):
+    """
+    v480ls: "DEEPSEEK ERROR [IGOR]: … rate_limit_reached …" w miejscu
+    odpowiedzi roli — MAIN dostaje zdanie: co sie stalo i co mozna
+    zrobic, a nie surowy blad pod imieniem tej osoby. Bieg 2026-11-02
+    22:53 (druzyna 1): w "Odpowiedziach zespolu" stalo "Igor: DEEPSEEK
+    ERROR [IGOR]: DeepSeek: rate_limit_reached — Messages too frequent.
+    Try again later." jak jego slowa; 01:55 (druzyna 2) to samo u Bartka.
+    """
+    tekst = str(tekst or "")
+    # tylko na poczatku: rola, ktora cytuje taki blad z logu, mowi swoje
+    m = _BLAD_DS_RE.match(tekst.lstrip())
+    if not m:
+        return tekst
+    tekst = tekst.lstrip()
+    kto = _IMIE_AUTORA.get(rola, (rola, _ROLE_DISPLAY_NAME.get(rola, rola)))[1]
+    pw = m.group(2).lower()
+    if any(x in pw for x in ("rate_limit", "too frequent", "too many", "za często", "za czesto")):
+        dlaczego = ("DeepSeek chwilowo nie przyjmuje wiadomości: za dużo naraz, limit po stronie "
+                    "DeepSeeka; program sam zwalnia tempo")
+    elif any(x in pw for x in ("invalid chat session", "invalid message id", "chat session",
+                               "sesja", "sesji")):
+        dlaczego = "rozmowa z DeepSeekiem się zerwała; program zaczyna nową"
+    elif any(x in pw for x in ("connection", "timed out", "timeout", "network", "resolve",
+                               "unreachable", "max retries", "ssl", "połączeni")):
+        dlaczego = "nie było połączenia z DeepSeekiem (sieć); program ponawia sam"
+    else:
+        dlaczego = "błąd po stronie DeepSeeka (" + short(m.group(2).strip(), 160) + ")"
+    zdanie = ("(Brak odpowiedzi od " + kto + " — " + dlaczego + ". To komunikat programu, nie "
+              "odpowiedź tej osoby; pytanie można zadać jeszcze raz w następnym kroku.)")
+    return (tekst[:m.start()] + zdanie + tekst[m.end():]).strip()
+
+
 def _dla_maina_z_zapisem(rola, tekst):
     """
     v480ft: glos z narady na poczatku kroku idzie do MAIN-a tak samo
@@ -23041,7 +23167,7 @@ def _dla_maina_z_zapisem(rola, tekst):
     plikow, ktore zespol mogl celowo usunac); wynik zapamietany, zeby
     ponowne skladanie promptu nie zapisywalo drugi raz.
     """
-    tekst = str(tekst or "")
+    tekst = _blad_roli_zdaniem(rola, str(tekst or ""))
     if "```" not in tekst or _role_response_step.get(rola) != _biezacy_krok:
         return _kod_na_jedna_linie(tekst)
     # v480fw: krok tej roli mogla ustawic pozniejsza odpowiedz (ASK), a
@@ -23052,10 +23178,18 @@ def _dla_maina_z_zapisem(rola, tekst):
     def _bloki(t):
         return {_znormalizuj_kod(_wyrownaj_blok(b))
                 for b in re.findall(r"```[^\n`]*\n(.*?)```", str(t or ""), re.DOTALL)}
-    _ostatnia = _bloki(_role_response_cache.get(rola))
-    if _ostatnia and any(len(k) >= 40 and k not in _ostatnia for k in _bloki(tekst)):
-        return _kod_na_jedna_linie(tekst)
+    # v480ls: takze gdy ostatnia odpowiedz nie ma zadnego bloku. Bieg
+    # 2026-11-03 02:59 (druzyna 2): Bartek odpowiedzial na ASK bez kodu,
+    # a jego starszy glos z poprawka (z kroku wczesniej) poszedl przez
+    # ten zapis drugi raz — na inny plik.
     klucz = (rola, _biezacy_krok, hash(tekst))
+    if klucz in _zapis_dla_maina:
+        # ten glos w tym kroku juz przeszedl zapis — ten sam wynik, takze
+        # gdy pozniejsza odpowiedz tej roli (ASK) jest bez kodu
+        return _zapis_dla_maina[klucz]
+    _ostatnia = _bloki(_role_response_cache.get(rola))
+    if any(len(k) >= 40 and k not in _ostatnia for k in _bloki(tekst)):
+        return _kod_na_jedna_linie(tekst)
     if klucz not in _zapis_dla_maina:
         if len(_zapis_dla_maina) > 60:
             _zapis_dla_maina.clear()
@@ -25055,6 +25189,31 @@ class _SlownikNaDysku(dict):
 
 
 _autor_pliku = _SlownikNaDysku(HOME / (".ael_autorzy_plikow_" + (_DRUZYNA or "0") + ".json"))
+
+# v480ls: pary (stary, nowy), ktore program juz naniosl — i na jaki plik.
+# Ta sama poprawka, ktora wraca (stary glos, cytat), nie idzie na inny,
+# podobny plik, gdy jej plik juz ma te zmiane. Czyszczone przy zmianie
+# celu, razem z _autor_pliku.
+_naniesione_pary = _SlownikNaDysku(HOME / (".ael_poprawki_" + (_DRUZYNA or "0") + ".json"))
+
+
+def _klucz_pary(stary, nowy):
+    return hashlib.sha1((_znormalizuj_kod(stary) + "\x00" + _znormalizuj_kod(nowy))
+                        .encode("utf-8")).hexdigest()[:16]
+
+
+def _zapamietaj_naniesione(p, pary):
+    try:
+        for stary, nowy in pary or ():
+            k = _klucz_pary(stary, nowy)
+            dict.pop(_naniesione_pary, k, None)
+            dict.__setitem__(_naniesione_pary, k, str(p))
+        if len(_naniesione_pary) > 400:
+            for k in list(_naniesione_pary)[:200]:
+                dict.pop(_naniesione_pary, k, None)
+        _naniesione_pary._zapisz()
+    except Exception:
+        pass
 
 
 def _zapisz_uruchomienie(nazwa, args, result):
@@ -42930,18 +43089,34 @@ def _naloz_pare(tekst, stary, nowy):
     if stary.strip() and stary in nowy and nowy.strip() and (
             nowy in tekst or _fragment_z_wcieciem(tekst, nowy)):
         return tekst, "juz", 0
-    n = tekst.count(stary)
-    if n == 1:
-        return tekst.replace(stary, nowy, 1), "ok", 1
-    if n > 1:
-        return tekst, "wiele", n
+    # v480ls: najpierw CALE linie z jednym wspolnym wcieciem, potem
+    # zwykle wystapienie w tekscie. Bieg 2026-11-03 02:21 (druzyna 2):
+    # blok Bartka mial zdjete wciecie, jednoliniowy stary fragment
+    # ("with open(LOG_PATH …):") trafial jako kawalek wcietej linii,
+    # a druga i trzecia linia nowego wchodzily bez wciecia — "unindent
+    # does not match", dwie rundy u autora za dobra poprawke.
     traf = _fragment_z_wcieciem(tekst, stary)
     if len(traf) == 1:
         a, b, wc = traf[0]
-        nw = _dodaj_wciecie(nowy, wc)
+        nw = _dodaj_wciecie(nowy, wc) if nowy.strip() else ""
         if tekst[b - 1:b] != "\n" and nw.endswith("\n"):
             nw = nw[:-1]
         return tekst[:a] + nw + tekst[b:], "ok", 1
+    n = tekst.count(stary)
+    if n == 1:
+        a = tekst.find(stary)
+        nw = nowy
+        if "\n" not in stary.strip("\n") and "\n" in nowy.strip("\n"):
+            # jedna linia (albo jej kawalek) -> kilka linii: dalsze linie
+            # nowego dostaja wciecie linii, w ktorej stal stary fragment
+            przed = tekst[tekst.rfind("\n", 0, a) + 1:a]
+            wc_l = przed[:len(przed) - len(przed.lstrip())]
+            if wc_l:
+                ls = nowy.split("\n")
+                nw = ls[0] + "\n" + "\n".join((wc_l + l) if l.strip() else l for l in ls[1:])
+        return tekst[:a] + nw + tekst[a + len(stary):], "ok", 1
+    if n > 1:
+        return tekst, "wiele", n
     if len(traf) > 1:
         return tekst, "wiele", len(traf)
     st2, nw2 = _bez_numerow(stary, nowy)
@@ -43073,7 +43248,10 @@ def _naloz_pary_na_plik(path, bloki, zapisz=True):
         return {"applied": True, "path": str(target), "original": original,
                 "content": zmieniony, "blocks": naniesione}
 
-    return _zapisz_poprawiony_plik(target, original, zmieniony, naniesione)
+    w = _zapisz_poprawiony_plik(target, original, zmieniony, naniesione)
+    if w.get("applied"):
+        _zapamietaj_naniesione(target, bloki)
+    return w
 
 
 def _zapisz_poprawiony_plik(target, original, zmieniony, naniesione):
@@ -49106,7 +49284,7 @@ def main_decide(
                     _odp["na_slowa"], _odp["na_slowa"]
                 ) + ")"
             _czesci.append(
-                (_kto_odp + ":\n" + str(_odp['answer']).strip())
+                (_kto_odp + ":\n" + _blad_roli_zdaniem(_odp['role'], str(_odp['answer']).strip()))
                 if str(_odp['answer'] or "").strip() else
                 (_kto_odp + " nie odpowiedział — sesja oddała pusty tekst.")
             )
@@ -50043,8 +50221,9 @@ def _handle_main_ask(
             )
 
             # Odpowiedz jest normalna wypowiedzia tej osoby — takze jako
-            # zrodlo kodu do zapisu (v355, v430).
-            if ask_role == "ENGINEER" and answer.strip():
+            # zrodlo kodu do zapisu (v355, v430). v480ls: blad wysylki do
+            # DeepSeeka nie zastepuje ostatniego kodu Bartka.
+            if ask_role == "ENGINEER" and answer.strip() and not _jest_blad_ds(answer):
                 team["engineer_full"] = answer
                 globals()["_kod_bartka_teraz"] = answer
 
@@ -50124,7 +50303,7 @@ def _handle_main_ask(
                     ((_t2 or {}).get("kod_full") or {}).get(_kogo) or ""
                 )
 
-                if _kogo == "ENGINEER" and _odp2.strip():
+                if _kogo == "ENGINEER" and _odp2.strip() and not _jest_blad_ds(_odp2):
                     team["engineer_full"] = _odp2
                     globals()["_kod_bartka_teraz"] = _odp2
 
@@ -61220,7 +61399,7 @@ def zdyskwalifikuj(numer, powod, ocena):
     d = ocena.get("druzyna_" + numer) or {}
     try:
         w = json.loads((_RYWALIZACJA_DIR / ("druzyna_" + numer + ".json")).read_text(encoding="utf-8"))
-        wynik = _werdykt_zdaniem(w, "Jej ostatni wynik.json")
+        wynik = _werdykt_zdaniem(w, "Jej ostatni wynik.json", trwalosc=False)
     except Exception:
         wynik = "Jej ostatni wynik.json: żadnego."
     spadek = _zachowaj_spadek(numer, _spadek_lista(d.get("spadek")))
@@ -61454,6 +61633,44 @@ def _ostatnia_liczba(tekst):
         return None
 
 
+def _ostatnia_liczba_tekst(tekst):
+    """Zapis (tekst) ostatniej liczby z ostatniej niepustej linii albo None."""
+    linie = [l for l in str(tekst or "").splitlines() if l.strip()]
+    if not linie:
+        return None
+    liczby = re.findall(r"[-+]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", linie[-1])
+    return liczby[-1] if liczby else None
+
+
+def _dziesietne(zapis):
+    """Ile cyfr po przecinku ma zapis liczby (z wykladnikiem: efektywnie)."""
+    m = re.fullmatch(r"[-+]?\d*(?:[.,](\d*))?(?:[eE]([-+]?\d+))?", str(zapis or "").strip())
+    if not m:
+        return None
+    d = len(m.group(1) or "") - (int(m.group(2)) if m.group(2) else 0)
+    return max(d, 0)
+
+
+def _liczby_zgodne(wypisana, ogloszony, zapis_wypisanej=None, zapis_ogloszonej=None):
+    """
+    v480ls: ogloszona liczba zgadza sie z wypisana z dokladnoscia do
+    zaokraglenia zapisu (krotszego z dwoch), najwyzej 0,1% wartosci.
+    Do v480lr: 0,005 bezwzglednie dla liczb ponizej 1 — bieg 2026-11-02
+    22:28 (druzyna 2): przy top-5 0.186015 Sedzia przyjal przebieg, ktory
+    wypisal 0.182737 (roznica 1,8%, a cala poprawa druzyny to tyle samo).
+    """
+    try:
+        a, b = float(wypisana), float(ogloszony)
+    except (TypeError, ValueError):
+        return False
+    ds = [d for d in (_dziesietne(zapis_wypisanej if zapis_wypisanej is not None else repr(a)),
+                      _dziesietne(zapis_ogloszonej if zapis_ogloszonej is not None else repr(b)))
+          if d is not None]
+    m = max(abs(a), abs(b))
+    tol = min(max(0.5 * 10 ** (-(min(ds) if ds else 6)), 1e-6 * m), 0.001 * m)
+    return abs(a - b) <= tol + 1e-12 * max(1.0, m)
+
+
 def _liczba_wpisana(komenda, folder, wyjscie):
     """v480ip: czy liczba, ktora wypisala komenda "sprawdz", stoi wprost w
     tresci samej komendy albo uruchamianego przez nia skryptu. Bieg
@@ -61555,7 +61772,8 @@ def _zapisz_widziana(komenda, wynik, start):
         if plik.exists():
             linie = plik.read_text(encoding="utf-8", errors="replace").splitlines()[-(_WIDZIANE_MAKS - 1):]
         linie.append(json.dumps({"start": float(start), "koniec": time.time(),
-                                 "komenda": str(komenda)[:3000], "liczba": liczba},
+                                 "komenda": str(komenda)[:3000], "liczba": liczba,
+                                 "zapis": _ostatnia_liczba_tekst(wynik.get("stdout"))},
                                 ensure_ascii=False))
         plik.write_text("\n".join(linie) + "\n", encoding="utf-8")
     except Exception:
@@ -61611,6 +61829,44 @@ def _rdzen_komendy(komenda, katalog_tel="~"):
     return laptop, katalog.rstrip("/") or "~", segmenty
 
 
+_OGON_BEZ_LICZB = {"tail", "tee", "true", ":", "sleep"}
+
+
+def _ogon_bez_nowych_liczb(komenda):
+    """
+    v480ls: po ostatnim segmencie liczacym komenda moze juz tylko obcinac
+    wyjscie od konca (tail), kopiowac je (tee) albo pisac napisy bez cyfr.
+    Bieg 2026-11-02 22:28 (druzyna 2): "… nowy artefakt …; echo '---'; …
+    stary artefakt" — ostatnia liczba pochodzila z innego segmentu niz
+    "sprawdz". Tak samo "; echo 0.19", "| awk …", "; cat wynik.txt",
+    "| head -1" czy "; wc -l log" zmienialyby to, co jest ostatnia liczba.
+    """
+    k = str(komenda or "").strip()
+    m = _LAPTOP_RE.match(k)
+    if m:
+        k = m.group(1).strip()
+    segs = []
+    for seg in re.split(r"&&|\|\||[;|\n]", k):
+        seg = re.sub(r"\s*\d*>>?\s*(?:&\s*\d+|\S+)", " ", seg)
+        seg = re.sub(r"\s*<\s*\S+", " ", seg).strip()
+        if seg:
+            segs.append(seg)
+    ostatni = -1
+    for i, seg in enumerate(segs):
+        if _rdzen_komendy(seg)[2]:
+            ostatni = i
+    for seg in segs[ostatni + 1:]:
+        slowa = seg.split()
+        if slowa[0] in _OGON_BEZ_LICZB or slowa[0] == "cd":
+            continue
+        if slowa[0] == "cat" and len(slowa) == 1:
+            continue
+        if slowa[0] in ("echo", "printf") and not re.search(r"[\d$`]", seg[len(slowa[0]):]):
+            continue
+        return False
+    return True
+
+
 def _pliki_bez_zmian(laptop, katalog, segmenty, start, numer):
     """True, gdy kazdy plik wymieniony w komendzie istnieje i nie byl
     zmieniany po `start`; inaczej tekst powodu."""
@@ -61655,7 +61911,7 @@ def _pliki_bez_zmian(laptop, katalog, segmenty, start, numer):
         return "laptop nie odpowiedział (" + type(e).__name__ + ")"
 
 
-def _widziana_liczba(numer, komenda, ogloszony):
+def _widziana_liczba(numer, komenda, ogloszony, zapis_ogloszonej=None):
     """(wpis, None) gdy program widzial te komende z ta liczba, a pliki sie
     nie zmienily; (None, powod) gdy nie."""
     laptop, katalog, rdzen = _rdzen_komendy(komenda, "~/MAIN_" + str(numer))
@@ -61672,16 +61928,33 @@ def _widziana_liczba(numer, komenda, ogloszony):
             liczba = float(w.get("liczba"))
         except Exception:
             continue
-        if abs(liczba - ogloszony) > 0.005 * max(1.0, abs(ogloszony)):
+        if not _liczby_zgodne(liczba, ogloszony, w.get("zapis"), zapis_ogloszonej):
             continue
         l2, k2, r2 = _rdzen_komendy(w.get("komenda"))
-        if l2 != laptop or k2 != katalog or not all(s in r2 for s in rdzen):
+        # v480ls: liczba jest z ostatniego segmentu — "sprawdz" musi byc
+        # koncem tamtej komendy, a za nim nic, co pisze nowe liczby
+        if (l2 != laptop or k2 != katalog or r2[-len(rdzen):] != rdzen
+                or not _ogon_bez_nowych_liczb(w.get("komenda"))):
             continue
         ok = _pliki_bez_zmian(laptop, katalog, rdzen, float(w.get("start") or 0), numer)
         if ok is True:
             return w, None
         powod = ok
     return None, powod
+
+
+def _potwierdzenie_spojne(w, ogloszony=None, zapis=None):
+    """v480ls: zapamietane "potwierdzone" liczy sie tylko, gdy liczba, ktora
+    komenda wypisala, zgadza sie z ogloszona (wedlug _liczby_zgodne). Do
+    v480lr wystarczalo 0,005 — takie potwierdzenia sa sprawdzane od nowa."""
+    try:
+        if not isinstance(w, dict) or w.get("wypisala") is None:
+            return True
+        og = w.get("wynik") if ogloszony is None else ogloszony
+        return _liczby_zgodne(w.get("wypisala"), og, None,
+                              zapis if zapis is not None else str(og))
+    except Exception:
+        return True
 
 
 def _sedzia_ocen(numer):
@@ -61745,7 +62018,8 @@ def _sedzia_ocen(numer):
         _pop = read_json(_liczba_plik, {})
         if (isinstance(_pop, dict) and _pop.get("klucz") == _klucz_liczby
                 and isinstance(_pop.get("werdykt"), dict)
-                and _pop["werdykt"].get("werdykt") == "potwierdzone"):
+                and _pop["werdykt"].get("werdykt") == "potwierdzone"
+                and _potwierdzenie_spojne(_pop["werdykt"], ogloszony, str(dane.get("wynik")))):
             w2 = dict(_pop["werdykt"])
             w2.update(czas=werdykt["czas"], opis=werdykt["opis"])
             log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": zmienił się tylko opis — "
@@ -61759,6 +62033,7 @@ def _sedzia_ocen(numer):
     try:
         _tab = read_json(_RYWALIZACJA_DIR / ("druzyna_" + str(numer) + ".json"), {})
         if (isinstance(_tab, dict) and _tab.get("werdykt") == "potwierdzone"
+                and _potwierdzenie_spojne(_tab, ogloszony, str(dane.get("wynik")))
                 and str(_tab.get("sprawdz") or "") == komenda[:500]
                 and str(_tab.get("lepiej") or "") == werdykt["lepiej"]
                 and _tab.get("wynik") is not None
@@ -61772,7 +62047,7 @@ def _sedzia_ocen(numer):
     except Exception:
         pass
     try:
-        _wid, _wid_powod = _widziana_liczba(numer, komenda, ogloszony)
+        _wid, _wid_powod = _widziana_liczba(numer, komenda, ogloszony, str(dane.get("wynik")))
         if _wid and not _liczba_wpisana(komenda, folder, str(_wid.get("liczba"))):
             _godz = datetime.fromtimestamp(float(_wid.get("koniec") or time.time())).strftime("%H:%M")
             werdykt.update(werdykt="potwierdzone", wypisala=_wid.get("liczba"), szczegol=(
@@ -61987,7 +62262,7 @@ def _sedzia_ocen(numer):
     elif wypisala is None:
         werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
                        + str(kod if kod is not None else "?") + "): " + short(str(wyjscie or "").strip(), 200))
-    elif abs(wypisala - ogloszony) <= 0.005 * max(1.0, abs(ogloszony)):
+    elif _liczby_zgodne(wypisala, ogloszony, _ostatnia_liczba_tekst(wyjscie), str(dane.get("wynik"))):
         werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala)
                        + _liczba_wpisana(komenda, folder, wyjscie))
         try:
@@ -61996,8 +62271,13 @@ def _sedzia_ocen(numer):
         except Exception:
             pass
     else:
+        # v480ls: zgodnosc liczona sciślej (_liczby_zgodne) — zdanie mowi,
+        # co jest przyjmowane, zeby druzyna wiedziala, co poprawic.
         werdykt.update(werdykt="nie wyszło", szczegol="komenda wypisała " + str(wypisala)
-                       + ", a ogłoszone było " + str(ogloszony))
+                       + ", a ogłoszone było " + str(ogloszony) + " — to nie ta sama liczba "
+                       "(przyjmowana jest tylko różnica w zaokrągleniu ostatniej cyfry zapisu, "
+                       "najwyżej 0,1% wartości); „wynik” w wynik.json ma być liczbą, którą ta "
+                       "komenda wypisuje w ostatniej linii")
     return werdykt
 
 
@@ -62014,14 +62294,28 @@ def _utnij_po_zdaniu(t, n):
     return cz[:k + 1].rstrip(" ,;:+-") + " …"
 
 
-def _werdykt_zdaniem(w, kto, z_opisem=True):
+_POTWIERDZENIE_TRWA = (
+    " To potwierdzenie zostaje, dopóki w wynik.json nie zmieni się „wynik”, „lepiej” "
+    "ani „sprawdz” — zmiana opisu i innych plików go nie rusza; obie formy werdyktu "
+    "(„komenda wypisała” i „program sam widział”) znaczą to samo: potwierdzone."
+)
+
+
+def _werdykt_zdaniem(w, kto, z_opisem=True, trwalosc=True):
     # v480dq: wynik rywala bez jego opisu (co i jak zrobil).
+    # v480ls: przy "potwierdzone" zdanie, ze potwierdzenie trwa. Bieg
+    # 2026-11-02 22:14 - 2026-11-03 06:00 (druzyna 1): Sedzia (ARBITER)
+    # porownal forme werdyktu "komenda wypisala 1.898074" z nowsza "program
+    # sam widzial …" u rywala i uznal, ze obserwacja "nie jest formalnie
+    # zarejestrowana" — druzyna cala noc puszczala te sama komende i
+    # pilnowala md5, zamiast pracowac dalej.
     return (
         kto + ": " + ((w.get("opis") or "(bez opisu)") if z_opisem else "sprawdzony wynik")
         + (" — ogłoszony wynik " + str(w["wynik"]) if "wynik" in w else "")
         + (" (lepiej: " + w["lepiej"] + ")" if w.get("lepiej") else "")
         + " — " + str(w.get("werdykt"))
         + (" (" + str(w.get("szczegol", "")) + ")." if z_opisem else ".")
+        + (_POTWIERDZENIE_TRWA if (z_opisem and trwalosc and w.get("werdykt") == "potwierdzone") else "")
     )
 
 
@@ -62044,6 +62338,14 @@ def _sedzia_petla():
         _tab = json.loads(moja_tablica.read_text(encoding="utf-8"))
         _juz = _tab.get("_mtime_wyniku", 0.0)
         ostatni_klucz = _tab.get("_klucz_wyniku", "")
+        # v480ls: potwierdzenie na liczbie, ktora sie z ogloszona nie zgadza
+        # (luzna tolerancja do v480lr) — sprawdzamy ten wynik jeszcze raz
+        if _tab.get("werdykt") == "potwierdzone" and not _potwierdzenie_spojne(_tab):
+            log("RYWALIZACJA", "Sędzia, drużyna " + _DRUZYNA + ": poprzednie potwierdzenie "
+                "opierało się na innej liczbie (komenda wypisała " + str(_tab.get("wypisala"))
+                + ", ogłoszone " + str(_tab.get("wynik")) + ") — sprawdzam ten wynik jeszcze raz.")
+            _juz = 0.0
+            ostatni_klucz = ""
     except Exception:
         _juz = 0.0
         ostatni_klucz = ""
@@ -62111,7 +62413,7 @@ def _sedzia_petla():
                         if not str(l).startswith("Wasz wynik")
                     ]
                     _sedzia_wiadomosci.append(_werdykt_zdaniem(w, "Wasz wynik"))
-                log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA))
+                log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA, trwalosc=False))
 
             # v480dx: sprawdzony wynik rywala nie idzie juz do tej druzyny
             # (uzytkownik: o rywalu tylko procent i kto prowadzi). Bieg
