@@ -4508,3 +4508,29 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      poprawiała swój kod w rozmowie z programem, komendy URUCHOM/PODGLĄD
      z jej wcześniejszej odpowiedzi nie są już uruchamiane (w nocy
      „pkill” sprzed 16 minut zabił liczące procesy).
+
+335. (v480lt) Jedno tempo DeepSeeka dla całego telefonu i przerwa po
+     „za dużo wiadomości”. DeepSeek dawał limit obu drużynom w tej samej
+     minucie (2–3.11: 20:51, 22:51, 00:04, 01:52, 03:49, 05:58, 17:05),
+     więc liczy cały telefon, nie samo konto. Teraz obie drużyny i Sędzia
+     biorą miejsce z jednego licznika w ~/.ael_deepseek_telefon.json:
+     razem najwyżej 80 wiadomości na godzinę, z czego 10 zostaje dla
+     człowieka (zmienna DEEPSEEK_NA_GODZINE_TELEFON) — jedna wiadomość co
+     ~51 s, na zmianę, gdy czeka więcej niż jeden. Duża wiadomość liczy
+     się jak kilka (do 10 kB jedna, 30 kB trzy, najwyżej cztery), więc po
+     ocenie Sędziego telefon dłużej odpoczywa. Po „za dużo wiadomości”
+     wszyscy robią przerwę 10 min (kolejny limit z rzędu dłużej, najwyżej
+     30 min), bez ponawiania w tym czasie, a potem idzie ta sama
+     wiadomość w tej samej rozmowie — nic nie przepada, rola nie dostaje
+     „DEEPSEEK ERROR”, a wznowiona rozmowa nie jest kasowana. Wspólne
+     tempo po limicie spada (×0,66, najwyżej raz na 10 min) i wraca o 5
+     co 15 min bez limitu. Sędzia nie zaczyna oceny w czasie przerwy. To
+     samo dotyczy powitania roli, zmiany jej instrukcji, dopytania po
+     pustej odpowiedzi, prośby o dokończenie i dalszego ciągu urwanej
+     odpowiedzi (wcześniej szły bez odstępu albo przepadały bez śladu).
+     Limit przy dalszym ciągu nie wyłącza go już do końca biegu, a czat
+     testowy nie uznaje limitu za martwe konto. Gdy odpowiedzi zespołu
+     nie doszły do MAIN-a przez błąd DeepSeeka, krok kończy się brakiem
+     odpowiedzi, a nie „złym JSON-em”. Wznowiona rozmowa, której serwer
+     już nie zna, od razu zaczyna się od nowa. Ten sam klucz w obu
+     plikach daje na starcie ostrzeżenie (jedno konto dla obu drużyn).
