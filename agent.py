@@ -16400,11 +16400,22 @@ def _po_komendzie(command, wynik, effective_timeout):
     if not isinstance(wynik, dict):
         return wynik
     tekst = str(wynik.get("stderr") or "") + " " + str(wynik.get("stdout") or "")
-    if "/tmp/" in tekst and ("Permission denied" in tekst or "No such file" in tekst):
+    # v480lu: tez gdy komenda uzywa /tmp/, a bledu nie widac (2>/dev/null,
+    # || true) — bieg 2026-11-03 18:30 (druzyna 1): awk … > /tmp/_note_patch.txt
+    # 2>/dev/null || true; if [ -f /tmp/… ] — wpis do NOTES po cichu nie
+    # powstal. Nie dla komendy na laptopie (ssh — tam /tmp jest) ani w
+    # proot (Debian ma swoj /tmp).
+    _kom = str(command or "")
+    _zdalna = bool(re.match(r"\s*ssh\s", _kom)) or bool(re.search(r"\bproot", _kom))
+    _tmp_w_komendzie = (not _zdalna and re.search(r"(?<![\w.~$/-])/tmp/", _kom)
+                        and not os.path.isdir("/tmp"))
+    if not _zdalna and (_tmp_w_komendzie or (
+            "/tmp/" in tekst and ("Permission denied" in tekst or "No such file" in tekst))):
         wynik["podpowiedz"] = (
-            "W Termuksie nie ma /tmp — pliki tymczasowe idą do "
-            "$PREFIX/tmp (" + str(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
-            + "/tmp) albo do ~/."
+            "W Termuksie nie ma /tmp — zapis i odczyt /tmp/… się nie udają (także po cichu, "
+            "gdy błąd idzie do 2>/dev/null). Pliki tymczasowe: $TMPDIR, czyli "
+            + str(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+            + "/tmp, albo folder drużyny."
         )
     if "no devices/emulators found" in tekst and "adb" in str(command):
         if not globals().get("_adb_ponowka_w_toku"):
@@ -22223,6 +22234,28 @@ def _resolve_home_relative_path(path):
         p = HOME / p
 
     return p
+
+
+def _sciezka_zapisu_w_druzynie(sciezka):
+    """
+    v480lu: w rywalizacji wzgledna sciezka zapisu (write_engineer_code_to)
+    to plik w folderze druzyny, nie w ~ — tak jak program kladzie tam nowe
+    pliki od zespolu. Bieg 2026-11-03 18:52 (druzyna 1, krok 18): pole
+    "kod/ppm_midicoth_lite.c", Bartek dal kod, program polozyl go w
+    ~/MAIN_1/kod/, a krok skonczyl sie ENGINEER_CODE_MISSING, bo program
+    szukal ~/kod/ppm_midicoth_lite.c. Poza rywalizacja bez zmian.
+    """
+    s = str(sciezka or "").strip()
+    if not s or not _DRUZYNA or s.startswith(("~", "/", "$", "..")):
+        return s
+    while s.startswith("./"):
+        s = s[2:].lstrip("/")
+    if not s:
+        return str(sciezka or "").strip()
+    wlasny = _folder_druzyny(_DRUZYNA).name
+    if s == wlasny or s.startswith(wlasny + "/"):
+        return "~/" + s
+    return "~/" + wlasny + "/" + s
 
 
 def termux_ls(path="."):
@@ -28432,28 +28465,163 @@ def zacznij_pilnowanie_laptopa():
     _threading.Thread(target=_petla, daemon=True, name="laptop").start()
 
 
+_DANE_HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][\w.-]*)\2")
+_DANE_PODSTAWIENIE_RE = re.compile(r"\$\([^()]*\)|`[^`]*`")
+_HEREDOC_INTERPRETER_RE = re.compile(
+    r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|perl|ruby|php|lua[\d.]*|Rscript|julia)$")
+_HEREDOC_OPAKOWANIA = ("timeout", "nice", "ionice", "nohup", "time", "env", "stdbuf", "exec", "command")
+_POWLOKA_W_ARGUMENCIE_RE = re.compile(
+    r"\b(?:bash|sh|zsh|dash|ksh)\s+(?:-\w+\s+)*-\w*c\b|\beval\b|\bssh\b|\bsu\b[^\n;&|]*\s-c\b")
+
+
+def _odbiorca_heredoc(slowa):
+    """Program, ktory czyta heredoc (bez timeout/nice/env… przed nim)."""
+    for x in slowa:
+        b = os.path.basename(x)
+        if (b in _HEREDOC_OPAKOWANIA or x.startswith("-") or re.match(r"^[\d.]+[smhd]?$", x)
+                or re.match(r"^\w+=", x)):
+            continue
+        return b
+    return ""
+
+
+def _rozbior_heredoc(tekst):
+    """
+    v480lu: (powloka, kod) — komenda bez tresci heredoc, ktora cat/tee tylko
+    zapisuje do pliku (to dane: przy znaczniku w cudzyslowie ('EOF') znika
+    cala, bez cudzyslowu zostaja z niej $(…) i `…`, bo te powloka wykonuje),
+    i osobno tresc heredoc dla python3/node/perl… (to kod tego jezyka, nie
+    powloki). Heredoc dla bash/sh i wszystko inne zostaje w komendzie.
+    """
+    linie = str(tekst or "").split("\n")
+    out, kod = [], []
+    i = 0
+    while i < len(linie):
+        l = linie[i]
+        out.append(l)
+        i += 1
+        for m in _DANE_HEREDOC_RE.finditer(l):
+            minus, cudz, znacznik = m.group(1), m.group(2), m.group(3)
+            przed_txt = l[:m.start()]
+            po = l[m.end():]
+            odbiorca = _odbiorca_heredoc(re.split(r"&&|\|\||[;|(]", przed_txt)[-1].split())
+            # cat w srodku $( ) albo <( ) oddaje tresc innej komendzie
+            w_podstawieniu = bool(re.search(r"[<$]\(|`", przed_txt))
+            cialo = []
+            while i < len(linie):
+                t = linie[i].lstrip("\t") if minus else linie[i]
+                if t.rstrip() == znacznik:
+                    break
+                cialo.append(linie[i])
+                i += 1
+            podstawienia = [] if cudz else _DANE_PODSTAWIENIE_RE.findall("\n".join(cialo))
+            if "|" in po or w_podstawieniu:
+                out.extend(cialo)
+            elif odbiorca in ("cat", "tee"):
+                out.extend(podstawienia)
+            elif _HEREDOC_INTERPRETER_RE.match(odbiorca):
+                kod.extend(cialo)
+                out.extend(podstawienia)
+            else:
+                out.extend(cialo)
+            if i < len(linie):
+                out.append(linie[i])
+                i += 1
+    return "\n".join(out), "\n".join(kod)
+
+
+def _bez_tekstu_echo(tekst):
+    """Tekst w cudzyslowie po echo/printf (bez $(…) i `…` w nim) — nie sciezka."""
+    def _bez_cytatow(m):
+        return _W_CUDZYSLOWIE_RE.sub(
+            lambda q: " " + " ".join(_DANE_PODSTAWIENIE_RE.findall(q.group(0))) + " ", m.group(0))
+    return _ECHO_RE.sub(_bez_cytatow, str(tekst or ""))
+
+
+def _tylda_poza_folderem(tekst, wlasny, jak_kod=False, cytaty_jak_powloka=False):
+    """
+    v480lu: pierwsza "~", ktora zrobilaby sie folderem domowym spoza
+    ~/<wlasny>, albo "". Poza cudzyslowem tak jak w powloce: na poczatku
+    slowa, sama, przed "/" albo z nazwa konta (~ael/). W cudzyslowie i w
+    kodzie Pythona itp. tylko '~' albo '~/…' (np. expanduser('~')) —
+    "~10 min", "BPE ~ chars/2.8" w komentarzu, awk '$1 ~ /x/', numpy
+    ~maska to nie sciezki.
+    """
+    q = None
+    i, n = 0, len(tekst)
+    while i < n:
+        c = tekst[i]
+        if not jak_kod and not cytaty_jak_powloka:
+            if q is None:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c in "'\"":
+                    q = c
+                    i += 1
+                    continue
+            elif q == "'":
+                if c == "'":
+                    q = None
+                    i += 1
+                    continue
+            else:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == '"':
+                    q = None
+                    i += 1
+                    continue
+        if c == "~":
+            prev = tekst[i - 1] if i else ""
+            reszta = tekst[i + 1:]
+            if q is None and not jak_kod:
+                sciezka = (prev == "" or prev in " \t\n=:;&|(<>`{[,") and bool(re.match(
+                    r"(?:$|[\s/;&|<>()`'\"]|[A-Za-z_][\w.-]*(?:$|[\s/;&|<>()`'\"]))", reszta))
+            else:
+                sciezka = (prev == "" or prev in " \t\n=:;(,[{'\"") and (reszta[:1] in ("", "/", "'", '"'))
+            if sciezka and not re.match(r"/" + re.escape(wlasny) + r"(?![\w.-])", reszta):
+                return "~" + re.match(r"[^\s'\"`;&|<>()]*", reszta).group(0)
+        i += 1
+    return ""
+
+
 def _laptop_odmowa(polecenie, druzyna=None):
     """Powod odmowy dla komendy na laptopie albo ""."""
     _d = _DRUZYNA if druzyna is None else str(druzyna or "")
-    if _LAPTOP_WYLACZA_RE.search(polecenie):
+    # v480lu: tresc zapisywana do pliku (heredoc dla cat/tee) to nie komenda.
+    # Bieg 2026-11-03 18:47 (druzyna 1, krok 18): Bartek dopisywal wynik do
+    # docs/NOTES.md przez cat >> … <<'MDEOF', w tekscie bylo "~10 min", a
+    # program odmowil: "„~” siega poza ten folder".
+    _komenda, _kod = _rozbior_heredoc(polecenie)
+    if _LAPTOP_WYLACZA_RE.search(_komenda + "\n" + _kod):
         return ("Nie wykonałem — ta komenda wyłączyłaby laptopa albo zakończyła wszystko na "
                 "jego koncie, a laptop wyłącza tylko użytkownik. Swój proces zatrzymacie "
                 "po pid albo nazwie skryptu, np. LAPTOP: pkill -f mój_skrypt.py.")
     if _d:
         wlasny = "MAIN_" + _d
+        _sprawdz = _bez_tekstu_echo(_komenda)
+        _wszystko = _sprawdz + "\n" + _kod
         # v480jc: sciezka, ktora konczy sie we wlasnym folderze (~/MAIN_n,
         # $HOME/MAIN_n, /home/<konto>/MAIN_n, sciezka telefonu z MAIN_n), nie
         # wychodzi poza niego. Bieg 2026-10-31 22:17 (druzyna 1): sed
         # podmieniajacy sciezke telefonu na $HOME/MAIN_1 dostal odmowe za "/home/".
+        # v480lu: "~" liczy sie tylko tam, gdzie zrobilby sie z niego folder
+        # domowy (patrz _tylda_poza_folderem); bash -c/eval/ssh — tekst w
+        # cudzyslowie tez jest wtedy powloka.
         _wl = r"/" + wlasny + r"(?![\w.-])"
-        m = (re.search(r"(?<![\w/.$])~(?!" + _wl + r")", polecenie)
-             or re.search(r"(?:\$HOME|\$\{HOME\})(?!" + _wl + r")", polecenie)
+        _tylda = (_tylda_poza_folderem(_sprawdz, wlasny,
+                                       cytaty_jak_powloka=bool(_POWLOKA_W_ARGUMENCIE_RE.search(_sprawdz)))
+                  or _tylda_poza_folderem(_kod, wlasny, jak_kod=True))
+        m = (re.search(r"(?:\$HOME|\$\{HOME\})(?!" + _wl + r")", _wszystko)
              or re.search(r"(?<![\w.])/home/(?![^/\s'\"]+" + _wl + r")(?!(?<=files/home/)"
-                          + wlasny + r"(?![\w.-]))", polecenie)
-             or re.search(r"(?<![\w.])\.\.(?:/|\b)", polecenie))
-        if m:
+                          + wlasny + r"(?![\w.-]))", _wszystko)
+             or re.search(r"(?<![\w.])\.\.(?:/|\b)", _wszystko))
+        _co = _tylda or (m.group(0) if m else "")
+        if _co:
             return ("Nie wykonałem — na laptopie Wasza drużyna pracuje w ~/" + wlasny
-                    + " (tam program zaczyna każdą komendę LAPTOP:). „" + m.group(0)
+                    + " (tam program zaczyna każdą komendę LAPTOP:). „" + _co
                     + "” sięga poza ten folder, a obok leży folder rywala. Podajcie ścieżkę "
                     "w Waszym folderze (względną albo ~/" + wlasny + "/…).")
     return ""
@@ -28623,10 +28791,20 @@ _LAPTOP_SYNC_MAX_PLIKOW = 3000
 
 
 def _laptop_sync_lokalne(folder):
-    """{rel: (mtime, rozmiar)} plikow do wyrownania na telefonie."""
+    """
+    ({rel: (mtime, rozmiar)}, pelna) — pliki do wyrownania na telefonie.
+    v480lu: lista obecnosci bez limitu rozmiaru (limit 1 MB dotyczy tylko
+    przenoszenia — plik, ktory urosl, nie moze wygladac na usuniety);
+    pelna=False, gdy czesc folderu sie nie dala przeczytac albo lista
+    doszla do limitu plikow (wtedy program niczego nie odklada).
+    """
     out = {}
+    pelna = [True]
+
+    def _blad(_e):
+        pelna[0] = False
     try:
-        for root, dirs, files in os.walk(str(folder)):
+        for root, dirs, files in os.walk(str(folder), onerror=_blad):
             dirs[:] = [d for d in dirs if not d.startswith(".")
                        and d not in ("__pycache__", "node_modules", "venv", ".venv",
                                      "site-packages", "spadek")]
@@ -28635,26 +28813,27 @@ def _laptop_sync_lokalne(folder):
                     continue
                 p = Path(root) / f
                 try:
+                    if p.is_symlink():
+                        continue
                     st = p.stat()
                 except Exception:
-                    continue
-                if st.st_size > _LAPTOP_SYNC_MAX_B:
+                    pelna[0] = False
                     continue
                 out[str(p.relative_to(folder))] = (st.st_mtime, st.st_size)
                 if len(out) >= _LAPTOP_SYNC_MAX_PLIKOW:
-                    return out
+                    return out, False
     except Exception:
-        pass
-    return out
+        return out, False
+    return out, pelna[0]
 
 
 def _laptop_sync_zdalne(f):
-    """{rel: (mtime, rozmiar, md5)} z ~/<f> na laptopie albo None."""
-    wzor = " -o ".join("-name '*" + s + "'" for s in _LAPTOP_SYNC_SUFIKSY)
-    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && find . -type d \\( -name '.?*' -o -name __pycache__ "
+    """({rel: (mtime, rozmiar)}, pelna) z ~/<f> na laptopie albo None."""
+    wzor = " -o ".join("-iname '*" + s + "'" for s in _LAPTOP_SYNC_SUFIKSY)
+    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && { find . -type d \\( -name '.?*' -o -name __pycache__ "
               "-o -name node_modules -o -name venv -o -name site-packages -o -name spadek \\) "
-              "-prune -o -type f \\( " + wzor + " \\) -size -" + str(_LAPTOP_SYNC_MAX_B // 1024 + 1)
-              + "k -printf '%T@ %s %p\\n' | head -" + str(_LAPTOP_SYNC_MAX_PLIKOW))
+              "-prune -o -type f \\( " + wzor + " \\) -printf '%T@ %s %p\\n'; echo \"#rc=$?\"; } "
+              "2>/dev/null | head -" + str(_LAPTOP_SYNC_MAX_PLIKOW + 2))
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=30, errors="replace")
@@ -28663,23 +28842,162 @@ def _laptop_sync_zdalne(f):
     if r.returncode != 0:
         return None
     out = {}
+    rc = None
     for l in (r.stdout or "").splitlines():
+        if l.startswith("#rc="):
+            rc = l[4:].strip()
+            continue
         cz = l.split(" ", 2)
         if len(cz) == 3:
             try:
                 out[cz[2][2:] if cz[2].startswith("./") else cz[2]] = (float(cz[0]), int(cz[1]))
             except ValueError:
                 pass
+    pelna = rc == "0" and len(out) <= _LAPTOP_SYNC_MAX_PLIKOW
+    return out, pelna
+
+
+# v480lu: wyrownanie z pamiecia. Bieg 2026-11-03 (druzyna 1, 18:10-18:49):
+# zespol uporzadkowal folder na telefonie (76 plikow do docs/ i kod/archiwum/),
+# a nastepne wyrownanie sciagnelo z laptopa wszystkie stare sciezki z
+# powrotem — plik tylko po jednej stronie zawsze szedl na druga. Potem
+# zespol porzadkowal na laptopie, a telefon odsylal stare kopie (18:22:14 z
+# laptopa 28, 18:22:16 na laptopa 28). NOTES.md i docs/NOTES.md rozjechaly
+# sie, zespol stracil ok. 1,5 h. Teraz program pamieta (plik w ~, poza
+# folderem druzyny), ktore pliki po ostatnim wyrownaniu byly po obu stronach
+# takie same. Plik z tej listy, ktorego nie ma po jednej stronie, a po
+# drugiej sie od tamtej pory nie zmienil — zostal tam usuniety albo
+# przeniesiony, wiec program odklada kopie z drugiej strony do .kopie/
+# obok (nic nie ginie). Zmieniona kopia wraca jak dotad. Bez pelnej listy
+# z ktorejkolwiek strony albo przy pustym folderze na laptopie (inny
+# laptop, wyczyszczony folder) program niczego nie odklada.
+_LAPTOP_SYNC_ZAMEK_S = 180.0
+
+
+def _laptop_sync_stan_plik(f):
+    return HOME / (".ael_laptop_stan_" + str(f) + ".json")
+
+
+class _ZamekWyrownania:
+    """Jedno wyrownanie folderu naraz (procesy druzyn i Sedzia)."""
+
+    def __init__(self, f, czekaj_s=_LAPTOP_SYNC_ZAMEK_S):
+        self.sciezka = HOME / (".ael_laptop_stan_" + str(f) + ".lock")
+        self.czekaj_s = czekaj_s
+        self.ok = True
+        self._f = None
+
+    def __enter__(self):
+        try:
+            import fcntl
+            self._f = open(str(self.sciezka), "a+")
+        except Exception:
+            self._f = None
+            return self
+        koniec = time.time() + self.czekaj_s
+        while True:
+            try:
+                fcntl.flock(self._f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.time() >= koniec:
+                    self.ok = False
+                    return self
+                time.sleep(0.5)
+
+    def __exit__(self, *_a):
+        if self._f is not None:
+            try:
+                if self.ok:
+                    import fcntl
+                    fcntl.flock(self._f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                self._f.close()
+            except Exception:
+                pass
+        return False
+
+
+def _laptop_sync_stan_czytaj(f):
+    """{rel: [mt_tel, sz_tel, mt_lap, sz_lap]} albo None (brak/zepsuty)."""
+    try:
+        d = json.loads(_laptop_sync_stan_plik(f).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(d, dict) or not isinstance(d.get("pliki"), dict):
+        return None
+    out = {}
+    for rel, v in d["pliki"].items():
+        try:
+            out[str(rel)] = [float(v[0]), int(v[1]), float(v[2]), int(v[3])]
+        except Exception:
+            continue
     return out
+
+
+def _laptop_sync_stan_zapisz(f, lok, zd):
+    """Zapamietuje pliki, ktore sa teraz po obu stronach takie same."""
+    pliki = {}
+    for rel, (mt, sz) in lok.items():
+        z = zd.get(rel)
+        if z and sz <= _LAPTOP_SYNC_MAX_B and z[1] == sz and abs(mt - z[0]) <= 2:
+            pliki[rel] = [mt, sz, z[0], z[1]]
+    try:
+        cel = _laptop_sync_stan_plik(f)
+        tmp = cel.with_name(cel.name + ".tmp")
+        tmp.write_text(json.dumps({"czas": time.time(), "pliki": pliki}), encoding="utf-8")
+        os.replace(str(tmp), str(cel))
+    except Exception:
+        pass
+
+
+def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True):
+    """
+    (wyslij, pobierz, odloz_na_laptopie, odloz_na_telefonie).
+    stan None = brak pamieci (pierwsze wyrownanie): plik po jednej stronie
+    idzie na druga, jak przed v480lu.
+    """
+    def _bez_zmian(teraz, mt, sz):
+        return abs(teraz[0] - mt) < 0.01 and teraz[1] == sz
+    # odkladamy tylko przy pelnych listach; pusty (albo prawie pusty) folder
+    # na laptopie przy pamieci wielu plikow = inny albo wyczyszczony laptop
+    # -> nic z telefonu nie odkladamy (folder wypelni sie z telefonu)
+    pamiec = stan if (stan and lok_pelna and zd_pelna) else {}
+    na_tel_ok = bool(zd) and len(zd) * 10 >= len(pamiec)
+    wyslij, pobierz, odloz_lap, odloz_tel = [], [], [], []
+    for rel, (mt, sz) in lok.items():
+        z = zd.get(rel)
+        if z is None:
+            st = pamiec.get(rel)
+            if st and na_tel_ok and _bez_zmian((mt, sz), st[0], st[1]):
+                odloz_tel.append(rel)
+            elif sz <= _LAPTOP_SYNC_MAX_B:
+                wyslij.append(rel)
+        elif mt > z[0] + 2 and sz <= _LAPTOP_SYNC_MAX_B:
+            wyslij.append(rel)
+    _wys = set(wyslij)
+    for rel, (mt, sz) in zd.items():
+        l = lok.get(rel)
+        if l is None:
+            st = pamiec.get(rel)
+            if st and _bez_zmian((mt, sz), st[2], st[3]):
+                odloz_lap.append(rel)
+            elif sz <= _LAPTOP_SYNC_MAX_B:
+                pobierz.append(rel)
+        elif rel not in _wys and mt > l[0] + 2 and sz <= _LAPTOP_SYNC_MAX_B:
+            pobierz.append(rel)
+    return wyslij, pobierz, odloz_lap, odloz_tel
 
 
 def _laptop_wyrownaj(druzyna=None):
     """
     Wyrownuje pliki z kodem miedzy folderem druzyny na telefonie i na
-    laptopie. Zwraca (na_laptopa, z_laptopa) — listy sciezek — albo None,
-    gdy laptop nie odpowiada.
+    laptopie. Zwraca (na_laptopa, z_laptopa, odlozone_na_laptopie,
+    odlozone_na_telefonie) — listy sciezek — albo None, gdy laptop nie
+    odpowiada.
     """
-    import tarfile, io
     d = _DRUZYNA if druzyna is None else str(druzyna or "")
     folder = _folder_druzyny(d) if d else Path(HOME / "AEL")
     f = _laptop_folder(druzyna)
@@ -28687,21 +29005,44 @@ def _laptop_wyrownaj(druzyna=None):
         folder.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    lok = _laptop_sync_lokalne(folder)
-    zd = _laptop_sync_zdalne(f)
-    if zd is None:
+    with _ZamekWyrownania(f) as zamek:
+        if not zamek.ok:
+            return [], [], [], []
+        return _laptop_wyrownaj_pod_zamkiem(folder, f)
+
+
+def _laptop_wyrownaj_pod_zamkiem(folder, f):
+    import tarfile, io
+    lok, lok_pelna = _laptop_sync_lokalne(folder)
+    zd_w = _laptop_sync_zdalne(f)
+    if zd_w is None:
         return None
-    wyslij, pobierz = [], []
-    for rel, (mt, sz) in lok.items():
-        z = zd.get(rel)
-        if z is None or mt > z[0] + 2:
-            wyslij.append(rel)
-    for rel, (mt, sz) in zd.items():
-        l = lok.get(rel)
-        if rel in wyslij:
-            continue
-        if l is None or mt > l[0] + 2:
-            pobierz.append(rel)
+    zd, zd_pelna = zd_w
+    stan = _laptop_sync_stan_czytaj(f)
+    wyslij, pobierz, odloz_lap, odloz_tel = _laptop_sync_decyzje(lok, zd, stan, lok_pelna, zd_pelna)
+    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if odloz_lap:
+        # na laptopie: <katalog>/.kopie/<nazwa>.bak_<czas>, jak na telefonie
+        linie = ["cd ~/" + f + " || exit 1"]
+        for rel in odloz_lap:
+            kat = os.path.dirname(rel) or "."
+            kop = kat + "/.kopie"
+            linie.append("mkdir -p -- " + shlex.quote(kop) + " && mv -f -- " + shlex.quote(rel) + " "
+                         + shlex.quote(kop + "/" + os.path.basename(rel) + ".bak_" + _ts))
+        try:
+            subprocess.run(_LAPTOP_SSH.replace("-n ", "").split() + [_LAPTOP_HOST, "bash -s"],
+                           input="\n".join(linie) + "\n", capture_output=True, text=True,
+                           timeout=60, errors="replace")
+        except Exception:
+            pass
+    for rel in odloz_tel:
+        try:
+            src = folder / rel
+            k = src.parent / ".kopie" / (src.name + ".bak_" + _ts)
+            k.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(str(src), str(k))
+        except Exception:
+            pass
     if wyslij:
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -28746,12 +29087,28 @@ def _laptop_wyrownaj(druzyna=None):
                         pass
         except Exception:
             pobierz = []
-    if wyslij or pobierz:
-        log("LAPTOP", "Wyrównane pliki z kodem (~/" + f + "): na laptopa " + str(len(wyslij))
-            + (" (" + ", ".join(wyslij[:5]) + ("…" if len(wyslij) > 5 else "") + ")" if wyslij else "")
-            + ", z laptopa " + str(len(pobierz))
-            + (" (" + ", ".join(pobierz[:5]) + ("…" if len(pobierz) > 5 else "") + ")" if pobierz else "") + ".")
-    return wyslij, pobierz
+    # pamiec po wyrownaniu: listy na nowo, gdy cos sie ruszylo; gdy laptop
+    # nie odpowie — stara pamiec zostaje (najwyzej plik wroci, nic nie zginie)
+    if wyslij or pobierz or odloz_lap or odloz_tel:
+        lok2, _p = _laptop_sync_lokalne(folder)
+        zd2 = _laptop_sync_zdalne(f)
+        if zd2 is not None:
+            odloz_lap = [x for x in odloz_lap if x not in zd2[0]]
+            odloz_tel = [x for x in odloz_tel if x not in lok2]
+            _laptop_sync_stan_zapisz(f, lok2, zd2[0])
+    else:
+        _laptop_sync_stan_zapisz(f, lok, zd)
+
+    def _lista(x):
+        return " (" + ", ".join(x[:5]) + ("…" if len(x) > 5 else "") + ")" if x else ""
+    if wyslij or pobierz or odloz_lap or odloz_tel:
+        log("LAPTOP", "Wyrównane pliki z kodem (~/" + f + "): na laptopa " + str(len(wyslij)) + _lista(wyslij)
+            + ", z laptopa " + str(len(pobierz)) + _lista(pobierz)
+            + ((", odłożone do .kopie/ na laptopie (nie ma ich już na telefonie) "
+                + str(len(odloz_lap)) + _lista(odloz_lap)) if odloz_lap else "")
+            + ((", odłożone do .kopie/ na telefonie (nie ma ich już na laptopie) "
+                + str(len(odloz_tel)) + _lista(odloz_tel)) if odloz_tel else "") + ".")
+    return wyslij, pobierz, odloz_lap, odloz_tel
 
 
 _laptop_tl = _threading.local()
@@ -29558,14 +29915,30 @@ def _termux_run_wew(command):
             _po = None
     if isinstance(wynik, dict):
         wynik["command"] = command_str
-        _tam = (_przed or ([], []))[0]
-        _stad = (_przed or ([], []))[1] + (_po or ([], []))[1]
-        if _tam or _stad:
-            wynik["pliki_wyrownane"] = (
-                ("na laptopa: " + ", ".join(_tam[:8]) + ("…" if len(_tam) > 8 else "") if _tam else "")
-                + ("; " if _tam and _stad else "")
-                + ("z laptopa na telefon: " + ", ".join(_stad[:8]) + ("…" if len(_stad) > 8 else "")
-                   if _stad else ""))
+        _przed4 = tuple(_przed or ()) + ([], [], [], [])
+        _po4 = tuple(_po or ()) + ([], [], [], [])
+        _tam = list(_przed4[0])
+        _stad = list(_przed4[1]) + list(_po4[1])
+        # v480lu: pliki odlozone, bo po drugiej stronie zespol je usunal
+        # albo przeniosl
+        _odl_lap = list(_przed4[2]) + list(_po4[2])
+        _odl_tel = list(_przed4[3]) + list(_po4[3])
+
+        def _wymien(x):
+            return ", ".join(x[:8]) + ("…" if len(x) > 8 else "")
+        _czesci = []
+        if _tam:
+            _czesci.append("na laptopa: " + _wymien(_tam))
+        if _stad:
+            _czesci.append("z laptopa na telefon: " + _wymien(_stad))
+        if _odl_lap:
+            _czesci.append("odłożone do .kopie/ na laptopie, bo na telefonie ich już nie ma: "
+                           + _wymien(_odl_lap))
+        if _odl_tel:
+            _czesci.append("odłożone do .kopie/ na telefonie, bo na laptopie ich już nie ma: "
+                           + _wymien(_odl_tel))
+        if _czesci:
+            wynik["pliki_wyrownane"] = "; ".join(_czesci)
         if (wynik.get("returncode") == 255 and not str(wynik.get("stdout") or "").strip()
                 and not _LAPTOP_SSH_BLAD_RE.search(str(wynik.get("stderr") or ""))):
             wynik["message"] = (
@@ -41259,12 +41632,34 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
             _o.append(Path(x).name)
         return ", ".join(_o) or "nowe pliki"
     _opis_zlecenia = _opis_celow(pliki)
-    log(
-        "MAIN",
-        "Zadanie tworzy " + _opis_zlecenia
-        + ", a nikt z zespołu nie napisał do tego kodu — najpierw "
-        "Bartek, potem wykonanie."
-    )
+
+    # v480lu: plik, ktory juz lezy na dysku, to zmiana, a nie nowy kod.
+    # Bieg 2026-11-03 16:50 (druzyna 1, krok 4): "napraw kod/ppm_bwt.c
+    # (1 linia)", a program pisal Bartkowi i MAIN-owi "nikt z zespolu nie
+    # napisal jeszcze kodu" — nieprawda, plik byl Bartka z kroku 3.
+    def _juz_jest(x):
+        try:
+            return (not str(x).rstrip().endswith(("/", "\\"))
+                    and _resolve_home_relative_path(x).is_file())
+        except Exception:
+            return False
+    _istniejace = [x for x in pliki if _juz_jest(x)]
+    _zmiana = bool(_istniejace) and len(_istniejace) == len(pliki)
+    if _zmiana:
+        log(
+            "MAIN",
+            "Zadanie zmienia " + _opis_zlecenia
+            + (" (plik już jest)" if len(_istniejace) == 1 else " (pliki już są)")
+            + ", a w tym kroku nikt z zespołu nie dał do tego kodu — najpierw Bartek, "
+            "potem wykonanie."
+        )
+    else:
+        log(
+            "MAIN",
+            "Zadanie tworzy " + _opis_zlecenia
+            + ", a nikt z zespołu nie napisał do tego kodu — najpierw "
+            "Bartek, potem wykonanie."
+        )
 
     # v452: jeden fakt przed zleceniem — kto je wykonuje i co z jego
     # odpowiedzi trafi na dysk. Bez tego Bartek czytal zadanie jako
@@ -41282,9 +41677,15 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     _kat = [x for x in pliki if _katalog(x)]
     pliki = [x for x in pliki if not _katalog(x)]
     _co = []
-    if pliki:
-        _co.append("Do " + ", ".join(Path(x).name for x in pliki)
+    _nowe = [x for x in pliki if x not in _istniejace]
+    if _nowe:
+        _co.append("Do " + ", ".join(Path(x).name for x in _nowe)
                    + " nikt z zespołu nie napisał jeszcze kodu")
+    if _istniejace:
+        _co.append(", ".join(_sciezka_od_domu(str(_resolve_home_relative_path(x))) for x in _istniejace)
+                   + (" już leży" if len(_istniejace) == 1 else " już leżą")
+                   + " na dysku — poprawkę fragmentu (SZUKAJ: i ZAMIEŃ NA:) program nałoży od razu, "
+                   "a całą nową wersję położy w miejsce starej (poprzednia zostaje w kopii)")
     if _kat:
         _co.append("pliki z kodem mają leżeć w " + ", ".join(_sciezka_od_domu(str(_resolve_home_relative_path(x))) for x in _kat)
                    + " — każdy plik w osobnym bloku, z pełną ścieżką tuż nad nim")
@@ -41389,8 +41790,11 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
     nie = [Path(x).name for x in pliki if not any(y.startswith(Path(x).name + " ") for y in polozone)]
 
     _pending_team_warnings.append(
-        "Zadanie tworzyło " + _opis_zlecenia
-        + ", do czego nikt nie napisał kodu; Bartek dostał to zlecenie."
+        ("Zadanie zmieniało " + _opis_zlecenia
+         + (" (plik już był)" if len(_istniejace) == 1 else " (pliki już były)")
+         + ", a w tym kroku nikt nie dał do tego kodu; Bartek dostał to zlecenie." if _zmiana else
+         "Zadanie tworzyło " + _opis_zlecenia
+         + ", do czego nikt nie napisał kodu; Bartek dostał to zlecenie.")
         + (" Położone z jego odpowiedzi: " + ", ".join(polozone) + "." if polozone else "")
         + (" Bez kodu przypisanego do pliku: " + ", ".join(nie) + "." if nie else "")
     )
@@ -57024,6 +57428,14 @@ def run_agent(goal):
                     )
                     write_target = ""
 
+            # v480lu: w rywalizacji wzgledna sciezka = folder druzyny
+            if write_target:
+                _wt_druzyny = _sciezka_zapisu_w_druzynie(write_target)
+                if _wt_druzyny != write_target:
+                    log("MAIN", "Ścieżka zapisu " + write_target + " jest względna — to plik w folderze "
+                        "drużyny: " + _wt_druzyny + ".")
+                    write_target = _wt_druzyny
+
             # v480ft: w polu katalog ("~/MAIN_1/src/") — kladziemy tam
             # kazdy plik, ktory ktos z zespolu podal pod naglowkiem z sama
             # nazwa. Bieg 2026-10-25 22:35, krok 3: szesc plikow Bartka,
@@ -57513,7 +57925,9 @@ def run_agent(goal):
                 # potem ENGINEER_CODE_MISSING dla kn_higher.py.
                 if not engineer_code and _polozone_bartka:
                     try:
-                        _cel = Path(os.path.expanduser(str(write_target)))
+                        # v480lu: wzgledna sciezka liczy sie od domu (jak
+                        # przy zapisie nizej), nie od katalogu programu
+                        _cel = _resolve_home_relative_path(write_target)
                         if any(str(y).startswith(_cel.name + " ") for y in _polozone_bartka) and _cel.is_file():
                             engineer_code = _cel.read_text(encoding="utf-8", errors="replace")
                     except Exception:
@@ -61578,32 +61992,45 @@ def _nowy_start_rywalizacji(usun_foldery=True):
                 pass
 
 
-def _usun_foldery_druzyn_na_laptopie():
+def _usun_foldery_druzyn_na_laptopie(numery=("1", "2")):
     """v480lk: uzytkownik (2026-11-01, "a usunie sie z laptopa jak nacisne
     t?"): zgoda na usuniecie folderow druzyn obejmuje tez ich foldery na
     laptopie (~/MAIN_1, ~/MAIN_2). Bez tego stare pliki z laptopa wracalyby
     przy wyrownaniu na telefon nowym druzynom. Najpierw konczy procesy
-    starych druzyn w ich slice'ach. Laptop niedostepny = mowimy to i tyle."""
+    starych druzyn w ich slice'ach. Laptop niedostepny = mowimy to i tyle.
+    v480lu: tez po dyskwalifikacji (tylko folder tej druzyny) — folder
+    zdyskwalifikowanej druzyny znika (v480br), wiec i jego kopia na
+    laptopie; razem z nia pamiec wyrownania tego folderu."""
     try:
         if not _laptop_skonfigurowany():
             return
     except Exception:
         return
-    f1, f2 = _laptop_folder("1"), _laptop_folder("2")
-    skrypt = ("systemctl --user stop ael-druzyna1.slice ael-druzyna2.slice 2>/dev/null; "
-              "rm -rf \"$HOME/" + f1 + "\" \"$HOME/" + f2 + "\" && echo USUNIETE")
+    numery = [str(n) for n in numery]
+    foldery = [_laptop_folder(n) for n in numery]
+    skrypt = ("systemctl --user stop " + " ".join("ael-druzyna" + n + ".slice" for n in numery)
+              + " 2>/dev/null; rm -rf " + " ".join("\"$HOME/" + f + "\"" for f in foldery)
+              + " && echo USUNIETE")
+    _jakie = " i ".join("~/" + f for f in foldery)
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=60, errors="replace")
         if "USUNIETE" in (r.stdout or ""):
-            log("RYWALIZACJA", "Na laptopie usunąłem ~/" + f1 + " i ~/" + f2
-                + " (procesy starych drużyn zatrzymane).")
+            for f in foldery:
+                try:
+                    _laptop_sync_stan_plik(f).unlink()
+                except Exception:
+                    pass
+            log("RYWALIZACJA", "Na laptopie usunąłem " + _jakie
+                + (" (procesy starych drużyn zatrzymane)." if len(foldery) > 1
+                   else " (procesy starej drużyny zatrzymane)."))
             return
         powod = short((r.stderr or r.stdout or "brak odpowiedzi").strip(), 200)
     except Exception as e:
         powod = str(e)[:200]
-    log("RYWALIZACJA", "Nie usunąłem folderów drużyn na laptopie (" + powod + ") — laptop był "
-        "niedostępny. Usuń je ręcznie: ssh " + _LAPTOP_HOST + " 'rm -rf ~/" + f1 + " ~/" + f2 + "'")
+    log("RYWALIZACJA", "Nie usunąłem " + ("folderów drużyn" if len(foldery) > 1 else "folderu drużyny")
+        + " na laptopie (" + powod + ") — laptop był niedostępny. Usuń ręcznie: ssh " + _LAPTOP_HOST
+        + " 'rm -rf " + " ".join("~/" + f for f in foldery) + "'")
 
 
 # v480bq: DYSKWALIFIKACJA. Uzytkownik (2026-10-16): gdy cel przewiduje
@@ -61689,6 +62116,9 @@ def _do_archiwum_po_dyskwalifikacji(numer, sciezki):
             if p == _folder_druzyny(numer):
                 shutil.rmtree(p)
                 log("RYWALIZACJA", "Usunąłem ~/" + p.name + " zdyskwalifikowanej drużyny.")
+                # v480lu: i jego kopie na laptopie — inaczej wyrownanie
+                # oddaloby nowej druzynie stare pliki
+                _usun_foldery_druzyn_na_laptopie((str(numer),))
                 continue
             archiwum.mkdir(parents=True, exist_ok=True)
             shutil.move(str(p), str(archiwum / p.name))

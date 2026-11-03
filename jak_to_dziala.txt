@@ -4534,3 +4534,37 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      odpowiedzi, a nie „złym JSON-em”. Wznowiona rozmowa, której serwer
      już nie zna, od razu zaczyna się od nowa. Ten sam klucz w obu
      plikach daje na starcie ostrzeżenie (jedno konto dla obu drużyn).
+
+336. (v480lu) Pisanie i poprawianie plików bez cofania przez laptopa.
+     Wyrównanie plików z kodem i notatek między telefonem a laptopem
+     (przed i po każdej komendzie LAPTOP:) kopiowało każdy plik, który
+     był tylko po jednej stronie, na drugą. Przeniesiony albo usunięty
+     plik wracał więc z drugiej strony: 3.11 drużyna 1 uporządkowała
+     folder (76 plików do docs/ i kod/archiwum/), a następne wyrównanie
+     przywróciło wszystkie stare ścieżki; NOTES.md i docs/NOTES.md się
+     rozjechały, a MAIN zaczął unikać laptopa, „żeby nie cofać”. Teraz
+     program pamięta (w ~/.ael_laptop_stan_MAIN_n.json, poza folderem
+     drużyny), które pliki po ostatnim wyrównaniu były po obu stronach
+     takie same. Gdy takiego pliku po jednej stronie nie ma, a po drugiej
+     się od tamtej pory nie zmienił, to zespół go usunął albo przeniósł —
+     program odkłada kopię z drugiej strony do .kopie/ obok (nic nie
+     ginie), zamiast ją oddawać. Zmieniona kopia wraca jak dotąd. Wynik
+     komendy LAPTOP: mówi, co program odłożył i dlaczego. Bez pełnej
+     listy plików albo gdy folder na laptopie jest pusty lub prawie pusty
+     (inny laptop, wyczyszczony folder) niczego nie odkłada, tylko
+     wypełnia laptopa z telefonu. Plik, który urósł ponad 1 MB, nie
+     wygląda już na usunięty. Jedno wyrównanie folderu naraz (drużyna
+     i Sędzia). Po dyskwalifikacji program usuwa też folder tej drużyny
+     na laptopie, żeby wyrównanie nie oddało nowej drużynie starych
+     plików. Względna ścieżka w write_engineer_code_to w rywalizacji
+     („kod/x.c”) to plik w folderze drużyny — wcześniej Bartek dawał kod,
+     program kładł go w ~/MAIN_1/kod/, a krok kończył się „nie było bloku
+     kodu”, bo program sprawdzał ~/kod/x.c. Treść heredoc, którą cat/tee
+     tylko zapisuje do pliku, i tekst po echo nie są sprawdzane jak
+     ścieżki: „~10 min” w notatce nie blokuje już zapisu na laptopie,
+     a „~” liczy się tylko tam, gdzie powłoka zrobiłaby z niego folder
+     domowy. Komenda na telefonie z /tmp/ dostaje podpowiedź, że w
+     Termuksie /tmp nie ma, także gdy błąd poszedł do 2>/dev/null. Gdy
+     MAIN każe Bartkowi zmienić plik, który już leży, program nie pisze
+     już „nikt nie napisał kodu”, tylko że plik jest i że poprawkę
+     fragmentu nałoży od razu.
