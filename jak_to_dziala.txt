@@ -4568,3 +4568,44 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      MAIN każe Bartkowi zmienić plik, który już leży, program nie pisze
      już „nikt nie napisał kodu”, tylko że plik jest i że poprawkę
      fragmentu nałoży od razu.
+
+337. (v480lv) Rozmowa bez szumu i powtórek, raporty na swoim miejscu.
+     Rozmowa w toku przeżywa przeładowanie programu po aktualizacji:
+     pytania MAIN-a przeniesione na następny krok, uwagi programu dla
+     MAIN-a, skrzynki zespołu i to, kto kogo zawołał, wracają na swoje
+     miejsce (3.11 18:14 drużyna 1: pytanie do Ani przepadło przy
+     przeładowaniu i MAIN zadał je od nowa dopiero w kroku 18). Pytania
+     ponad 5 w jednym kroku nie przepadają („nie wysłałem”), tylko idą
+     na początek następnego, a MAIN wie, do kogo i że nie musi ich
+     powtarzać; kolejne przeniesione pytania dopisują się do czekających,
+     zamiast je zastępować. W jednej wiadomości do osoby z zespołu ta
+     sama długa treść (co najmniej 6 linii) idzie raz — drugi egzemplarz
+     to jedna linia z odesłaniem wyżej; słowa ludzi (MAIN-a, kolegów,
+     użytkownika, Tomka) zostają nietknięte. W „moim logu” autora nie ma
+     już samych podglądów jego pliku (cat, head, grep, sed -n, ls) — ma
+     plik w całości (3.11 20:16: Bartek dostał swój plik dwa razy w
+     całości i trzeci raz w kawałkach, 32 tys. znaków). Zlecenie MAIN-a,
+     które Bartek dostał razem z prośbą o kod, w tej samej rozmowie idzie
+     drugi raz jednym zdaniem. Spis plików z dysku nie ma już dwóch
+     nagłówków pod rząd. Notatki zespołu są tam, gdzie zespół je trzyma:
+     przypomnienie o burzy mózgów wskazuje najświeższy BURZA_MOZGOW.md
+     w folderze drużyny (np. docs/), a skrzynka dla użytkownika szuka
+     plików *UZYTKOWNIK* w całym folderze, nie tylko w korzeniu (3.11
+     02:51 drużyna 1 zapisała w docs/DLA_UZYTKOWNIKA.md pytanie do
+     decyzji użytkownika, a powiadomienie nie przyszło). Z kilku plików
+     o tej samej nazwie ogłaszany i kopiowany do AEL-MINI jest tylko
+     najświeższy; przeniesiony plik z tą samą treścią nie wraca jako
+     nowa wiadomość, a przeniesiony i dopisany pokazuje tylko dopisek;
+     wiadomość starsza niż pół godziny ma godzinę zapisu. Sędzia w tej
+     samej rozmowie dostaje każdą treść raz: niezmieniony werdykt to
+     liczba i werdykt („pełny opis masz wyżej”), spis plików po pierwszej
+     ocenie to tylko to, co przybyło, zniknęło albo zmieniło rozmiar,
+     plik poprawiony w środku idzie jako same zmiany („-” usunięte, „+”
+     dodane), przeniesiony albo skopiowany jako „ta sama treść, którą
+     widziałeś jako …”, a niezmienione pliki to jedna wspólna linia.
+     Program pamięta treść pokazanych plików (do 60 kB na plik) do końca
+     rozmowy Sędziego; nowa rozmowa albo nieudana ocena znów daje
+     wszystko. Plik cofnięty do starszej wersji nie udaje „bez zmian”.
+     Sprawdzenie, czy ta sama robota już liczy w tle, znowu porównuje
+     samą komendę (bez cd i zmiennych) — od v480lp funkcja Sędziego
+     o tej samej nazwie ją przykrywała.

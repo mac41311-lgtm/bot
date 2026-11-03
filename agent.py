@@ -4697,6 +4697,84 @@ def _juz_to_czytal(rola, tresc):
     return igla in stog
 
 
+# v480lv: w jednej wiadomosci ta sama dluga tresc tylko raz. Wiadomosc
+# do osoby z zespolu sklada sie z wielu niezaleznych kawalkow (dowody
+# z dysku, jej log, plik nad ktorym pracuje, wynik uruchomienia), wiec
+# ten sam plik albo ten sam wynik potrafil wejsc dwa razy. Bieg
+# 2026-11-03 20:16 (druzyna 1, Bartek, 32 kB): ppm_c_v3_mut.c dwa razy
+# w calosci ("Zawiera dokładnie to:" i "(teraz na dysku):"). Drugi
+# egzemplarz zastepuje jedna linia z odeslaniem wyzej. Slowa ludzi
+# (pytanie MAIN-a, wiadomosci kolegow) zostaja nietkniete.
+_POWTORKA_MIN_LINII = 6
+_POWTORKA_MIN_ZNAKOW = 400
+
+
+def _linii_slownie(k):
+    k = int(k)
+    if k == 1:
+        return "1 linia"
+    if k % 10 in (2, 3, 4) and k % 100 not in (12, 13, 14):
+        return str(k) + " linie"
+    return str(k) + " linii"
+
+
+def _bez_powtorzen_w_wiadomosci(tekst, chronione=()):
+    tekst = str(tekst or "")
+    linie = tekst.split("\n")
+    n = len(linie)
+    if n < _POWTORKA_MIN_LINII * 2 or len(tekst) > 400000:
+        return tekst
+    try:
+        norm = [" ".join(l.split()) for l in linie]
+        # linie, ktorych nie ruszamy (slowa ludzi)
+        chron = [False] * n
+        for c in chronione or ():
+            c = str(c or "").strip("\n")
+            if len(c) < 40:
+                continue
+            i0 = tekst.find(c)
+            while i0 >= 0:
+                l0 = tekst.count("\n", 0, i0)
+                for x in range(l0, min(n, l0 + c.count("\n") + 1)):
+                    chron[x] = True
+                i0 = tekst.find(c, i0 + len(c))
+        poz = {}
+        wynik = []
+        i = 0
+        zmienione = False
+        while i < n:
+            best_k = 0
+            best_j = -1
+            if not chron[i] and len(norm[i]) >= 8:
+                for j in poz.get(norm[i], ())[-30:]:
+                    k = 0
+                    while (i + k < n and j + k < i and not chron[i + k]
+                           and norm[j + k] == norm[i + k]):
+                        k += 1
+                    if k > best_k:
+                        best_k, best_j = k, j
+            # puste linie na koncu powtorki zostaja — oddzielaja to, co dalej
+            while best_k and not norm[i + best_k - 1]:
+                best_k -= 1
+            if (best_k >= _POWTORKA_MIN_LINII
+                    and sum(len(norm[i + x]) for x in range(best_k)) >= _POWTORKA_MIN_ZNAKOW):
+                _pierwsza = next((norm[i + x] for x in range(best_k) if len(norm[i + x]) >= 8), norm[i])
+                wynik.append(
+                    "[… " + _linii_slownie(best_k) + " — to samo, co wyżej w tej wiadomości (od „"
+                    + short(_pierwsza, 70).replace("\n", " ") + "”)]"
+                )
+                zmienione = True
+                i += best_k
+                continue
+            if len(norm[i]) >= 8:
+                poz.setdefault(norm[i], []).append(i)
+            wynik.append(linie[i])
+            i += 1
+        return "\n".join(wynik) if zmienione else tekst
+    except Exception:
+        return tekst
+
+
 # v350: klucze, ktore opisuja ZDARZENIE, a nie stan.
 #
 # Uzytkownik (punkt 7): "filtrowanie ma zapobiegac spamowi, ale nie
@@ -4910,6 +4988,11 @@ def _progress_for_role(role_name, snapshot):
         # v220: krótkie wprowadzenie zamiast gołej listy wrzuconej w
         # środek wiadomości — to są fakty z dysku, więc mówimy, skąd
         # są, tak jak powiedziałby to człowiek.
+        # v480lv: spis ma juz wlasne zdanie na gorze ("Sprawdziłem to
+        # teraz na dysku:") — drugie nad nim to byly dwa naglowki pod
+        # rzad (bieg 2026-11-03, 4 razy w druzynie 1).
+        if snapshot.lstrip().split("\n", 1)[0].rstrip().endswith(":"):
+            return "\n" + snapshot.strip("\n") + "\n"
         return "\nNa dysku wygląda to teraz tak:\n" + snapshot + "\n"
 
     zmiany = []
@@ -5205,7 +5288,8 @@ def _wspolne_dla_wolanego(rola):
 
     uzytkownik = (
         "" if rola in _ROLE_TYLKO_PYTANIE
-        else _co_powiedzial_uzytkownik(rola)
+        # v480lv: slowa uzytkownika nie sa skracane przy usuwaniu powtorzen
+        else _slowa_ludzi(rola, _co_powiedzial_uzytkownik(rola))
     )
 
     if uzytkownik:
@@ -14063,7 +14147,60 @@ def _przywroc_komendy_w_tle(lista):
             + short(rzecz["komenda"], 120))
 
 
+def _rozmowa_do_zapisu():
+    """v480lv: to, co czeka w rozmowie na nastepny krok (patrz
+    _przywroc_rozmowe)."""
+    try:
+        return {
+            "ask_przeniesione": [dict(q) for q in _ask_przeniesione if isinstance(q, dict)],
+            "uwagi_dla_maina": [str(x) for x in _pending_team_warnings if str(x or "").strip()],
+            "skrzynki": {
+                str(k): [[str(a) for a in w] for w in (v or []) if isinstance(w, (list, tuple))]
+                for k, v in _role_inbox.items()
+            },
+            "kto_zawolal": {str(k): sorted(str(x) for x in (v or ())) for k, v in _kto_mnie_zawolal.items()},
+        }
+    except Exception:
+        return {}
+
+
+def _przywroc_rozmowe(zapis):
+    """v480lv: pytania, uwagi i skrzynki sprzed przeladowania wracaja na
+    swoje miejsce — bez dublowania tego, co juz jest."""
+    if not isinstance(zapis, dict):
+        return
+    try:
+        for q in zapis.get("ask_przeniesione") or []:
+            if isinstance(q, dict) and q not in _ask_przeniesione:
+                _ask_przeniesione.append(q)
+        for x in zapis.get("uwagi_dla_maina") or []:
+            if str(x or "").strip() and x not in _pending_team_warnings:
+                _pending_team_warnings.append(str(x))
+        for k, v in (zapis.get("skrzynki") or {}).items():
+            for w in v or []:
+                if isinstance(w, (list, tuple)) and len(w) >= 2:
+                    t = tuple(str(a) for a in w)
+                    if t not in _role_inbox.get(str(k), []):
+                        _role_inbox.setdefault(str(k), []).append(t)
+        for k, v in (zapis.get("kto_zawolal") or {}).items():
+            if v:
+                _kto_mnie_zawolal.setdefault(str(k), set()).update(str(x) for x in v)
+        _co = []
+        if _ask_przeniesione:
+            _co.append("pytania MAIN-a na ten krok (do " + ", ".join(
+                _ROLE_DISPLAY_NAME.get(_rola_ask(q.get("ask_role")), str(q.get("ask_role") or ""))
+                for q in _ask_przeniesione) + ")")
+        if _role_inbox:
+            _co.append("wiadomości w zespole czekające na odpowiedź")
+        if _co:
+            log("AKTUALIZACJA", "Rozmowa idzie dalej po przeładowaniu: " + "; ".join(_co) + ".")
+    except Exception as e:
+        log("AKTUALIZACJA", "Nie odtworzyłem rozmowy w toku: " + short(str(e), 200))
+
+
 def _przywroc_procesy_w_tle():
+
+    _przywroc_rozmowe(_stan_przed_aktualizacja.get("rozmowa"))
 
     for _wpis in _stan_przed_aktualizacja.get("procesy_w_tle") or []:
         try:
@@ -14179,6 +14316,14 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
         },
         "autorzy_grup": {str(k): v for k, v in _autor_grupy.items()},
         "komendy_w_tle": _komendy_w_tle_do_zapisu(),
+        # v480lv: rozmowa w toku przezywa przeladowanie — pytania MAIN-a
+        # przeniesione na nastepny krok, uwagi programu dla MAIN-a,
+        # skrzynki zespolu i to, kto kogo zawolal. Bieg 2026-11-03 18:14
+        # (druzyna 1, krok 13): szoste pytanie z burzy mozgow (do Ani)
+        # "poszlo na poczatek kroku 14", program sie przeladowal po
+        # aktualizacji i pytanie przepadlo; MAIN zadal je od nowa dopiero
+        # w kroku 18 ("nie doszlo do skutku").
+        "rozmowa": _rozmowa_do_zapisu(),
     }
 
     try:
@@ -25663,6 +25808,20 @@ def _zapisz_uruchomienie(nazwa, args, result):
         pass
 
 
+def _tylko_oglada(komenda):
+    """v480lv: czy komenda tylko oglada pliki (to, co przeszloby jako
+    PODGLĄD: cat, head, tail, sed -n, grep, ls, wc, [ -f …]) i niczego
+    nie uruchamia — bez pythona, pip, curl i git, ktore moga odpalac
+    czyjs kod albo siec."""
+    k = re.sub(r"^\s*LAPTOP:\s*", "", str(komenda or "")).strip()
+    if not k or re.search(r"(?<![\w./-])(?:python3?|pip3?|curl|git|bash|sh)\b", k):
+        return False
+    try:
+        return not _podglad_odmowa(k)
+    except Exception:
+        return False
+
+
 def _log_dla_autora(rola):
     """
     Wszystko, co wypisalo to, co TA osoba napisala — w calosci.
@@ -25707,6 +25866,15 @@ def _log_dla_autora(rola):
     for u in _uruchomienia_kroku:
 
         komenda = u["komenda"]
+
+        # v480lv: komenda, ktora tylko oglada pliki (cat, head, sed -n,
+        # grep, ls, [ -f …]), nie uruchamia niczego, co ta osoba napisala —
+        # jej wynik to fragmenty plikow, ktore autor ma w calosci. Bieg
+        # 2026-11-03 20:16 (druzyna 1): Bartek dostal w jednej wiadomosci
+        # swoj plik dwa razy w calosci i trzeci raz w kawalkach z head,
+        # grep i sed wykonawcy.
+        if _tylko_oglada(komenda):
+            continue
 
         czyje = any(n and n in komenda for n in moje_pliki)
 
@@ -39964,7 +40132,7 @@ def _wykonaj_po_skonczonym(name, args):
     return wynik
 
 
-def _rdzen_komendy(cmd):
+def _rdzen_komendy_tekst(cmd):
     """v480gn: komenda bez "cd X &&", "export A=B &&" i zmiennych A=B na
     poczatku — "cd ~/MAIN_1 && OMP_NUM_THREADS=4 python3 tcn.py" i
     "cd ~/MAIN_1 && python3 tcn.py" to ta sama robota."""
@@ -40000,13 +40168,17 @@ def _juz_liczy_w_tle(cmd):
     """v480gn: ta sama robota juz liczy w tle — opis dla tego, kto chce ja
     puscic drugi raz (bieg 2026-10-26 22:44: wykonawca TASK puscil
     tcn.py, ktory Bartek trenowal juz w tle; dwa treningi po 2 h)."""
-    rdzen = _rdzen_komendy(cmd)
+    # v480lv: wlasna nazwa — od v480lp _rdzen_komendy (Sedzia) zwraca
+    # krotke (laptop, katalog, segmenty) i przykrywala te funkcje: ta sama
+    # robota z "cd ~/MAIN_1 &&" i bez niego wygladala na inna, a w
+    # wiadomosci dla MAIN-a stalaby krotka "((False, '~', [...]))".
+    rdzen = _rdzen_komendy_tekst(cmd)
     if not rdzen:
         return ""
     _skr = _skrypty_komendy(cmd)
     for r in _w_tle_zywe():
         if r.get("rodzaj") == "komenda" and (
-                _rdzen_komendy(r.get("komenda")) == rdzen
+                _rdzen_komendy_tekst(r.get("komenda")) == rdzen
                 or (_skr and _skr & _skrypty_komendy(r.get("komenda")))):
             kto = ("Komenda " + r["autor_dop"]) if r.get("autor_dop") else "Ta komenda"
             return (kto + " (" + short(rdzen, 120) + ") liczy już w tle od "
@@ -41700,6 +41872,13 @@ def _zlec_kod_bartkowi(task_text, pliki, team, step):
 
     if not str(odp or "").strip():
         return []
+
+    if not _jest_blad_ds(odp):
+        _zlecenie_u_roli["ENGINEER"] = {
+            "skrot": hashlib.sha1(str(task_text or "").strip().encode("utf-8", "replace")).hexdigest(),
+            "krok": int(step or 0),
+            "rozmowa": _rozmowa_roli("ENGINEER"),
+        }
 
     team["engineer_full"] = odp
     globals()["_kod_bartka_teraz"] = odp
@@ -45051,6 +45230,9 @@ _main_decision_for_team = None
 # _main_decision_for_team. Osobno, zeby _o_kogo_prosi_main() dalej
 # czytalo samo uzasadnienie. Patrz main_decision_block.
 _main_task_for_team = ""
+# v480lv: {rola: {"skrot", "krok", "rozmowa"}} — zlecenie MAIN-a, ktore
+# ta osoba dostala w calosci (prosba o kod), patrz _decyzja_maina_dla.
+_zlecenie_u_roli = {}
 
 
 # v350: o kogo MAIN prosi w swojej decyzji.
@@ -47098,9 +47280,10 @@ def _od_kolegi(etykieta, tekst, rola, autor, limit, klucz=None):
     # _dla_tej_roli() widzialo dokladnie ten sam tekst, co dotad.
     moje = _kod_dla_tej_roli(moje, rola)
 
-    return str(etykieta) + _role_output_for_team(
+    # v480lv: slowa kolegi — nie skracane przy usuwaniu powtorzen.
+    return _slowa_ludzi(rola, str(etykieta) + _role_output_for_team(
         autor, moje, limit, klucz
-    )
+    ))
 
 
 # v312: "przy kilku pytaniach o to samo niech dochodzi jedno"
@@ -47295,7 +47478,22 @@ def _role_inbox_block(role_name):
         poczatek=_poczatek_bloku(blok)
     )
 
-    return blok
+    # v480lv: slowa kolegow i MAIN-a nie sa skracane przy usuwaniu
+    # powtorzen z wiadomosci (patrz _bez_powtorzen_w_wiadomosci).
+    return _slowa_ludzi(role_name, blok)
+
+
+# v480lv: {rola: [teksty]} — slowa ludzi w wiadomosci, ktora wlasnie
+# powstaje dla tej roli; _bez_powtorzen_w_wiadomosci ich nie skraca.
+_ostatnia_skrzynka = {}
+
+
+def _slowa_ludzi(rola, tekst):
+    if str(tekst or "").strip():
+        _l = _ostatnia_skrzynka.setdefault(str(rola), [])
+        _l.append(str(tekst))
+        del _l[:-20]
+    return tekst
 
 
 # Pytanie Marka czekające na odpowiedź: {"role":..., "text":..., "wiek":int}
@@ -48091,6 +48289,28 @@ def consult_team(
         + "\n"
     ) if _main_decision_for_team else ""
 
+    # v480lv: Bartek dostal to zlecenie w calosci, gdy program prosil go
+    # o kod (_zlec_kod_bartkowi) — w tej samej rozmowie drugi raz idzie
+    # jedno zdanie. Bieg 2026-11-03 20:16 (druzyna 1): 3 tys. znakow
+    # zlecenia drugi raz w wiadomosci z pytaniem MAIN-a do Bartka.
+    def _decyzja_maina_dla(rola):
+        if not main_decision_block:
+            return ""
+        try:
+            _z = _zlecenie_u_roli.get(str(rola)) or {}
+            _t = str(_main_task_for_team or "").strip()
+            if (_z and _t and str(_main_decision_for_team).upper().startswith("TASK")
+                    and _z.get("skrot") == hashlib.sha1(_t.encode("utf-8", "replace")).hexdigest()
+                    and _z.get("rozmowa") == _rozmowa_roli(rola)):
+                return (
+                    "\nCo MAIN zrobił i dlaczego:\n" + _main_decision_for_team
+                    + "\n\nZlecenie MAIN-a dla programu: to samo, które dostałeś w kroku "
+                    + str(_z.get("krok")) + " razem z prośbą o kod — masz je wyżej w tej rozmowie.\n"
+                )
+        except Exception:
+            pass
+        return main_decision_block
+
     # v191: bez CEL-u. Każda rola dostała go RAZ, przy pierwszej
     # wiadomości w tym celu (patrz _goal_briefing_for), i ma go w
     # historii swojej rozmowy. Tu idzie tylko to, co NOWE.
@@ -48307,7 +48527,7 @@ def consult_team(
             # (planuja, pisza i oceniaja wlasnie ja) i tam zostaje.
             "" if _bez_maszynowni
             else _only_if_new(
-                role_name, "main_decision", main_decision_block
+                role_name, "main_decision", _decyzja_maina_dla(role_name)
             ),
             # v269: surowy zrzut wywolania narzedzia to maszynownia.
             # Kamil szuka w sieci i nie uruchamia narzedzi — sam
@@ -48389,7 +48609,7 @@ def consult_team(
             # ta osoba zaczęła — nawet jeśli nikt nie wymienił jej z
             # imienia. Patrz _watek_blok(); obok skrzynki, bo to ten
             # sam rodzaj rzeczy: czyjeś słowa skierowane do niej.
-            _watek_blok(role_name),
+            _slowa_ludzi(role_name, _watek_blok(role_name)),
         ]
         return "".join(p for p in pieces if p)
 
@@ -48461,7 +48681,8 @@ def consult_team(
         # numery telefonow.
         _od_uzytkownika = (
             "" if role_name in _ROLE_TYLKO_PYTANIE
-            else _co_powiedzial_uzytkownik(role_name)
+            # v480lv: slowa uzytkownika nie sa skracane przy usuwaniu powtorzen
+            else _slowa_ludzi(role_name, _co_powiedzial_uzytkownik(role_name))
         )
 
         if _od_uzytkownika:
@@ -48525,7 +48746,11 @@ def consult_team(
                 )
             )
 
-        return "\n".join(p for p in pieces if p)
+        # v480lv: ta sama dluga tresc w jednej wiadomosci tylko raz.
+        return _bez_powtorzen_w_wiadomosci(
+            "\n".join(p for p in pieces if p),
+            chronione=tuple(_ostatnia_skrzynka.pop(str(role_name), None) or ())
+        )
 
     # Role odpytywane PO KOLEI — jedno realne połączenie do
     # opendeep na raz. CRITIC i ENGINEER dostają
@@ -49206,7 +49431,7 @@ def consult_team(
                 # Bartek ma wykonac, nie cudza rozmowa obok.
                 _only_if_new(
                     "ENGINEER", "od_tomka",
-                    ("\nTomek:\n" + planner_out) if planner_out else ""
+                    _slowa_ludzi("ENGINEER", "\nTomek:\n" + planner_out) if planner_out else ""
                 )
                 + _only_if_new(
                     "ENGINEER", "od_kamila",
@@ -49343,7 +49568,7 @@ def consult_team(
             extra=(
                 _only_if_new(
                     "CRITIC", "od_tomka",
-                    ("\nTomek:\n" + planner_out) if planner_out else ""
+                    _slowa_ludzi("CRITIC", "\nTomek:\n" + planner_out) if planner_out else ""
                 )
                 + _only_if_new(
                     "CRITIC", "project_file",
@@ -50073,10 +50298,14 @@ def main_decide(
             )
         ask_block = "\n\n".join(_czesci) + "\n"
         if asked_followup.get("niewyslane"):
+            # v480lv: co sie z nimi stanie i co MAIN ma (nie) robic.
+            _do = [x for x in (asked_followup.get("niewyslane_do") or []) if x]
             ask_block += (
                 "\nPytań w tym kroku było już " + str(_MAIN_ASK_MAX)
-                + " — " + str(asked_followup["niewyslane"])
-                + " nie wysłałem.\n"
+                + " — " + ("pytania do " + ", ".join(_do) if _do
+                           else str(asked_followup["niewyslane"]) + " pozostałe")
+                + " program wyśle na początku następnego kroku, a odpowiedzi "
+                "przyjdą razem z jego wynikami; nie musisz ich powtarzać.\n"
             )
         ask_contract_block = ""
 
@@ -50787,6 +51016,14 @@ _MAIN_ASK_MAX = 5
 # pierwsze w nastepnym (patrz _handle_main_ask i run_agent).
 _ask_przeniesione = []
 
+
+def _przenies_pytania(pytania):
+    """v480lv: pytania MAIN-a na poczatek nastepnego kroku — dopisane do
+    tych, ktore juz czekaja (bez dublowania), a nie w ich miejsce."""
+    for q in pytania or []:
+        if isinstance(q, dict) and q not in _ask_przeniesione:
+            _ask_przeniesione.append(q)
+
 # v454: gdy zapytany zwroci sie w odpowiedzi do kolegi po imieniu
 # ("Bartku, napisz…"), kolega odpowiada OD RAZU, w tym samym kroku —
 # najwyzej tylu na krok. Do v453 taka wiadomosc lezala w skrzynce do
@@ -50880,6 +51117,10 @@ def _handle_main_ask(
 
     zadane = 0
     _hopy = 0
+    # v480lv: pytania z jednej odpowiedzi MAIN-a ponad limit kroku — nie
+    # przepadaja ("N nie wysłałem"), tylko ida na poczatek nastepnego
+    # kroku, jak pytanie ponad limit w osobnej odpowiedzi (v458).
+    _zalegle = []
 
     while isinstance(decision, dict) and decision.get("type") == "ASK":
 
@@ -50901,7 +51142,7 @@ def _handle_main_ask(
                 "kroku — to pytanie idzie na początek następnego kroku."
             )
 
-            return {"type": "ASK_DALEJ", "pytania": pytania}
+            return {"type": "ASK_DALEJ", "pytania": _zalegle + [q for q in pytania if q not in _zalegle]}
 
         odpowiedzi = []
         niewyslane = 0
@@ -50934,6 +51175,8 @@ def _handle_main_ask(
 
             if zadane >= _MAIN_ASK_MAX:
                 niewyslane += 1
+                if pytanie not in _zalegle:
+                    _zalegle.append(pytanie)
                 continue
 
             zadane += 1
@@ -50975,10 +51218,11 @@ def _handle_main_ask(
                 # rozmowy, z tym, co ma kazdy wolany (_wspolne_dla_wolanego:
                 # slowa uzytkownika, ich wlasny log) i celem raz na rozmowe.
                 # Moga sprawdzac pliki (PODGLĄD/URUCHOM) jak reszta.
-                _wiad = (
+                _wiad = _bez_powtorzen_w_wiadomosci(
                     _only_if_new(ask_role, "cel_ask", "Cel użytkownika:\n" + str(goal or "").strip() + "\n\n")
                     + _wspolne_dla_wolanego(ask_role)
-                    + "MAIN:\n" + ask_question
+                    + "MAIN:\n" + ask_question,
+                    chronione=(ask_question,) + tuple(_ostatnia_skrzynka.pop(str(ask_role), None) or ())
                 )
                 answer = str(deepseek(ask_role, _wiad) or "")
                 if answer.strip():
@@ -51115,6 +51359,10 @@ def _handle_main_ask(
         _followup = dict(odpowiedzi[-1])
         _followup["odpowiedzi"] = odpowiedzi
         _followup["niewyslane"] = niewyslane
+        _followup["niewyslane_do"] = [
+            _ROLE_DISPLAY_NAME.get(_rola_ask(q.get("ask_role")), str(q.get("ask_role") or ""))
+            for q in _zalegle
+        ]
 
         raw = main_decide(
             goal,
@@ -51135,6 +51383,16 @@ def _handle_main_ask(
             _blad_wysylki_maina[0] = str(raw)
 
         decision = _tylko_decyzja(parse_json(raw))
+
+    if _zalegle and not (isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ"):
+        _przenies_pytania(_zalegle)
+        log(
+            "MAIN",
+            "Pytania ponad " + str(_MAIN_ASK_MAX) + " w tym kroku (do " + ", ".join(
+                _ROLE_DISPLAY_NAME.get(_rola_ask(q.get("ask_role")), str(q.get("ask_role") or ""))
+                for q in _zalegle
+            ) + ") idą na początek następnego kroku."
+        )
 
     return decision
 
@@ -57052,7 +57310,7 @@ def run_agent(goal):
         # v458: pytania ponad limit — na poczatek nastepnego kroku.
         if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
 
-            _ask_przeniesione[:] = list(decision.get("pytania") or [])
+            _przenies_pytania(decision.get("pytania"))
 
             _kogo = ", ".join(
                 _ROLE_DISPLAY_NAME.get(
@@ -57184,7 +57442,7 @@ def run_agent(goal):
 
             if isinstance(decision, dict) and decision.get("type") == "ASK_DALEJ":
 
-                _ask_przeniesione[:] = list(decision.get("pytania") or [])
+                _przenies_pytania(decision.get("pytania"))
 
                 last_result = {
                     "status": "ASK_PRZENIESIONE",
@@ -58604,7 +58862,7 @@ def run_agent(goal):
                 _pytania_ask(_odp_maina) if ('"RUN"' in _odp_maina or "DSML" in _odp_maina) else []
             )
             if _pytania_obok and isinstance(last_result, dict):
-                _ask_przeniesione[:] = _pytania_obok
+                _przenies_pytania(_pytania_obok)
                 log(
                     "MAIN",
                     "Obok RUN były pytania (" + ", ".join(
@@ -59884,10 +60142,66 @@ _sedzia_watek = [None]
 # (druzyna 2): po 9 odbitych DONE MAIN szukal drogi do uzytkownika przez
 # NEED_USER_LOGIN bez strony. Bieg nie czeka na uzytkownika — on czyta
 # ten plik, kiedy zechce.
-def _plik_dla_uzytkownika():
+def _plik_dla_uzytkownika_domyslny():
     if _DRUZYNA in ("1", "2"):
         return "~/MAIN_" + _DRUZYNA + "/DLA_UZYTKOWNIKA.md"
     return "~/DLA_UZYTKOWNIKA.md"
+
+
+def _plik_dla_uzytkownika():
+    # v480lv: plik, w ktorym zespol naprawde pisze do uzytkownika (np.
+    # docs/DLA_UZYTKOWNIKA.md po porzadkach), a nie zawsze korzen folderu.
+    return _plik_zespolu("DLA_UZYTKOWNIKA.md", _plik_dla_uzytkownika_domyslny())
+
+
+# v480lv: katalogi, w ktorych nie szukamy plikow zespolu po nazwie.
+_BEZ_SZUKANIA_KATALOGI = ("archiwum_od_uzytkownika", "__pycache__", "node_modules",
+                          "venv", "site-packages")
+
+
+def _pliki_zespolu_wg_nazwy(pasuje, glebokosc=4, limit=20000):
+    """v480lv: pliki w folderze druzyny, ktorych nazwa spelnia pasuje(nazwa)
+    — bez ukrytych katalogow (.kopie), kopii zapasowych i archiwum
+    skrzynki. Bez rywalizacji (folder = caly dom) — nic."""
+    if _DRUZYNA not in ("1", "2"):
+        return []
+    folder = _folder_druzyny(_DRUZYNA)
+    wynik, ile = [], 0
+    try:
+        for korzen, katalogi, pliki in os.walk(folder):
+            katalogi[:] = sorted(k for k in katalogi
+                                 if not k.startswith(".") and k not in _BEZ_SZUKANIA_KATALOGI)
+            if len(Path(korzen).relative_to(folder).parts) >= glebokosc:
+                katalogi[:] = []
+            for n in sorted(pliki):
+                ile += 1
+                if ile > limit:
+                    return wynik
+                if n.startswith(".") or _KOPIA_W_SPISIE_RE.search(n):
+                    continue
+                if pasuje(n):
+                    wynik.append(Path(korzen) / n)
+    except Exception:
+        pass
+    return wynik
+
+
+def _plik_zespolu(nazwa, domyslna):
+    """v480lv: sciezka (od ~), pod ktora zespol naprawde trzyma swoj plik
+    o tej nazwie — najswiezszy taki w folderze druzyny; gdy go nie ma,
+    domyslna. Bieg 2026-11-03 (druzyna 1): zespol przeniosl
+    BURZA_MOZGOW.md i DLA_UZYTKOWNIKA.md do docs/, a program dalej kazal
+    dopisywac do ~/MAIN_1/BURZA_MOZGOW.md — MAIN zalozyl drugi plik
+    w korzeniu i notatki sie rozjechaly."""
+    best, t = None, -1.0
+    for p in _pliki_zespolu_wg_nazwy(lambda n: n == nazwa):
+        try:
+            m = p.stat().st_mtime
+        except Exception:
+            continue
+        if m > t:
+            best, t = p, m
+    return _sciezka_od_domu(str(best)) if best is not None else domyslna
 
 
 def _zdanie_o_pliku_dla_uzytkownika():
@@ -59913,7 +60227,9 @@ _POCZTA_WIDZIANE_FILE = STATE_DIR / "dla_uzytkownika_widziane.json"
 
 
 def _plik_od_uzytkownika():
-    return _plik_dla_uzytkownika().replace(
+    # odpowiedz uzytkownika zawsze w korzeniu folderu druzyny — tam ja
+    # pisze i tam program jej szuka
+    return _plik_dla_uzytkownika_domyslny().replace(
         "DLA_UZYTKOWNIKA.md", "OD_UZYTKOWNIKA.txt"
     )
 
@@ -61145,8 +61461,20 @@ def _jeszcze_zyje(pid):
 
 def _pliki_dla_uzytkownika():
     """Pliki zespolu do uzytkownika: DLA_UZYTKOWNIKA.md i podobne
-    (RAPORT_DLA_UZYTKOWNIKA.md, DECYZJA_DLA_UZYTKOWNIKA.md, ...)."""
-    dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+    (RAPORT_DLA_UZYTKOWNIKA.md, DECYZJA_DLA_UZYTKOWNIKA.md, ...).
+
+    v480lv: w calym folderze druzyny, nie tylko w korzeniu. Bieg
+    2026-11-02/03 (druzyna 1): zespol przeniosl DLA_UZYTKOWNIKA.md do
+    docs/ i o 02:51 dopisal tam pytanie "do decyzji użytkownika" —
+    program patrzyl tylko w korzen, wiec uzytkownik nie dostal ani
+    powiadomienia, ani kopii w AEL-MINI."""
+    def _pasuje(n):
+        N = n.upper()
+        return ("UZYTKOWNIK" in N and "OD_UZYTKOWNIKA" not in N
+                and Path(n).suffix.lower() in (".md", ".txt"))
+    if _DRUZYNA in ("1", "2"):
+        return [p for p in _pliki_zespolu_wg_nazwy(_pasuje) if p.is_file()]
+    dla = Path(os.path.expanduser(_plik_dla_uzytkownika_domyslny()))
     pliki = []
     try:
         for p in sorted(dla.parent.iterdir()):
@@ -61202,10 +61530,12 @@ def _odloz_stare_kopie_dla_uzytkownika():
     try:
         if not PRZEBIEG_NA_TELEFONIE.is_dir():
             return
-        dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+        dla = Path(os.path.expanduser(_plik_dla_uzytkownika_domyslny()))
         obecne = set()
         if dla.parent.is_dir():
             obecne = {p.name for p in dla.parent.iterdir() if p.is_file()}
+        # v480lv: plik przeniesiony w glab folderu (docs/) dalej jest
+        obecne |= {p.name for p in _pliki_dla_uzytkownika()}
         for k in sorted(PRZEBIEG_NA_TELEFONIE.iterdir()):
             n = k.name.upper()
             if (not k.is_file() or "UZYTKOWNIK" not in n or "OD_UZYTKOWNIKA" in n
@@ -61245,17 +61575,43 @@ def _poczta_uzytkownika(step):
                 "rozmiar": widziane.get("rozmiar"),
             }}
         zmiana = False
-        for dla in _pliki_dla_uzytkownika():
-            st = dla.stat()
+        # v480lv: klucz = sciezka w folderze druzyny (w korzeniu to sama
+        # nazwa, jak dotad). Z kilku plikow o tej samej nazwie (korzen,
+        # docs/, docs/historia/ …) zywy jest najswiezszy — reszta to
+        # kopie: program je zapamietuje, ale o nich nie powiadamia.
+        _folder_poczty = Path(os.path.expanduser(_plik_dla_uzytkownika_domyslny())).parent
+
+        def _klucz_poczty(pl):
+            try:
+                return str(pl.relative_to(_folder_poczty))
+            except Exception:
+                return pl.name
+
+        _wszystkie = _pliki_dla_uzytkownika()
+        _najnowszy = {}
+        for pl in _wszystkie:
+            try:
+                _m = pl.stat().st_mtime
+            except Exception:
+                continue
+            if pl.name not in _najnowszy or _m > _najnowszy[pl.name][1]:
+                _najnowszy[pl.name] = (pl, _m)
+        for dla in _wszystkie:
+            try:
+                st = dla.stat()
+            except Exception:
+                continue
+            klucz = _klucz_poczty(dla)
+            zywy = _najnowszy.get(dla.name, (None, 0))[0] == dla
             znak = [int(st.st_mtime), int(st.st_size)]
-            byl = widziane.get(dla.name)
+            byl = widziane.get(klucz)
             if not isinstance(byl, dict):
                 byl = {}
             if byl.get("znak") == znak or st.st_size == 0:
                 # juz ogloszony (np. przed v480dm) — tylko dociagnij kopie
                 kopia = PRZEBIEG_NA_TELEFONIE / dla.name
                 try:
-                    if st.st_size and (
+                    if zywy and st.st_size and (
                         not kopia.exists()
                         or kopia.stat().st_mtime < st.st_mtime
                     ):
@@ -61264,6 +61620,22 @@ def _poczta_uzytkownika(step):
                     pass
                 continue
             tresc = dla.read_text(encoding="utf-8", errors="replace")
+            _skrot_calosci = hashlib.sha1(tresc.encode("utf-8")).hexdigest()
+            _znane = [w for w in widziane.values() if isinstance(w, dict) and w.get("skrot")]
+            # v480lv: ta sama tresc byla juz ogloszona pod inna sciezka
+            # (zespol przeniosl albo skopiowal plik) albo to stara kopia
+            # obok zywego pliku — nic nowego dla uzytkownika.
+            if not zywy or any(w.get("skrot") == _skrot_calosci for w in _znane):
+                widziane[klucz] = {"znak": znak, "rozmiar": len(tresc), "skrot": _skrot_calosci}
+                zmiana = True
+                if zywy:
+                    try:
+                        kopia = PRZEBIEG_NA_TELEFONIE / dla.name
+                        if not kopia.exists() or kopia.stat().st_mtime < st.st_mtime:
+                            _na_telefon_dla_uzytkownika(dla)
+                    except Exception:
+                        pass
+                continue
             stary = int(byl.get("rozmiar") or 0)
             # v480do: koncowka tylko, gdy plik zostal DOPISANY (poczatek
             # bez zmian). Przepisany od nowa — pokazuje jego poczatek,
@@ -61274,6 +61646,14 @@ def _poczta_uzytkownika(step):
                     tresc[:stary].encode("utf-8")
                 ).hexdigest()
             )
+            if not dopisany and not byl:
+                # v480lv: plik przeniesiony (np. do docs/), a potem
+                # dopisany — nowe jest tylko to, co doszlo.
+                for w in _znane:
+                    _r = int(w.get("rozmiar") or 0)
+                    if (stary < _r < len(tresc) and w.get("skrot") == hashlib.sha1(
+                            tresc[:_r].encode("utf-8")).hexdigest()):
+                        stary, dopisany = _r, True
             nowe = (tresc[stary:] if dopisany else tresc).strip()
             poczatek = " ".join(nowe.split())[:200]
             na_telefonie = _na_telefon_dla_uzytkownika(dla)
@@ -61288,8 +61668,16 @@ def _poczta_uzytkownika(step):
                 ) + "OD_UZYTKOWNIKA.txt albo "
                 if na_telefonie else ""
             ) + _plik_od_uzytkownika()
+            # v480lv: wiadomosc sprzed dluzszej chwili (np. z pliku,
+            # ktorego program dotad nie widzial) — z godzina zapisu.
+            _kiedy = ""
+            try:
+                if time.time() - st.st_mtime > 1800:
+                    _kiedy = " (zapisana " + datetime.fromtimestamp(st.st_mtime).strftime("%d.%m %H:%M") + ")"
+            except Exception:
+                pass
             linia = (
-                _kto + " zostawiła Ci wiadomość: " + gdzie + " — „"
+                _kto + " zostawiła Ci wiadomość" + _kiedy + ": " + gdzie + " — „"
                 + poczatek + ("…" if len(nowe) > 200 else "")
                 + "”. Odpowiedź zapisz w " + odp
             )
@@ -61311,9 +61699,9 @@ def _poczta_uzytkownika(step):
                 )
             except Exception:
                 pass
-            widziane[dla.name] = {
+            widziane[klucz] = {
                 "znak": znak, "rozmiar": len(tresc),
-                "skrot": hashlib.sha1(tresc.encode("utf-8")).hexdigest(),
+                "skrot": _skrot_calosci,
             }
             zmiana = True
         if zmiana:
@@ -63637,9 +64025,11 @@ def _gdzie_pracowala(katalog, n=8, ile=30):
     return "\n".join(linie)
 
 
-def _pliki_druzyny(numer, ile=40):
+def _spis_druzyny(numer, ile=400):
+    """v480lv: spis plikow druzyny jako lista (sciezka wzgledna, rozmiar),
+    liczba kopii zapasowych i czy spis ucieto na `ile` pozycjach."""
     folder = HOME / ("MAIN_" + str(numer))
-    linie = []
+    spis = []
     kopii = 0
     try:
         for korzen, katalogi, pliki in os.walk(folder):
@@ -63657,19 +64047,75 @@ def _pliki_druzyny(numer, ile=40):
                 if _KOPIA_W_SPISIE_RE.search(nazwa):
                     kopii += 1
                     continue
+                if len(spis) >= ile:
+                    return spis, kopii, True
                 p = Path(korzen) / nazwa
                 try:
                     rozmiar = _po_ludzku_rozmiar(p.stat().st_size)
                 except Exception:
                     rozmiar = "?"
-                linie.append(str(p.relative_to(folder)) + " (" + rozmiar + ")")
-                if len(linie) >= ile:
-                    return ", ".join(linie) + ", …"
+                spis.append((str(p.relative_to(folder)), rozmiar))
     except Exception:
         pass
+    return spis, kopii, False
+
+
+def _plikow_slownie(k):
+    k = int(k)
+    if k == 1:
+        return "1 plik"
+    if k % 10 in (2, 3, 4) and k % 100 not in (12, 13, 14):
+        return str(k) + " pliki"
+    return str(k) + " plików"
+
+
+def _pliki_druzyny(numer, ile=40, spis=None):
+    spis, kopii, ucieto = spis if spis is not None else _spis_druzyny(numer)
+    linie = [r + " (" + s + ")" for r, s in spis[:ile]]
+    if not linie:
+        return "(pusto)"
+    if len(spis) > ile or ucieto:
+        return (", ".join(linie) + ", … i jeszcze "
+                + ("ponad " if ucieto else "") + _plikow_slownie(len(spis) - len(linie)))
     if kopii:
         linie.append("(+ " + str(kopii) + " kopii zapasowych)")
-    return ", ".join(linie) if linie else "(pusto)"
+    return ", ".join(linie)
+
+
+def _spis_dla_sedziego(numer):
+    """v480lv: spis plikow raz w rozmowie Sedziego, potem tylko to, co sie
+    w nim zmienilo. Bieg 2026-11-03 (14 ocen): co kwadrans te same ~1,3 tys.
+    znakow spisu kazdej druzyny, slowo w slowo."""
+    n = str(numer)
+    calosc = _spis_druzyny(n)
+    spis, kopii, ucieto = calosc
+    teraz = {r: s for r, s in spis}
+    stary = (_sedzia_widzial.get("spisy_stare") or {}).get("pliki" + n)
+    _sedzia_widzial["spisy_nowe"]["pliki" + n] = teraz
+    pelny = _pliki_druzyny(n, spis=calosc)
+    if not isinstance(stary, dict) or ucieto:
+        return pelny
+    przybylo = [r + " (" + s + ")" for r, s in spis if r not in stary]
+    zniknelo = [r for r in stary if r not in teraz]
+    zmienione = [r + " (" + str(stary[r]) + " → " + s + ")" for r, s in spis
+                 if r in stary and stary[r] != s]
+    czas = _sedzia_widzial["czas"] or "poprzedniej"
+    if not (przybylo or zniknelo or zmienione):
+        return "bez zmian od oceny z " + czas + " (spis masz wyżej)"
+
+    def _lista(xs):
+        return ", ".join(xs[:20]) + (" i jeszcze " + _plikow_slownie(len(xs) - 20) if len(xs) > 20 else "")
+    czesci = []
+    if przybylo:
+        czesci.append("nowe: " + _lista(przybylo))
+    if zniknelo:
+        czesci.append("zniknęły: " + _lista(zniknelo))
+    if zmienione:
+        czesci.append("zmienił się rozmiar: " + _lista(zmienione))
+    tekst = ("zmiany od oceny z " + czas + " (reszta spisu bez zmian, masz ją wyżej) — "
+             + "; ".join(czesci))
+    # przy duzej przebudowie folderu czytelniejszy jest caly spis od nowa
+    return pelny if len(tekst) > len(pelny) else tekst
 
 
 # v480bw: uzytkownik (2026-10-16) — Sedzia widzi to, co drużyna
@@ -63718,7 +64164,25 @@ def _kroki_dla_sedziego(katalog, n=8):
 # jedna linia, ile wczesniejszego pominieto. Nowa rozmowa Sedziego
 # (inny chat_session_id) dostaje znow wszystko.
 _SEDZIA_WIDZIAL_FILE = STATE_DIR / "sedzia_widzial.json"
-_sedzia_widzial = {"stare": set(), "nowe": set(), "czas": ""}
+_sedzia_widzial = {"stare": set(), "nowe": set(), "czas": "", "spisy_stare": {}, "spisy_nowe": {}}
+
+# v480lv: pelna tresc plikow, ktore Sedzia widzial w tej rozmowie —
+# zmieniony plik idzie jako sama zmiana, a nie znowu od poczatku. Bieg
+# 2026-11-03 (druzyna 1, 14 ocen): ok. 46% tresci plikow w materiale
+# Sedziego to byly linie, ktore juz dostal — pliki poprawione w srodku
+# (ppm_bwt.c, _NEG.md, CHECKPOINTS.md) szly od nowa, przeniesione
+# (kod/ppm_bwt.c -> kod/eksperymenty/) tez; limit 5 tys. znakow
+# wypelnialy powtorki, a 20:28 rozmowa Sedziego skonczyla sie na
+# "Length limit reached".
+_SEDZIA_PLIKI_FILE = STATE_DIR / "sedzia_pliki.json"
+_sedzia_pliki = {"stare": {}, "nowe": {}}
+_SEDZIA_PLIK_PAMIEC_B = 60000
+_SEDZIA_PLIKOW_W_PAMIECI = 80
+_SEDZIA_PLIKI_RAZEM_ZNAKOW = 1500000
+# klucze plikow (tresc, przeniesienia, dopiski) zostaja na cala rozmowe,
+# takze gdy plik nie zmiescil sie w tej ocenie; werdykt i spis plikow
+# pamietamy osobno ("spisy": ostatnio pokazany)
+_SEDZIA_KLUCZE_TRWALE = ("plik", "tresc", "dl", "duzy")
 
 
 _SEDZIA_OD_UZYTKOWNIKA = HOME / ".ael_sedzia_od_uzytkownika.jsonl"
@@ -63806,12 +64270,71 @@ def _sedzia_tylko_nowe(tekst, rodzaj, numer):
 def _sedzia_wczytaj_widziane(rozmowa):
     d = read_json(_SEDZIA_WIDZIAL_FILE, {})
     _sedzia_widzial["nowe"] = set()
+    _sedzia_widzial["spisy_nowe"] = {}
+    _sedzia_pliki["nowe"] = {}
     if isinstance(d, dict) and rozmowa and d.get("rozmowa") == rozmowa:
         _sedzia_widzial["stare"] = set(d.get("klucze") or [])
         _sedzia_widzial["czas"] = str(d.get("czas") or "")
+        _sedzia_widzial["spisy_stare"] = d.get("spisy") if isinstance(d.get("spisy"), dict) else {}
+        _p = read_json(_SEDZIA_PLIKI_FILE, {})
+        _sedzia_pliki["stare"] = (
+            _p.get("pliki") if isinstance(_p, dict) and _p.get("rozmowa") == rozmowa
+            and isinstance(_p.get("pliki"), dict) else {}
+        )
     else:
         _sedzia_widzial["stare"] = set()
         _sedzia_widzial["czas"] = ""
+        _sedzia_widzial["spisy_stare"] = {}
+        _sedzia_pliki["stare"] = {}
+
+
+def _sedzia_zapisz_widziane(rozmowa, udalo_sie):
+    """v480lv: klucze plikow zostaja na cala rozmowe (takze pliku, ktory
+    nie zmiescil sie w tej ocenie), tresc pokazanych plikow obok."""
+    if not (udalo_sie and rozmowa):
+        write_json(_SEDZIA_WIDZIAL_FILE, {"rozmowa": rozmowa, "czas": datetime.now().strftime("%H:%M"),
+                                          "klucze": []})
+        write_json(_SEDZIA_PLIKI_FILE, {"rozmowa": "", "pliki": {}})
+        return
+    klucze = set(_sedzia_widzial["nowe"])
+    # plik przejrzany w tej ocenie ma juz swoj obecny klucz — stary klucz
+    # tej samej sciezki nie przechodzi (inaczej plik cofniety do starej
+    # wersji wygladalby na "bez zmian" wobec ostatnio widzianej)
+    _przejrzane = {k.rsplit(":", 1)[0] for k in klucze if k.startswith("plik")}
+    _trwale = sorted(k for k in _sedzia_widzial["stare"] - klucze
+                     if k.startswith(_SEDZIA_KLUCZE_TRWALE)
+                     and not (k.startswith("plik") and k.rsplit(":", 1)[0] in _przejrzane))
+    klucze.update(_trwale[-3000:])
+    spisy = dict(_sedzia_widzial.get("spisy_stare") or {})
+    spisy.update(_sedzia_widzial.get("spisy_nowe") or {})
+    write_json(_SEDZIA_WIDZIAL_FILE, {
+        "rozmowa": rozmowa,
+        "czas": datetime.now().strftime("%H:%M"),
+        "klucze": sorted(klucze),
+        "spisy": spisy,
+    })
+    pliki = dict(_sedzia_pliki.get("stare") or {})
+    pliki.update(_sedzia_pliki.get("nowe") or {})
+    # najnowsze najpierw, najwyzej 80 plikow i ok. 1,5 MB tresci
+    _zostaja, _razem = {}, 0
+    for _kl, _wp in sorted(pliki.items(), key=lambda kv: -float((kv[1] or {}).get("t") or 0)
+                           if isinstance(kv[1], dict) else 0):
+        if not isinstance(_wp, dict):
+            continue
+        _razem += len(str(_wp.get("tresc") or ""))
+        if len(_zostaja) >= _SEDZIA_PLIKOW_W_PAMIECI or _razem > _SEDZIA_PLIKI_RAZEM_ZNAKOW:
+            break
+        _zostaja[_kl] = _wp
+    write_json(_SEDZIA_PLIKI_FILE, {"rozmowa": rozmowa, "pliki": _zostaja})
+
+
+def _sedzia_roznica(stara, nowa):
+    """v480lv: zmiany miedzy wersja, ktora Sedzia juz widzial, a obecna —
+    unified diff z dwiema liniami kontekstu, bez naglowkow ---/+++."""
+    import difflib
+    d = list(difflib.unified_diff(str(stara).splitlines(), str(nowa).splitlines(),
+                                  lineterm="", n=2))
+    return "\n".join(d[2:]).strip("\n")
 
 
 def _sedzia_rozmowa_teraz():
@@ -63825,9 +64348,19 @@ def _sedzia_rozmowa_teraz():
         return ""
 
 
+# v480lv: ile plikow najwyzej przegladamy w jednej ocenie (z niezmienionymi)
+_SEDZIA_PLIKOW_NA_OCENE = 40
+
+
 def _kod_dla_sedziego(numer):
-    """Tresc ostatnio zmienionych plikow tekstowych z ~/MAIN_N."""
+    """Tresc ostatnio zmienionych plikow tekstowych z ~/MAIN_N.
+
+    v480lv: w tej samej rozmowie Sedzia dostaje kazda tresc raz — plik
+    niezmieniony to jedna wspolna linia, przeniesiony albo skopiowany to
+    "ta sama tresc co …", poprawiony w srodku to same zmiany (diff), a
+    dopisany na koncu to sam dopisek."""
     folder = HOME / ("MAIN_" + str(numer))
+    n = str(numer)
     try:
         # v480lr: bez skrzynki od uzytkownika (OD_UZYTKOWNIKA.txt czeka na
         # krok druzyny, archiwum ma tez wiadomosci zatrzymane sprzed v480lr)
@@ -63847,10 +64380,36 @@ def _kod_dla_sedziego(numer):
     if wynik in pliki:
         pliki.remove(wynik)
         pliki.insert(0, wynik)
+    stare = _sedzia_widzial["stare"]
+    nowe_klucze = _sedzia_widzial["nowe"]
+    czas = _sedzia_widzial["czas"] or "poprzedniej"
+    teraz_hm = datetime.now().strftime("%H:%M")
+    # tresci, ktore Sedzia ma juz w tej rozmowie (skrot -> sciezka)
+    znane = {}
+    for x in sorted(stare):
+        if x.startswith("tresc" + n + ":"):
+            try:
+                _hz, _rz = x[len("tresc" + n + ":"):].split(":", 1)
+            except ValueError:
+                continue
+            znane.setdefault(_hz, _rz)
+    zapamietane = _sedzia_pliki.get("stare") or {}
+
+    def _zapamietaj(rel, tresc_pliku, kiedy=None):
+        if len(tresc_pliku.encode("utf-8", "replace")) <= _SEDZIA_PLIK_PAMIEC_B:
+            _sedzia_pliki["nowe"][n + ":" + rel] = {"tresc": tresc_pliku, "t": time.time(),
+                                                   "czas": kiedy or teraz_hm}
+        else:
+            # za duzy do pamietania — starsza wersja nie moze zostac
+            # podstawa nastepnej roznicy
+            _sedzia_pliki["nowe"][n + ":" + rel] = None
+
     bloki, zostalo = [], _SEDZIA_KOD_LIMIT
-    for p in pliki:
-        if zostalo < 300:
+    bez_zmian = []
+    for _nr, p in enumerate(pliki):
+        if zostalo < 300 or _nr >= _SEDZIA_PLIKOW_NA_OCENE:
             break
+        _rel = str(p.relative_to(folder))
         # v480iu: duzy plik (dane uczace, wielki log) — Sedzia nie czyta
         # dziesiatek MB kodu, a odczyt w calosci zajmowal setki MB pamieci.
         try:
@@ -63858,10 +64417,10 @@ def _kod_dla_sedziego(numer):
         except Exception:
             continue
         if _rozm > _PLIK_CALY_DO_B:
-            _kd = "duzy" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + str(_rozm)
-            _sedzia_widzial["nowe"].add(_kd)
-            if _kd not in _sedzia_widzial["stare"]:
-                _wiersz = "--- " + str(p.relative_to(folder)) + " --- (" + str(_rozm) + " B, duży plik — treści nie pokazuję)"
+            _kd = "duzy" + n + ":" + _rel + ":" + str(_rozm)
+            nowe_klucze.add(_kd)
+            if _kd not in stare:
+                _wiersz = "--- " + _rel + " --- (" + str(_rozm) + " B, duży plik — treści nie pokazuję)"
                 bloki.append(_wiersz)
                 zostalo -= len(_wiersz)
             continue
@@ -63869,51 +64428,90 @@ def _kod_dla_sedziego(numer):
             tresc = p.read_text(encoding="utf-8", errors="replace")
         except Exception:
             continue
-        _k = "plik" + str(numer) + ":" + str(p.relative_to(folder)) + ":" + hashlib.sha1(
-            tresc.encode("utf-8", "replace")).hexdigest()[:12]
-        _sedzia_widzial["nowe"].add(_k)
-        _rel = str(p.relative_to(folder))
-        if _k in _sedzia_widzial["stare"]:
-            bloki.append("--- " + _rel + " --- bez zmian od oceny z "
-                         + (_sedzia_widzial["czas"] or "poprzedniej") + " (treść masz wyżej)")
-            _sedzia_widzial["nowe"].update(
-                x for x in _sedzia_widzial["stare"] if x.startswith("dl" + str(numer) + ":" + _rel + ":"))
+        _h = hashlib.sha1(tresc.encode("utf-8", "replace")).hexdigest()[:12]
+        _k = "plik" + n + ":" + _rel + ":" + _h
+        nowe_klucze.add(_k)
+        _kt = "tresc" + n + ":" + _h + ":" + _rel
+        _wpis = zapamietane.get(n + ":" + _rel)
+        _wpis = _wpis if isinstance(_wpis, dict) and isinstance(_wpis.get("tresc"), str) else None
+        if _k in stare:
+            bez_zmian.append(_rel)
+            nowe_klucze.update(x for x in stare if x.startswith("dl" + n + ":" + _rel + ":"))
+            nowe_klucze.add(_kt)
+            znane.setdefault(_h, _rel)
+            if _wpis is not None and _wpis["tresc"] == tresc:
+                _sedzia_pliki["nowe"][n + ":" + _rel] = dict(_wpis, t=time.time())
             continue
+        # przeniesiony albo skopiowany plik, ktorego tresc Sedzia juz ma
+        _gdzie = znane.get(_h)
+        if _gdzie and _gdzie != _rel and len(tresc.strip()) >= 200:
+            _wiersz = ("--- " + _rel + " --- ta sama treść, którą widziałeś jako " + _gdzie
+                       + " (masz ją wyżej" + ("" if (folder / _gdzie).exists()
+                                               else "; " + _gdzie + " już nie ma w folderze") + ")")
+            bloki.append(_wiersz)
+            zostalo -= len(_wiersz)
+            nowe_klucze.add(_kt)
+            _zapamietaj(_rel, tresc)
+            continue
+        nowe_klucze.add(_kt)
+        znane.setdefault(_h, _rel)
+        # plik poprawiony w srodku — same zmiany od wersji, ktora Sedzia widzial
+        if _wpis is not None:
+            _roz = _sedzia_roznica(_wpis["tresc"], tresc)
+            if not _roz.strip():
+                bez_zmian.append(_rel)
+                _zapamietaj(_rel, tresc, _wpis.get("czas"))
+                continue
+            # maly plik czytelniej w calosci; przepisany prawie caly tez
+            if len(tresc) >= 600 and len(_roz) < 0.7 * len(tresc):
+                kawalek = _roz[:min(zostalo, 3000)]
+                bloki.append("--- " + _rel + " --- zmiany od oceny z " + str(_wpis.get("czas") or czas)
+                             + " („-” usunięte, „+” dodane, reszta pliku bez zmian):\n" + kawalek
+                             + ("\n…(dalej " + str(len(_roz) - len(kawalek)) + " znaków zmian)"
+                                if len(kawalek) < len(_roz) else ""))
+                zostalo -= len(kawalek)
+                _zapamietaj(_rel, tresc)
+                continue
         # v480gb: plik dopisywany (NOTES.md, log) — Sedzia dostawal co
         # runde te same pierwsze 3000 znakow, a dopisanego konca nie
         # widzial wcale (bieg 2026-10-26 nocny: "## 00:38 — baseline"
         # 10 razy). Gdy poczatek jest ten sam, co juz widzial, idzie
         # tylko to, co przybylo.
         _przybylo_od = 0
-        for x in _sedzia_widzial["stare"]:
-            if not x.startswith("dl" + str(numer) + ":" + _rel + ":"):
+        for x in stare:
+            if not x.startswith("dl" + n + ":" + _rel + ":"):
                 continue
             try:
-                _dl, _h = x.rsplit(":", 2)[-2:]
+                _dl, _hd = x.rsplit(":", 2)[-2:]
                 _dl = int(_dl)
             except Exception:
                 continue
             if (_przybylo_od < _dl <= len(tresc) and hashlib.sha1(
-                    tresc[:_dl].encode("utf-8", "replace")).hexdigest()[:12] == _h):
+                    tresc[:_dl].encode("utf-8", "replace")).hexdigest()[:12] == _hd):
                 _przybylo_od = _dl
         if _przybylo_od:
-            _sedzia_widzial["nowe"].add("dl" + str(numer) + ":" + _rel + ":" + str(len(tresc)) + ":"
-                                        + hashlib.sha1(tresc.encode("utf-8", "replace")).hexdigest()[:12])
+            nowe_klucze.add("dl" + n + ":" + _rel + ":" + str(len(tresc)) + ":" + _h)
             nowe = tresc[_przybylo_od:]
             kawalek = nowe[-min(zostalo, 3000):]
             bloki.append("--- " + _rel + " --- (pierwsze " + str(_przybylo_od) + " znaków bez zmian "
-                         "od oceny z " + (_sedzia_widzial["czas"] or "poprzedniej") + ", masz je wyżej; "
+                         "od oceny z " + czas + ", masz je wyżej; "
                          "dopisane:)" + ("\n…(pominięto " + str(len(nowe) - len(kawalek)) + " znaków dopisanych wcześniej)"
                                         if len(kawalek) < len(nowe) else "") + "\n" + kawalek)
             zostalo -= len(kawalek)
+            _zapamietaj(_rel, tresc)
             continue
         kawalek = tresc[:min(zostalo, 3000)]
-        _sedzia_widzial["nowe"].add("dl" + str(numer) + ":" + _rel + ":" + str(len(kawalek)) + ":"
-                                    + hashlib.sha1(kawalek.encode("utf-8", "replace")).hexdigest()[:12])
+        nowe_klucze.add("dl" + n + ":" + _rel + ":" + str(len(kawalek)) + ":"
+                        + hashlib.sha1(kawalek.encode("utf-8", "replace")).hexdigest()[:12])
         bloki.append("--- " + _rel + " ---\n" + kawalek
                      + ("\n…(dalej " + str(len(tresc) - len(kawalek)) + " znaków)"
                         if len(kawalek) < len(tresc) else ""))
         zostalo -= len(kawalek)
+        _zapamietaj(_rel, tresc)
+    if bez_zmian:
+        bloki.append("Bez zmian od oceny z " + czas + " (treść masz wyżej): "
+                     + ", ".join(bez_zmian[:12])
+                     + (" i jeszcze " + _plikow_slownie(len(bez_zmian) - 12) if len(bez_zmian) > 12 else ""))
     return "\n".join(bloki)
 
 
@@ -63982,13 +64580,26 @@ def _stan_druzyny_dla_sedziego(numer):
         except Exception:
             pass
     except Exception:
+        w = {}
         wynik = "jeszcze żadnego"
+    # v480lv: ten sam werdykt (z calym opisem druzyny, ok. 700 znakow) szedl
+    # co kwadrans od nowa — w tej samej rozmowie wystarczy liczba i werdykt.
+    try:
+        _hw = hashlib.sha1(wynik.encode("utf-8", "replace")).hexdigest()[:12]
+        if (_sedzia_widzial.get("spisy_stare") or {}).get("wynik" + numer) == _hw:
+            wynik = ("bez zmian od oceny z " + (_sedzia_widzial["czas"] or "poprzedniej")
+                     + (" — ogłoszony wynik " + str(w["wynik"]) if isinstance(w, dict) and "wynik" in w else "")
+                     + (" — " + str(w.get("werdykt")) if isinstance(w, dict) and w.get("werdykt") else "")
+                     + " (pełny opis i szczegóły masz wyżej)")
+        _sedzia_widzial["spisy_nowe"]["wynik" + numer] = _hw
+    except Exception:
+        pass
     return (
         "Drużyna " + numer + " (folder ~/MAIN_" + numer + ")"
         + (", teraz w kroku " + str(_krok_druzyny(numer)) if _krok_druzyny(numer) else "") + ":\n"
         "Ostatnie kroki (z uzasadnieniem MAIN-a):\n" + (_sedzia_tylko_nowe(_kroki_dla_sedziego(katalog), "krok", numer) or "(jeszcze żadnych)") + "\n"
         "Wynik sprawdzony przez program: " + wynik + "\n"
-        "Pliki w folderze: " + _pliki_druzyny(numer) + "\n"
+        "Pliki w folderze: " + _spis_dla_sedziego(numer) + "\n"
         "Ostatnio używane komendy i pliki:\n"
         + (_sedzia_tylko_nowe(_gdzie_pracowala(katalog), "gdzie", numer) or "(brak)") + "\n"
         "Treść ostatnio zmienionych plików w ~/MAIN_" + numer + ":\n"
@@ -64030,14 +64641,10 @@ def ocen_rywalizacje(kroki):
         _nowe_po_dyskwalifikacji.clear()
         try:
             _rozmowa_po = _sedzia_rozmowa_teraz()
-            write_json(_SEDZIA_WIDZIAL_FILE, {
-                "rozmowa": _rozmowa_po,
-                "czas": datetime.now().strftime("%H:%M"),
-                # inna rozmowa niz ta, do ktorej liczylismy — nastepnym
-                # razem wszystko od nowa
-                "klucze": sorted(_sedzia_widzial["nowe"])
-                if isinstance(parsed, dict) and _rozmowa_po == _rozmowa_przed else [],
-            })
+            # inna rozmowa niz ta, do ktorej liczylismy — nastepnym
+            # razem wszystko od nowa
+            _sedzia_zapisz_widziane(
+                _rozmowa_po, isinstance(parsed, dict) and _rozmowa_po == _rozmowa_przed)
         except Exception:
             pass
         if not isinstance(parsed, dict):
@@ -64272,10 +64879,11 @@ def _burza_blok():
             and str(p[1]) not in _BURZA_BEZ
         }
         write_json(_BURZA_PLIK_STANU, st)
-        plik = (
+        # v480lv: tam, gdzie zespol trzyma swoja burze (np. docs/).
+        plik = _plik_zespolu("BURZA_MOZGOW.md", (
             "~/MAIN_" + _DRUZYNA + "/BURZA_MOZGOW.md" if _DRUZYNA
             else "~/BURZA_MOZGOW.md"
-        )
+        ))
         tekst = (
             # v480ej (uzytkownik 2026-10-24 17:31): tekst dostaje tylko
             # MAIN, wiec mowi do niego, nie do "was" — inaczej MAIN myslal,
