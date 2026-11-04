@@ -4698,3 +4698,51 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        skończyła się błędem, albo błąd go wskazuje. 4.11 18:03
        demo_nextbyte.py policzył się bez błędu, zadanie padło na dwóch
        odmowach programu, a Piotr i Ania „naprawili” działający plik.
+340. (v480ly) Poprawki plików: plik wskazany nad poprawką, propozycja zostaje
+     propozycją, dopiski, historia zmian pliku i linie [PLIK] w logu.
+     - Bieg 4.11 18:41 (drużyna 1): Piotr pisał nad każdym blokiem
+       „Poprawka do ~/MAIN_1/kod/ppm_c_v3_m8.c”, a trzeci blok poszedł do
+       ppm_c_v3_mut.c — miejsce bloku program brał z pierwszego wystąpienia
+       jego linii w tekście (stała wyżej w diagnozie, obok nazwy mut.c),
+       a gdy fragmentu nie było w nazwanym pliku, brał inny wymieniony.
+       Teraz każdy blok ma swoje miejsce w tekście, a plik WSKAZANY nad
+       poprawką („Poprawka do X”, „Poprawka 2 — X:”, nagłówek, linia
+       z samą ścieżką, nagłówek diffa; bez nowej wzmianki — ten sam, co dla
+       poprzedniej) jest jej plikiem: gdy fragmentu w nim nie ma, nic się
+       nie zmienia, a autor dostaje to, co w tym pliku stoi najbliżej, gdzie
+       ten fragment naprawdę stoi („napisz nad nią »Poprawka do Y«”) i kto
+       ostatnio zmieniał plik. Plik tylko wspomniany w zdaniu („W zadanie.py
+       jest -total_bits. Poprawka:”) ma pierwszeństwo, ale poprawka idzie
+       tam, gdzie fragment stoi (jak dotąd); gdy stoi i tam, i w pliku
+       wskazanym wyżej — autor wybiera.
+     - 19:09 Ania napisała pod blokiem „tego nie nanoszę, dopóki nie
+       wiem…”, a program naniósł go od razu, potem MAIN pytał, czy o to jej
+       chodziło. Zdanie przy poprawce, że autor jej (jeszcze) nie nanosi
+       albo że to tylko propozycja, zostawia ją propozycją: linia w logu
+       i zdanie dla MAIN-a, jak ją wprowadzić. „Nie nanoś tego na X, tylko
+       na Y” to wskazanie pliku, nie wstrzymanie.
+     - Dopisanie: pusty „Stary fragment” albo „Dopisz na końcu <plik>:”
+       nad blokiem dopisuje blok na końcu pliku (Ania dwa razy dała
+       notatkę do docs/NOTES.md, program pominął ją bez słowa); to samo
+       drugi raz = „już jest”. Notatkę dopisuje każdy z zespołu, nie tylko
+       role od kodu. Pusty „Nowy fragment” usuwa fragment.
+     - Dziennik zmian pliku (~/.ael_zmiany_plikow_<drużyna>.json, ostatnie
+       8 na plik): kto, kiedy i jak (poprawka w liniach…, dopisane,
+       usunięty fragment, nowy plik, cała nowa wersja, zmiana komendą sed /
+       printf >> — też na laptopie). W logu jedna linia [PLIK]: ścieżka —
+       kto: jak, rozmiar przed → po, kopia. MAIN dostaje przy RUN z tym
+       plikiem pole zmiany_plikow, zespół przy PODGLĄD i URUCHOM — tylko
+       zmiany innych, których jeszcze nie widział. 19:03 Bartek pisał, że
+       „ktoś znowu edytował”, 19:12 MAIN dopisał sedem deklarację, którą
+       Piotr już naniósł (duplikat), i usuwał ją 19:14.
+     - Wynik poprawki mówi, w których liniach plik się zmienił;
+       „składnia OK” tylko dla .py i .sh (w C: „składni program nie
+       sprawdzał — pokaże ją kompilacja”). Diff z nagłówkiem a/… b/… trafia
+       w plik z nagłówka.
+     - Porządek w logu: jedna linia [PLIK] zamiast „Zapisano kod ENGINEER
+       bezpośrednio do…”, „[PROGRAM] … naniesiona”, „Nowy plik … prawie
+       kopia” i drugiej linii o tym samym zapisie (17:56, 19:03); zapis
+       z zadania MAIN-a z treścią taką jak na dysku nie zapisuje drugi raz.
+     - Akapit o kodzie w opisie rozmowy zespołu przepisany w całości:
+       „Poprawka do <plik>”, Stary/Nowy 1:1 z pliku, dopisanie, propozycja,
+       historia zmian przy PODGLĄDZIE i uruchomieniu.
