@@ -4654,3 +4654,47 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        (INVALID_TOKEN) i oba konta czekały do rana — to wymaga nowych
        userTokenów w ~/api_token.txt i ~/api_token_2.txt; program bierze
        je sam, bez restartu.
+339. (v480lx) Drużyna 2 widać, gdy stoi; log komend czytelny i bez powtórek.
+     - Drużyna 2 stała 4.11 od 16:35 w kroku 1 (najpewniej wygasły token
+       konta 2, jak token konta 1 o tej samej godzinie), a z zewnątrz było
+       widać tylko „krok 1, brak wypowiedzi”. Proces czekający na token
+       zostawia znacznik ~/.ael_token_czeka_<konto> (konto, plik, od kiedy,
+       pid). Terminal drużyny 1 mówi raz, że drużyna 2 stoi i jak to
+       naprawić, potem co 30 min, a gdy token przyjdzie — że pracuje dalej.
+       Sędzia dostaje zdanie, że drużyna stoi przez token (sprawa
+       użytkownika). Powiadomienie na telefonie mówi, której drużyny dotyczy.
+     - Log biegu jest w AEL-MINI/druzyna_<n> od pierwszej minuty: kopia
+       zaraz po otwarciu pliku biegu, przy każdym kroku i najpóźniej co
+       5 min, gdy coś się loguje (dotąd tylko przy przejściu do kolejnego
+       kroku, a z kroku 1 nigdy). Linie sprzed otwarcia pliku (start
+       programu, „Drużyna 2 ruszyła w tle”) są na jego początku. Gdy
+       drużyna 2 pada, drużyna 1 kopiuje jej terminal.log do
+       AEL-MINI/druzyna_2.
+     - Komenda stoi w logu raz, przy starcie: [KOMENDA] kto, gdzie
+       (telefon/laptop) i co. Koniec to jedna linia: kod wyjścia, czas
+       i pierwsza/ostatnia linia wyniku (przy błędzie ostatnia linia
+       błędu) zamiast JSON-a. To, co poszło w tło, ma numer: „[W TLE] #N
+       kto: co liczy już 2 min — idzie dalej w tle” i „[W TLE] #N
+       skończone (kto): co — kod, czas, wynik”. 4.11 jedna komenda Bartka
+       stała w logu 5 razy. RUN MAIN-a i narzędzia wykonawcy mają komendę
+       od razu („RUN #1: termux_run” jej nie miało). Karta „Dalej w tle”
+       dla komendy z ostatniego RUN-a ma jej krótką nazwę — cała stoi
+       wyżej w tej samej wiadomości.
+     - „Leci …” bez nowego wyjścia najwyżej raz na minutę (dotąd co 15 s,
+       8 linii „nic nowego” przed przejściem w tło), nowa linia wyjścia
+       najwyżej co 30 s, bez opakowania ssh zamiast komendy.
+     - Bez powtórek w logu: „zakładam rozmowę” i zaraz „wznowiona” przy
+       każdej roli, „Klucz 1 odpowiada” po każdym przeładowaniu, dwie
+       linie o tej samej poprawce, odpowiedź roli drugi raz (300 znaków),
+       długość odpowiedzi MAIN-a (jest w nagłówku „ODPOWIEDŹ SUROWA”),
+       cała ocena Sędziego drugi raz w pliku drużyny 1 (na ekranie
+       zostaje), „brak odpowiedzi po 10 s” od uiautomator2 co kwadrans
+       (przerwa rośnie do 2 h, w logu tylko pierwszy raz).
+     - Linia planu z małym „Uruchom:” (4.11 18:13 Bartek: „- Uruchom:
+       `timeout 600 …` → M3_ACC …”) nie idzie do powłoki: URUCHOM:
+       i PODGLĄD: tylko wielkimi literami, tak jak w promptach.
+     - Przegląd kodu po nieudanym zadaniu tylko wtedy, gdy padł ten plik:
+       komenda go uruchomiła (interpreter, kompilator albo ./plik) i
+       skończyła się błędem, albo błąd go wskazuje. 4.11 18:03
+       demo_nextbyte.py policzył się bez błędu, zadanie padło na dwóch
+       odmowach programu, a Piotr i Ania „naprawili” działający plik.
