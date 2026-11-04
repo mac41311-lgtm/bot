@@ -4609,3 +4609,48 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Sprawdzenie, czy ta sama robota już liczy w tle, znowu porównuje
      samą komendę (bez cd i zmiennych) — od v480lp funkcja Sędziego
      o tej samej nazwie ją przykrywała.
+338. (v480lw) Po nocy 3/4.11: bez plików rywala w „Nowe na dysku”, notatka
+     nie jest blokowana, scp na laptopa z telefonu, Sędzia pamięta wyniki.
+     - „Nowe na dysku” pokazuje tylko rzeczy drużyny. 4.11 01:02 MAIN
+       drużyny 1 dostał w tym spisie ~/.ael_laptop_stan_MAIN_2.json —
+       pamięć programu o plikach drużyny 2 (synchronizacja z laptopem),
+       założoną w tej samej chwili przez jej proces. Uznał to za pliki
+       rywala i stracił krok na notatkę „NIE DOTYKAĆ — dyskwalifikacja”.
+       Pliki z kropką (programu, konfiguracji) nie trafiają do spisu,
+       rzeczy drugiej drużyny też nie, a w rywalizacji nowa rzecz w ~
+       liczy się tylko wtedy, gdy komenda sama ją nazywa (obie drużyny
+       i Sędzia pracują naraz). Ten plik stanu rywala jest też na liście
+       rzeczy, do których komenda drużyny nie może sięgnąć.
+     - Notatka dopisywana heredokiem (cat >> NOTES.md << 'EOF' … EOF)
+       jest tekstem jak echo: ta sama notatka MAIN-a z „nie otwierać
+       ~/MAIN_2” była zablokowana jako sięganie do folderu rywala. Kod
+       w heredocu dla python3/node i ścieżki w samej komendzie dalej są
+       sprawdzane.
+     - Kopiowanie na laptopa idzie z telefonu: w części po LAPTOP: komenda
+       „scp/rsync … laptop:…” albo „ssh laptop” (na samym laptopie nie ma
+       sensu) wykonuje się na telefonie, w folderze drużyny. 4.11
+       00:41–00:46 drużyna 2 trzy razy próbowała skopiować dane, bo scp
+       stało po LAPTOP: i szło na laptopa („scp: stat local … No such
+       file”). Linia z pętlą, $(…) albo „&” zostaje w całości jak dotąd.
+     - Wykonawca, który zgubił LAPTOP:, dostaje komendę na laptopa także
+       wtedy, gdy ta sama komenda (np. gcc …) stoi w jego zadaniu za
+       LAPTOP: — dotąd tylko uruchomienie skryptu (3.11 23:06: gcc na
+       telefonie, potem 19 narzędzi szukało na telefonie danych, które są
+       tylko na laptopie).
+     - Sędzia pamięta liczby, które sam potwierdził (do 60 ostatnich,
+       osobno od 300 ostatnich komend drużyny). Powrót do potwierdzonego
+       wcześniej wyniku przy niezmienionych plikach nie liczy się od nowa
+       (3.11 22:22: powrót z M3 do 1.898074 uruchomił ppm_c_v3 drugi raz,
+       po 5 min „nie wyszło”). Gdy program widział tę liczbę, ale coś się
+       zmieniło, log mówi co. Sprawdzanie plików na laptopie dla drużyny 2
+       patrzy w ~/MAIN_2 (Sędzia liczy w procesie drużyny 1 i dla komendy
+       „LAPTOP: …” bez cd brał folder MAIN_1).
+     - Nazwa aplikacji na wierzchu bierze się też z drzewa ekranu, które
+       program właśnie odczytał; gdy uiautomator2 nie odpowie, przez 10 min
+       nie jest pytany znowu. Przez całą noc 3/4.11 każdy krok obu drużyn
+       czekał 10 s na app_current() (ekran wygaszony), a log miał linię
+       „brak odpowiedzi po 10 s” co krok.
+     - Tokeny obu kont przestały działać 4.11 o 01:07 i 01:08
+       (INVALID_TOKEN) i oba konta czekały do rana — to wymaga nowych
+       userTokenów w ~/api_token.txt i ~/api_token_2.txt; program bierze
+       je sam, bez restartu.

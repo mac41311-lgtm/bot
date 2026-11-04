@@ -3089,6 +3089,17 @@ def _co_przybylo_blok():
             if not p.exists():
                 continue
 
+            # v480lw: pliki programu (~/.ael_…) i rzeczy drugiej druzyny
+            # nigdy nie ida do zespolu jako "nowe na dysku"
+            try:
+                _w_home = p.resolve().relative_to(HOME.resolve()).parts
+            except Exception:
+                _w_home = ()
+            if _w_home and _w_home[0].startswith("."):
+                continue
+            if _DRUZYNA and _sciezka_rywala(str(p)):
+                continue
+
             if p.is_dir():
                 pozycje.append(str(p) + "/")
                 continue
@@ -11651,7 +11662,30 @@ def _foreground_przez_adb():
     return ""
 
 
-def _foreground_app():
+# v480lw: po tym, jak uiautomator2 app_current() nie odpowiedzial, przez
+# 10 min nie pytamy go znowu (do tej chwili). Bieg 2026-11-03 21:00-01:07:
+# adb nic nie mowil (ekran wygaszony w nocy), app_current() wisial 10 s na
+# KAZDYM kroku obu druzyn — 13+57 linii "brak odpowiedzi po 10 s" w logu i
+# porzucony watek co krok, choc zespol telefonu nie uzywal.
+_u2_app_current_przerwa = [0.0]
+
+
+def _pakiet_z_drzewa(xml):
+    """v480lw: pakiet aplikacji na wierzchu z drzewa ekranu (pierwszy wezel,
+    ktory nie jest paskiem systemu ani klawiatura) albo ""."""
+    try:
+        root = ET.fromstring(xml)
+        for n in root.iter("node"):
+            pk = str(n.attrib.get("package") or "").strip()
+            if (pk and pk != "com.android.systemui" and "inputmethod" not in pk
+                    and not pk.endswith(".keyboard") and ".keyboard." not in pk):
+                return pk
+    except Exception:
+        pass
+    return ""
+
+
+def _foreground_app(xml=None):
     """
     (pakiet, czytelna nazwa) aplikacji na wierzchu albo (None, None),
     gdy nie da się tego ustalić. Nigdy nie rzuca wyjątkiem — to
@@ -11664,8 +11698,12 @@ def _foreground_app():
     # uiautomator2 zostaje tylko na wypadek, gdy adb nic nie powie.
     pakiet = _foreground_przez_adb()
 
+    # v480lw: drzewo ekranu, ktore wlasnie odczytalismy, tez to mowi
+    if not pakiet and xml:
+        pakiet = _pakiet_z_drzewa(xml)
+
     if not pakiet:
-        if android_device is None:
+        if android_device is None or time.time() < _u2_app_current_przerwa[0]:
             return None, None
         try:
             biezaca = _android_with_deadline(
@@ -11677,6 +11715,7 @@ def _foreground_app():
             pakiet = str((biezaca or {}).get("package") or "").strip()
 
         except Exception:
+            _u2_app_current_przerwa[0] = time.time() + 600
             return None, None
 
     if not pakiet:
@@ -12007,7 +12046,7 @@ def android_summary(with_header=True):
             # v222: jedno zdanie o tym, co jest na wierzchu — patrz
             # _foreground_app(). Idzie PRZED hierarchią, bo to jest
             # rzecz, którą czytelnik i tak musi z niej wywnioskować.
-            _app_pakiet, _app_label = _foreground_app()
+            _app_pakiet, _app_label = _foreground_app(xml)
 
             # v272: zespol wlasnie dostaje zrzut ekranu — to jedyna
             # chwila, w ktorej ten fakt jest mu do czegos potrzebny.
@@ -25906,7 +25945,7 @@ def _log_dla_autora(rola):
     return "\n\n".join(kawalki)
 
 
-def _zglos_to_co_przybylo(przed):
+def _zglos_to_co_przybylo(przed, komenda=None):
     """
     Zglasza do sprzatniecia katalogi/pliki, ktore wlasnie POJAWILY SIE
     pod $HOME — patrz _track_project_path().
@@ -25932,11 +25971,44 @@ def _zglos_to_co_przybylo(przed):
 
     for nazwa in (_co_lezy_w_home() - przed):
 
+        if not _nowe_w_home_dla_druzyny(nazwa, komenda):
+            continue
+
         try:
             _track_project_path(HOME / nazwa)
             _zapamietaj_gdzie(HOME / nazwa)
         except Exception:
             pass
+
+
+def _nowe_w_home_dla_druzyny(nazwa, komenda=None):
+    """
+    v480lw: czy rzecz, ktora wlasnie pojawila sie w $HOME, jest rzecza
+    zespolu (do "Nowe na dysku" i do sprzatania na koniec celu).
+
+    Bieg 2026-11-04 01:02 (druzyna 1): w "Nowe na dysku" MAIN dostal
+    ~/.ael_laptop_stan_MAIN_2.json i .lock — pamiec programu o plikach
+    drugiej druzyny, zalozona w tej samej chwili przez jej proces. MAIN
+    uznal to za pliki rywala, zapisal w notatkach "NIE DOTYKAC —
+    dyskwalifikacja" i stracil na tym krok. Pliki z kropka to pliki
+    programu i konfiguracji, nie zespolu; a w rywalizacji obie druzyny
+    (i Sedzia) pracuja naraz, wiec nowa rzecz w ~, ktorej ta komenda nie
+    nazywa, mogla polozyc druga druzyna.
+    """
+    n = str(nazwa or "")
+    if not n or n.startswith("."):
+        return False
+    if n in _PROJECT_TRACKING_EXCLUDED_NAMES:
+        return False
+    if _DRUZYNA:
+        try:
+            if _sciezka_rywala("~/" + n):
+                return False
+        except Exception:
+            return False
+        if komenda is not None and n not in str(komenda):
+            return False
+    return True
 
 
 # Adres w komendzie otwierajacej strone.
@@ -29675,6 +29747,28 @@ def _nazwa_skryptu(kom):
     return os.path.basename(k.group(1)) if k else ""
 
 
+def _pierwsza_prosta_komenda(tekst):
+    """v480lw: pierwsza prosta komenda (bez cd X &&, VAR=…, timeout N, nice)
+    — do porownania komendy wykonawcy z komenda z jego zadania."""
+    t = str(tekst or "").strip().strip("`").strip()
+    t = re.sub(r"^\s*(?:[-*•]\s+)?", "", t)
+    t = re.sub(r"^LAPTOP\s*:\s*", "", t, flags=re.IGNORECASE)
+    while True:
+        m = re.match(r"^cd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*", t)
+        if not m:
+            break
+        t = t[m.end():]
+    t = re.split(r"\s*(?:;|&&|\|\||\||\d?>>?|<|`)\s*", t, 1)[0]
+    slowa = t.split()
+    while slowa and (slowa[0] in ("timeout", "nice", "nohup", "time", "env")
+                     or re.fullmatch(r"-\w+|[\d.]+[smhd]?", slowa[0])
+                     or re.fullmatch(r"[A-Za-z_]\w*=\S*", slowa[0])):
+        slowa = slowa[1:]
+    # do konca komendy, bez kropki konczacej zdanie w tresci zadania
+    t = " ".join(slowa).rstrip(".,)")
+    return t
+
+
 def _laptop_z_zadania(command_str):
     """
     v480jo: wykonawca Gemini zgubil przedrostek LAPTOP: z komendy, ktora w
@@ -29687,8 +29781,6 @@ def _laptop_z_zadania(command_str):
     if "LAPTOP" not in zad or not _laptop_skonfigurowany():
         return ""
     klucze = {os.path.basename(k) for k in _KLUCZ_SKRYPTU_RE.findall(str(command_str or ""))}
-    if not klucze:
-        return ""
     na_lap, na_tel = set(), set()
     for linia in zad.splitlines():
         ks = {os.path.basename(k) for k in _KLUCZ_SKRYPTU_RE.findall(linia)}
@@ -29697,7 +29789,27 @@ def _laptop_z_zadania(command_str):
         (na_lap if re.search(r"LAPTOP\s*:", linia) else na_tel).update(ks)
     trafione = (klucze & na_lap) - na_tel
     if not trafione:
-        return ""
+        # v480lw: ta sama komenda (np. "gcc … -o kod/x kod/x.c"), ktora w
+        # zadaniu stoi za LAPTOP:. Bieg 2026-11-03 23:06 (druzyna 1): MAIN
+        # dal "KROK 2: LAPTOP: cd ~/MAIN_1 && gcc …", wykonawca puscil gcc na
+        # telefonie, a potem szukal na telefonie danych, ktore sa tylko na
+        # laptopie (enwik8) — 19 narzedzi bez wyniku.
+        pierwsza = _pierwsza_prosta_komenda(command_str)
+        if len(pierwsza) < 8 or _do_laptopa_z_telefonu(pierwsza):
+            return ""
+        lap_k, tel_k = set(), set()
+        for linia in zad.splitlines():
+            czesci_l = re.split(r"LAPTOP\s*:", linia)
+            for i, kaw in enumerate(czesci_l):
+                kaw = re.split(r"TELEFON\s*:", kaw)
+                for j, k2 in enumerate(kaw):
+                    pk = _pierwsza_prosta_komenda(k2)
+                    if len(pk) < 8:
+                        continue
+                    (lap_k if (i > 0 and j == 0) else tel_k).add(pk)
+        if pierwsza not in lap_k or pierwsza in tel_k:
+            return ""
+        trafione = {short(pierwsza, 60)}
     tekst = str(command_str).strip()
     m = re.match(r"^cd\s+(?:~|\$HOME)/MAIN_\d+\s*&&\s*", tekst)
     if m:
@@ -29708,6 +29820,128 @@ def _laptop_z_zadania(command_str):
 
 
 _PRZELACZ_MASZYNE_RE = re.compile(r"(;|&&|\|\|)[ \t]*(LAPTOP|TELEFON)\s*:", re.IGNORECASE)
+_ZLOZONA_POWLOKA_RE = re.compile(
+    r"(?:^|[;&|(\s])(?:for|while|until|if|case|select|function|then|do|done|fi|esac)(?=\s|;|$)|[{}]|\$\(|`")
+
+
+def _proste_komendy(tekst):
+    """
+    v480lw: [(separator_przed, komenda)] — linia pocieta na proste komendy
+    po ; && || (poza cudzyslowem), z | w srodku komendy. None, gdy linia ma
+    petle, warunki, podpowloke, $(…) albo heredoc — wtedy nie ma pewnego
+    podzialu i zostaje w calosci.
+    """
+    t = str(tekst or "")
+    if not t.strip() or "<<" in t or "\n" in t.strip():
+        return None
+    bez_cudz = re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", " ", t)
+    if bez_cudz.count("'") or bez_cudz.count('"') or "(" in bez_cudz or _ZLOZONA_POWLOKA_RE.search(bez_cudz):
+        return None
+    wynik, sep, biez, i, cudz = [], "", [], 0, None
+    while i < len(t):
+        c = t[i]
+        if cudz:
+            biez.append(c)
+            if c == "\\" and cudz == '"' and i + 1 < len(t):
+                biez.append(t[i + 1])
+                i += 2
+                continue
+            if c == cudz:
+                cudz = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            cudz = c
+            biez.append(c)
+            i += 1
+            continue
+        dwa = t[i:i + 2]
+        if dwa in ("&&", "||") or c == ";":
+            kom = "".join(biez).strip()
+            if kom:
+                wynik.append((sep, kom))
+            elif wynik or sep:
+                return None
+            sep = dwa if dwa in ("&&", "||") else ";"
+            biez = []
+            i += len(sep)
+            continue
+        if c == "&":
+            # 2>&1, >&2, &> to przekierowania; samo "&" puszcza w tlo — bez dzielenia
+            if (i > 0 and t[i - 1] in "<>") or t[i + 1:i + 2] == ">":
+                biez.append(c)
+                i += 1
+                continue
+            return None
+        biez.append(c)
+        i += 1
+    kom = "".join(biez).strip()
+    if kom:
+        wynik.append((sep, kom))
+    return wynik or None
+
+
+def _do_laptopa_z_telefonu(kom):
+    """v480lw: prosta komenda, ktora siega do laptopa jako do drugiej
+    maszyny (scp/rsync na „laptop:…”, ssh laptop) — ma sens tylko na
+    telefonie; na samym laptopie konczy sie bledem."""
+    k = str(kom or "").strip()
+    h = re.escape(_LAPTOP_HOST)
+    slowa = k.split()
+    while slowa and (slowa[0] in ("timeout", "nice", "nohup", "time", "command", "env")
+                     or slowa[0].startswith("-") or re.fullmatch(r"[\d.]+[smhd]?", slowa[0])
+                     or re.fullmatch(r"[A-Za-z_]\w*=\S*", slowa[0])):
+        slowa = slowa[1:]
+    if not slowa:
+        return False
+    prog = os.path.basename(slowa[0])
+    reszta = " ".join(slowa[1:])
+    if prog in ("scp", "rsync"):
+        return bool(re.search(r"(?:^|\s)['\"]?(?:[\w.-]+@)?" + h + r":", reszta))
+    if prog == "ssh":
+        return bool(re.search(r"(?:^|\s)(?:[\w.-]+@)?" + h + r"(?:\s|$)", reszta))
+    return False
+
+
+def _scp_z_laptopa_na_telefon(czesci):
+    """
+    v480lw: w czesci na laptopie komenda kopiujaca NA laptopa (scp/rsync
+    "… laptop:…", ssh laptop) idzie na telefon. Bieg 2026-11-04 00:41-00:46
+    (druzyna 2): "… && LAPTOP: ls dane/cli/; echo; scp dane/cli/*.cm
+    laptop:MAIN_2/dane/cli/; LAPTOP: ls …" — scp poszedl na laptopa (tam
+    nie ma tych plikow: "scp: stat local … No such file") i MAIN dopiero za
+    trzecim razem wpisal TELEFON: przed scp. Zwraca (czesci, zmienione).
+    """
+    nowe, zmiana = [], False
+    for sep, maszyna, kom in czesci:
+        if maszyna == "laptop" and re.search(r"\b(?:scp|rsync|ssh)\b", kom) and _LAPTOP_HOST in kom:
+            proste = _proste_komendy(kom)
+            if proste and any(_do_laptopa_z_telefonu(k) for _s, k in proste):
+                # sciezki w tej czesci byly pisane wzgledem folderu druzyny
+                # (na laptopie komenda startuje w ~/<folder>) — na telefonie
+                # ten sam folder ma te sama nazwe
+                _fold = _laptop_folder()
+                kat = ("~/" + _fold) if (HOME / _fold).is_dir() else "~"
+                grupa = None
+                for i, (s2, k) in enumerate(proste):
+                    m2 = "telefon" if _do_laptopa_z_telefonu(k) else "laptop"
+                    if m2 == "telefon" and kat != "~":
+                        k = "cd " + kat + " && " + k
+                    if grupa and grupa[1] == m2:
+                        grupa[2] += " " + s2 + " " + k
+                    else:
+                        if grupa:
+                            nowe.append(tuple(grupa))
+                        grupa = [sep if i == 0 else s2, m2, k]
+                    _cd = re.fullmatch(r"cd\s+(\S+)", k.strip())
+                    if m2 == "laptop" and _cd:
+                        _c = _cd.group(1).strip("\"'")
+                        kat = _c if _c.startswith(("~", "/")) else (kat.rstrip("/") + "/" + _c)
+                nowe.append(tuple(grupa))
+                zmiana = True
+                continue
+        nowe.append((sep, maszyna, kom))
+    return nowe, zmiana
 
 
 def _czesci_maszyn(command_str):
@@ -29741,6 +29975,11 @@ def _czesci_maszyn(command_str):
             continue
         ciecia.append(m)
     if not ciecia:
+        if m0:
+            # v480lw: cala komenda na laptopie, a w niej scp/ssh na laptopa
+            _cz, _zm = _scp_z_laptopa_na_telefon([("", "laptop", m0.group(1).strip())])
+            if _zm:
+                return _cz
         return None if not mt else [("", "telefon", tekst[mt.end():].strip())]
     czesci = []
     poz, sep = pierwsza_od, ""
@@ -29757,6 +29996,8 @@ def _czesci_maszyn(command_str):
     kom = tekst[poz:].strip()
     if kom:
         czesci.append((sep, maszyna, kom))
+    if czesci:
+        czesci = _scp_z_laptopa_na_telefon(czesci)[0]
     return czesci or None
 
 
@@ -30429,7 +30670,7 @@ def _termux_run_lokalnie(command):
                 skonczone = _poczekaj_na_komende_w_tle(bg)
 
                 if skonczone is not None:
-                    _zglos_to_co_przybylo(_przed)
+                    _zglos_to_co_przybylo(_przed, command_str)
                     return skonczone
 
                 bg["status"] = "AUTO_BACKGROUNDED"
@@ -30445,7 +30686,7 @@ def _termux_run_lokalnie(command):
                         "zawiesiłby czekanie na wynik, którego nie "
                         "będzie."
                     )
-                    _zglos_to_co_przybylo(_przed)
+                    _zglos_to_co_przybylo(_przed, command_str)
                     return bg
 
                 bg["reason"] = (
@@ -30470,7 +30711,7 @@ def _termux_run_lokalnie(command):
                     "cokolwiek zgłosisz jako wynik."
                 )
 
-            _zglos_to_co_przybylo(_przed)
+            _zglos_to_co_przybylo(_przed, command_str)
 
             return bg
 
@@ -30685,7 +30926,7 @@ def _termux_run_lokalnie(command):
                     "powyżej jest z adb."
                 )
 
-                _zglos_to_co_przybylo(_przed)
+                _zglos_to_co_przybylo(_przed, command_str)
 
                 return przez_adb
 
@@ -30734,11 +30975,11 @@ def _termux_run_lokalnie(command):
                     "Komenda `" + short(command_str, 120) + "` chodzi już ponad " + str(DLUGA_ROBOTA_TIMEOUT // 60) + " min — przeniosłem ją w tło, leci dalej."
                 )
 
-                _zglos_to_co_przybylo(_przed)
+                _zglos_to_co_przybylo(_przed, command_str)
 
                 return bg2
 
-        _zglos_to_co_przybylo(_przed)
+        _zglos_to_co_przybylo(_przed, command_str)
 
         if isinstance(result, dict):
 
@@ -32559,6 +32800,9 @@ def _rzeczy_rywala_re():
         r"|druzyna_" + oni + r"(?:/|\.json|\b)"
         r"|druzyna_[*?\[{]"
         r"|archiwum_rywalizacji"
+        # v480lw: pamiec programu o plikach rywala (synchronizacja z laptopem)
+        r"|\.ael_laptop_stan_MAIN_" + oni + r"(?![0-9])[\w.]*"
+        r"|\.ael_laptop_stan_[*?\[{][^\s;&|)]*"
         r"|RYWALIZACJA/(?:ocena_sedziego|oceny|ostrzezenia|dyskwalifikacja))"
     )
     # v480ds: tylko jako sciezka — po "/" (~/MAIN_2, /home/.../MAIN_2)
@@ -32593,7 +32837,18 @@ def _komenda_siega_do_rywala(cmd):
     sie takze w cudzyslowie (cat "~/MAIN_2/x").
     """
     po_ukosniku, slowo = _rzeczy_rywala_re()
-    bez_echo = _ECHO_RE.sub(" ", str(cmd or ""))
+    tekst = str(cmd or "")
+    # v480lw: tresc heredoc, ktora cat/tee tylko zapisuje do pliku (notatka),
+    # to tekst jak w echo — bieg 2026-11-04 01:02 (druzyna 1): "cat >>
+    # docs/NOTES.md << 'EOF' … nie otwierac ~/MAIN_2 … EOF" zablokowane jako
+    # siegniecie do folderu rywala. Kod dla python3/node… zostaje sprawdzany.
+    if "<<" in tekst:
+        try:
+            _powloka, _kod = _rozbior_heredoc(tekst)
+            tekst = _powloka + (("\n" + _kod) if _kod else "")
+        except Exception:
+            pass
+    bez_echo = _ECHO_RE.sub(" ", tekst)
     return (
         po_ukosniku.search(bez_echo)
         or slowo.search(_W_CUDZYSLOWIE_RE.sub(" ", bez_echo))
@@ -62980,6 +63235,40 @@ def _widziane_plik(numer):
     return _RYWALIZACJA_DIR / ("widziane_" + str(numer) + ".jsonl")
 
 
+# v480lw: liczby, ktore Sedzia sam potwierdzil, zostaja w widziane_<n>.jsonl
+# dluzej niz zwykle komendy druzyny. Bieg 2026-11-03 22:22-22:28 (druzyna 1):
+# po powrocie z M3 (1.882792, sprawdzanie przerwane) do potwierdzonego
+# wczesniej 1.898074 Sedzia puscil ppm_c_v3 od nowa (~20 min na laptopie) i po
+# 5 min dal "nie wyszło" — wpis o tamtym przebiegu dawno wypadl z 300
+# ostatnich komend druzyny. Druzyna stracila ocene za wynik, ktory juz mial.
+_WIDZIANE_SEDZIEGO_MAKS = 60
+
+
+def _dopisz_widziane(numer, wpis):
+    """Dopisuje wpis (dopisanie na koncu pliku — Sedzia i druzyna pisza z
+    dwoch procesow); przy przycinaniu zostaje _WIDZIANE_MAKS ostatnich
+    komend druzyny i _WIDZIANE_SEDZIEGO_MAKS potwierdzen Sedziego."""
+    plik = _widziane_plik(numer)
+    plik.parent.mkdir(parents=True, exist_ok=True)
+    with open(plik, "a", encoding="utf-8") as f:
+        f.write(json.dumps(wpis, ensure_ascii=False) + "\n")
+    try:
+        linie = plik.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return
+    if len(linie) <= _WIDZIANE_MAKS + _WIDZIANE_SEDZIEGO_MAKS:
+        return
+    sedzia, druzyna = [], []
+    for i, l in enumerate(linie):
+        try:
+            (sedzia if json.loads(l).get("sedzia") else druzyna).append(i)
+        except Exception:
+            continue
+    zostaja = set(sedzia[-_WIDZIANE_SEDZIEGO_MAKS:]) | set(druzyna[-_WIDZIANE_MAKS:])
+    plik.write_text("\n".join(l for i, l in enumerate(linie) if i in zostaja) + "\n",
+                    encoding="utf-8")
+
+
 def _zapisz_widziana(komenda, wynik, start):
     try:
         if not _DRUZYNA or not isinstance(wynik, dict) or wynik.get("returncode") != 0:
@@ -62989,31 +63278,41 @@ def _zapisz_widziana(komenda, wynik, start):
         liczba = _ostatnia_liczba(wynik.get("stdout"))
         if liczba is None or not _rdzen_komendy(komenda)[2]:
             return
-        plik = _widziane_plik(_DRUZYNA)
-        plik.parent.mkdir(parents=True, exist_ok=True)
-        linie = []
-        if plik.exists():
-            linie = plik.read_text(encoding="utf-8", errors="replace").splitlines()[-(_WIDZIANE_MAKS - 1):]
-        linie.append(json.dumps({"start": float(start), "koniec": time.time(),
-                                 "komenda": str(komenda)[:3000], "liczba": liczba,
-                                 "zapis": _ostatnia_liczba_tekst(wynik.get("stdout"))},
-                                ensure_ascii=False))
-        plik.write_text("\n".join(linie) + "\n", encoding="utf-8")
+        _dopisz_widziane(_DRUZYNA, {"start": float(start), "koniec": time.time(),
+                                    "komenda": str(komenda)[:3000], "liczba": liczba,
+                                    "zapis": _ostatnia_liczba_tekst(wynik.get("stdout"))})
     except Exception:
         pass
 
 
-def _rdzen_komendy(komenda, katalog_tel="~"):
+def _zapisz_potwierdzenie_sedziego(numer, komenda, liczba, zapis, start):
+    """v480lw: potwierdzona przez Sedziego liczba jako widziany przebieg —
+    powrot do niej (te same pliki, ta sama komenda) nie liczy drugi raz.
+    Komenda na telefonie startowala w ~/MAIN_n (Popen cwd=folder)."""
+    try:
+        k = str(komenda or "").strip()
+        if not _LAPTOP_RE.match(k):
+            k = "cd ~/MAIN_" + str(numer) + " && " + k
+        _dopisz_widziane(str(numer), {"start": float(start), "koniec": time.time(),
+                                      "komenda": k[:3000], "liczba": liczba,
+                                      "zapis": zapis, "sedzia": True})
+    except Exception:
+        pass
+
+
+def _rdzen_komendy(komenda, katalog_tel="~", druzyna=None):
     """(laptop?, katalog, [segmenty liczace]) — bez cd/echo/tail/…,
     timeout/nice/time i przekierowan. Komenda druzyny na telefonie startuje
-    w ~, sprawdzanie Sedziego w ~/MAIN_n (katalog_tel)."""
+    w ~, sprawdzanie Sedziego w ~/MAIN_n (katalog_tel). v480lw: `druzyna` —
+    Sedzia (w procesie druzyny 1) liczy folder na laptopie druzyny n, nie
+    swojej: "LAPTOP: python3 x.py" druzyny 2 to ~/MAIN_2 na laptopie."""
     k = str(komenda or "").strip()
     laptop = False
     m = _LAPTOP_RE.match(k)
     if m:
         laptop = True
         k = m.group(1).strip()
-    katalog = ("~/" + _laptop_folder()) if laptop else katalog_tel
+    katalog = ("~/" + _laptop_folder(druzyna)) if laptop else katalog_tel
     segmenty = []
     for seg in re.split(r"&&|\|\||[;|\n]", k):
         seg = re.sub(r"\s*\d*>>?\s*(?:&\s*\d+|\S+)", " ", seg)
@@ -63137,7 +63436,7 @@ def _pliki_bez_zmian(laptop, katalog, segmenty, start, numer):
 def _widziana_liczba(numer, komenda, ogloszony, zapis_ogloszonej=None):
     """(wpis, None) gdy program widzial te komende z ta liczba, a pliki sie
     nie zmienily; (None, powod) gdy nie."""
-    laptop, katalog, rdzen = _rdzen_komendy(komenda, "~/MAIN_" + str(numer))
+    laptop, katalog, rdzen = _rdzen_komendy(komenda, "~/MAIN_" + str(numer), druzyna=str(numer))
     if not rdzen:
         return None, "komenda bez części liczącej"
     try:
@@ -63153,7 +63452,7 @@ def _widziana_liczba(numer, komenda, ogloszony, zapis_ogloszonej=None):
             continue
         if not _liczby_zgodne(liczba, ogloszony, w.get("zapis"), zapis_ogloszonej):
             continue
-        l2, k2, r2 = _rdzen_komendy(w.get("komenda"))
+        l2, k2, r2 = _rdzen_komendy(w.get("komenda"), druzyna=str(numer))
         # v480ls: liczba jest z ostatniego segmentu — "sprawdz" musi byc
         # koncem tamtej komendy, a za nim nic, co pisze nowe liczby
         if (l2 != laptop or k2 != katalog or r2[-len(rdzen):] != rdzen
@@ -63273,13 +63572,24 @@ def _sedzia_ocen(numer):
         _wid, _wid_powod = _widziana_liczba(numer, komenda, ogloszony, str(dane.get("wynik")))
         if _wid and not _liczba_wpisana(komenda, folder, str(_wid.get("liczba"))):
             _godz = datetime.fromtimestamp(float(_wid.get("koniec") or time.time())).strftime("%H:%M")
+            _dzien = datetime.fromtimestamp(float(_wid.get("koniec") or time.time())).strftime("%d.%m")
+            if _dzien != datetime.now().strftime("%d.%m"):
+                _godz = _dzien + " " + _godz
             werdykt.update(werdykt="potwierdzone", wypisala=_wid.get("liczba"), szczegol=(
-                "program sam widział, jak ta komenda wypisała " + str(_wid.get("liczba"))
+                ("Sędzia sam potwierdził tę liczbę z tej komendy" if _wid.get("sedzia")
+                 else "program sam widział, jak ta komenda wypisała " + str(_wid.get("liczba")))
                 + " (o " + _godz + "), a pliki, których używa, się od tego czasu nie zmieniły "
                 "— nie liczyłem drugi raz"))
             write_json(_liczba_plik, {"klucz": _klucz_liczby, "czas": werdykt["czas"], "werdykt": werdykt})
+            if not _wid.get("sedzia"):
+                _dopisz_widziane(str(numer), dict(_wid, sedzia=True))
             log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": " + werdykt["szczegol"] + ".")
             return werdykt
+        if _wid_powod and _wid_powod not in ("program nie widział tej komendy z tą liczbą",
+                                             "brak widzianych przebiegów",
+                                             "komenda bez części liczącej"):
+            log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": tę liczbę z tej komendy "
+                "program już widział, ale " + str(_wid_powod) + " — liczę od nowa.")
     except Exception as e:
         log("RYWALIZACJA", "Sędzia: sprawdzenie widzianych przebiegów nie wyszło: " + str(e)[:200])
     stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
@@ -63486,13 +63796,17 @@ def _sedzia_ocen(numer):
         werdykt.update(werdykt="nie wyszło", szczegol="w ostatniej linii nie ma liczby (kod "
                        + str(kod if kod is not None else "?") + "): " + short(str(wyjscie or "").strip(), 200))
     elif _liczby_zgodne(wypisala, ogloszony, _ostatnia_liczba_tekst(wyjscie), str(dane.get("wynik"))):
+        _wpisana = _liczba_wpisana(komenda, folder, wyjscie)
         werdykt.update(werdykt="potwierdzone", szczegol="komenda wypisała " + str(wypisala)
-                       + _liczba_wpisana(komenda, folder, wyjscie))
+                       + _wpisana)
         try:
             write_json(_liczba_plik, {"klucz": _klucz_liczby, "czas": werdykt.get("czas"),
                                       "werdykt": werdykt})
         except Exception:
             pass
+        if not _wpisana:
+            _zapisz_potwierdzenie_sedziego(numer, komenda, wypisala,
+                                           _ostatnia_liczba_tekst(wyjscie), start)
     else:
         # v480ls: zgodnosc liczona sciślej (_liczby_zgodne) — zdanie mowi,
         # co jest przyjmowane, zeby druzyna wiedziala, co poprawic.
