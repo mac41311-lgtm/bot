@@ -23749,6 +23749,17 @@ def _linie_wystapien(tekst, stary):
             while i >= 0 and len(nr) < 8:
                 nr.append(t.count("\n", 0, i) + 1)
                 i = t.find(stary, i + 1)
+        # v480lz: fragment ze skrotem "..." — linie jego dopasowan
+        if len(nr) < 2 and _WIELOKROPEK_RE.search(str(stary or "")):
+            w = _wzor_wielokropka(stary)
+            if w:
+                tr = _dopasowania(w[0], t, 6) or (
+                    _dopasowania(w[1], t, 6) if w[1] is not None else [])
+                nr = []
+                for x in tr:
+                    n = t.count("\n", 0, x.start()) + 1
+                    if n not in nr:
+                        nr.append(n)
         if len(nr) < 2:
             return ""
         return " (linie " + ", ".join(str(x) for x in nr[:6]) + ")"
