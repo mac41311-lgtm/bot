@@ -4787,3 +4787,51 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        stał pod imieniem tej samej osoby, nie idzie drugi raz (2.6 kB
        mniej); kolega cytujący kolegę zostaje. List do kolegi nie gubi
        już otwierającego „**” (zostawały gwiazdki bez pary).
+
+342. (v480ma) Powtórki w rozmowie zespołu i jedna sekcja o pliku (bieg 5.11,
+     19:00–20:16, już na v480lz). Policzone na wiadomościach z logów: do tej
+     samej osoby drugi raz szło 14 kB (drużyna 2) i 17 kB (drużyna 1).
+     - „Co się właśnie stało” szło przy każdym pytaniu w tym samym kroku
+       (pytanie MAIN-a, zawołanie po imieniu, runda z kolegą): Tomek i
+       Bartek dostali te same komendy MAIN-a z wynikami 3–4 razy w jednym
+       kroku. Teraz raz na krok dla każdej osoby; gdy ten sam wynik wraca
+       w następnym kroku — jedno zdanie „Co się właśnie stało: to samo, co
+       w kroku N — po raz K”. Notka „To samo, co w kroku 11 — po raz 2”
+       w tym samym kroku już nie pada (nic nie zdarzyło się drugi raz).
+     - Log autora szedł obok „Co się właśnie stało” z tymi samymi
+       komendami (raz skrócone, raz w całości, z całym heredokiem notatki
+       MAIN-a). Teraz autor dostaje wynik komend, które uruchamiają jego
+       kod, w „Co się właśnie stało” w całości (do 12 kB), a jego log
+       podaje tylko komendy, których tam nie ma. Bez „$ ~/plik.py (nic nie
+       wypisało)” po zapisie pliku i bez „(nic nie wypisało)” przy
+       komendzie, która poszła w tło („poszło w tło (proces N); wynik
+       przyjdzie, gdy się skończy”).
+     - Jedna linia o pliku: „hdc_predict.py: JEST, bez zmian — tę samą
+       treść masz już”, pod nią „Od ostatniego razu zmieniło się tyle:
+       hdc_predict.py: jest (5690 B), kod Bartka”, a na dole cały plik
+       (5.7 kB) — teraz zostaje pierwsza linia. Cały plik idzie tylko
+       wtedy, gdy ta osoba nie ma w rozmowie tych samych bajtów.
+     - „zmiany_plikow: … MAIN (Ty) …” (linia dla MAIN-a) nie idzie już do
+       zespołu w „Co się właśnie stało”. MAIN dostaje w niej tylko cudze
+       zmiany i tylko od startu programu (po aktualizacji dostał zmiany
+       sprzed 15 godzin). „Ktoś zmienił na dysku: _NEG.md” mówi teraz kto
+       i kiedy („_NEG.md (MAIN, 19:01)”).
+     - Dziennik: poprawka nałożona przez program, gdy komenda liczyła,
+       nie jest już drugi raz zapisana jako „zmiana komendą: tee
+       raporty/AST_PPM_run.log” do ast_mutator_ppm.py; komenda LAPTOP:, po
+       której nic nie przyszło z laptopa, nie zmienia pliku na telefonie.
+     - Kilka notek „[Program od razu naniósł poprawkę Bartka na X …]” w
+       jednej wiadomości (trzy, nie po kolei, każda z tym samym „Plik jest
+       gotowy do uruchomienia: …”) to teraz jedna linia: „naniósł 3
+       poprawki Bartka na X, po kolei: … (7662 B -> 10208 B); …; składnia
+       OK, kopie w .kopie/. Plik jest gotowy do uruchomienia: …”.
+     - Procesy: skrypt puszczony przez inny skrypt drużyny (mutacje
+       ast_mutator_ppm.py jako python3 /tmp/tmpXXXXXXXX.py) to jego praca,
+       nie osobny skrypt — MAIN nie dostaje już 15 linii „tmp….py
+       przestał działać — nie wiadomo” (telefon i laptop). Pliki
+       tymczasowe (tmpXXXXXXXX.py) nie wchodzą do „przybyło/zniknęło”
+       w spisie folderu (Tomek trzy razy pisał o nich zespołowi).
+     - „Gdy masz już odpowiedź — napisz ją…” po podglądzie raz na
+       rozmowę, nie przy każdym podglądzie.
+     Na tych samych wiadomościach z logów powtórki do tej samej osoby
+     spadają z 14 do 4 kB (drużyna 2) i z 17 do 5 kB (drużyna 1).

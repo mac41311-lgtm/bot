@@ -4399,7 +4399,7 @@ def _plik_w_grze(*teksty):
     return any(nazwa in str(t or "") for t in teksty)
 
 
-def _current_project_file_block(tekst_bledu=""):
+def _current_project_file_block(tekst_bledu="", rola=None):
     """
     Aktualna tresc pliku, odczytana Z DYSKU TERAZ.
 
@@ -4451,7 +4451,18 @@ def _current_project_file_block(tekst_bledu=""):
             + stopka
         )
 
+    # v480ma: plik, ktorego TE SAME bajty ta osoba ma juz w rozmowie
+    # (napisala go albo program jej go pokazal), nie idzie drugi raz w
+    # calosci. Bieg 2026-11-05 (druzyna 1, krok 22): Bartek dostal na
+    # gorze "hdc_predict.py: JEST (5690 B), bez zmian — tę samą treść masz
+    # już w tej rozmowie", a na dole ten sam plik w calosci (5.7 kB).
+    # Okolica linii bledu (wyzej) zostaje — wskazuje miejsce.
+    if rola and _rola_zna_plik(rola, p):
+        return ""
+
     if len(tresc) <= _PROJECT_FILE_MAX:
+        if rola:
+            _rola_poznala_plik(rola, p)
         return naglowek + tresc + stopka
 
     polowa = _PROJECT_FILE_MAX // 2
@@ -4857,10 +4868,21 @@ def _bez_powtorzen_w_wiadomosci(tekst, chronione=()):
 # Stan (checklista, dysk, ekran) moze sie powtarzac bez slowa: gdy
 # sie nie zmienil, nie ma o czym mowic. Ale ZDARZENIE, ktore
 # wystapilo drugi raz, jest NOWYM zdarzeniem.
-_KLUCZE_ZDARZEN = ("python_zauwazyl", "tool_hint", "moj_log")
+_KLUCZE_ZDARZEN = ("python_zauwazyl", "tool_hint", "moj_log", "co_sie_stalo")
 
-# {(rola, klucz, odcisk): [pierwszy krok, ile razy]}
+# {(rola, klucz, odcisk): [pierwszy krok, ile razy, ostatni krok]}
 _powtorzone_zdarzenia = {}
+
+
+def _notka_powtorki(block, krok, ile):
+    """v480ma: "To samo, co w kroku N" pod naglowkiem bloku, gdy blok go ma
+    ("Co się właśnie stało: to samo, co w kroku 10 — po raz 2.") — sama
+    notka bez naglowka nie mowila, CO jest tym samym."""
+    pierwsza = next((l.strip() for l in str(block or "").split("\n") if l.strip()), "")
+    if pierwsza.endswith(":") and len(pierwsza) <= 80 and not pierwsza.startswith(("$", "-", "#")):
+        return ("\n" + pierwsza + " to samo, co w kroku " + str(krok)
+                + " — po raz " + str(ile) + ".\n")
+    return "\nTo samo, co w kroku " + str(krok) + " — po raz " + str(ile) + ".\n"
 
 
 def _only_if_new(role, key, block):
@@ -4909,24 +4931,45 @@ def _only_if_new(role, key, block):
 
             _pamiec = _powtorzone_zdarzenia.setdefault(
                 (str(role), str(key), odcisk),
-                [_biezacy_krok, 1]
+                [_biezacy_krok, 1, _biezacy_krok]
             )
-            _pamiec[1] += 1
+            if len(_pamiec) < 3:
+                _pamiec.append(_pamiec[0])
 
-            return (
-                "\nTo samo, co w kroku " + str(_pamiec[0])
-                + " — po raz " + str(_pamiec[1]) + ".\n"
-            )
+            # v480ma: w TYM SAMYM kroku ta osoba juz to dostala (kolejne
+            # pytanie MAIN-a, zawolanie po imieniu, runda z kolega) — nic
+            # nie zdarzylo sie drugi raz, wiec nic nie mowimy. Bieg
+            # 2026-11-05 19:00-20:16 (druzyna 2): Tomek i Bartek dostali w
+            # jednym kroku "Co się właśnie stało" 3-4 razy (te same komendy
+            # MAIN-a i ich wyniki), a log autora z dopiskiem "To samo, co w
+            # kroku 11 — po raz 2", "po raz 3" — choc wszystko zdarzylo sie
+            # raz.
+            if _pamiec[2] == _biezacy_krok:
+                return ""
+
+            _pamiec[1] += 1
+            _pamiec[2] = _biezacy_krok
+
+            return _notka_powtorki(block, _pamiec[0], _pamiec[1])
 
         return ""
 
     _role_seen_blocks[slot] = odcisk
 
     if str(key) in _KLUCZE_ZDARZEN:
-        _powtorzone_zdarzenia.setdefault(
+        # v480ma: pelny blok idzie tez wtedy, gdy wraca po czyms innym
+        # albo w nowym czacie — wtedy to kolejny raz tego samego zdarzenia
+        # i ten krok liczy sie jako ostatni (druga wiadomosc w tym samym
+        # kroku jest cicha, a licznik "po raz K" sie zgadza).
+        _rek = _powtorzone_zdarzenia.setdefault(
             (str(role), str(key), odcisk),
-            [_biezacy_krok, 1]
+            [_biezacy_krok, 0, None]
         )
+        if len(_rek) < 3:
+            _rek.append(None)
+        if _rek[2] != _biezacy_krok:
+            _rek[1] += 1
+            _rek[2] = _biezacy_krok
 
     # v296: zapamietujemy, co ta osoba NAPRAWDE dostala w tym kroku —
     # patrz _juz_dostal i _role_inbox_block(). Bez tego ta sama
@@ -5007,10 +5050,18 @@ def _progress_lines_to_map(snapshot):
     return mapa
 
 
+# v480ma: nazwa pliku tymczasowego Pythona (tempfile: "tmp" + 8 znakow) —
+# w roznicy spisu katalogu to szum. Bieg 2026-11-05 19:00 (druzyna 2):
+# Tomek dostal "przybyło: tmpm806zrhf.py; zniknęło: tmp8hv4tltz.py" (pliki
+# robocze ast_mutator_ppm.py) i trzy razy pisal o nich do zespolu.
+_PLIK_TYMCZASOWY_RE = re.compile(r"^tmp[a-z0-9_]{8}(?:\.[A-Za-z0-9]{1,6})?/?$")
+
+
 def _roznica_spisu(stara, nowa):
     """v480gt: przy katalogu ("JEST — to katalog, w środku: a, b, …") po
     zmianie tylko to, co przybylo i co zniknelo — nie caly spis od nowa
-    (Tomek dostawal 40 nazw przy kazdym nowym pliku)."""
+    (Tomek dostawal 40 nazw przy kazdym nowym pliku).
+    v480ma: bez plikow tymczasowych; gdy zmienily sie tylko one — None."""
     try:
         if not stara or "w środku: " not in stara or "w środku: " not in nowa:
             return nowa
@@ -5021,6 +5072,10 @@ def _roznica_spisu(stara, nowa):
         a, b = _spis(stara), _spis(nowa)
         plus = [x for x in b if x not in a and not x.startswith("(+")]
         minus = [x for x in a if x not in b and not x.startswith("(+")]
+        if (plus or minus) and all(_PLIK_TYMCZASOWY_RE.match(x) for x in plus + minus):
+            return None
+        plus = [x for x in plus if not _PLIK_TYMCZASOWY_RE.match(x)]
+        minus = [x for x in minus if not _PLIK_TYMCZASOWY_RE.match(x)]
         if not plus and not minus:
             return nowa
         glowa = nowa.split(":", 1)[0]
@@ -5031,13 +5086,45 @@ def _roznica_spisu(stara, nowa):
         return nowa
 
 
-def _progress_for_role(role_name, snapshot):
+def _klucz_sciezki(s):
+    """v480ma: sciezka tak, jak wskazuje na plik (~/x, /data/…/home/x i x
+    w folderze druzyny to ten sam plik)."""
+    s = str(s or "").strip().strip("`'\"")
+    if not s:
+        return ""
+    try:
+        return str(_resolve_home_relative_path(
+            s.replace("/data/data/com.termux/files/home", "~", 1)))
+    except Exception:
+        return s
+
+
+def _sciezki_z_linii(tekst):
+    """v480ma: pliki, o ktorych tekst ma linie "- <sciezka>: …"."""
+    out = set()
+    for l in str(tekst or "").split("\n"):
+        l = l.strip()
+        if l.startswith("- ") and ":" in l[2:]:
+            k = _klucz_sciezki(l[2:].split(":", 1)[0])
+            if k:
+                out.add(k)
+    return out
+
+
+def _progress_for_role(role_name, snapshot, pomin=()):
     """
     Co z aktualnego stanu faktycznego ma isc DO TEJ ROLI.
 
     Pierwszy raz — calosc (potrzebuje punktu odniesienia).
     Potem — tylko to, co sie zmienilo, zniklo albo doszlo.
     Nic sie nie zmienilo — pusty string.
+
+    v480ma: pomin — pliki, o ktorych ta sama wiadomosc ma juz linie
+    (odpowiedz o pliku: "JEST (5690 B), bez zmian — tę samą treść masz
+    już"). Bieg 2026-11-05 (druzyna 1, krok 22): Bartek dostal o
+    hdc_predict.py linie "JEST, bez zmian", zaraz pod nia "Od ostatniego
+    razu zmieniło się tyle: hdc_predict.py: jest (5690 B), kod Bartka",
+    a nizej caly plik.
     """
 
     snapshot = str(snapshot or "")
@@ -5049,6 +5136,18 @@ def _progress_for_role(role_name, snapshot):
     poprzednio = _role_seen_progress.get(role_name)
 
     _role_seen_progress[role_name] = teraz
+
+    pomin = set(pomin or ())
+
+    def _pomijana(klucz):
+        return bool(pomin) and _klucz_sciezki(klucz) in pomin
+
+    if poprzednio is None and pomin:
+        _linie = [l for l in snapshot.split("\n")
+                  if not (l.startswith("- ") and _pomijana(l[2:].split(":", 1)[0]))]
+        if not any(l.startswith("- ") for l in _linie):
+            return ""
+        snapshot = "\n".join(_linie)
 
     if poprzednio is None:
         # v220: krótkie wprowadzenie zamiast gołej listy wrzuconej w
@@ -5064,8 +5163,10 @@ def _progress_for_role(role_name, snapshot):
     zmiany = []
 
     for klucz, linia in teraz.items():
-        if poprzednio.get(klucz) != linia:
-            zmiany.append(_roznica_spisu(poprzednio.get(klucz), linia))
+        if poprzednio.get(klucz) != linia and not _pomijana(klucz):
+            _r = _roznica_spisu(poprzednio.get(klucz), linia)
+            if _r:
+                zmiany.append(_r)
 
     for klucz, linia in poprzednio.items():
         if klucz not in teraz:
@@ -9945,6 +10046,127 @@ def _na_co_odpowiada(wiadomosc, n=350):
     return ("… " + t[m.end():]) if m and m.end() < n // 2 else "… " + t
 
 
+# v480ma: kilka notek programu o tym samym pliku w jednej wiadomosci —
+# jedna linia, po kolei. Bieg 2026-11-05 19:43-19:49 (druzyna 2, krok 11):
+# Tomek, Kamil i MAIN dostali trzy linie "[Program od razu naniósł poprawkę
+# Bartka na ~/MAIN_2/ast_mutator_ppm.py …]", kazda z tym samym "Plik jest
+# gotowy do uruchomienia: python3 … [--n-mutations …]", i nie po kolei
+# (19:49, 19:43, 19:47).
+_NOTKA_PROGRAMU_RE = re.compile(
+    r"(?m)^\[(?:Program od razu (?:naniósł poprawkę|dopisał tekst|zastąpił|zapisał ten plik)"
+    r"|Zmiana z poprawki) .*\][ \t]*$")
+_NOTKA_POPRAWKI_RE = re.compile(
+    r"^\[Program od razu naniósł poprawkę (\S+) na (\S+?)((?: w lini\w+ [^(]*?)?) "
+    r"\((\d+) B -> (\d+) B(.*?), kopia: \.kopie/([^)\s]+)\)\.(.*)\]\s*$")
+_NOTKA_SCIEZKA_RE = re.compile(r"(?:~|/data/data/com\.termux/files/home)/[^\s()\[\]]+")
+
+
+def _poprawki_slownie(n):
+    n = int(n)
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return str(n) + " poprawki"
+    return str(n) + " poprawek"
+
+
+def _bez_ogona_notki(linia):
+    """Notka bez zdania o uruchomieniu (zostaje przy ostatniej notce pliku)."""
+    return re.sub(r"\.?\s*(?:Plik jest gotowy do uruchomienia|Kod jest w pliku — uruchomienie)"
+                  r"[^\]]*(?:\[[^\]]*\][^\]]*)*\]\s*$", ".]", linia)
+
+
+def _scal_notki_programu(tekst):
+    tekst = str(tekst or "")
+    try:
+        notki = list(_NOTKA_PROGRAMU_RE.finditer(tekst))
+        if len(notki) < 2:
+            return tekst
+        grupy = {}
+        for i, m in enumerate(notki):
+            linia = m.group(0).rstrip()
+            sc = _NOTKA_SCIEZKA_RE.search(linia)
+            if not sc:
+                continue
+            klucz = _klucz_sciezki(sc.group(0).rstrip(".,;:"))
+            t = re.search(r"bak_(\d{8}_\d{6})", linia)
+            grupy.setdefault(klucz, []).append([(t.group(1) if t else ""), i, m, linia])
+        zamiany = {}
+        for klucz, g in grupy.items():
+            if len(g) < 2:
+                continue
+            # po kolei: wg czasu kopii; notka bez kopii (nowy plik) stoi
+            # przed najblizsza nastepna w tekscie, a gdy takiej nie ma — po
+            # poprzedniej
+            klucze = []
+            for j, x in enumerate(g):
+                if x[0]:
+                    klucze.append((x[0], 1, x[1]))
+                    continue
+                nast = next((y[0] for y in g[j + 1:] if y[0]), "")
+                if nast:
+                    klucze.append((nast, 0, x[1]))
+                else:
+                    pop = next((y[0] for y in reversed(g[:j]) if y[0]), "")
+                    klucze.append((pop, 2, x[1]))
+            g = [x for _, x in sorted(zip(klucze, g), key=lambda z: z[0])]
+            # kolejne poprawki tej samej osoby — jedna linia
+            bloki = []
+            for x in g:
+                mp = _NOTKA_POPRAWKI_RE.match(x[3])
+                if (mp and bloki and bloki[-1][0] == "pop"
+                        and bloki[-1][1][-1].group(1) == mp.group(1)):
+                    bloki[-1][1].append(mp)
+                elif mp:
+                    bloki.append(["pop", [mp], x[3]])
+                else:
+                    bloki.append(["inna", None, x[3]])
+            linie = []
+            for b, blok in enumerate(bloki):
+                if blok[0] == "pop" and len(blok[1]) > 1:
+                    pop = blok[1]
+                    ost = pop[-1]
+                    l = ("[Program od razu naniósł " + _poprawki_slownie(len(pop)) + " "
+                         + ost.group(1) + " na " + ost.group(2) + ", po kolei: "
+                         + "; ".join(((x.group(3).strip() + " ") if x.group(3).strip() else "")
+                                     + "(" + x.group(4) + " B -> " + x.group(5) + " B)" for x in pop)
+                         + ost.group(6) + ", kopie w .kopie/." + ost.group(8) + "]")
+                else:
+                    l = blok[2]
+                # sposob uruchomienia raz, przy ostatniej notce tego pliku
+                if b < len(bloki) - 1:
+                    l = _bez_ogona_notki(l)
+                linie.append(l)
+            scalona = "\n".join(linie)
+            pierwszy = min(x[1] for x in g)
+            for x in g:
+                zamiany[x[1]] = scalona if x[1] == pierwszy else None
+        if not zamiany:
+            return tekst
+        out = []
+        poz = 0
+        for i, m in enumerate(notki):
+            if i not in zamiany:
+                continue
+            out.append(tekst[poz:m.start()])
+            if zamiany[i] is not None:
+                out.append(zamiany[i])
+                poz = m.end()
+                continue
+            # usuwamy linie razem z jej koncem linii, a gdy stala osobno
+            # (pusta linia przed i po) — z jedna z tych pustych linii; reszty
+            # tekstu (kod w odpowiedzi) nie ruszamy
+            koniec = m.end()
+            if koniec < len(tekst) and tekst[koniec] == "\n":
+                koniec += 1
+            if (tekst[:m.start()].endswith("\n\n") and koniec < len(tekst)
+                    and tekst[koniec] == "\n"):
+                koniec += 1
+            poz = koniec
+        out.append(tekst[poz:])
+        return "".join(out)
+    except Exception:
+        return tekst
+
+
 def _podglad_dla_roli(rola, odp, wiadomosc=""):
     """Dopoki rola prosi o PODGLĄD — wynik do niej; zwraca jej ostatnia
     odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
@@ -9959,7 +10181,7 @@ def _podglad_dla_roli(rola, odp, wiadomosc=""):
     nowe = [z for z in zapisane if z not in str(odp)]
     if nowe:
         odp = str(odp).rstrip() + "\n\n" + "\n".join(nowe)
-    return odp
+    return _scal_notki_programu(odp)
 
 
 def _podglad_dla_roli_rundy(rola, odp, zapisane):
@@ -10122,9 +10344,23 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
                 "Wynik:\n\n" + "\n\n".join(wyniki)
                 + (("\n\nMAIN pytał: «" + _pyt + "»") if runda == 3 and _pyt else "")
                 + ("\n\nGdy masz już odpowiedź — napisz ją; możesz też zajrzeć albo uruchomić jeszcze raz."
-                   if runda == 1 else "")
+                   if runda == 1 and _stopka_rundy_pierwszy_raz(rola) else "")
             ))
     return odp
+
+
+# v480ma: zdanie "Gdy masz już odpowiedź…" raz na rozmowe tej osoby — bieg
+# 2026-11-05 (obie druzyny): szlo przy kazdym nowym podgladzie, to samo
+# zdanie 3-4 razy w jednej rozmowie.
+_stopka_rundy_dana = set()
+
+
+def _stopka_rundy_pierwszy_raz(rola):
+    klucz = (str(rola), _rozmowa_roli(rola))
+    if klucz in _stopka_rundy_dana:
+        return False
+    _stopka_rundy_dana.add(klucz)
+    return True
 
 
 def _bez_powtorzonych_glosow(tekst):
@@ -24876,7 +25112,7 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
     if "```" not in odp:
         _pop = _naniesc_poprawke_autora(rola, odp, [f for f in (
             _folder_druzyny(_DRUZYNA) if _DRUZYNA else None,) if f])
-        return (odp.rstrip() + "\n\n" + "\n".join(_pop)) if _pop else odp
+        return _scal_notki_programu(odp.rstrip() + "\n\n" + "\n".join(_pop)) if _pop else odp
     imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
     # Autor musi byc w notatniku, zeby zapis wzial jego kod 1:1 i zeby
     # blad skladni wrocil do niego (Ela odpowiada poza narada).
@@ -25043,7 +25279,7 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             _foldery_pop.append(f)
     _pop = _naniesc_poprawke_autora(rola, odp, _foldery_pop)
     if _pop:
-        odp = odp.rstrip() + "\n\n" + "\n".join(_pop)
+        odp = _scal_notki_programu(odp.rstrip() + "\n\n" + "\n".join(_pop))
     # v480fr: reszta kodu (fragmenty, poprawki, pliki, ktore juz leza)
     # idzie do MAIN-a jedna linia, jak glosy z poczatku kroku; pelna
     # wypowiedz autora zostaje w jego rozmowie i w notatniku autorow,
@@ -26812,6 +27048,10 @@ _ZMIANY_PLIKOW_MAKS = 300
 _zmiany_lock = _threading.Lock()
 _zmiany_stan = {"d": None}
 _zmiany_widziane = {}
+# v480ma: po starcie programu "widziane" zaczyna sie od teraz — bieg
+# 2026-11-05 19:00 (druzyna 2, po aktualizacji): MAIN dostal przy gru_eval.py
+# "ostatnie zmiany: 03:51 Bartek …; 03:57 Bartek …" sprzed 15 godzin.
+_ZMIANY_WIDZIANE_OD = time.time()
 
 
 def _zmiany_plikow():
@@ -26946,13 +27186,15 @@ def _nowe_zmiany_dla(kto, pliki):
         if not lista:
             continue
         kw = (str(kto), k)
-        bylo = _zmiany_widziane.get(kw, 0)
+        bylo = _zmiany_widziane.get(kw, _ZMIANY_WIDZIANE_OD)
         nowe = [w for w in lista if float(w.get("ts") or 0) > bylo]
-        _zmiany_widziane[kw] = float(lista[-1].get("ts") or 0)
-        if not nowe or all(str(w.get("kto")) == str(kto) for w in nowe):
+        _zmiany_widziane[kw] = max(bylo, float(lista[-1].get("ts") or 0))
+        # v480ma: tylko cudze zmiany — swoje "(Ty)" ta osoba zna
+        cudze = [w for w in nowe if str(w.get("kto")) != str(kto)]
+        if not cudze:
             continue
         out.append(_plik_do_logu(p) + " — ostatnie zmiany: "
-                   + "; ".join(_opis_zmiany(w, kto) for w in nowe[-4:]))
+                   + "; ".join(_opis_zmiany(w, kto) for w in cudze[-4:]))
     return out
 
 
@@ -27024,10 +27266,35 @@ def _migawka_plikow(pliki):
             # v480lz: z odciskiem tresci — komenda, ktora zapisala te same
             # bajty (np. heredoc pliku, ktory program juz polozyl), nie jest
             # zmiana
-            out[str(p)] = (st.st_mtime_ns, st.st_size, _odcisk_malego(p, st))
+            # v480ma: i z chwila migawki — zmiana, ktora w tym czasie wpisal
+            # do dziennika ktos inny (poprawka nalozona przez program, gdy
+            # komenda liczyla), nie jest zmiana tej komendy
+            out[str(p)] = (st.st_mtime_ns, st.st_size, _odcisk_malego(p, st), time.time())
         except Exception:
             out[str(p)] = None
     return out
+
+
+def _zmiana_juz_w_dzienniku(p, od, rozmiar):
+    """v480ma: (czy zmiane pliku po chwili `od` wyjasnia juz dziennik —
+    ostatni wpis od tej chwili konczy sie tym samym rozmiarem; rozmiar po
+    ostatnim takim wpisie albo None). Bieg 2026-11-05 19:23 (druzyna 2):
+    Bartek puscil ast_mutator_ppm.py | tee raporty/AST_PPM_run.log, program
+    w tym czasie nalozyl jego poprawke, a dziennik dopisal jeszcze
+    "zmiana komendą: tee raporty/AST_PPM_run.log" — do ast_mutator_ppm.py."""
+    try:
+        if not od:
+            return False, None
+        lista = [w for w in (_zmiany_plikow().get(_klucz_pliku(p)) or [])
+                 if float(w.get("ts") or 0) >= float(od) - 1]
+        if not lista:
+            return False, None
+        po = lista[-1].get("po")
+        if po is None:
+            return False, None
+        return int(po) == int(rozmiar), int(po)
+    except Exception:
+        return False, None
 
 
 _PISZE_DO_RE_TPL = (
@@ -27150,7 +27417,8 @@ def _zmiany_z_komendy(komenda, przed, kto):
     if not przed:
         return zmienione
     lap = bool(re.match(r"\s*LAPTOP\s*:", str(komenda or "")))
-    pobrane_po = set(getattr(_laptop_tl, "pobrane_po", None) or ())
+    _pobrane_raw = getattr(_laptop_tl, "pobrane_po", None)
+    pobrane_po = set(_pobrane_raw or ())
     for sc, stan in przed.items():
         p = Path(sc)
         try:
@@ -27167,16 +27435,27 @@ def _zmiany_z_komendy(komenda, przed, kto):
         if lap:
             # na laptopie: tylko plik wyrownany na telefon PO tej komendzie
             # (wczesniejszy to zmiana sprzed niej, np. proces w tle)
+            # v480ma: pusta lista = nic nie przyszlo z laptopa po tej
+            # komendzie, wiec ta komenda tego pliku na telefonie nie zmienila
             try:
                 rel = _plik_do_logu(p)
             except Exception:
                 rel = ""
-            if pobrane_po and rel not in pobrane_po and p.name not in {Path(x).name for x in pobrane_po}:
+            if _pobrane_raw is not None and rel not in pobrane_po \
+                    and p.name not in {Path(x).name for x in pobrane_po}:
                 continue
+        # v480ma: zmiane wpisal juz do dziennika ktos inny w trakcie komendy
+        _przed_rozmiar = None if stan is None else stan[1]
+        if stan is not None and len(stan) > 3:
+            _wyjasniona, _po_wpisie = _zmiana_juz_w_dzienniku(p, stan[3], teraz[1])
+            if _wyjasniona:
+                continue
+            if _po_wpisie is not None:
+                _przed_rozmiar = _po_wpisie
         frag = _fragment_komendy_z_plikiem(komenda, p.name)
         jak = (("nowy plik" if stan is None else "zmiana") + " komendą" + (" na laptopie" if lap else "")
                + ": " + frag)
-        _zapisz_zmiane_pliku(p, kto, jak, None if stan is None else stan[1], teraz[1])
+        _zapisz_zmiane_pliku(p, kto, jak, _przed_rozmiar, teraz[1])
         zmienione.append(p)
     return zmienione
 
@@ -27234,6 +27513,11 @@ def _zapisz_uruchomienie(nazwa, args, result):
             "stderr": str(result.get("stderr") or ""),
             "blad": str(result.get("error") or ""),
             "kod": result.get("returncode"),
+            # v480ma: komenda, ktora poszla w tlo, jeszcze nic nie wypisala —
+            # to nie "(nic nie wypisało)"
+            "status": str(result.get("status") or ""),
+            "pid": result.get("pid"),
+            "komenda_zlecona": str((args or {}).get("command") or ""),
         })
 
         del _uruchomienia_kroku[:-40]
@@ -27256,22 +27540,10 @@ def _tylko_oglada(komenda):
         return False
 
 
-def _log_dla_autora(rola):
-    """
-    Wszystko, co wypisalo to, co TA osoba napisala — w calosci.
-
-    Dopasowanie po tym, co naprawde widac: plik, ktorego tresc
-    pochodzi od niej (notatnik autorow z v340), albo komenda, ktora
-    stoi doslownie w jej wypowiedzi.
-
-    Niczego nie skracamy — to jest jego wlasny log, tak jak
-    uzytkownik wkleja mi caly plik, a nie pierwsze piec linijek.
-    """
-
-    if not _uruchomienia_kroku:
-        return ""
-
-    # Pliki, ktorych tresc napisala ta osoba.
+def _pliki_autora(rola):
+    """v480ma: (nazwy plikow, teksty) — pliki, ktorych tresc napisala ta
+    osoba, i jej wypowiedzi z kodem. Wspolne dla jej logu i dla "Co się
+    właśnie stało" (tam jej komendy ida z pelnym wynikiem)."""
     moje_pliki = set()
     moje_teksty = []
 
@@ -27295,30 +27567,78 @@ def _log_dla_autora(rola):
         if kto == str(rola) and nazwa:
             moje_pliki.add(nazwa)
 
+    return moje_pliki, moje_teksty
+
+
+def _komenda_autora(komenda, moje_pliki, moje_teksty):
+    """v480ma: czy komenda uruchamia cos, co ta osoba napisala (jej plik
+    albo komenda doslownie z jej wypowiedzi) — a nie tylko oglada pliki."""
+    komenda = str(komenda or "")
+    # v480lv: komenda, ktora tylko oglada pliki (cat, head, sed -n,
+    # grep, ls, [ -f …]), nie uruchamia niczego, co ta osoba napisala —
+    # jej wynik to fragmenty plikow, ktore autor ma w calosci. Bieg
+    # 2026-11-03 20:16 (druzyna 1): Bartek dostal w jednej wiadomosci
+    # swoj plik dwa razy w calosci i trzeci raz w kawalkach z head,
+    # grep i sed wykonawcy.
+    if not komenda.strip() or _tylko_oglada(komenda):
+        return False
+    if any(n and n in komenda for n in moje_pliki):
+        return True
+    return any(komenda.strip() in t for t in moje_teksty)
+
+
+# v480ma: sama sciezka zamiast komendy — wpis z zapisu pliku
+# (termux_write_file, write_engineer_code_to), nie uruchomienie
+_SAMA_SCIEZKA_RE = re.compile(r"^\s*[~/][^\s;&|<>]*\s*$")
+
+
+def _log_dla_autora(rola, pomin=()):
+    """
+    Wszystko, co wypisalo to, co TA osoba napisala — w calosci.
+
+    Dopasowanie po tym, co naprawde widac: plik, ktorego tresc
+    pochodzi od niej (notatnik autorow z v340), albo komenda, ktora
+    stoi doslownie w jej wypowiedzi.
+
+    Niczego nie skracamy — to jest jego wlasny log, tak jak
+    uzytkownik wkleja mi caly plik, a nie pierwsze piec linijek.
+
+    v480ma: bez komend, ktore ta osoba ma juz w "Co się właśnie stało"
+    (pomin — tam ida z pelnym wynikiem dla autora), bez samych sciezek
+    (zapis pliku to nie uruchomienie: "$ ~/x.py (nic nie wypisało)") i
+    bez "(nic nie wypisało)" przy komendzie, ktora poszla w tlo. Bieg
+    2026-11-05 (druzyna 2, krok 11): Bartek dostal te same cztery komendy
+    MAIN-a dwa razy w jednej wiadomosci — raz w "Co się właśnie stało",
+    raz tu, z calym heredokiem notatki MAIN-a.
+    """
+
+    if not _uruchomienia_kroku:
+        return ""
+
+    moje_pliki, moje_teksty = _pliki_autora(rola)
+    pomin = {" ".join(str(x or "").split()) for x in (pomin or ()) if str(x or "").strip()}
+
     kawalki = []
 
     for u in _uruchomienia_kroku:
 
         komenda = u["komenda"]
 
-        # v480lv: komenda, ktora tylko oglada pliki (cat, head, sed -n,
-        # grep, ls, [ -f …]), nie uruchamia niczego, co ta osoba napisala —
-        # jej wynik to fragmenty plikow, ktore autor ma w calosci. Bieg
-        # 2026-11-03 20:16 (druzyna 1): Bartek dostal w jednej wiadomosci
-        # swoj plik dwa razy w calosci i trzeci raz w kawalkach z head,
-        # grep i sed wykonawcy.
-        if _tylko_oglada(komenda):
+        if _SAMA_SCIEZKA_RE.match(str(komenda or "")):
             continue
 
-        czyje = any(n and n in komenda for n in moje_pliki)
+        if pomin and (" ".join(str(komenda or "").split()) in pomin
+                      or " ".join(str(u.get("komenda_zlecona") or "").split()) in pomin):
+            continue
 
-        if not czyje:
-            czyje = any(
-                komenda.strip() and komenda.strip() in t
-                for t in moje_teksty
-            )
+        if not _komenda_autora(komenda, moje_pliki, moje_teksty):
+            continue
 
-        if not czyje:
+        if u.get("status") in ("LECI_W_TLE", "AUTO_BACKGROUNDED", "JUZ_LICZY_W_TLE",
+                               "JUZ_CZEKA_W_TLE", "CZEKA_W_TLE"):
+            kawalki.append("$ " + komenda.strip() + "\n("
+                           + _wynik_do_logu({"status": u.get("status"), "pid": u.get("pid")})
+                           + "; wynik przyjdzie, gdy się skończy)")
             continue
 
         wyjscie = "\n".join(
@@ -30987,8 +31307,9 @@ def _laptop_moje_procesy():
               "tr '\\0' ' ' < /proc/$q/cmdline 2>/dev/null | grep -q '/[.]ael_laptop/' && { w=1; break; }; done; "
               "j=0; grep -qz '^AEL_SEDZIA=1$' $p/environ 2>/dev/null && j=1; "
               "n=$(tr '\\0' '\\n' < $p/environ 2>/dev/null | sed -n 's/^AEL_KOMENDA=//p' | head -1); "
-              "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$j\" \"${n:--}\" \"$o\" "
-              "\"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
+              "pp=$(ps -o ppid= -p $i 2>/dev/null | tr -d ' '); "
+              "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$i\" \"${e:-0}\" \"$w\" \"$j\" \"${n:--}\" \"$o\" "
+              "\"${pp:-0}\" \"$(tr '\\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-300)\"; done; true")
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=20, errors="replace")
@@ -30999,9 +31320,25 @@ def _laptop_moje_procesy():
     naj = {}
     teraz = {}
     wszystkie = {}
+    # v480ma: rodzic kazdego procesu druzyny — proces puszczony przez inny
+    # skrypt druzyny (mutacja w /tmp, worker) to praca tamtego skryptu
+    _wiersze = []
+    _rodzic_lap = {}
     for l in (r.stdout or "").splitlines():
-        cz = l.split("\t", 6)
-        if len(cz) < 7:
+        cz = l.split("\t", 7)
+        if len(cz) < 8:
+            continue
+        _pp = cz.pop(6)
+        _rodzic_lap[cz[0]] = _pp
+        _wiersze.append(cz)
+    _skrypty_lap = {
+        cz[0] for cz in _wiersze
+        if "/.ael_laptop/" not in cz[6]
+        and not re.match(r"\s*(?:\S*/)?(?:bash|sh|nice|timeout|setsid|nohup)\b", cz[6])
+        and _nazwa_skryptu(cz[6])}
+    for cz in _wiersze:
+        if cz[0] in _skrypty_lap and _dziecko_skryptu(
+                cz[0], _skrypty_lap, rodzic=lambda x: _rodzic_lap.get(str(x), "0")):
             continue
         # v480kb: [pid, czas, pod komenda programu, Sedzia, log, komenda]
         # v480ku: + numer komendy programu; proces komendy, ktora jeszcze
@@ -47785,6 +48122,24 @@ def _bez_szumu_maszyny(tekst):
     )
 
 
+# v480ma: ile wyniku komendy, ktora uruchamia kod autora, dostaje autor w
+# "Co się właśnie stało" (dotad ten sam wynik szedl drugi raz, w calosci,
+# w jego logu)
+_AUTOR_WYNIK_MAKS = 12000
+
+
+def _komendy_raportu(last_result):
+    """v480ma: komendy, ktore "Co się właśnie stało" pokazuje z wynikiem
+    (RUN MAIN-a) — zeby log autora nie podawal ich drugi raz."""
+    try:
+        if isinstance(last_result, dict) and last_result.get("executed_by") == "main_run":
+            return [str((w.get("args") or {}).get("command") or "")
+                    for w in (last_result.get("wyniki_run") or []) if isinstance(w, dict)]
+    except Exception:
+        pass
+    return []
+
+
 def _jeszcze_nic_sie_nie_stalo(last_result):
     """
     Czy to pierwszy krok celu — zanim cokolwiek sie wykonalo.
@@ -47801,7 +48156,7 @@ def _jeszcze_nic_sie_nie_stalo(last_result):
     )
 
 
-def _condense_last_result_for_team(last_result, limit=2500):
+def _condense_last_result_for_team(last_result, limit=2500, pelne=None):
     """
     Buduje ZWIĘZŁE, czytelne podsumowanie last_result zamiast
     surowego short(json.dumps(last_result), 4500).
@@ -48075,13 +48430,27 @@ def _condense_last_result_for_team(last_result, limit=2500):
         _na = max(300, (limit - 400) // max(1, len(_wr)))
         def _jedna_akcja(i, w):
             _wy = w.get("wynik")
+            _limit_akcji = _na
+            # v480ma: "zmiany_plikow" to linia dla MAIN-a ("odkad ostatnio
+            # widziales ten plik"), z "MAIN (Ty)" w srodku — u Bartka i Tomka
+            # pod "Co się właśnie stało" mylila, kto jest "Ty". Zmiany plikow
+            # zespol dostaje swoja droga (dziennik przy PODGLĄDZIE).
+            if isinstance(_wy, dict) and "zmiany_plikow" in _wy:
+                _wy = {k: v for k, v in _wy.items() if k != "zmiany_plikow"}
+            # v480ma: komenda, ktora uruchamia kod tej osoby, idzie do niej z
+            # pelnym wynikiem — w tym miejscu, a nie drugi raz w jej logu
+            try:
+                if pelne and pelne(str((w.get("args") or {}).get("command") or "")):
+                    _limit_akcji = max(_na, _AUTOR_WYNIK_MAKS)
+            except Exception:
+                pass
             if isinstance(_wy, dict) and _wy.get("status") == "CZEKA_W_TLE":
                 return str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — poszło w tle jako czekanie."
             if isinstance(_wy, dict) and _wy.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
                 return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — "
                         + str(_wy.get("message") or "to samo już leci w tle."))
             return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + "\n"
-                    + _wynik_dla_maina(_wy, w.get("args"), _na))
+                    + _wynik_dla_maina(_wy, w.get("args"), _limit_akcji))
         parts.append("\n\n".join(_jedna_akcja(i, w) for i, w in enumerate(_wr)))
         tool_trace = None
 
@@ -50312,6 +50681,25 @@ def consult_team(
 
     raw_report_material = _condense_last_result_for_team(last_result_for_team)
 
+    # v480ma: autor kodu dostaje wyniki swoich komend w "Co się właśnie
+    # stało" w calosci (do _AUTOR_WYNIK_MAKS), a jego log nie podaje ich
+    # drugi raz — jedna sekcja zamiast dwoch o tych samych komendach.
+    _komendy_w_raporcie = _komendy_raportu(last_result_for_team)
+
+    def _raport_dla(rola):
+        try:
+            if not _komendy_w_raporcie:
+                return raw_report_material
+            moje_pliki, moje_teksty = _pliki_autora(rola)
+            if not (moje_pliki or moje_teksty) or not any(
+                    _komenda_autora(k, moje_pliki, moje_teksty) for k in _komendy_w_raporcie):
+                return raw_report_material
+            return _condense_last_result_for_team(
+                last_result_for_team,
+                pelne=lambda k: _komenda_autora(k, moje_pliki, moje_teksty))
+        except Exception:
+            return raw_report_material
+
     # v191: Ola dostawała przy KAŻDYM kroku pełne wyjaśnienie swojej
     # własnej roli ("przetłumacz na ludzkie zdania, bez żargonu, nie
     # oceniaj, nie planuj...") — czyli dokładnie to, co ma już w
@@ -50680,10 +51068,31 @@ def consult_team(
         # go nie dostaje).
         # v410: na starcie celu nic sie jeszcze nie stalo — nie ma o
         # czym mowic. Patrz _jeszcze_nic_sie_nie_stalo().
-        _co_sie_stalo = "" if _jeszcze_nic_sie_nie_stalo(last_result) else (
+        # v480ma: raz na krok dla kazdej osoby. Kolejne pytanie MAIN-a w tym
+        # samym kroku (zawolanie po imieniu, runda z kolega) nie niesie
+        # tego drugi raz — ta osoba ma to kilka wiadomosci wyzej. Bieg
+        # 2026-11-05 19:00-20:16 (druzyna 2): Tomek i Bartek dostali w
+        # kroku 10 i 11 te same komendy MAIN-a z wynikami 3-4 razy (ok.
+        # 12 kB z 14 kB powtorek w obu krokach).
+        # Bramka liczy sie od relacji wspolnej dla wszystkich — wersja dla
+        # autora (pelny wynik jego komend) moze urosnac w trakcie kroku, gdy
+        # ktos napisze nowy plik, a to nadal ta sama relacja.
+        _co_wspolne = (
             ("" if _bez_maszynowni
              else "\nCo się właśnie stało:\n" + raw_report_material)
             + success_values_block
+        )
+        _co_sie_stalo = "" if _jeszcze_nic_sie_nie_stalo(last_result) else _only_if_new(
+            role_name, "co_sie_stalo", _co_wspolne
+        )
+        if _co_sie_stalo and _co_sie_stalo == _co_wspolne and not _bez_maszynowni:
+            _co_autora = "\nCo się właśnie stało:\n" + _raport_dla(role_name) + success_values_block
+            if _co_autora != _co_wspolne:
+                _co_sie_stalo = _co_autora
+                _zapamietaj_co_dostal(role_name, _co_autora)
+
+        _odp_o_plikach = (lambda _o: ("\n" + _o + "\n") if _o else "")(
+            _team_file_answers_block(role_name)
         )
 
         pieces = [
@@ -50697,16 +51106,14 @@ def consult_team(
             # cos"), mowimy to raz kazdej roli — zanim ktokolwiek
             # zacznie ukladac warianty do wyboru dla uzytkownika.
             _only_if_new(role_name, "delegacja", delegacja_block),
-            _only_if_new(
-                role_name, "files",
-                (lambda _o: ("\n" + _o + "\n") if _o else "")(
-                    _team_file_answers_block(role_name)
-                )
-            ),
+            _only_if_new(role_name, "files", _odp_o_plikach),
             # v208: nie caly listing co krok, tylko roznica —
             # patrz _progress_for_role().
+            # v480ma: bez plikow, o ktorych ta wiadomosc ma juz linie wyzej
+            # (odpowiedz o pliku) — jedna linia na plik.
             "" if _bez_maszynowni
-            else _progress_for_role(role_name, progress_snapshot),
+            else _progress_for_role(role_name, progress_snapshot,
+                                    pomin=_sciezki_z_linii(_odp_o_plikach)),
             # v413: BEZ SPISOW PYTHONA W ROZMOWIE ZESPOLU.
             #
             # Uzytkownik: "usun je tez, ma byc normalna rozmowa".
@@ -50885,7 +51292,11 @@ def consult_team(
 
         # v342: co wypisalo to, co TA osoba napisala — jej wlasny
         # log, w calosci. Patrz _log_dla_autora().
-        _moj_log = _log_dla_autora(role_name)
+        # v480ma: bez komend, ktore ta osoba ma w "Co się właśnie stało"
+        # (tam ida z pelnym wynikiem dla autora)
+        _moj_log = _log_dla_autora(
+            role_name,
+            pomin=() if _bez_maszynowni_dla(role_name) else _komendy_w_raporcie)
 
         if _moj_log:
             pieces.append(
@@ -51673,7 +52084,7 @@ def consult_team(
                 )
                 + _only_if_new(
                     "ENGINEER", "project_file",
-                    _current_project_file_block(_tekst_bledu)
+                    _current_project_file_block(_tekst_bledu, "ENGINEER")
                 )
                 + _engineer_feedback_block()
                 + engineer_critic_block
@@ -51799,7 +52210,7 @@ def consult_team(
                     # w tym, co sie wlasnie wywalilo. Inaczej to
                     # kilka tysiecy znakow cudzego kodu, ktorego w
                     # tej turze nie ocenia.
-                    _current_project_file_block(_tekst_bledu)
+                    _current_project_file_block(_tekst_bledu, "CRITIC")
                     if _plik_w_grze(planner_out, _tekst_bledu)
                     else ""
                 )
@@ -56554,14 +56965,34 @@ def _znane_pliki_zmienione(rola, tresc=""):
             poczatek = ""
         if poczatek and poczatek in str(tresc or ""):
             continue  # ta wiadomosc i tak niesie nowa tresc
-        nazwy.append(_sciezka_od_domu(str(p)))
+        nazwy.append(_sciezka_od_domu(str(p)) + _kto_zmienil_ostatnio(p, rola))
     if not nazwy:
         return ""
+    # v480ma: kto zmienil (z dziennika zmian), nie "ktos" — bieg 2026-11-05
+    # (druzyna 2, krok 10): Tomek dostal "ktoś zmienił na dysku: _NEG.md,
+    # HDC_VSA.md", a to byl MAIN, dwie linie nizej w "Co się właśnie stało".
     return ("Od czasu, gdy " + ("ten plik był" if len(nazwy) == 1 else "te pliki były")
-            + " w tej rozmowie, ktoś zmienił na dysku: " + ", ".join(nazwy[:10])
+            + " w tej rozmowie, zmieniono na dysku: " + ", ".join(nazwy[:10])
             + (" (i " + str(len(nazwy) - 10) + " więcej)" if len(nazwy) > 10 else "")
             + ". Wersja, którą pamiętasz, jest starsza — aktualną treść pokaże "
             "PODGLĄD: grep -n albo sed -n na tym pliku.")
+
+
+def _kto_zmienil_ostatnio(p, dla=None):
+    """v480ma: " (MAIN, 19:01)" — ostatni wpis z dziennika zmian pliku
+    albo ""."""
+    try:
+        lista = list(_zmiany_plikow().get(_klucz_pliku(p)) or [])
+        if not lista:
+            return ""
+        w = lista[-1]
+        kto = str(w.get("kto") or "")
+        if dla and kto and kto == _IMIE_AUTORA.get(str(dla), (str(dla),))[0]:
+            kto = "Ty"
+        t = datetime.fromtimestamp(float(w.get("ts") or 0)).strftime("%H:%M")
+        return " (" + ((kto + ", ") if kto else "") + t + ")"
+    except Exception:
+        return ""
 
 
 def _spis_katalogu(p):
@@ -56586,8 +57017,9 @@ def _katalog_od_ostatniego(rola, p):
         _katalog_znany_roli[klucz] = teraz
         if bylo is None:
             return None
-        nowe = [n for n in teraz if n not in set(bylo)]
-        znikly = [n for n in bylo if n not in set(teraz)]
+        # v480ma: bez plikow tymczasowych (tmpXXXXXXXX.py) — patrz _PLIK_TYMCZASOWY_RE
+        nowe = [n for n in teraz if n not in set(bylo) and not _PLIK_TYMCZASOWY_RE.match(n)]
+        znikly = [n for n in bylo if n not in set(teraz) and not _PLIK_TYMCZASOWY_RE.match(n)]
         if not nowe and not znikly:
             return "JEST — katalog, bez zmian od spisu, który już masz w tej rozmowie."
         czesci = []
@@ -63222,6 +63654,36 @@ def _grupa_pid(pid):
         return None
 
 
+def _rodzic_procesu(pid):
+    try:
+        with open("/proc/" + str(pid) + "/stat", encoding="utf-8") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[1])
+    except Exception:
+        return 0
+
+
+def _dziecko_skryptu(pid, skrypty, rodzic=None, glebokosc=6):
+    """v480ma: czy przodek procesu (przez opakowania: bash, timeout, nice …)
+    to inny skrypt druzyny z listy — wtedy to czesc jego pracy, nie osobny
+    skrypt. Bieg 2026-11-05 19:38 (druzyna 2): ast_mutator_ppm.py puszczal
+    kazda mutacje jako python3 /tmp/tmpXXXXXXXX.py; MAIN dostal 15 linii
+    "tmp….py (na telefonie) przestał działać — nie wiadomo"."""
+    rodzic = rodzic or _rodzic_procesu
+    widziane = set()
+    p = str(pid)
+    for _ in range(glebokosc):
+        try:
+            p = str(rodzic(p) or 0)
+        except Exception:
+            return False
+        if p in ("0", "1") or p in widziane:
+            return False
+        widziane.add(p)
+        if p in skrypty:
+            return True
+    return False
+
+
 def _procesy_druzyny_telefon():
     """{"telefon:<pid>": {...}} skryptow tej druzyny na telefonie."""
     wynik = {}
@@ -63229,6 +63691,7 @@ def _procesy_druzyny_telefon():
         nasze = _nasi_przodkowie()
         program = os.path.basename(str(_SCIEZKA_PROGRAMU)) or "agent.py"
         moja = _DRUZYNA or "1"
+        kandydaci = {}
         for wpis in os.listdir("/proc"):
             if not wpis.isdigit() or int(wpis) in nasze:
                 continue
@@ -63251,6 +63714,11 @@ def _procesy_druzyny_telefon():
                 continue
             _nz = _nazwa_skryptu(kom)
             if not _nz or _druzyna_procesu(wpis) != moja:
+                continue
+            kandydaci[wpis] = (kom, _nz)
+        for wpis, (kom, _nz) in kandydaci.items():
+            # v480ma: proces puszczony przez inny skrypt druzyny to jego praca
+            if _dziecko_skryptu(wpis, kandydaci):
                 continue
             _lg = _plik_wyjscia_procesu(int(wpis)) or ""
             _kid_p = _kid_procesu(wpis)
