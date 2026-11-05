@@ -9257,6 +9257,20 @@ _wiadomosci_do_roli = {}
 _ostatnia_odp_roli = {}
 
 
+# v480lz: wiadomosc od programu w rundzie poprawek autora (blad skladni,
+# poprawka nie weszla, proba uruchomienia) — patrz _podglad_dla_roli.
+_runda_programu_tl = _threading.local()
+
+
+def _deepseek_od_programu(rola, wiadomosc):
+    _bylo = getattr(_runda_programu_tl, "aktywna", False)
+    _runda_programu_tl.aktywna = True
+    try:
+        return deepseek(rola, wiadomosc)
+    finally:
+        _runda_programu_tl.aktywna = _bylo
+
+
 def deepseek(name, message):
     if name in _ROLE_Z_PODGLADEM:
         try:
@@ -9936,7 +9950,11 @@ def _podglad_dla_roli(rola, odp, wiadomosc=""):
     odpowiedz (z linia o plikach, ktore program polozyl po drodze)."""
     zapisane = []
     _czekania_roli[rola] = 0
-    _pytanie_roli[rola] = _na_co_odpowiada(wiadomosc)
+    # v480lz: wiadomosc programu w rundzie poprawek ("Twoja poprawka nie
+    # weszla…") nie jest pytaniem — "MAIN pytał: «…»" cytowalo ja zamiast
+    # pytania MAIN-a (bieg 2026-11-05 17:58, Bartek)
+    if not getattr(_runda_programu_tl, "aktywna", False) or not _pytanie_roli.get(rola):
+        _pytanie_roli[rola] = _na_co_odpowiada(wiadomosc)
     odp = _podglad_dla_roli_rundy(rola, odp, zapisane)
     nowe = [z for z in zapisane if z not in str(odp)]
     if nowe:
@@ -10109,6 +10127,127 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
     return odp
 
 
+def _bez_powtorzonych_glosow(tekst):
+    """
+    v480lz: akapit czyjejs wypowiedzi, ktory w tej samej wiadomosci juz
+    stal pod imieniem TEJ SAMEJ osoby, nie idzie drugi raz.
+
+    Bieg 2026-11-05 17:42 (druzyna 2, wiadomosc do Bartka, 10.2 kB): list
+    Tomka ze skrzynki ("Tomek:"), list Wojtka ("Wojtek:"), potem ta sama
+    wypowiedz Tomka jeszcze raz jako "Tomek (wcześniej, krok 8):" i koniec
+    listu Wojtka drugi raz ("Wojtek:"). Kazda droga (skrzynka, glos
+    kolegi, stara wypowiedz) pilnuje powtorek sama, ale nie widzi
+    pozostalych — 2.6 kB tego samego.
+
+    Glos to tekst pod linia z samym imieniem ("Tomek:", "Tomek
+    (wcześniej, krok 8):"). Akapit konczy pusta linia, blok ``` zostaje w
+    calosci. Porownanie bez spacji i gwiazdek, od 40 znakow, tylko z
+    wczesniejszymi slowami tej samej osoby — kolega, ktory cytuje
+    kolege, zostaje. Naglowek, pod ktorym nic nowego nie zostalo, tez
+    znika. Tekst programu (wyniki, pliki, pytania) zostaje nietkniety.
+    """
+    t = str(tekst or "")
+    if t.count(":\n") < 2:
+        return t
+    imiona = {
+        str(v) for v in list(_IMIONA_ROL.values()) + list(_ROLE_DISPLAY_NAME.values())
+        if str(v or "").strip()
+    }
+    imiona.add("Użytkownik")
+    naglowek = re.compile(
+        r"^(" + "|".join(re.escape(i) for i in sorted(imiona, key=len, reverse=True)) + r")"
+        r"(?: \(wcześniej[^)\n]*\)|, wcześniej(?: \(krok \d+\))?)?:[ \t]*$"
+    )
+
+    def _norm(akapit):
+        n = re.sub(r"[\s*]+", "", str(akapit).lstrip("*_#>- \t\n"))
+        return re.sub(r"(?:…|\.\.\.|\[\.\.\.\]|\[…\])+$", "", n)
+
+    # czesci: ["tekst", [linie]] albo
+    #         ["glos", imie, linia_naglowka, [akapity], [linie_oryginalne]]
+    # akapit to lista linii; None to pusta linia miedzy akapitami.
+    czesci = []
+    w_bloku = False
+    biezacy = None
+    akapit = []
+
+    def _zamknij_akapit():
+        if biezacy is not None and akapit:
+            biezacy[3].append(list(akapit))
+        akapit.clear()
+
+    for linia in t.split("\n"):
+        if not w_bloku:
+            m = naglowek.match(linia)
+            if m:
+                _zamknij_akapit()
+                biezacy = ["glos", m.group(1), linia, [], []]
+                czesci.append(biezacy)
+                continue
+        if linia.lstrip().startswith("```"):
+            w_bloku = not w_bloku
+        if biezacy is None:
+            if not czesci or czesci[-1][0] != "tekst":
+                czesci.append(["tekst", []])
+            czesci[-1][1].append(linia)
+            continue
+        biezacy[4].append(linia)
+        if not linia.strip() and not w_bloku:
+            _zamknij_akapit()
+            biezacy[3].append(None)
+            continue
+        akapit.append(linia)
+    _zamknij_akapit()
+
+    if sum(1 for c in czesci if c[0] == "glos") < 2:
+        return t
+
+    widziane = {}
+    zmiana = False
+    wynik = []
+    for c in czesci:
+        if c[0] == "tekst":
+            wynik.extend(c[1])
+            continue
+        _, imie, linia_nagl, akapity, oryginal = c
+        juz = widziane.get(imie, "")
+        zostaja = []
+        wyciete = 0
+        for a in akapity:
+            if a is None:
+                if zostaja and zostaja[-1] is None:
+                    continue
+                zostaja.append(None)
+                continue
+            n = _norm("\n".join(a))
+            if len(n) >= 40 and juz and n in juz:
+                wyciete += 1
+                continue
+            zostaja.append(a)
+        widziane[imie] = juz + "\x00" + "\x00".join(
+            _norm("\n".join(a)) for a in akapity if a is not None
+        )
+        if not wyciete:
+            # bez zmian — linia w linie, jak przyszlo
+            wynik.append(linia_nagl)
+            wynik.extend(oryginal)
+            continue
+        zmiana = True
+        if not any(a is not None for a in zostaja):
+            continue
+        while zostaja and zostaja[0] is None:
+            zostaja.pop(0)
+        wynik.append(linia_nagl)
+        for a in zostaja:
+            if a is None:
+                wynik.append("")
+            else:
+                wynik.extend(a)
+    if not zmiana:
+        return t
+    return "\n".join(wynik)
+
+
 def _deepseek_jedna_rozmowa(name, message):
     """
     Wyślij wiadomość do trwałej sesji roli `name`.
@@ -10136,6 +10275,19 @@ def _deepseek_jedna_rozmowa(name, message):
             r"(?m)^([^\W\d_][\w]*):\n\1, wcześniej(?: \(krok (\d+)\))?:\n",
             lambda m: m.group(1) + " (wcześniej" + (", krok " + m.group(2) if m.group(2) else "") + "):\n",
             str(message))
+    except Exception:
+        pass
+    # v480lz: ta sama wypowiedz jednej osoby dwa razy w jednej wiadomosci
+    # (skrzynka + stara wypowiedz + kawalek dla tej roli) — patrz
+    # _bez_powtorzonych_glosow.
+    try:
+        _przed_glosy = len(str(message))
+        message = _bez_powtorzonych_glosow(message)
+        if len(message) < _przed_glosy:
+            zapisz_zdarzenie(
+                "powtorzone_glosy", rola=str(name),
+                znaki=_przed_glosy - len(message)
+            )
     except Exception:
         pass
     _wiadomosci_do_roli[name] = _wiadomosci_do_roli.get(name, 0) + 1
@@ -22481,9 +22633,27 @@ def _kopia_kodu_zespolu(kod):
     return kod if _czyja_kopia(kod) else None
 
 
-def _tresc_napisana_dla(p):
+def _podobny_kod(a, b, prog=0.6):
+    """v480lz: czy b to (prawie) przepisany kod a — po liniach, bez bialych znakow."""
+    try:
+        la = [l.strip() for l in str(a or "").splitlines() if l.strip()]
+        lb = [l.strip() for l in str(b or "").splitlines() if l.strip()]
+        if not la or not lb:
+            return False
+        return difflib.SequenceMatcher(None, la, lb, autojunk=False).ratio() >= prog
+    except Exception:
+        return False
+
+
+def _tresc_napisana_dla(p, tresc_wywolania=None):
     """
     Tresc, ktora zespol napisal DLA TEGO PLIKU — i skad ja mamy.
+
+    v480lz: tresc_wywolania (to, co wykonawca chcial zapisac): blok z
+    ostatniej wypowiedzi Bartka, ktora tego pliku nie wymienia (wybrany
+    tylko po jezyku), wchodzi zamiast niej jedynie wtedy, gdy wykonawca go
+    wlasnie przepisuje (podobne linie); a gdy tresc wywolania jest kopia
+    kodu kogos z zespolu 1:1, idzie ona sama.
 
     Zwraca (tresc albo None, _kod_autora_dla(p)).
 
@@ -22528,9 +22698,21 @@ def _tresc_napisana_dla(p):
     #
     # Kopia kodu Bartka (v281, log 2026-09-07) dalej przechodzi: jest
     # w notatniku autorow, wiec _kopia_kodu_zespolu() ja rozpozna.
+    z_bartka = _kod_z_wypowiedzi(_kod_bartka_teraz or "", p)
+
+    # v480lz: blok wybrany tylko po jezyku z wypowiedzi, ktora tego pliku
+    # nie wymienia — nie podmienia tresci wykonawcy, ktora jest czyms innym.
+    _wyw = str(tresc_wywolania or "")
+    if (
+        z_bartka and _wyw.strip()
+        and Path(str(p)).name not in str(_kod_bartka_teraz or "")
+        and not _podobny_kod(z_bartka, _wyw)
+    ):
+        z_bartka = None
+
     kod = (
         (u_wskazanego[0] if u_wskazanego else None)
-        or _kod_z_wypowiedzi(_kod_bartka_teraz or "", p)
+        or z_bartka
         or (z_pamieci[0] if z_pamieci else None)
         or _kopia_kodu_zespolu(
             extract_code_block(_tresc_zadania_teraz or "", p)
@@ -22538,6 +22720,7 @@ def _tresc_napisana_dla(p):
         or _kopia_kodu_zespolu(
             _kod_z_heredoca(_tresc_zadania_teraz, p)
         )
+        or (_kopia_kodu_zespolu(_wyw) if _wyw.strip() else None)
     )
 
     return kod, z_pamieci
@@ -23053,7 +23236,7 @@ def _autor_poprawia_skladnie(path, content, wynik):
         runda += 1
         log("PROGRAM", sciezka + " od " + imie_d + " się nie kompiluje — błąd wraca "
             "do autora (runda " + str(runda) + ").")
-        odp = str(deepseek(rola, (
+        odp = str(_deepseek_od_programu(rola, (
             odpowiedzi_kolegow
             + "Twój kod zapisany w " + sciezka + " nie kompiluje się. py_compile:\n"
             + short(blad, 1500) + "\n\nPopraw to miejsce: podaj poprawkę fragmentu "
@@ -23250,7 +23433,7 @@ def _poloz_pliki_w_katalogu(katalog, team):
                 continue
             if not any(w.get("rola") == rola and w.get("tekst") == tekst for w in _kod_autorow[-8:]):
                 _zapamietaj_kod_autora(rola, tekst)
-            w = termux_write_file(str(p), kod, _dziennik=False)
+            w = _zapis_autora(rola, p, kod)
             if not isinstance(w, dict) or not p.exists():
                 continue
             _zapamietaj_zapis(p, kod)
@@ -23836,6 +24019,10 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
                     zdanie += "\nOstatnie zmiany w " + _plik_do_logu(wskazany) + ": " + _h + "."
                 if t is not None:
                     zdanie += "\nSkopiuj fragment 1:1 z pliku (PODGLĄD: sed -n 'od,dop' " + _sc(wskazany) + ")."
+                    # v480lz: skrot "..." / dluga linia
+                    _uw = _uwaga_o_skrocie(t, stary, nowy)
+                    if _uw:
+                        zdanie += " " + _uw
                 bledy.append(zdanie)
                 continue
         else:
@@ -23944,11 +24131,15 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
                                     wsp.append((n, p))
                         kand = [p for _n, p in sorted(wsp, key=lambda x: -x[0])[:3]]
                     blisko = ""
+                    _uw = ""
                     for p in kand[:3]:
                         b = _najblizszy_fragment(_tresc(p), stary)
                         if b:
                             blisko = "W " + _sciezka_od_domu(str(p)) + ": " + b[0].lower() + b[1:]
+                            _uw = _uwaga_o_skrocie(_tresc(p), stary, nowy)
                             break
+                    if not _uw:
+                        _uw = _uwaga_o_skrocie("", stary, nowy)
                     gdzie = (", ".join(_sciezka_od_domu(str(p)) for p in kolejnosc[:3])
                              if kolejnosc else "plikach z kodem w " + ", ".join(
                                  _sciezka_od_domu(str(f)) for f in (foldery or ())[:2]))
@@ -23959,7 +24150,7 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
                                      + "; program nanosi poprawki tylko na pliki w nim.") if poza else "")
                                  + ("\n" + blisko if blisko else "")
                                  + "\nSkopiuj fragment 1:1 z pliku (PODGLĄD: sed -n 'od,dop' plik) i napisz "
-                                 "nad poprawką ścieżkę pliku.")
+                                 "nad poprawką ścieżkę pliku." + ((" " + _uw) if _uw else ""))
                     continue
             if cel not in [p for _q, p in wym]:
                 ukryte.append((stary, cel))
@@ -24123,11 +24314,28 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
     runda = 0
     _historia = []
     zapisane = []
+    _t_rund = time.time()
+
+    def _w_rundach():
+        # v480lz: co w plikach zmienilo sie w trakcie rund (dziennik) — bieg
+        # 2026-11-05 17:48-18:01 (druzyna 1): Bartek w rundzie naniosl
+        # poprawke i dwa razy zmienil plik komenda, a MAIN dostal "autor
+        # odpowiedzial bez nowej poprawki".
+        try:
+            out = []
+            for k, lista in list(_zmiany_plikow().items()):
+                nowe = [w for w in lista or () if float(w.get("ts") or 0) >= _t_rund]
+                if nowe:
+                    out.append(_plik_do_logu(k) + ": " + "; ".join(_opis_zmiany(w) for w in nowe[-4:]))
+            return out[:4]
+        except Exception:
+            return []
+
     while True:
         runda += 1
         log("PROGRAM", "Poprawka " + imie_d + " nie weszła — wraca do autora (runda " + str(runda) + "): "
             + short(" ".join(powod.split()), 200))
-        odp2 = str(deepseek(rola, (
+        odp2 = str(_deepseek_od_programu(rola, (
             "Twoja poprawka nie weszła, plik jest bez zmian:\n" + short(powod, 1600)
             + "\n\nPodaj poprawkę jeszcze raz. Program naniesie ją od razu."
         )) or "")
@@ -24139,6 +24347,13 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                 zapisane = [l.strip() for l in str(_po).split("\n") if l.strip().startswith("[Program")]
             except Exception as e:
                 log("PROGRAM", "Pliki z odpowiedzi " + imie_d + ": " + str(e))
+            _zm = _w_rundach()
+            if _zm:
+                log("PROGRAM", "Poprawka " + imie_d + ": w trakcie rund plik zmieniony (" + "; ".join(
+                    z.split(":")[0] for z in _zm) + ") — koniec rund.")
+                return zapisane + ["[Pierwsza poprawka " + imie_d + " nie weszła w całości, ale w trakcie "
+                                   "rozmowy z programem plik się zmienił — " + " | ".join(_zm)
+                                   + ". Ostatnie słowo " + imie_d + ": " + short(" ".join(odp2.split()), 300) + "]"]
             log("PROGRAM", "Poprawka " + imie_d + ": autor odpowiedział bez nowej poprawki — koniec rund.")
             return zapisane or ["[Poprawka " + imie_d + ": autor odpowiedział bez nowej poprawki: "
                                 + short(" ".join(odp2.split()), 300) + "]"]
@@ -24149,6 +24364,11 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
         powod = "\n".join(bledy)
         if _bez_postepu(_historia, _powod_przed, odp2):
             break
+    _zm = _w_rundach()
+    if _zm:
+        return ["[Poprawki " + imie_d + " nie dało się nanieść w całości (autor próbował " + str(runda + 1)
+                + " razy): " + short(" ".join(powod.split()), 400) + " W trakcie rund plik się zmienił — "
+                + " | ".join(_zm) + ".]"]
     return ["[Poprawki " + imie_d + " nie dało się nanieść (autor próbował " + str(runda + 1)
             + " razy): " + short(" ".join(powod.split()), 400) + " Pliki są bez zmian.]"]
 
@@ -24257,7 +24477,7 @@ def _autor_poprawia_uruchomienie(rola, p):
                     + brak.group(1) + " — trzeba ją zainstalować (pip install); dalej próba nie doszła")
         log("PROGRAM", sciezka + " od " + imie_d + " wyłożył się przy próbie uruchomienia — "
             "błąd wraca do autora (runda " + str(runda) + ").")
-        odp = str(deepseek(rola, (
+        odp = str(_deepseek_od_programu(rola, (
             odpowiedzi_kolegow
             + "Twój plik " + sciezka + " kompiluje się, ale krótka próba uruchomienia ("
             + komenda + ") kończy się błędem:\n" + short(wyj, 2000)
@@ -24515,6 +24735,120 @@ def _zastap_plik_autora(rola, p, kod, folder):
             + "całość pokaże termux_read_file.]")
 
 
+# v480lz: kto z zespolu wlasnie kladzie swoj plik droga autora
+# (_poloz_nowy_plik_autora, _poloz_pliki_w_katalogu). Taki zapis idzie 1:1
+# z tresci, ktora ta droga wybrala — nie przez przejecie zapisu wykonawcy
+# (_termux_write_file), ktore szuka kodu od nowa w pamieci. Bieg 2026-11-05
+# 17:56 (druzyna 2): Bartek dal nowy so_cli_size.py heredokiem w URUCHOM,
+# a przejecie wzielo jego stary dwulinijkowy blok ```python sprzed 12 minut
+# (pseudo-kod "keep; else reject") i zapisalo go jako plik — Bartek dostal
+# blad skladni linii, ktorej w tym pliku nie pisal.
+_zapis_od_autora_tl = _threading.local()
+
+
+def _zapis_autora(rola, p, kod):
+    """termux_write_file dla pliku autora — z jego trescia, bez przejecia."""
+    _bylo = getattr(_zapis_od_autora_tl, "rola", None)
+    _zapis_od_autora_tl.rola = rola
+    try:
+        return termux_write_file(str(p), kod, _dziennik=False)
+    finally:
+        _zapis_od_autora_tl.rola = _bylo
+
+
+def _heredoce_w_tekscie(tekst):
+    """
+    v480lz: heredoki zapisujace pliki: (nazwa pliku, ">" albo ">>", tresc
+    bajt w bajt jak zapisze cat — linie miedzy znacznikami i koncowy znak
+    nowej linii — albo None, gdy powloka cos w niej podmieni: znacznik bez
+    cudzyslowu, a w srodku $, ` albo \\). Obie kolejnosci ("cat > x <<'EOF'"
+    i "cat <<'EOF' > x") i tee.
+    """
+    t = str(tekst or "")
+    if "<<" not in t:
+        return
+    linie = t.split("\n")
+    i = 0
+    while i < len(linie):
+        m = re.search(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", linie[i])
+        if not m:
+            i += 1
+            continue
+        reszta = linie[i][:m.start()] + " " + linie[i][m.end():]
+        cel, tryb = None, None
+        mc = re.search(r"\b(?:cat|tee)\b", reszta)
+        if mc:
+            mt = re.search(r"(?<![<>&\d])(>{1,2})\s*(['\"]?)([^\s<>|;&'\"]+)\2", reszta[mc.start():])
+            if mt:
+                cel, tryb = mt.group(3), mt.group(1)
+            else:
+                mt = re.search(r"\btee\s+(-a\s+)?(['\"]?)([^\s<>|;&'\"-][^\s<>|;&'\"]*)\2", reszta)
+                if mt:
+                    cel, tryb = mt.group(3), (">>" if mt.group(1) else ">")
+        znacznik, taby = m.group(3), bool(m.group(1))
+        j, cialo = i + 1, []
+        while j < len(linie):
+            lj = linie[j].lstrip("\t") if taby else linie[j]
+            if lj.rstrip() == znacznik:
+                break
+            cialo.append(lj)
+            j += 1
+        if j >= len(linie):
+            # bez zamkniecia to nie heredoc (np. "x << n" w kodzie)
+            i += 1
+            continue
+        if cel:
+            tresc = "\n".join(cialo) + "\n"
+            if not m.group(2) and re.search(r"[$`\\]", tresc):
+                tresc = None
+            yield Path(cel).name, tryb, tresc
+        i = j + 1
+
+
+def _heredoc_pliku(tekst, nazwa, nowy=True):
+    """
+    v480lz: tresc, ktora heredoc w komendzie zapisze do pliku `nazwa`
+    (patrz _heredoce_w_tekscie) — albo None. ">>" tylko dla nowego pliku
+    (dopisanie do istniejacego to nie cala jego tresc).
+    Bieg 2026-11-05 17:14 (druzyna 2): program polozyl man18_extract.py
+    (6425 B, srodek heredoca bez koncowego znaku nowej linii), a zaraz
+    potem komenda Bartka z tym samym heredokiem zapisala go drugi raz
+    (6426 B) — w dzienniku dwie zmiany jednej tresci.
+    """
+    nazwa = Path(str(nazwa or "")).name
+    if not nazwa:
+        return None
+    for cel, tryb, tresc in _heredoce_w_tekscie(tekst):
+        if cel == nazwa and (tryb == ">" or nowy):
+            return tresc
+    return None
+
+
+def _tresc_bloku_dla(kod, p, tekst=None):
+    """
+    v480lz: blok przypisany plikowi p jako jego tresc — albo None.
+    Komenda, ktora heredokiem pisze ten NOWY plik, daje srodek heredoca;
+    heredoc do pliku, ktory juz lezy (nadpisanie albo dopisanie), zrobi
+    sama komenda; inna komenda (cd … && python3 -c, PODGLĄD/URUCHOM) nie
+    jest trescia pliku (v480ig). Srodek heredoca wyjety juz wczesniej
+    (bez koncowego znaku nowej linii) dostaje go z powrotem — plik jest
+    wtedy taki sam, jaki zapisze komenda autora (tekst = jego wypowiedz).
+    """
+    if not kod:
+        return kod
+    p = Path(str(p))
+    nowy = not p.exists()
+    if _heredoc_pliku(kod, p.name, nowy=True) is not None:
+        return _heredoc_pliku(kod, p.name, nowy=True) if nowy else None
+    if _blok_to_komenda(kod, str(p)):
+        return None
+    if tekst and nowy:
+        for cel, tryb, tresc in _heredoce_w_tekscie(tekst):
+            if cel == p.name and tresc and tresc.rstrip("\n") == str(kod).rstrip("\n"):
+                return tresc
+    return kod
+
+
 def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
     """Zwraca odpowiedz dla MAIN-a (kod zastapiony zdaniem) albo odp."""
     odp = str(odp or "")
@@ -24616,8 +24950,11 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             kod = _z_naglowka.get(s) or _blok_tego_pliku(odp, p.name)
             # v480ig: blok-komenda (cd … && python3 -c "…", PODGLĄD:) nie
             # jest trescia pliku, nawet gdy wymienia jego nazwe.
-            if kod and _blok_to_komenda(kod, str(p)):
-                kod = None
+            # v480lz: chyba ze ta komenda heredokiem pisze wlasnie ten
+            # nowy plik — wtedy jego tresc to srodek heredoca, bajt w bajt
+            # jak zapisze cat (komenda potem nic juz w nim nie zmienia).
+            # Istniejacy plik zmienia sama komenda, gdy pojdzie.
+            kod = _tresc_bloku_dla(kod, p, odp)
             if p.exists():
                 # v480fw: autor dal nowa pelna wersje pliku, ktory juz lezy
                 # — bieg 2026-10-25 23:39: "eval_bpb.py — nowa wersja
@@ -24629,14 +24966,14 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                     odp = _wstaw_zdanie_za_blok(odp, kod, zdanie)
                 continue
             if not kod and len(sciezki) == 1 and p.name not in _podpisane:
-                kod = _kod_z_wypowiedzi(odp, p.name)
+                kod = _tresc_bloku_dla(_kod_z_wypowiedzi(odp, p.name), p, odp)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
                 continue
             if _usuniety_ta_sama_tresc(p, kod):
                 log("PROGRAM", _sciezka_od_domu(str(p)) + " od " + imie_d + ": tę samą treść "
                     "program już kładł, a potem plik usunięto — nie kładę go znowu.")
                 continue
-            w = termux_write_file(str(p), kod, _dziennik=False)
+            w = _zapis_autora(rola, p, kod)
             _zapamietaj_zapis(p, kod)
             if not isinstance(w, dict) or not p.exists():
                 continue
@@ -24767,10 +25104,14 @@ def _termux_write_file(path, content, append=False):
             _is_custom_tool = False
 
         # v461: w RUN pisze MAIN (DeepSeek) — to kod zespolu, nie Gemini.
+        # v480lz: plik autora kladziony jego droga (_zapis_autora) — tez
+        # nie: tresc wybrala juz ta droga, z jego wypowiedzi.
+        _od_autora = getattr(_zapis_od_autora_tl, "rola", None)
         if (
             (_code_suffix or _has_shebang)
             and not _is_custom_tool
             and not _wykonuje_main
+            and not _od_autora
         ):
 
             # Gemini siega po zapis kodu. Podzial rol zostaje: kod
@@ -24809,7 +25150,7 @@ def _termux_write_file(path, content, append=False):
             # koncu przepisana wersja MAIN-a. MAIN nigdy nie pisze
             # kodu — jesli kod jest w jego zadaniu, to jest CZYJAS
             # kopia, i nie ma powodu przedkladac kopii nad oryginal.
-            _kod, _z_pamieci = _tresc_napisana_dla(p)
+            _kod, _z_pamieci = _tresc_napisana_dla(p, data)
 
             # v480ig: pamietany blok z sama komenda (PODGLĄD/URUCHOM,
             # cd/grep) nie jest trescia pliku; a dzialajacego pliku .py
@@ -25047,6 +25388,12 @@ def _termux_write_file(path, content, append=False):
 
         _track_project_path(p)
         _zapamietaj_gdzie(p)
+
+        # v480lz: plik autora — trwaly slad autoryzacji jak przy przejeciu
+        # (v358d), i ze ta tresc juz lezy (v388).
+        if _od_autora and (_code_suffix or _has_shebang) and not append:
+            _zapisz_autoryzacje_kodu(p, autor=_od_autora)
+            _kod_polozony_w_kroku.setdefault(_odcisk_tresci(data), str(p))
 
         if _wykonuje_main and (_code_suffix or _has_shebang):
             # v480fj: MAIN przepisal 1:1 kod kogos z zespolu — autorem
@@ -26647,12 +26994,26 @@ def _pliki_z_komendy(komenda, cwd=None):
     return out[:12]
 
 
+def _odcisk_malego(p, st=None):
+    """v480lz: sha1 tresci pliku do 8 MB (inaczej None)."""
+    try:
+        st = st or Path(p).stat()
+        if st.st_size > 8 * 1024 * 1024:
+            return None
+        return hashlib.sha1(Path(p).read_bytes()).hexdigest()
+    except Exception:
+        return None
+
+
 def _migawka_plikow(pliki):
     out = {}
     for p in pliki or ():
         try:
             st = Path(p).stat()
-            out[str(p)] = (st.st_mtime_ns, st.st_size)
+            # v480lz: z odciskiem tresci — komenda, ktora zapisala te same
+            # bajty (np. heredoc pliku, ktory program juz polozyl), nie jest
+            # zmiana
+            out[str(p)] = (st.st_mtime_ns, st.st_size, _odcisk_malego(p, st))
         except Exception:
             out[str(p)] = None
     return out
@@ -26699,16 +27060,72 @@ def _czesci_komendy(k):
     return [x.strip() for x in out if x.strip()]
 
 
+# v480lz: zapis bez nazwy pliku w tej linii (petla po plikach w skrypcie)
+_ZAPIS_OGOLNY_RE = re.compile(
+    r"open\([^)\n]*,\s*['\"][wax]b?\+?['\"]|\.write_text\(|\.writelines?\(|json\.dump\("
+    r"|\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\btee\s")
+
+
+def _czesci_komendy_z_heredocami(k):
+    """
+    v480lz: czesci komendy do wpisu w dzienniku. Tresc pliku pisanego
+    heredokiem (cat > x <<'EOF' … EOF) to dane — bez niej; skrypt podany
+    interpreterowi heredokiem (python3 - <<'EOF') — linia po linii, bez
+    sledzenia cudzyslowow (apostrof w komentarzu nie skleja reszty).
+    Bieg 2026-11-05 17:07 (druzyna 2): wpis dla raporty/_NEG.md pokazal
+    linie z tresci notatki zamiast "cat >> raporty/_NEG.md".
+    """
+    linie = str(k or "").split("\n")
+    out, powloka, i = [], [], 0
+    while i < len(linie):
+        l = linie[i]
+        m = re.search(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", l)
+        if m:
+            j = i + 1
+            while j < len(linie) and (linie[j].lstrip("\t") if m.group(1) else linie[j]).rstrip() != m.group(3):
+                j += 1
+            if j < len(linie):
+                powloka.append(l)
+                out.extend(_czesci_komendy("\n".join(powloka)))
+                powloka = []
+                if not re.search(r"\b(?:cat|tee)\b", l[:m.start()] + " " + l[m.end():]):
+                    out.extend(x.strip() for x in linie[i + 1:j] if x.strip() and not x.strip().startswith("#"))
+                i = j + 1
+                continue
+        powloka.append(l)
+        i += 1
+    out.extend(_czesci_komendy("\n".join(powloka)))
+    return [x for x in out if x]
+
+
 def _fragment_komendy_z_plikiem(komenda, nazwa):
-    """Czesc komendy (miedzy && ; |), w ktorej stoi plik — do wpisu."""
+    """Czesc komendy (miedzy && ; |), w ktorej stoi plik — do wpisu.
+    v480lz: w skrypcie wielolinijkowym — jego poczatek i linia zapisu
+    ("python3 -c " … open('x.py','w').write(src)"), zamiast samego
+    poczatku z liczba linii."""
     k = re.sub(r"^\s*(?:LAPTOP|TELEFON)\s*:\s*", "", str(komenda or ""))
-    czesci = _czesci_komendy(k)
-    for cz in czesci:
-        if nazwa in cz and re.search(_PISZE_DO_RE_TPL.replace("{n}", re.escape(nazwa)), cz):
+    czesci = _czesci_komendy_z_heredocami(k)
+    wz = re.compile(_PISZE_DO_RE_TPL.replace("{n}", re.escape(nazwa)))
+
+    def _opis(cz, wzor):
+        ls = [l.strip() for l in cz.split("\n") if l.strip()]
+        if len(ls) <= 1:
             return _komenda_jedna_linia(cz, 90)
+        traf = next((l for l in ls[1:] if wzor.search(l) and not l.startswith("#")), None)
+        if traf:
+            return short(ls[0], 40) + " … " + short(traf, 70)
+        return _komenda_jedna_linia(cz, 90)
+
     for cz in czesci:
-        if nazwa in cz:
-            return _komenda_jedna_linia(cz, 90)
+        if nazwa in cz and wz.search(cz):
+            return _opis(cz, wz)
+    if any(nazwa in cz for cz in czesci):
+        for cz in czesci:
+            if _ZAPIS_OGOLNY_RE.search(cz):
+                return _opis(cz, _ZAPIS_OGOLNY_RE)
+        for cz in czesci:
+            if nazwa in cz:
+                return _komenda_jedna_linia(cz, 90)
     return _komenda_jedna_linia(k, 90)
 
 
@@ -26730,7 +27147,11 @@ def _zmiany_z_komendy(komenda, przed, kto):
             teraz = (st.st_mtime_ns, st.st_size)
         except Exception:
             teraz = None
-        if teraz is None or teraz == stan:
+        if teraz is None or teraz == tuple(stan or ())[:2]:
+            continue
+        # v480lz: te same bajty co przed komenda — bez wpisu
+        if stan is not None and len(stan) > 2 and stan[2] and stan[1] == teraz[1] \
+                and _odcisk_malego(p) == stan[2]:
             continue
         if lap:
             # na laptopie: tylko plik wyrownany na telefon PO tej komendzie
@@ -43182,7 +43603,7 @@ def _popraw_skladnie_u_autora(target_path, kod, team, step):
             + ") — proszę " + _IMIE_AUTORA.get(autor, (autor, autor))[1]
             + " o poprawkę, zanim trafi na dysk."
         )
-        odp = deepseek(
+        odp = _deepseek_od_programu(
             autor,
             "Kod do " + target_path.name + " się nie kompiluje ("
             + blad + "), więc jeszcze go nie zapisałem."
@@ -45585,6 +46006,199 @@ def _przenies_wciecie(kod, wc_z, wc_do):
     return "\n".join(out) + "\n"
 
 
+# v480lz: "..." (albo "…") w starym fragmencie — skrot autora. Bieg
+# 2026-11-05 17:46-18:01 (druzyna 1): Bartek nie umial przepisac 1:1 linii
+# z tablica _punct[256] (640 znakow zer i jedynek; 97% zgodnosci), a dwa
+# inne stare fragmenty sam napisal ze skrotem ("={0,0,0,...};",
+# "'...d.escape_depth...',") — program ich nie znal, wiec trzy poprawki
+# przepadly i Bartek latal plik komendami python3 -c z re.sub.
+_WIELOKROPEK_RE = re.compile(r"\.\.\.|…")
+
+
+def _linia_wielokropka(l):
+    """Linia z samym "..." (tez w komentarzu, z opisem: "# ... reszta bez zmian")."""
+    s = str(l or "").strip()
+    kom = re.match(r"^(?:#+|//+|/\*|--|;+)\s*", s)
+    reszta = s[kom.end():] if kom else s
+    m = re.match(r"^(?:\.\.\.|…)", reszta)
+    if not m:
+        return False
+    dalej = reszta[m.end():].strip()
+    if kom:
+        return len(dalej) <= 80
+    return not dalej or (len(dalej) <= 60 and not re.search(r"[=;{}()\[\]<>\"'`,.:]", dalej))
+
+
+def _skroty_nowego(nowy):
+    """Kolejne "..." w nowym fragmencie: "L" (cala linia) albo "W" (w linii)."""
+    out = []
+    for l in str(nowy or "").split("\n"):
+        if not l.strip():
+            continue
+        if _linia_wielokropka(l):
+            out.append("L")
+        else:
+            out.extend("W" * len(_WIELOKROPEK_RE.findall(l)))
+    return out
+
+
+def _wzor_wielokropka(stary):
+    """
+    v480lz: wzorzec starego fragmentu z "..." — albo None. "..." w linii
+    zastepuje dowolny tekst w tej linii, linia z samym "..." — do 400
+    calych linii. Pierwsza i ostatnia linia musza byc z pliku, a tekstu
+    1:1 (bez bialych znakow) co najmniej 12 znakow. Zwraca (wzorzec na
+    cale linie, wzorzec w linii albo None, typy kolejnych "..." — "W"/"L").
+    """
+    st = str(stary or "")
+    if not _WIELOKROPEK_RE.search(st):
+        return None
+    ls = [l.rstrip() for l in st.strip("\n").split("\n")]
+    while ls and not ls[0].strip():
+        ls.pop(0)
+    while ls and not ls[-1].strip():
+        ls.pop()
+    if not ls or _linia_wielokropka(ls[0]) or _linia_wielokropka(ls[-1]):
+        return None
+    czesci, typy, dosl = [], [], 0
+    for l in ls:
+        if not l.strip():
+            czesci.append(r"[ \t]*")
+            continue
+        if _linia_wielokropka(l):
+            if czesci and czesci[-1] is None:
+                continue
+            czesci.append(None)
+            typy.append("L")
+            continue
+        kawalki = _WIELOKROPEK_RE.split(l.strip())
+        w = r"[ \t]*"
+        for i, k in enumerate(kawalki):
+            if i:
+                w += r"([^\n]*?)"
+                typy.append("W")
+            w += re.escape(k)
+            dosl += len("".join(k.split()))
+        czesci.append(w + r"[ \t]*")
+    if dosl < 12 or "W" not in typy and "L" not in typy:
+        return None
+    wzor = ""
+    for i, c in enumerate(czesci):
+        if c is None:
+            wzor += r"((?:[^\n]*\n){0,400}?)"
+        else:
+            wzor += c + (r"\n" if i < len(czesci) - 1 else "")
+    w_linii = None
+    if len(czesci) == 1:
+        # jedna linia — tez jako kawalek linii (bez kotwic)
+        w_linii = re.compile(czesci[0][len(r"[ \t]*"):-len(r"[ \t]*")] or "(?!)")
+    return re.compile(r"(?m)^" + wzor + r"$"), w_linii, typy
+
+
+def _dopasowania(rx, tekst, ile=3):
+    """Dopasowania wzorca z roznymi poczatkami (najwyzej `ile`)."""
+    out, pos = [], 0
+    while len(out) < ile and pos <= len(tekst):
+        m = rx.search(tekst, pos)
+        if not m:
+            break
+        out.append(m)
+        pos = m.start() + 1
+    return out
+
+
+def _naloz_wielokropek(tekst, stary, nowy):
+    """
+    v480lz: para ze skrotem "..." w starym fragmencie. Zwraca (tekst_po,
+    stan, ile) albo None (bez skrotu / nie stoi). "..." w nowym fragmencie
+    w tych samych miejscach co w starym zostawia tam tekst z pliku.
+    """
+    w = _wzor_wielokropka(stary)
+    if not w:
+        return None
+    rx, rx_linii, typy = w
+    traf = _dopasowania(rx, tekst)
+    caly = True
+    if not traf and rx_linii is not None:
+        traf = _dopasowania(rx_linii, tekst)
+        caly = False
+    if not traf:
+        return None
+    if len(traf) > 1:
+        return tekst, "wiele", len(traf)
+    m = traf[0]
+    nw = str(nowy or "")
+    skroty = _skroty_nowego(nw)
+    if skroty and skroty != typy:
+        return tekst, "skrot_nowego", 0
+    if caly and nw.strip():
+        st_l = [l for l in str(stary).split("\n") if l.strip()]
+        wc_fr = st_l[0][:len(st_l[0]) - len(st_l[0].lstrip())]
+        l0 = tekst[m.start():tekst.find("\n", m.start()) if "\n" in tekst[m.start():] else len(tekst)]
+        wc_pl = l0[:len(l0) - len(l0.lstrip())]
+        nw = _przenies_wciecie(nw, wc_fr, wc_pl).rstrip("\n")
+    elif not caly:
+        nw = nw.strip("\n")
+    if skroty:
+        grupy = list(m.groups())
+        out, gi = [], 0
+        for l in nw.split("\n"):
+            if l.strip() and _linia_wielokropka(l):
+                g = grupy[gi]
+                gi += 1
+                if g:
+                    out.append(g.rstrip("\n"))
+                continue
+            if _WIELOKROPEK_RE.search(l):
+                kaw = _WIELOKROPEK_RE.split(l)
+                l = kaw[0]
+                for k in kaw[1:]:
+                    l += grupy[gi] + k
+                    gi += 1
+            out.append(l)
+        nw = "\n".join(out)
+    a, b = m.start(), m.end()
+    if not nw.strip() and caly:
+        # usuniecie calych linii — razem z koncem ostatniej
+        if tekst[b:b + 1] == "\n":
+            b += 1
+        return tekst[:a] + tekst[b:], "ok", 1
+    return tekst[:a] + nw + tekst[b:], "ok", 1
+
+
+def _uwaga_o_skrocie(tekst, stary, nowy):
+    """
+    v480lz: jedno zdanie do bledu "fragmentu nie ma": o "..." w starym
+    fragmencie albo o dlugiej linii, ktorej nie trzeba przepisywac — "".
+    """
+    try:
+        st = str(stary or "")
+        if _WIELOKROPEK_RE.search(st):
+            w = _naloz_wielokropek(str(tekst or ""), st, nowy)
+            if w and w[1] == "skrot_nowego":
+                return ("Stary fragment ze skrótem „...” program w pliku znalazł, ale w Nowym "
+                        "„...” stoi w innych miejscach niż w Starym — napisz Nowy fragment w całości "
+                        "albo z „...” dokładnie tam, gdzie w Starym (tam zostaje tekst z pliku).")
+            return ("„...” w Starym fragmencie zastępuje dowolny tekst w środku jednej linii, a linia "
+                    "z samym „...” — kilka całych linii; pierwsza i ostatnia linia oraz tekst wokół "
+                    "„...” muszą być 1:1 z pliku.")
+        dl = [l.strip() for l in st.split("\n") if len(l.strip()) >= 150]
+        if not dl:
+            for l in st.split("\n"):
+                p = l.strip()[:30]
+                if len(p) >= 15 and any(x.strip().startswith(p) and len(x.strip()) >= len(l.strip()) + 100
+                                        for x in str(tekst or "").split("\n")):
+                    dl.append(p)
+                    break
+        if dl:
+            return ("Długiej linii nie trzeba przepisywać: zostaw jej początek i koniec, a środek "
+                    "zastąp „...” — program dopasuje resztę z pliku („...” w tym samym miejscu "
+                    "Nowego fragmentu zostawia tamten tekst bez zmian).")
+    except Exception:
+        pass
+    return ""
+
+
 def _naloz_pare(tekst, stary, nowy):
     """
     v480lq: jedna para (stary, nowy) na tekst. Zwraca (tekst_po, stan,
@@ -45647,9 +46261,18 @@ def _naloz_pare(tekst, stary, nowy):
         return tekst[:a] + nw + tekst[b:], "ok", 1
     if len(luz) > 1:
         return tekst, "wiele", len(luz)
+    # v480lz: skrot "..." w starym fragmencie (patrz _naloz_wielokropek)
+    _wk = _naloz_wielokropek(tekst, stary, nowy)
+    if _wk is not None and _wk[1] in ("ok", "wiele"):
+        return _wk
     if nowy.strip() and (tekst.count(nowy) == 1 or len(_fragment_z_wcieciem(tekst, nowy)) == 1
                          or len(_fragment_luzno(tekst, nw2)) == 1):
         return tekst, "juz", 0
+    # v480lz: nowy fragment ze skrotem "..." juz stoi w pliku
+    if nowy.strip() and _WIELOKROPEK_RE.search(nowy):
+        _wn = _wzor_wielokropka(nowy)
+        if _wn and len(_dopasowania(_wn[0], tekst, 2)) == 1:
+            return tekst, "juz", 0
     return tekst, "brak", 0
 
 
@@ -45723,12 +46346,14 @@ def _naloz_pary_na_plik(path, bloki, zapisz=True, kto=None):
 
         if stan == "brak":
             _blisko = _najblizszy_fragment(zmieniony, stary)
+            _uw = _uwaga_o_skrocie(zmieniony, stary, nowy)
             return {
                 "applied": False,
                 "reason": (
                     "Fragment " + _poczatek_fragmentu(stary) + " nie występuje w pliku "
                     + target.name + " (program szukał też z innym wcięciem i bez spacji "
                     "na końcach linii). Nic nie zmieniono. Skopiuj fragment 1:1 z pliku."
+                    + ((" " + _uw) if _uw else "")
                     + ("\n" + _blisko if _blisko else "")
                 ),
             }
@@ -45780,15 +46405,23 @@ def _zapisz_poprawiony_plik(target, original, zmieniony, naniesione, cicho=False
         target.name + ".bak_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
 
+    # v480lz: rozmiary w bajtach, jak w zmianach komenda (stat) — bylo w
+    # znakach: "poprawka … 11084 → 11209 B", a zaraz potem komenda "11267 →".
+    _b_przed = len(original.encode("utf-8", "replace"))
     try:
         if target.read_text(encoding="utf-8", errors="ignore") != original:
             return {"applied": False, "reason": "plik zmienił się w międzyczasie — nic nie zapisano"}
+        _b_przed = target.stat().st_size
         kopia.parent.mkdir(parents=True, exist_ok=True)
         kopia.write_text(original, encoding="utf-8")
         target.write_text(zmieniony, encoding="utf-8")
     except Exception as e:
         return {"applied": False, "reason": "Nie udało się zapisać: " + str(e)}
 
+    try:
+        _b_po = target.stat().st_size
+    except Exception:
+        _b_po = len(zmieniony.encode("utf-8", "replace"))
     # v480lx: wolajacy, ktory pisze wlasna linie z autorem poprawki
     # ("Poprawka Bartka naniesiona na …"), prosi o cisze — bylo dwa razy.
     # v480ly: zamiast linii [PROGRAM] wpis w dzienniku pliku ([PLIK]: kto,
@@ -45798,15 +46431,15 @@ def _zapisz_poprawiony_plik(target, original, zmieniony, naniesione, cicho=False
         _zapisz_zmiane_pliku(target, kto or _kto_puszcza(str(target)),
                              "poprawka" + ((" " + _linie) if _linie else "")
                              + ((" (" + str(naniesione) + " miejsca)") if naniesione and naniesione > 1 else ""),
-                             len(original), len(zmieniony), kopia)
+                             _b_przed, _b_po, kopia)
 
     return {
         "applied": True,
         "path": str(target),
         "blocks": naniesione,
         "backup": str(kopia),
-        "size_before": len(original),
-        "size_after": len(zmieniony),
+        "size_before": _b_przed,
+        "size_after": _b_po,
     }
 
 # ============================================================
@@ -47935,6 +48568,23 @@ def _zawolania(text):
     return wynik
 
 
+def _bez_znakow_na_poczatku(tekst):
+    """
+    List bez "- ", "> ", "# " na poczatku — ale pogrubienie, ktore domyka
+    sie w pierwszej linii, zostaje w calosci.
+
+    v480lz: bylo .lstrip("*_#>- "), wiec "**NEG przyjęty — ... = nie.**
+    Zamykam sesję." szlo do Bartka jako "NEG przyjęty — ... = nie.**
+    Zamykam sesję." (bieg 2026-11-05 17:42) — gwiazdki bez pary.
+    """
+    t = str(tekst or "").strip()
+    s = t.lstrip("*_#>- \t\n")
+    m = re.search(r"[*_]+$", t[:len(t) - len(s)])
+    if m and s and m.group(0) in s.split("\n", 1)[0]:
+        s = m.group(0) + s
+    return s
+
+
 def _collect_role_messages(speaker_role, text):
     """
     Wyławia z wypowiedzi zwroty do konkretnych osób i odkłada je do
@@ -48060,9 +48710,11 @@ def _collect_role_messages(speaker_role, text):
                 # calosci tylko dla tych, ktorzy przy nim siedza.
                 # Ta droga dostarczyla Oli skrypt test_uplink.sh.
                 _kod_dla_tej_roli(
-                    _utnij_na_sekcji_wykonawcy(
-                        _dla_tej_roli(text, adresat)
-                    ).strip().lstrip("*_#>- \t\n"),
+                    _bez_znakow_na_poczatku(
+                        _utnij_na_sekcji_wykonawcy(
+                            _dla_tej_roli(text, adresat)
+                        )
+                    ),
                     adresat
                 )
             )
@@ -54462,6 +55114,9 @@ def _jak_rozmawiamy_laptop():
 
 
 def _jak_rozmawiamy(laptop=True):
+    # v480lz: akapit przepisany w calosci — doszlo zdanie o „...” w
+    # poprawce fragmentu (bieg 2026-11-05 17:48: Bartek nie umial
+    # przepisac 1:1 linii z 640 znakami tablicy i poprawka wracala).
     return (
         "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
         "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
@@ -54487,7 +55142,12 @@ def _jak_rozmawiamy(laptop=True):
         "blok „Stary fragment:” skopiowany 1:1 z pliku i blok „Nowy "
         "fragment:”. Program od razu nanosi ją na ten plik i mówi, w "
         "których liniach zmienił; gdy fragmentu w tym pliku nie ma, nic "
-        "nie zmienia i pokazuje, co tam stoi najbliżej. Pusty „Stary "
+        "nie zmienia i pokazuje, co tam stoi najbliżej. Długiej albo "
+        "powtarzalnej linii nie trzeba przepisywać: w „Starym fragmencie” "
+        "„...” zastępuje dowolny tekst w środku linii, a linia z samym "
+        "„...” kilka całych linii; reszta zostaje 1:1 z pliku, a „...” w "
+        "tym samym miejscu „Nowego fragmentu” zostawia tamten tekst bez "
+        "zmian. Pusty „Stary "
         "fragment:” albo „Dopisz na końcu <plik>:” nad blokiem dopisuje "
         "blok na końcu pliku, np. notatkę do NOTES.md. Poprawka, przy "
         "której napiszecie, że jej jeszcze nie nanosicie, zostaje "

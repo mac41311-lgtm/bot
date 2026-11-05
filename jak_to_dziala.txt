@@ -4746,3 +4746,44 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Akapit o kodzie w opisie rozmowy zespołu przepisany w całości:
        „Poprawka do <plik>”, Stary/Nowy 1:1 z pliku, dopisanie, propozycja,
        historia zmian przy PODGLĄDZIE i uruchomieniu.
+
+341. (v480lz) Operacje na plikach w biegu 5.11: właściwa treść nowego pliku,
+     skróty „...” w poprawce, dziennik w bajtach, bez powtórzonych wypowiedzi.
+     - 17:56 (drużyna 2) so_cli_size.py dostał stary pseudokod Bartka
+       („if … : keep; else reject”) zamiast skryptu z jego heredoca:
+       wykonawca przejmował zapis pliku autora i brał „kod Bartka” sprzed
+       rozmowy. Plik od autora program kładzie teraz sam, z jego treścią;
+       blok z komendą cat > plik <<'EOF' daje dokładnie to, co zapisze
+       heredoc (bajt w bajt, z końcową nową linią). Przejęcie zapisu
+       wykonawcy bierze kod z rozmowy tylko wtedy, gdy jest podobny do
+       tego, co wykonawca chciał zapisać.
+     - 17:14 man18_extract.py: dwa wpisy [PLIK] (nowy plik 6425 B, potem
+       „zmiana komendą” 6426 B) dla jednego zapisu. Teraz jeden; komenda,
+       która zapisuje tę samą treść, nie jest zmianą (migawka z sumą
+       kontrolną treści, nie tylko czas i rozmiar).
+     - 17:48 (drużyna 1) Bartek nie umiał przepisać 1:1 linii z 640
+       znakami tablicy i poprawka wracała trzy razy. W „Starym fragmencie”
+       „...” zastępuje dowolny tekst w środku linii, a linia z samym
+       „...” kilka całych linii (pierwsza i ostatnia linia muszą być
+       prawdziwe, co najmniej 12 znaków tekstu); „...” w tym samym miejscu
+       „Nowego fragmentu” zostawia tamten tekst bez zmian. Gdy fragment
+       nie pasuje, a w nim albo w pliku jest długa linia, błąd podpowiada
+       „...”. Zdanie o tym doszło do akapitu o kodzie w opisie rozmowy
+       zespołu (przepisany w całości).
+     - Dziennik zmian: rozmiary poprawek w bajtach, jak przy komendach
+       (było 11084 → 11209 znaków obok 11143 B).
+     - „MAIN pytał: «…»” w rundzie programu cytował wiadomość programu
+       („Twoja poprawka nie weszła…”) — rundy programu (składnia,
+       poprawka, krótkie uruchomienie) nie nadpisują już pytania MAIN-a.
+     - „autor odpowiedział bez nowej poprawki — koniec rund”, choć plik
+       w trakcie rund się zmienił (Bartek poprawił go komendą): MAIN
+       dostaje teraz listę zmian z rund (kto, jak, rozmiar).
+     - Linia [PLIK] pokazuje komendę zapisu („cat >> raporty/_NEG.md
+       <<'EOF'”, „python3 -c " … open('kod/auto_diagnose.py','w')…”),
+       nie linię z treści notatki ani „(+15 linii)”.
+     - 17:42 wiadomość do Bartka (10.2 kB): list Tomka, list Wojtka, potem
+       ta sama wypowiedź Tomka jako „Tomek (wcześniej, krok 8)” i koniec
+       listu Wojtka drugi raz. Akapit, który w tej samej wiadomości już
+       stał pod imieniem tej samej osoby, nie idzie drugi raz (2.6 kB
+       mniej); kolega cytujący kolegę zostaje. List do kolegi nie gubi
+       już otwierającego „**” (zostawały gwiazdki bez pary).
