@@ -4835,3 +4835,57 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        rozmowę, nie przy każdym podglądzie.
      Na tych samych wiadomościach z logów powtórki do tej samej osoby
      spadają z 14 do 4 kB (drużyna 2) i z 17 do 5 kB (drużyna 1).
+
+343. (v480mb) Pisanie kodu w plikach i rozmowa zespołu w nocnym biegu 5/6.11
+     (już na v480ma: drużyna 1 od 23:19, drużyna 2 od 23:25).
+     - Komenda pod nazwą pliku szła na dysk jako nowy plik. Krok 56 (00:14,
+       drużyna 1): Tomek napisał „nie pisz `evolve_ast.py`, najpierw:” i dał
+       blok „LAPTOP: cd ~/MAIN_1 && grep …”. Program zapisał ten blok jako
+       ~/MAIN_1/evolve_ast.py (192 B), Tomek dostał błąd składni, w rundzie
+       poprawki napisał na ślepo cały plik (4717 B) obok kod/eval/, a jego
+       komenda sprawdzająca przepadła. Krok 74 (03:07): blok Bartka
+       „LAPTOP: cd ~/MAIN_1 && timeout 600 ./kod/ppm_c_v3_mut …” poszedł
+       jako kod/segment_gate.py (147 B). Teraz linia zaczęta od „LAPTOP:” /
+       „TELEFON:” (także po „URUCHOM:” / „PODGLĄD:”) to zawsze komenda,
+       nigdy treść pliku; w bloku rozpoznawanych jest więcej komend powłoki
+       (gcc, make, find, git, ln, ./program …); przeczenie tuż przed nazwą
+       w nagłówku („nie pisz `x.py`”) nie zapowiada pliku.
+     - Wzór pod nazwą pliku: krok 73 (02:53) Tomek opisał `ppm_cm_paq.c`
+       i dał dwie linie wzoru („p_final = softmax( Σ_i w_i · logit(p_i) )”),
+       a program położył je jako kod/ppm_cm_paq.c (115 B) — plik, który
+       dopiero miał napisać Bartek. Teraz blok pod nazwą pliku C, C++, JS,
+       Javy, Go, Rusta czy Kotlina bez ; { } i bez #include/#define nie jest
+       plikiem; jedna linia kodu (cytat „w linii 38”) i dwie linie Pythona,
+       które się nie kompilują, też nie.
+     - „Stary fragment” / „Nowy fragment” poprawki do ścieżki, pod którą
+       pliku nie ma (zła ścieżka), szedł na dysk jako nowy plik z samym
+       fragmentem (na logach: evolve_ast.py 145 B, distill_ensemble.py
+       187 B i 198 B, także gdy każda połowa poprawki stoi w osobnym
+       bloku). Teraz fragment poprawki nie jest nowym plikiem.
+     - List kolegi dwa razy w jednej wiadomości: Tomek (drużyna 2, krok 40)
+       dostał list Bartka pod „Bartek:” ze skrzynki i zaraz drugi raz cały
+       pod „Bartek — w nawiązaniu do tego, co powiedziałeś („…”):” (8 kB);
+       Tomek w drużynie 1 (krok 83) tak samo list Oli. Teraz to, co osoba
+       dostała ze skrzynki, liczy się jako przeczytane w tym kroku, a bramka
+       wysyłki zna też nagłówek „— w nawiązaniu …” i nie zostawia samych
+       nagłówków. Na tych wiadomościach 12,7 → 7,4 tys. znaków i 9,7 → 7,3
+       tys.
+     - Dziennik plików: „ln -s docs/NOTES.md NOTES.md” (03:44, Piotr) dało
+       dwa razy „docs/NOTES.md — nowy plik komendą”; komenda na dwie maszyny
+       (część na telefonie, część na laptopie) wpisywała nowy plik drugi raz.
+       Teraz jeden wpis na plik (ta sama prawdziwa ścieżka pod dwiema
+       nazwami to jeden plik), a nowe dowiązanie do pliku, który już był,
+       nie jest nowym plikiem.
+     - „wyniki/ssm_smoke.json — nowy plik komendą: cat wyniki/ssm_smoke.json”
+       (23:10, Bartek): plik zapisał ssm_predict.py z tej samej komendy,
+       a wpis podawał część, która go tylko czytała (tak samo
+       hdc_v4_backoff.json i python3 -c "json.load(open(…))"). Teraz, gdy plik
+       stoi tylko w części, która go czyta, wpis podaje program uruchomiony
+       przed nią („timeout 120 python3 kod/eval/ssm_predict.py …”).
+     - Log autora: ta sama komenda z tym samym wynikiem kilka razy z rzędu
+       (Tomek, krok 59: dwa razy „$ LAPTOP: python3 kod/eval/evolve_ast.py /
+       FATAL … / kod wyjścia: 2”) to jeden wpis z dopiskiem „(2 razy
+       z rzędu, ten sam wynik)”.
+     Sprawdzone na 10 biegach (noc 5/6.11 i osiem wcześniejszych): odpada
+     tylko komenda, wzór, cytat albo fragment poprawki; prawdziwe pliki
+     zespołu zapisują się jak dotąd.

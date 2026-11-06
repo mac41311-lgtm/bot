@@ -10390,9 +10390,12 @@ def _bez_powtorzonych_glosow(tekst):
         if str(v or "").strip()
     }
     imiona.add("Użytkownik")
+    # v480mb: takze naglowek watku "Bartek — w nawiązaniu do tego, co
+    # powiedziałeś („…”):" — to ten sam glos co "Bartek:" ze skrzynki
     naglowek = re.compile(
         r"^(" + "|".join(re.escape(i) for i in sorted(imiona, key=len, reverse=True)) + r")"
-        r"(?: \(wcześniej[^)\n]*\)|, wcześniej(?: \(krok \d+\))?)?:[ \t]*$"
+        r"(?: \(wcześniej[^)\n]*\)|, wcześniej(?: \(krok \d+\))?"
+        r"| — w nawiązaniu do tego, co powiedziałeś \(„.*”\))?:[ \t]*$"
     )
 
     def _norm(akapit):
@@ -10460,6 +10463,20 @@ def _bez_powtorzonych_glosow(tekst):
                 wyciete += 1
                 continue
             zostaja.append(a)
+        # v480mb: gdy ten glos byl powtorka, krotkie akapity, ktore tez juz
+        # staly wyzej ("## Do zespołu", "**Ania — NEG:**"), nie zostaja same
+        # jako szkielet naglowkow
+        if wyciete and juz:
+            zostaja = [a for a in zostaja
+                       if a is None or not _norm("\n".join(a)) or _norm("\n".join(a)) not in juz]
+            while zostaja and zostaja[-1] is None:
+                zostaja.pop()
+            _zw = []
+            for a in zostaja:
+                if a is None and (not _zw or _zw[-1] is None):
+                    continue
+                _zw.append(a)
+            zostaja = _zw
         widziane[imie] = juz + "\x00" + "\x00".join(
             _norm("\n".join(a)) for a in akapity if a is not None
         )
@@ -23621,6 +23638,15 @@ def _pliki_pod_naglowkami(text):
         nazwa = _nazwa_z_naglowka(linie[-1])
         if not nazwa:
             continue
+        # v480mb: "nie pisz `evolve_ast.py`, najpierw:" — nad blokiem stoi
+        # plik, ktorego autor wlasnie NIE pisze (noc 2026-11-05/06, Tomek).
+        # Przeczenie tuz przed nazwa; "Plik x.py (nie zapisuj go do /tmp)"
+        # zostaje plikiem.
+        _gdzie = linie[-1].find(nazwa)
+        if re.search(r"\bnie\s+(?:pisz|napisz|zapisuj|tw[oó]rz|zak[lł]adaj|r[oó]b|dodawaj|"
+                     r"k[lł]ad[zź])\w*\b[^.!?;:\n]{0,25}$",
+                     linie[-1][:_gdzie] if _gdzie >= 0 else linie[-1], re.IGNORECASE):
+            continue
         kod = _wyrownaj_blok(m.group(2))
         if (len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
                 or _obcy_jezyk_dla(nazwa, m.group(1), kod)
@@ -23666,6 +23692,11 @@ def _poloz_pliki_w_katalogu(katalog, team):
                 byly.append(nazwa + " (już był, " + str(p.stat().st_size) + " B)")
                 continue
             if _siega_do_rywala("termux_write_file", {"path": str(p)}) or _code_target_rejection(str(p), kod):
+                continue
+            # v480mb: heredoc tego pliku daje jego srodek; inna komenda, wzor
+            # albo szkic pod nazwa pliku to nie plik (patrz _nie_wyglada_na_plik)
+            kod = _tresc_bloku_dla(kod, p, tekst)
+            if not kod or _nie_wyglada_na_plik(p, kod):
                 continue
             if not any(w.get("rola") == rola and w.get("tekst") == tekst for w in _kod_autorow[-8:]):
                 _zapamietaj_kod_autora(rola, tekst)
@@ -25215,6 +25246,11 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             if not kod and len(sciezki) == 1 and p.name not in _podpisane:
                 kod = _tresc_bloku_dla(_kod_z_wypowiedzi(odp, p.name), p, odp)
             if not kod or len(kod.strip()) < 40 or _code_target_rejection(str(p), kod):
+                continue
+            # v480mb: komenda, wzor albo szkic pod nazwa pliku to nie nowy plik;
+            # "Stary fragment" / "Nowy fragment" poprawki tez nie — pliku pod
+            # ta sciezka nie ma, wiec poprawki nie ma do czego przylozyc
+            if _nie_wyglada_na_plik(p, kod) or _fragment_poprawki(odp, kod):
                 continue
             if _usuniety_ta_sama_tresc(p, kod):
                 log("PROGRAM", _sciezka_od_domu(str(p)) + " od " + imie_d + ": tę samą treść "
@@ -27258,8 +27294,15 @@ def _odcisk_malego(p, st=None):
         return None
 
 
+class _Migawka(dict):
+    """v480mb: migawka plikow komendy z chwila jej zrobienia (.czas) —
+    takze dla plikow, ktorych jeszcze nie bylo."""
+    czas = 0.0
+
+
 def _migawka_plikow(pliki):
-    out = {}
+    out = _Migawka()
+    out.czas = time.time()
     for p in pliki or ():
         try:
             st = Path(p).stat()
@@ -27401,10 +27444,51 @@ def _fragment_komendy_z_plikiem(komenda, nazwa):
         for cz in czesci:
             if _ZAPIS_OGOLNY_RE.search(cz):
                 return _opis(cz, _ZAPIS_OGOLNY_RE)
-        for cz in czesci:
+        for i, cz in enumerate(czesci):
             if nazwa in cz:
+                # v480mb: plik stoi tylko w czesci, ktora go czyta — zapisal
+                # go program uruchomiony przed nia. Noc 2026-11-05/06
+                # (druzyna 1): "wyniki/ssm_smoke.json — nowy plik komendą:
+                # cat wyniki/ssm_smoke.json", a plik zapisal ssm_predict.py
+                # z tej samej komendy.
+                if _czesc_tylko_czyta(cz):
+                    _prog = [c for c in czesci[:i] if _PROGRAM_RE.match(_bez_maszyny(c))
+                             and not _czesc_tylko_czyta(c)]
+                    if _prog:
+                        return _komenda_jedna_linia(_prog[-1], 90)
                 return _komenda_jedna_linia(cz, 90)
     return _komenda_jedna_linia(k, 90)
+
+
+def _bez_maszyny(cz):
+    return re.sub(r"^\s*(?:LAPTOP|TELEFON)\s*:\s*", "", str(cz or "")).strip()
+
+
+# v480mb: czesc komendy, ktora uruchamia program (skrypt, plik wykonywalny),
+# takze po timeout / nice / nohup / zmiennych srodowiska
+_PROGRAM_RE = re.compile(
+    r"^(?:(?:timeout\s+(?:-\w+(?:\s+\w+)?\s+)*\S+|nice(?:\s+-n\s*-?\d+)?|nohup|setsid|time|env"
+    r"|stdbuf(?:\s+-\w+)+|taskset\s+\S+|[A-Z_][A-Z0-9_]*=\S*)\s+)*"
+    r"(?:python3?\s+(?:-[uOBE]\s+|-X\s+\S+\s+|-m\s+)*(?!-c\b)['\"]?[\w~./-]+"
+    r"|(?:bash|sh|node|perl|ruby|Rscript)\s+(?!-c\b)['\"]?[\w~./-]+|\.{0,2}/[\w./-]+|~/[\w./-]+)")
+
+
+def _czesc_tylko_czyta(cz):
+    """v480mb: czesc komendy, ktora tylko czyta pliki: PODGLĄD-owe cat,
+    head, grep, ls… albo python3 -c, ktory nic nie zapisuje
+    (json.load(open('x.json')), ast.parse(open(…).read()))."""
+    try:
+        k = _bez_maszyny(cz)
+        if not k:
+            return False
+        if _tylko_oglada(k):
+            return True
+        return bool(re.match(r"^(?:timeout\s+\S+\s+)?python3?\s+-c\s", k)) and not (
+            _ZAPIS_OGOLNY_RE.search(k)
+            or re.search(r"\.(?:save|savez|savetxt|dump|to_csv|to_json|savefig|tofile)\w*\(|"
+                         r"subprocess|os\.system|os\.(?:remove|rename|replace|makedirs)|shutil\.", k))
+    except Exception:
+        return False
 
 
 def _zmiany_z_komendy(komenda, przed, kto):
@@ -27419,6 +27503,8 @@ def _zmiany_z_komendy(komenda, przed, kto):
     lap = bool(re.match(r"\s*LAPTOP\s*:", str(komenda or "")))
     _pobrane_raw = getattr(_laptop_tl, "pobrane_po", None)
     pobrane_po = set(_pobrane_raw or ())
+    _czas_migawki = getattr(przed, "czas", None)
+    _juz_wpisane = set()
     for sc, stan in przed.items():
         p = Path(sc)
         try:
@@ -27428,6 +27514,34 @@ def _zmiany_z_komendy(komenda, przed, kto):
             teraz = None
         if teraz is None or teraz == tuple(stan or ())[:2]:
             continue
+        # v480mb: ten sam plik pod dwiema nazwami (dowiazanie, ~/ i pelna
+        # sciezka) — jeden wpis
+        try:
+            _prawdziwa = str(p.resolve())
+        except Exception:
+            _prawdziwa = str(p)
+        if _prawdziwa in _juz_wpisane:
+            continue
+        if stan is None:
+            # v480mb: nowe dowiazanie do pliku, ktory juz byl — tresc sie nie
+            # zmienila. Noc 2026-11-06 03:44 (druzyna 1): "ln -s docs/NOTES.md
+            # NOTES.md" dalo dwa razy "docs/NOTES.md — nowy plik komendą".
+            try:
+                if p.is_symlink() and any(
+                        s2 is not None and Path(k2).resolve() == p.resolve()
+                        and tuple(s2)[:2] == teraz for k2, s2 in przed.items() if k2 != sc):
+                    continue
+                if p.is_symlink() and p.resolve().exists() and p.resolve().stat().st_mtime < float(
+                        _czas_migawki or 0):
+                    continue
+            except Exception:
+                pass
+            # v480mb: nowy plik wpisal juz do dziennika ktos w trakcie tej
+            # komendy (komenda na dwie maszyny: kazda czesc ma swoja migawke)
+            if _czas_migawki:
+                _wyj_nowy, _ = _zmiana_juz_w_dzienniku(p, _czas_migawki, teraz[1])
+                if _wyj_nowy:
+                    continue
         # v480lz: te same bajty co przed komenda — bez wpisu
         if stan is not None and len(stan) > 2 and stan[2] and stan[1] == teraz[1] \
                 and _odcisk_malego(p) == stan[2]:
@@ -27456,6 +27570,7 @@ def _zmiany_z_komendy(komenda, przed, kto):
         jak = (("nowy plik" if stan is None else "zmiana") + " komendą" + (" na laptopie" if lap else "")
                + ": " + frag)
         _zapisz_zmiane_pliku(p, kto, jak, _przed_rozmiar, teraz[1])
+        _juz_wpisane.add(_prawdziwa)
         zmienione.append(p)
     return zmienione
 
@@ -27636,7 +27751,7 @@ def _log_dla_autora(rola, pomin=()):
 
         if u.get("status") in ("LECI_W_TLE", "AUTO_BACKGROUNDED", "JUZ_LICZY_W_TLE",
                                "JUZ_CZEKA_W_TLE", "CZEKA_W_TLE"):
-            kawalki.append("$ " + komenda.strip() + "\n("
+            _dodaj_kawalek(kawalki, "$ " + komenda.strip() + "\n("
                            + _wynik_do_logu({"status": u.get("status"), "pid": u.get("pid")})
                            + "; wynik przyjdzie, gdy się skończy)")
             continue
@@ -27645,7 +27760,8 @@ def _log_dla_autora(rola, pomin=()):
             x for x in (u["stdout"], u["stderr"], u["blad"]) if x.strip()
         ).strip()
 
-        kawalki.append(
+        _dodaj_kawalek(
+            kawalki,
             "$ " + komenda.strip()
             + ("\n" + wyjscie if wyjscie else "\n(nic nie wypisało)")
             + (
@@ -27657,7 +27773,22 @@ def _log_dla_autora(rola, pomin=()):
     if not kawalki:
         return ""
 
-    return "\n\n".join(kawalki)
+    # v480mb: ta sama komenda z tym samym wynikiem kilka razy pod rzad —
+    # raz, z liczba. Noc 2026-11-06 (druzyna 1, krok 59): Tomek dostal dwa
+    # razy "$ LAPTOP: python3 kod/eval/evolve_ast.py / FATAL: brak … / kod
+    # wyjścia: 2" jeden pod drugim.
+    return "\n\n".join(
+        k + ("\n(" + str(n) + " razy z rzędu, ten sam wynik)" if n > 1 else "")
+        for k, n in kawalki
+    )
+
+
+def _dodaj_kawalek(kawalki, tekst):
+    """v480mb: [tekst, ile razy z rzedu] — powtorka tuz po tym samym to licznik."""
+    if kawalki and kawalki[-1][0] == tekst:
+        kawalki[-1][1] += 1
+    else:
+        kawalki.append([tekst, 1])
 
 
 def _zglos_to_co_przybylo(przed, komenda=None):
@@ -43601,9 +43732,18 @@ def _blok_to_komenda(kod, sciezka):
     MAIN-owi komende w bloku, program wzial ja za nowa wersje
     k4_iteracja3.py i nadpisal 17 kB kodu 112 bajtami."""
     try:
+        kod = str(kod or "").strip()
+        # v480mb: linia zaczeta od "LAPTOP:" / "TELEFON:" (takze po
+        # "URUCHOM:" / "PODGLĄD:") to komenda programu dla tej maszyny — nie
+        # tresc zadnego pliku, takze .sh. Noc 2026-11-05/06 (druzyna 1): trzy
+        # bloki "LAPTOP: cd ~/MAIN_1 && grep …" poszly na dysk jako nowe pliki
+        # (evolve_ast.py, segment_gate.py), autor dostawal blad skladni
+        # i pisal caly plik na slepo, a jego komenda sprawdzajaca przepadala.
+        _pierwsza_cala = next((l.strip() for l in kod.splitlines() if l.strip()), "")
+        if _PRZEDROSTEK_MASZYNY_RE.match(_pierwsza_cala):
+            return True
         if Path(str(sciezka or "").split("/")[-1]).suffix.lower() in (".sh", ".bash", "") :
             return False
-        kod = str(kod or "").strip()
         try:
             compile(kod, "x.py", "exec")
             return False
@@ -43621,7 +43761,7 @@ def _blok_to_komenda(kod, sciezka):
         pierwsza = linie[0]
         if (
             _LINIA_POWLOKI_RE.match(pierwsza)
-            and not re.match(r"^[\w.]+\s*(?:=|\(|\[|\.|:)", pierwsza)
+            and not re.match(r"^[\w.]+\s*(?:=|\(|\[|\.|:)", _PRZEDROSTEK_RE.sub("", pierwsza))
             and (re.search(r"(?:python3?\s+-c\s+[\"']|<<-?\s*['\"]?\w+)", pierwsza)
                  or "&&" in pierwsza or "|" in pierwsza or ";" in pierwsza)
         ):
@@ -43639,9 +43779,91 @@ def _blok_to_komenda(kod, sciezka):
 # a zapis tfm_bpe_med.py wzial ten blok jako "kod Tomka" i nadpisal trener.
 _LINIA_POWLOKI_RE = re.compile(
     r"^(?:\*\*)?(?:(?:PODGL[AĄ]D|URUCHOM)\s*:\s*(?:\*\*)?\s*`?)?"
+    r"(?:(?:LAPTOP|TELEFON)\s*:\s*)?"
     r"(?:\$\s*)?(?:[A-Z_][A-Z0-9_]*=\S*\s+)*(?:cd|python3?|bash|sh|nohup|setsid|"
     r"timeout|time|export|env|pip3?|pkg|ls|cat|tail|head|grep|sed|wc|kill|pkill|ps|"
-    r"mkdir|cp|mv|rm|echo|curl|wget|tar|unzip|chmod|sleep|watch|nice|taskset)\b")
+    r"mkdir|cp|mv|rm|echo|curl|wget|tar|unzip|chmod|sleep|watch|nice|taskset|"
+    r"gcc|g\+\+|clang|make|find|md5sum|sha1sum|sha256sum|du|df|awk|sort|uniq|xargs|"
+    r"tee|diff|ln|touch|nproc|strings|ssh|scp|rsync|git|xz|gzip|gunzip|zip|"
+    r"\./[\w./-]+|~/[\w./-]+)\b")
+
+_KOD_KLAMROWY = {".c", ".h", ".cpp", ".hpp", ".java", ".js", ".mjs", ".ts", ".go", ".rs", ".kt"}
+
+
+def _nie_wyglada_na_plik(p, kod):
+    """
+    v480mb: blok, ktory na pewno nie jest trescia NOWEGO pliku p, choc stoi
+    pod jego nazwa: komenda (patrz _blok_to_komenda), wzor albo szkic.
+    Noc 2026-11-05/06 (druzyna 1, krok 73): pod "`ppm_cm_paq.c` — 7 modeli
+    PPM …, na wyjściu logistic mixer:" Tomek dal dwie linie wzoru
+    ("p_final = softmax( Σ_i w_i · logit(p_i) )"), a program polozyl je
+    jako kod/ppm_cm_paq.c (115 B) — plik, ktory dopiero mial napisac Bartek.
+    Kod w C, JS, Javie, Go, Ruscie i Kotlinie ma zawsze ; albo { }
+    (albo #include/#define); plik .py z jednej-dwoch linii, ktore sie nie
+    kompiluja, to tez nie plik.
+    """
+    try:
+        kod = str(kod or "")
+        if _blok_to_komenda(kod, str(p)):
+            return True
+        linie = [l for l in kod.splitlines() if l.strip()]
+        if not linie:
+            return True
+        suf = Path(str(p)).suffix.lower()
+        if suf in _KOD_KLAMROWY and not re.search(
+                r"[;{}]|^\s*#\s*(?:include|define|pragma|ifn?def)\b", kod, re.M):
+            return True
+        # jedna linia kodu to cytat z pliku ("logits = sum(m(x) + mask …)"
+        # pod "Co się dzieje w linii 38"), nie nowy plik
+        if (suf in _KOD_KLAMROWY or suf == ".py") and len(linie) == 1:
+            return True
+        if suf == ".py" and len(linie) <= 2:
+            try:
+                compile(kod, "x.py", "exec")
+            except SyntaxError:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _fragment_poprawki(text, kod):
+    """
+    v480mb: blok `kod` stoi w wypowiedzi jako kawalek poprawki (nad nim
+    "Stary fragment:" / "Nowy fragment:" / SZUKAJ — patrz _blok_poprawki)
+    albo sam ma w sobie "Stary fragment:" i "Nowy fragment:". Gdy pliku pod
+    ta sciezka nie ma (zla sciezka), program polozylby jako nowy plik sam
+    stary fragment. Bieg 2026-11-05 (druzyna 1, krok 59): poprawka Ani do
+    kod/eval/evolve_ast.py — pod inna sciezka bylby to plik ze 145 B.
+    """
+    try:
+        t = str(text or "")
+        k = str(kod or "").strip()
+        if not k:
+            return False
+        if (re.search(r"^\s*\**\s*(?:stary|old)\s+fragment\b", k, re.I | re.M)
+                and re.search(r"^\s*\**\s*(?:nowy|new)\s+fragment\b", k, re.I | re.M)):
+            return True
+        # blok zaczety od "Stary fragment:" / "Nowy fragment:" / "SZUKAJ:"
+        # (Ola, druzyna 2, krok 20 — kazda polowa poprawki w osobnym bloku)
+        _pierwsza = next((l.strip() for l in k.splitlines() if l.strip()), "")
+        if re.match(r"^\**\s*(?:(?:stary|nowy|old|new)\s+fragment\b[^:\n]{0,40}:|"
+                    r"(?:SZUKAJ|ZAMIE[ŃN](?:\s+NA)?)\b[^:\n]{0,40}:)", _pierwsza, re.I):
+            return True
+        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)```", t, re.DOTALL):
+            if _wyrownaj_blok(m.group(2)).strip() == k and _blok_poprawki(t, m.start()):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# v480mb: "LAPTOP:" / "TELEFON:" na poczatku linii (takze po "URUCHOM:" /
+# "PODGLĄD:" i gwiazdkach) — komenda programu dla tej maszyny.
+_PRZEDROSTEK_MASZYNY_RE = re.compile(
+    r"^(?:\*\*)?(?:(?:PODGL[AĄ]D|URUCHOM)\s*:\s*(?:\*\*)?\s*`?)?(?:LAPTOP|TELEFON)\s*:\s*\S")
+_PRZEDROSTEK_RE = re.compile(
+    r"^(?:\*\*)?(?:(?:PODGL[AĄ]D|URUCHOM)\s*:\s*(?:\*\*)?\s*`?)?(?:(?:LAPTOP|TELEFON)\s*:\s*)?")
 
 
 def _blok_dokladnie_dla(text, sciezka):
@@ -43779,6 +44001,9 @@ def _kod_zamiast_wyniku(text, sciezka, wybrany):
         for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)```", tekst, re.DOTALL):
             kod = _wyrownaj_blok(m.group(2))
             if not kod.strip() or kod.strip() == str(wybrany).strip():
+                continue
+            # v480mb: "Stary fragment" / "Nowy fragment" poprawki to nie caly plik
+            if _blok_poprawki(tekst, m.start()):
                 continue
             przed = tekst[:m.start()]
             przed = przed[przed.rfind("```") + 3:] if "```" in przed else przed
@@ -50068,6 +50293,14 @@ def _role_inbox_block(role_name):
         znaki=len(blok),
         poczatek=_poczatek_bloku(blok)
     )
+
+    # v480mb: to, co ta osoba wlasnie dostala ze skrzynki, liczy sie jako
+    # przeczytane w tym kroku — watek ("Bartek — w nawiązaniu do tego, co
+    # powiedziałeś …") nie poda tego samego listu drugi raz. Noc
+    # 2026-11-05/06: Tomek (druzyna 2, krok 40) dostal list Bartka pod
+    # "Bartek:" i zaraz caly jeszcze raz w watku (8 kB), Tomek w druzynie 1
+    # (krok 83) list Oli dwa razy.
+    _zapamietaj_co_dostal(role_name, blok)
 
     # v480lv: slowa kolegow i MAIN-a nie sa skracane przy usuwaniu
     # powtorzen z wiadomosci (patrz _bez_powtorzen_w_wiadomosci).
