@@ -4937,3 +4937,71 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wiadomość 2053 → 1051 znaków.
      Sprawdzone na logach z 10 biegów: z 432 par poprawek zmienia się 5
      (wszystkie z błędnym wcięciem), z 3854 bloków kodu 9, z 1013 komend 3.
+345. (v480md) Podpowiedzi z drugiego czatu sprawdzone na biegu 6.11 od 14:26
+     (na v480mb/v480mc); wzięte to, co w logach dalej szło źle.
+     - Plik z kilkoma kropkami i notatki pod nagłówkiem (drużyna 2, krok 35,
+       19:32): Bartek dał cztery pliki pod „**eksperymenty/gra_v2/…**” —
+       program_v0.dsl.py przepadł bez słowa (nazwa z dwiema kropkami),
+       run.py padał na FileNotFoundError, a Bartek pisał go jeszcze dwa
+       razy, w końcu przez cat >. README.md (krok 35) i bench/README.md
+       (krok 10, dwie wersje) też przepadały, bo program kładł tylko kod.
+       Teraz nazwa może mieć kilka kropek, a notatka .md/.txt pod
+       nagłówkiem z samą jej nazwą idzie od razu na dysk („[Program od razu
+       zapisał ten plik Bartka w …]”). Druga wersja od tego samego autora
+       zastępuje pierwszą (kopia w .kopie/); cudzego pliku nie zastępuje,
+       tylko mówi, jak go zmienić (poprawka fragmentu albo dopisanie).
+       Wyników (.json) z wypowiedzi program nie kładzie.
+     - Wynik uruchomienia dla autora (drużyna 1): Bartek pięć razy dostał
+       „Uruchomione: … — kod wyjścia None. Nic nie wypisał”, choć skrypt
+       coś wypisał (15:31 FATAL i kod 2, 17:56 wyniki gry) albo w ogóle nie
+       ruszył (19:22, 20:01: tylko grep i „liczy już w tle”). Program brał
+       wynik ostatniego narzędzia zadania, a nie uruchomienia tego pliku.
+       Teraz autor dostaje wynik właśnie tej komendy (z argumentami, kod
+       wyjścia, początek i koniec wydruku), „uruchomione w tle” albo nic,
+       gdy plik nie ruszył.
+     - Przegląd kodu, gdy kod jest dobry (drużyna 1): trzy przeglądy Piotra
+       i Ani po ~20 kB — 15:31 tweedie_fit.py i 16:41 prog_synth.py na
+       telefonie bez danych z laptopa, 17:19 prog_synth.py ze złymi
+       argumentami — zużyły limit 3 przeglądów; o 18:16 przy kolejnych
+       złych argumentach „(~30 min)” był już „wyczerpany limit”. Teraz brak
+       danych na telefonie albo błąd argparse („usage: … error:
+       unrecognized arguments”) nie idzie do przeglądu (jedna linia
+       w logu). Komentarz za komendą w zadaniu („--max-depth 6 (30 gen
+       zamiast 20 …)”, „— szybki test”, „# …”) nie jest już doklejany do
+       argumentów.
+     - Dane na laptopie (drużyna 1, 15:31 i 16:41): „FATAL: … tweedie_test_
+       p256.bin incomplete” na telefonie — zespół uznał dump za zepsuty,
+       a na laptopie był cały; przy braku enwik8 podpowiedź mówiła
+       „LAPTOP: tail -n 20 dane/enwik8” (100 MB danych). Teraz program
+       porównuje rozmiary na obu maszynach i, gdy komenda uruchamia
+       program, mówi: puść ją na laptopie („LAPTOP: …”). Zna też „cat:
+       logi/x.log: No such file or directory” bez cudzysłowu.
+     - Poprawka już naniesiona (drużyna 1, krok 23, 19:22): Bartek naniósł
+       fix alfa o 19:19, a wykonawca z zadaniem „Stary fragment / Nowy
+       fragment” nanosił go drugi raz (python -c przez ssh, patch_
+       tweedie.py), dostał dwie odmowy i zadanie wróciło bez uruchomienia.
+       Teraz notka wykonawcy mówi, że ta poprawka już stoi w pliku i żeby
+       zrobił resztę zadania.
+     - Marek (krytyk) po każdej zmianie pliku dostawał cały plik: siedem
+       razy (tweedie_fit.py 9841, 10170, 11628 B; prog_synth.py
+       i self_game.py po 12 kB) — około połowy wszystkiego, co dostał
+       w biegu, a zmiany miały kilka linii. Teraz osoby, które nie nanoszą
+       poprawek, dostają same zmiany od wersji, którą mają w tej rozmowie
+       (np. 10170 B → 1736 B); przy dużej zmianie, nowej rozmowie albo po
+       przeładowaniu — cały plik. Autorzy poprawek dalej dostają cały plik
+       (Stary fragment przepisują z niego co do znaku).
+     - Po przeładowaniu (aktualizacja co 15 min) nie idzie drugi raz to, co
+       idzie raz na rozmowę: zdanie po podglądzie, całe zlecenie MAIN-a
+       i „zmieniono na dysku” o tej samej zmianie.
+     Sprawdzone i bez zmian: „EXIT=0” po potoku z tail przy błędzie
+     programu (9 razy w drużynie 1) — za każdym razem rola od razu
+     przeczytała Traceback/FATAL i działała dobrze, więc dodatkowe zdanie
+     byłoby tylko szumem. Odmowy BRAK_KODU (programy w python -c u
+     wykonawcy) działają zgodnie z zasadą i mówią, co zrobić. Rejestru
+     eksperymentów i osobnego weryfikatora z drugiego czatu nie dodałem:
+     w logach nic nie wskazuje, że ich brak coś psuje, a Sędzia już
+     sprawdza wyniki komendą.
+     Na 35 logach drużyn z 16 biegów: z 982 odpowiedzi z kodem zmienia się
+     5 (wszystkie to program_v0.dsl.py), z 172 komend z argumentami 3
+     (wszystkie z komentarzem za komendą), a notatek pod nagłówkiem jest
+     6 (same README: bench/ i eksperymenty/gra_v2/).

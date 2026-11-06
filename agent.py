@@ -4402,6 +4402,43 @@ def _plik_w_grze(*teksty):
     return any(nazwa in str(t or "") for t in teksty)
 
 
+# v480md: tresc pliku, ktora ta osoba dostala w tej rozmowie (caly albo
+# poczatek i koniec) — do pokazania samych zmian (patrz
+# _current_project_file_block). Tylko w pamieci: po przeladowaniu raz caly.
+_wersja_u_roli = {}
+
+
+def _zapamietaj_wersje_roli(rola, p, tresc):
+    try:
+        if len(tresc) > 200000:
+            return
+        k = (str(rola), _rozmowa_roli(rola), str(Path(p).resolve()))
+        _wersja_u_roli.pop(k, None)
+        _wersja_u_roli[k] = tresc
+        while len(_wersja_u_roli) > 30:
+            _wersja_u_roli.pop(next(iter(_wersja_u_roli)))
+    except Exception:
+        pass
+
+
+def _zmiany_od_wersji_roli(rola, p, tresc):
+    """v480md: zmiany pliku od wersji z rozmowy tej osoby (diff) albo "",
+    gdy jej nie ma albo zmiana jest duza (wtedy caly plik)."""
+    try:
+        stara = _wersja_u_roli.get((str(rola), _rozmowa_roli(rola), str(Path(p).resolve())))
+        if stara is None or stara == tresc:
+            return ""
+        roz = list(difflib.unified_diff(stara.split("\n"), tresc.split("\n"), lineterm="", n=3))[2:]
+        cialo = "\n".join(roz)
+        if not cialo.strip() or len(cialo) > 0.5 * min(len(tresc), _PROJECT_FILE_MAX):
+            return ""
+        return ("\n\n" + str(p) + " (" + str(len(tresc)) + " B, teraz na dysku) — zmiany od wersji, którą "
+                "masz już w tej rozmowie" + _kto_zmienil_ostatnio(p, rola) + "; linie z „-” zniknęły, "
+                "z „+” doszły, reszta pliku bez zmian:\n" + cialo + "\n")
+    except Exception:
+        return ""
+
+
 def _current_project_file_block(tekst_bledu="", rola=None):
     """
     Aktualna tresc pliku, odczytana Z DYSKU TERAZ.
@@ -4463,6 +4500,21 @@ def _current_project_file_block(tekst_bledu="", rola=None):
     if rola and _rola_zna_plik(rola, p):
         return ""
 
+    # v480md: Marek (i kazdy, kto nie nanosi poprawek) — po zmianie pliku
+    # tylko to, co sie zmienilo od wersji, ktora ma w tej rozmowie. Bieg
+    # 2026-11-06 (druzyna 1): siedem razy caly plik (tweedie_fit.py 9841,
+    # 10170, 11628 B; prog_synth.py i self_game.py po 12 kB) — polowa tego,
+    # co Marek dostal przez caly bieg, a zmiana miedzy wersjami miala kilka
+    # linii. Autorzy poprawek dostaja dalej caly plik (fragment Stary
+    # przepisuja z niego co do znaku).
+    if rola and str(rola) not in _ROLE_KODU:
+        _roz = _zmiany_od_wersji_roli(rola, p, tresc)
+        _zapamietaj_wersje_roli(rola, p, tresc)
+        if _roz:
+            if len(tresc) <= _PROJECT_FILE_MAX:
+                _rola_poznala_plik(rola, p)
+            return _roz
+
     if len(tresc) <= _PROJECT_FILE_MAX:
         if rola:
             _rola_poznala_plik(rola, p)
@@ -4482,6 +4534,55 @@ def _current_project_file_block(tekst_bledu="", rola=None):
 
 
 
+# v480md: wyniki ostatnich komend wykonawcy (termux_run), po kluczu "bieg"
+# z jego sladu — slad zostaje maly (idzie do plikow kroku), a pelny wynik
+# tu, na chwile. Bieg 2026-11-06 (druzyna 1): Bartek piec razy dostal
+# "Uruchomione: tweedie_fit.py / self_game.py — kod wyjścia None. Nic nie
+# wypisał", choc skrypt wypisal wynik (15:31: FATAL i kod 2, 17:56: wyniki
+# gry) albo w ogole nie ruszyl (19:22, 20:01: tylko grep i "liczy już w
+# tle"). Program bral wynik ostatniego narzedzia zadania (np. odmowy
+# zapisu), a nie uruchomienia tego pliku.
+_biegi_komend = {}
+_biegi_nr = [0]
+
+
+def _zapamietaj_bieg(result):
+    """v480md: klucz do wyniku komendy (patrz _biegi_komend)."""
+    _biegi_nr[0] += 1
+    k = str(os.getpid()) + "-" + str(_biegi_nr[0])
+    try:
+        _biegi_komend[k] = {
+            "returncode": result.get("returncode"),
+            "status": result.get("status"),
+            "ok": result.get("ok"),
+            "stdout": str(result.get("stdout") or "")[-4000:],
+            "stderr": str(result.get("stderr") or "")[-3000:],
+            "pid": result.get("pid"),
+            "na_laptopie_jest": result.get("na_laptopie_jest"),
+        }
+        while len(_biegi_komend) > 40:
+            _biegi_komend.pop(next(iter(_biegi_komend)))
+    except Exception:
+        pass
+    return k
+
+
+def _bieg_pliku_z_zadania(path, result):
+    """v480md: ostatnie uruchomienie TEGO pliku w zadaniu wykonawcy (komenda
+    z interpreterem albo sciezka do pliku, nie zablokowana i nie odeslana
+    jako "to samo już liczy w tle") — wynik tej komendy albo None."""
+    nazwa = Path(str(path or "")).name
+    for w in reversed(list(result.get("tool_trace") or [])):
+        if not (isinstance(w, dict) and str(w.get("tool") or "").startswith("termux_run")
+                and not w.get("zablokowane") and _komenda_uruchamia_plik(w.get("komenda"), nazwa)):
+            continue
+        b = _biegi_komend.get(w.get("bieg"))
+        if not b or b.get("status") in ("JUZ_LICZY_W_TLE", "JUZ_CZEKA_W_TLE"):
+            continue
+        return dict(b, command=str(w.get("komenda") or ""))
+    return None
+
+
 def _remember_engineer_code_result(path, result):
     """
     Zapamietuje, jak zachowal sie kod Bartka, zeby oddac mu to wprost.
@@ -4492,6 +4593,28 @@ def _remember_engineer_code_result(path, result):
 
     try:
         if not isinstance(result, dict):
+            return
+
+        # v480md: zadanie wykonawcy — wynik uruchomienia tego pliku z jego
+        # sladu; plik nie ruszyl (tylko grep/cat, "liczy już w tle") — nie
+        # ma czego oddawac autorowi.
+        if not isinstance(result.get("shell_result"), dict) and isinstance(result.get("tool_trace"), list):
+            _bieg = _bieg_pliku_z_zadania(path, result)
+            if _bieg is None:
+                _engineer_code_feedback = None
+                return
+            _w_tle = _bieg.get("status") in ("LECI_W_TLE", "AUTO_BACKGROUNDED")
+            _engineer_code_feedback = {
+                "path": str(path),
+                "command": _bieg.get("command") or "",
+                "ok": _bieg.get("returncode") == 0 or (_bieg.get("returncode") is None and _bieg.get("ok") is True),
+                "w_tle": _w_tle,
+                "pid": _bieg.get("pid"),
+                "returncode": _bieg.get("returncode"),
+                "stdout": str(_bieg.get("stdout") or ""),
+                "stderr": str(_bieg.get("stderr") or ""),
+                "report": "",
+            }
             return
 
         tool_result = result.get("tool_result")
@@ -4517,6 +4640,18 @@ def _remember_engineer_code_result(path, result):
         _engineer_code_feedback = None
 
 
+def _glowa_ogon(tekst, limit):
+    """v480md: dlugie wyjscie programu — poczatek i koniec (wynik i blad
+    stoja zwykle na koncu), srodek jedna linia."""
+    tekst = str(tekst or "")
+    if len(tekst) <= limit:
+        return tekst
+    g = int(limit * 0.4)
+    o = limit - g
+    return (tekst[:g].rstrip() + "\n[… pominięte " + str(len(tekst) - g - o) + " znaków ze środka …]\n"
+            + tekst[-o:].lstrip("\n"))
+
+
 def _engineer_feedback_block():
     """
     Blok oddawany Bartkowi: co realnie zrobil jego kod. Opróżnia sam
@@ -4534,8 +4669,14 @@ def _engineer_feedback_block():
     # v432: sam wynik uruchomienia — bez "oto co wyszlo NAPRAWDE",
     # "to jest surowy wynik, nie czyjes streszczenie" i polecenia, jak
     # podac poprawke.
+    # v480md: wykonawca — jego komenda (z argumentami), w tle albo kod wyjscia
+    if dane.get("w_tle"):
+        return ("\n\nUruchomione w tle: " + short(dane.get("command") or dane["path"], 300)
+                + (" (proces " + str(dane["pid"]) + ")" if dane.get("pid") else "")
+                + " — liczy dalej; wynik przyjdzie, gdy się skończy.")
+
     naglowek = (
-        "\n\nUruchomione: " + dane["path"]
+        "\n\nUruchomione: " + (short(dane["command"], 300) if dane.get("command") else dane["path"])
         + (
             " — bez błędu."
             if dane["ok"] else
@@ -4546,15 +4687,15 @@ def _engineer_feedback_block():
     czesci = [naglowek]
 
     if dane["stdout"].strip():
-        czesci.append("\nstdout:\n" + short(dane["stdout"], 2500))
+        czesci.append("\nstdout:\n" + _glowa_ogon(dane["stdout"], 2500))
 
     if dane["stderr"].strip():
-        czesci.append("\nstderr:\n" + short(dane["stderr"], 2000))
+        czesci.append("\nstderr:\n" + _glowa_ogon(dane["stderr"], 2000))
 
     if not (dane["stdout"].strip() or dane["stderr"].strip()):
         czesci.append(
-            "\nNic nie wypisał. Gemini napisał:\n"
-            + short(dane["report"], 1500)
+            ("\nNic nie wypisał. Gemini napisał:\n" + short(dane["report"], 1500))
+            if str(dane.get("report") or "").strip() else "\nNic nie wypisał."
         )
 
     return "".join(czesci)
@@ -15061,6 +15202,20 @@ def _przywroc_procesy_w_tle():
             _katalog_znany_roli[tuple(r[:3])] = list(r[3])
     except Exception:
         pass
+    # v480md: to, co idzie raz na rozmowe, po przeladowaniu tez nie idzie
+    # drugi raz (zdanie po podgladzie, zlecenie MAIN-a w calosci, "zmieniono
+    # na dysku" o tej samej zmianie)
+    try:
+        _rz = _stan_przed_aktualizacja.get("raz_na_rozmowe") or {}
+        for k in _rz.get("stopka") or []:
+            _stopka_rundy_dana.add(tuple(k))
+        for r, v in (_rz.get("zlecenie") or {}).items():
+            if isinstance(v, dict):
+                _zlecenie_u_roli[str(r)] = v
+        for r in _rz.get("zgloszone") or []:
+            _zmiana_zgloszona[tuple(r[:3])] = r[3]
+    except Exception:
+        pass
 
 
 def _przeladuj_po_aktualizacji(step, last_result, signatures):
@@ -15123,6 +15278,11 @@ def _przeladuj_po_aktualizacji(step, last_result, signatures):
         "znane_roli": {
             "pliki": [list(k) + [v] for k, v in _tresc_znana_roli.items()],
             "katalogi": [list(k) + [v] for k, v in _katalog_znany_roli.items()],
+        },
+        "raz_na_rozmowe": {
+            "stopka": [list(k) for k in _stopka_rundy_dana],
+            "zlecenie": {str(r): v for r, v in _zlecenie_u_roli.items() if isinstance(v, dict)},
+            "zgloszone": [list(k) + [v] for k, v in _zmiana_zgloszona.items()],
         },
         "grupy_z_komend": {
             str(k): list(v) for k, v in _grupy_z_komend.items()
@@ -23796,7 +23956,12 @@ _SCIEZKA_KODU_RE = re.compile(
 )
 
 
-_NAZWA_PLIKU_KODU = r"[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt)"
+# v480md: nazwa z kilkoma kropkami ("program_v0.dsl.py") tez jest nazwa pliku.
+# Bieg 2026-11-06 19:32 (druzyna 2, krok 35): Bartek dal cztery pliki pod
+# naglowkami "**eksperymenty/gra_v2/…**" — program_v0.dsl.py przepadl bez
+# slowa, run.py padal na FileNotFoundError, a Bartek pisal go jeszcze dwa
+# razy, az w koncu przez cat > ("program nie lubi rozszerzenia .dsl.py").
+_NAZWA_PLIKU_KODU = r"[\w-]+(?:\.[\w-]+)*\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt)"
 
 
 def _nazwa_z_naglowka(linia):
@@ -23868,6 +24033,101 @@ def _pliki_pod_naglowkami(text):
         widziane.add(nazwa)
         out.append((nazwa, kod, foldery[-1] if foldery else None))
     return out
+
+
+# v480md: notatka (.md, .txt) pod naglowkiem, w ktorym stoi SAMA jej nazwa
+# ("**bench/README.md**", "### `PLAN.md`") — tak samo jak plik z kodem, od
+# razu na dysk. Bieg 2026-11-06 (druzyna 2): Bartek dal bench/README.md
+# (krok 10, dwie wersje) i eksperymenty/gra_v2/README.md (krok 35, dwa
+# razy) — program kladl tylko kod, README przepadaly bez slowa, a bench/
+# do konca biegu nie mial opisu progow i baseline'u. Wynikow (.json) program
+# z wypowiedzi nie kladzie: to liczby, za ktore odpowiada ten, kto liczyl.
+_NOTATKA_NAGLOWEK_RE = re.compile(
+    r"[\s*_#>`]*(?:\d+[.)]\s*)?[\s*_`]*"
+    r"((?:~/|/data/data/com\.termux/files/home/)?(?:[\w-][\w.-]*/)*[\w-]+(?:\.[\w-]+)*\.(?:md|txt))"
+    r"[\s*_`]*:?[\s*_`]*")
+
+
+def _notatki_pod_naglowkami(text):
+    """v480md: [(sciezka, tresc, caly_blok)] — bloki ```markdown/```text/```
+    z sama nazwa pliku .md/.txt w linii tuz nad nimi; ten sam plik drugi raz
+    w jednej wypowiedzi — liczy sie ostatnia wersja."""
+    text = str(text or "")
+    out = []
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", text, re.DOTALL):
+        if m.group(1).lower() not in ("", "markdown", "md", "text", "txt", "plaintext"):
+            continue
+        przed = text[:m.start()]
+        k = przed.rfind("```")
+        linie = [l for l in (przed[k + 3:] if k >= 0 else przed).splitlines() if l.strip()]
+        mm = _NOTATKA_NAGLOWEK_RE.fullmatch(linie[-1].strip()) if linie else None
+        if not mm or len(m.group(2).strip()) < 40 or _blok_poprawki(text, m.start()):
+            continue
+        out = [o for o in out if o[0] != mm.group(1)]
+        out.append((mm.group(1), m.group(2), m.group(0)))
+    return out
+
+
+def _poloz_notatke_autora(rola, sciezka, tresc, folder):
+    """v480md: notatka autora na dysk (w folderze druzyny / z pytania).
+    Nowy plik — od razu. Plik, ktory juz jest — nowa wersja tylko wtedy, gdy
+    ostatnio pisal go ten sam autor (poprzednia w .kopie/); cudzy plik
+    zostaje, a autor dostaje zdanie, jak go zmienic. Zwraca zdanie albo ""."""
+    imie, imie_d = _IMIE_AUTORA.get(rola, (rola, rola))
+    try:
+        s = str(sciezka or "").strip()
+        if s.startswith(("~/", "/")):
+            p = _resolve_home_relative_path(s)
+        else:
+            p = Path(folder) / s
+            if "/" not in s:
+                _jest = _pliki_w_folderze(folder, p.name)
+                if len(_jest) > 1:
+                    return ""
+                if _jest:
+                    p = _jest[0]
+        p = Path(os.path.normpath(str(p)))
+        if (not p.resolve().is_relative_to(Path(folder).resolve())
+                or _siega_do_rywala("termux_write_file", {"path": str(p)})):
+            return ""
+        tresc = str(tresc or "").rstrip("\n") + "\n"
+        sc = _sciezka_od_domu(str(p))
+        if p.exists():
+            if not p.is_file():
+                return ""
+            stary = p.read_text(encoding="utf-8", errors="replace")
+            if stary.strip() == tresc.strip():
+                return ""
+            _hist = list(_zmiany_plikow().get(_klucz_pliku(p)) or [])
+            if not (_hist and str(_hist[-1].get("kto") or "") == imie):
+                _kto_ost = ""
+                if _hist:
+                    try:
+                        _kto_ost = ", ostatnia zmiana: " + ", ".join(x for x in (
+                            str(_hist[-1].get("kto") or ""),
+                            datetime.fromtimestamp(float(_hist[-1].get("ts") or 0)).strftime("%H:%M")) if x)
+                    except Exception:
+                        _kto_ost = ""
+                return ("[Program nie zastąpił " + sc + " blokiem od " + imie_d + ": ten plik już jest ("
+                        + str(p.stat().st_size) + " B" + _kto_ost + "). Zmianę podaj jako poprawkę "
+                        "fragmentu („Stary fragment:” / „Nowy fragment:”) albo dopisanie "
+                        "(„Dopisz na końcu " + sc + ":”).]")
+        _przed = p.stat().st_size if p.is_file() else None
+        _blad = _zapisz_poprawke_autora(p, tresc, dziennik=False)
+        if _blad:
+            return "[Program nie zapisał " + sc + ": " + _blad + "]"
+        _rola_poznala_plik(rola, p)
+        _zapisz_zmiane_pliku(p, imie, "nowy plik" if _przed is None else "nowa pełna wersja",
+                             _przed, p.stat().st_size)
+        if _przed is None:
+            return ("[Program od razu zapisał ten plik " + imie_d + " w " + sc + " ("
+                    + str(p.stat().st_size) + " B).]")
+        return ("[Program od razu zastąpił " + sc + " nową wersją od " + imie_d + " ("
+                + str(p.stat().st_size) + " B; poprzednia leży w "
+                + _sciezka_od_domu(str(p.parent / ".kopie")) + "/).]")
+    except Exception as e:
+        log("PROGRAM", "Nie zapisałem notatki " + imie_d + " " + str(sciezka) + ": " + str(e))
+        return ""
 
 
 def _poloz_pliki_w_katalogu(katalog, team):
@@ -25381,7 +25641,7 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             _folder = _resolve_home_relative_path(_foldery.pop())
     _podpisane = set()
     if _folder is not None:
-        for m in re.finditer(r"(?<![\w/.~-])([\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])", odp):
+        for m in re.finditer(r"(?<![\w/.~-])(" + _NAZWA_PLIKU_KODU + r")(?![\w-])", odp):
             nazwa = m.group(1)
             if (nazwa not in _podpisane and not any(x.endswith("/" + nazwa) for x in sciezki)
                     and _blok_podpisany(odp, nazwa)):
@@ -25391,7 +25651,7 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
         # ("## Skrypt: `scripts/d0_prepare_data.py`") — w folderze
         # druzyny / z pytania. Bieg 2026-10-25 22:06: skrypt Kamila
         # (7,7 tys. znakow) szedl do MAIN-a w calosci.
-        for m in re.finditer(r"(?<![\w/.~$-])((?:[\w-]+/)+[\w-]+\.(?:py|sh|js|mjs|ts|c|h|cpp|hpp|rs|go|java|kt))(?![\w-])", odp):
+        for m in re.finditer(r"(?<![\w/.~$-])((?:[\w-]+/)+" + _NAZWA_PLIKU_KODU + r")(?![\w-])", odp):
             wzgl = m.group(1)
             cel = str(Path(_folder) / wzgl)
             if cel in sciezki or any(x.endswith("/" + wzgl) for x in sciezki):
@@ -25507,6 +25767,12 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
                 odp = odp.rstrip() + "\n\n" + zdanie
         except Exception as e:
             log("PROGRAM", "Nie zapisałem od razu pliku " + imie_d + " " + s + ": " + str(e))
+    # v480md: notatki (.md, .txt) pod naglowkiem z sama nazwa
+    if _folder is not None:
+        for _sc_n, _tr_n, _blok_n in _notatki_pod_naglowkami(odp):
+            _zd_n = _poloz_notatke_autora(rola, _sc_n, _tr_n, _folder)
+            if _zd_n:
+                odp = odp.replace(_blok_n, _zd_n, 1)
     # v480ft: krotka proba uruchomienia kazdego nowego pliku — po zapisie
     # WSZYSTKICH (importy sasiednich plikow), blad do autora (3 rundy).
     for p, kompiluje in _zapisane_teraz:
@@ -32166,7 +32432,9 @@ def _laptop_w_srodku_odmowa(command_str):
 
 _BRAK_PLIKU_NAZWA_RE = re.compile(
     r"(?:cannot (?:open|access|stat)|can't open file|No such file or directory:?)\s*['\"‘’]?([\w./*?~-]+)['\"‘’]?"
-    r"|['\"‘’]([\w./*?~-]+)['\"‘’][^\n]*No such file or directory")
+    r"|['\"‘’]([\w./*?~-]+)['\"‘’][^\n]*No such file or directory"
+    # v480md: "cat: logi/x.log: No such file or directory" (bez cudzyslowu)
+    r"|(?m:^)[\w.+-]+: ([\w./*?~-]+): No such file or directory")
 
 
 _TYLKO_CZYTA_RE = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:ls|cat|tail|head|grep|egrep|wc|stat|du|file|md5sum|sha256sum)\b")
@@ -32191,7 +32459,7 @@ def _plik_jest_w_folderze_druzyny(wynik, komenda=""):
         folder = _folder_druzyny(_DRUZYNA)
         jest = []
         for m in _BRAK_PLIKU_NAZWA_RE.finditer(tekst):
-            n = (m.group(1) or m.group(2) or "").strip()
+            n = (m.group(1) or m.group(2) or m.group(3) or "").strip()
             if (n and not n.startswith(("/", "~", "..")) and ".." not in n.split("/")
                     and n not in jest and (Path(folder) / n).exists() and not (HOME / n).exists()):
                 jest.append(n)
@@ -32221,7 +32489,20 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
             return wynik
         tekst = str(wynik.get("stderr") or "") + "\n" + str(wynik.get("stdout") or "")[-2000:]
         nazwy = []
-        if "No such file" not in tekst and "cannot open" not in tekst:
+        # v480md: "FATAL: ~/MAIN_1/logi/x.bin incomplete (need … B)" — plik
+        # danych na telefonie jest niepelny (albo go nie ma), a na laptopie
+        # jest caly. Bieg 2026-11-06 15:31 (druzyna 1): wykonawca puscil
+        # tweedie_fit.py na telefonie, zespol uznal dump za zepsuty ("Tweedie
+        # +1,73 nie istnieje … dump niekompletny") — a byl caly na laptopie.
+        _niepelne = []
+        if wynik.get("returncode") not in (0, None) or wynik.get("ok") is False:
+            for m in re.finditer(r"(?:/data/data/com\.termux/files/home|~)/" + re.escape(_laptop_folder())
+                                 + r"/([\w./-]+)[^\n]{0,60}?\b(?:incomplete|truncated|missing|not found|"
+                                 r"too small|niepełn|niekompletn)", tekst, re.IGNORECASE):
+                n = m.group(1).rstrip(".:,")
+                if n and n not in _niepelne and ".." not in n.split("/"):
+                    _niepelne.append(n)
+        if "No such file" not in tekst and "cannot open" not in tekst and not _niepelne:
             # v480ke: ls/cat ... 2>/dev/null — blad schowany, puste wyjscie,
             # kod 1/2 (bieg 2026-11-01 09:1x: ls -la ~/MAIN_1/log/mixer4_tiny_v2*.log
             # 2>/dev/null, log byl na laptopie). Nazwy bierzemy z komendy.
@@ -32237,16 +32518,33 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
                     continue
                 tekst += "\ncannot access '" + _t.strip("'\"") + "'"
         for m in _BRAK_PLIKU_NAZWA_RE.finditer(tekst):
-            n = (m.group(1) or m.group(2) or "").strip()
+            n = (m.group(1) or m.group(2) or m.group(3) or "").strip()
             n = re.sub(r"^(?:~|/data/data/com\.termux/files/home)/" + re.escape(_laptop_folder()) + "/", "", n)
             if (n and n not in nazwy and not n.startswith(("/", "~", "..")) and ".." not in n.split("/")):
                 nazwy.append(n)
+        nazwy += [n for n in _niepelne if n not in nazwy]
         if not nazwy:
             return wynik
-        skrypt = "cd ~/" + _laptop_folder() + " 2>/dev/null && ls -d -- " + " ".join(nazwy[:5]) + " 2>/dev/null; true"
+        # v480md: z rozmiarem — niepelny plik na telefonie liczy sie tylko,
+        # gdy na laptopie jest wiekszy
+        skrypt = ("cd ~/" + _laptop_folder() + " 2>/dev/null && stat -c '%s %n' -- "
+                  + " ".join(shlex.quote(n) if not re.search(r"[*?]", n) else n for n in nazwy[:5])
+                  + " 2>/dev/null; true")
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=15, errors="replace")
-        jest = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()][:5]
+        rozmiary = {}
+        for l in (r.stdout or "").splitlines():
+            _r, _, _n = l.strip().partition(" ")
+            if _r.isdigit() and _n:
+                rozmiary[_n] = int(_r)
+        na_tel = {}
+        for n in _niepelne:
+            try:
+                _pt = _resolve_home_relative_path("~/" + _laptop_folder() + "/" + n)
+                na_tel[n] = _pt.stat().st_size if _pt.is_file() else 0
+            except Exception:
+                na_tel[n] = 0
+        jest = [n for n in rozmiary if n not in na_tel or rozmiary[n] > na_tel[n]][:5]
         # v480kc: sama komenda czytajaca (ls/cat/tail/grep…, bez zapisu,
         # bez potoku do innych programow) — program puszcza ja od razu na
         # laptopie i oddaje tamten wynik. Bieg 2026-11-01 09:12: wykonawca
@@ -32265,10 +32563,24 @@ def _plik_jest_na_laptopie(wynik, komenda=""):
                                 + _laptop_folder() + "). Następnym razem: LAPTOP: na początku komendy.")
                 return _lw
         if jest:
-            wynik["na_laptopie_jest"] = (
-                "Na telefonie tego nie ma, ale na laptopie w ~/" + _laptop_folder() + " jest: "
-                + ", ".join(jest) + " — odczytasz to komendą z LAPTOP: na początku, np. "
-                "LAPTOP: tail -n 20 " + jest[0] + ".")
+            # v480md: komenda uruchamia program (python3, bash…) — liczy sie
+            # puszczenie jej na laptopie, nie "tail -n 20 dane/enwik8" (bieg
+            # 2026-11-06 16:41: taka podpowiedz przy 100 MB danych)
+            _k_lap = re.sub(r"/data/data/com\.termux/files/home/", "~/", str(komenda or "")).strip()
+            if _k_lap and re.search(r"(?:^|[\s;&|(])" + _INTERPRETERY_RE + r"\s", _k_lap):
+                wynik["na_laptopie_jest"] = (
+                    "Na telefonie brakuje danych tej komendy, a na laptopie w ~/" + _laptop_folder()
+                    + " są: " + ", ".join(
+                        n + " (" + str(rozmiary[n]) + " B"
+                        + ("; na telefonie " + str(na_tel[n]) + " B" if n in na_tel else "") + ")"
+                        for n in jest)
+                    + ". Ta komenda uruchamia program, więc puść ją na laptopie: LAPTOP: "
+                    + short(_k_lap, 300) + ".")
+            else:
+                wynik["na_laptopie_jest"] = (
+                    "Na telefonie tego nie ma, ale na laptopie w ~/" + _laptop_folder() + " jest: "
+                    + ", ".join(jest) + " — odczytasz to komendą z LAPTOP: na początku, np. "
+                    "LAPTOP: tail -n 20 " + jest[0] + ".")
     except Exception:
         pass
     return wynik
@@ -39192,6 +39504,9 @@ zrobienia — co konkretnie MAIN ma z tym zrobić dalej.
                     ),
                     # v480fm: patrz _gdzie_pracowala()
                     "zablokowane": _zablokowane_przez_program(result),
+                    # v480md: pelny wynik komendy — patrz _biegi_komend
+                    **({"bieg": _zapamietaj_bieg(result)}
+                       if str(name).startswith("termux_run") and isinstance(result, dict) else {}),
                 })
 
                 # Patrz komentarz przy _decision_asks_for_contact_info()
@@ -43721,9 +44036,19 @@ def _argumenty_z_zadania(task_text, path):
         pass
     if m is not None:
         try:
-            return shlex.split(m.group(1))
+            _tok = shlex.split(m.group(1))
         except Exception:
-            return m.group(1).split()
+            _tok = m.group(1).split()
+        # v480md: komentarz po komendzie to nie argumenty — bieg 2026-11-06
+        # 17:19 (druzyna 1): "RUN: python3 kod/eval/prog_synth.py --pop 50 …
+        # --max-depth 6 (30 gen zamiast 20, bo głębsze drzewa wolniej
+        # zbiegają; ~5 min)" — program dopisal "(30 gen zamiast 20, bo …" do
+        # komendy, argparse dal kod 2, a Piotr i Ania dostali "kod się
+        # wysypał" do przegladu dzialajacego pliku.
+        for _i, _t in enumerate(_tok):
+            if _t.startswith(("(", "—", "–", "#")):
+                return _tok[:_i]
+        return _tok
     try:
         bez_wartosci = _flagi_bez_wartosci(Path(str(path)).read_text(encoding="utf-8", errors="replace"))
     except Exception:
@@ -46727,6 +47052,68 @@ def _plik_sie_wysypal(sciezka, wynik):
     return False
 
 
+_ARGPARSE_BLAD_RE = re.compile(
+    r"(?m)^usage: .*\n(?:.*\n)*?.*: error: (?:unrecognized arguments|argument |the following "
+    r"arguments are required|invalid choice|unrecognized option)")
+
+
+def _zmiana_z_zadania_juz_jest(task_text, path):
+    """v480md: zdanie dla wykonawcy, gdy kazda poprawka ("Stary fragment" /
+    "Nowy fragment") z tresci zadania juz stoi w tym pliku — albo "". Bieg
+    2026-11-06 19:22 (druzyna 1, krok 23): Bartek naniosl fix alfa do
+    tweedie_fit.py o 19:19, a wykonawca z zadaniem "Napraw … Stary fragment
+    / Nowy fragment" nanosil go drugi raz (python -c przez ssh,
+    patch_tweedie.py), dostal dwie odmowy BRAK_KODU_DO_ZAPISU i zadanie
+    wrocilo do MAIN-a bez uruchomienia."""
+    try:
+        pary = extract_search_replace_blocks(task_text)
+        if not pary:
+            return ""
+        tekst = _resolve_home_relative_path(str(path)).read_text(encoding="utf-8", errors="replace")
+        for st, nw in pary:
+            st, nw = _wyrownaj_pare(st, nw)
+            if _naloz_pare(tekst, st, nw)[1] != "juz":
+                return ""
+        return (" Poprawka z treści zadania (Stary → Nowy" + (", " + str(len(pary)) + (" miejsca" if len(pary) < 5 else " miejsc") if len(pary) > 1 else "")
+                + ") już w nim jest — nie nanoś jej drugi raz, zrób resztę zadania.")
+    except Exception:
+        return ""
+
+
+def _awaria_nie_z_kodu(sciezka, wynik):
+    """v480md: plik padl, ale jego kod jest w porzadku — na telefonie nie ma
+    danych, ktore sa na laptopie (wynik ma "na_laptopie_jest"), albo komenda
+    dala mu zle argumenty (argparse: "usage: …" i "error: unrecognized
+    arguments"). Zwraca krotki powod albo "". Bieg 2026-11-06 (druzyna 1):
+    trzy przeglady Piotra i Ani (po ~20 kB kazdy) — tweedie_fit.py 15:31 i
+    prog_synth.py 16:41 na telefonie bez danych z laptopa, prog_synth.py
+    17:19 z argumentami "(30 gen zamiast 20, bo …" z tresci zadania.
+    Piotr: "Blocker: znowu telefon, nie laptop … To już piąty raz"."""
+    try:
+        if isinstance(wynik.get("shell_result"), dict):
+            w = wynik["shell_result"]
+        else:
+            w = None
+            nazwa = Path(str(sciezka or "")).name
+            for t in reversed(list(wynik.get("tool_trace") or [])):
+                if (isinstance(t, dict) and t.get("ok") is False and not t.get("zablokowane")
+                        and str(t.get("tool") or "").startswith("termux_run")
+                        and _komenda_uruchamia_plik(t.get("komenda"), nazwa)):
+                    w = _biegi_komend.get(t.get("bieg"))
+                    break
+        if not isinstance(w, dict):
+            return ""
+        if w.get("na_laptopie_jest"):
+            return "na telefonie nie ma danych, które są na laptopie"
+        _err = str(w.get("stderr") or "") + "\n" + str(w.get("stdout") or "")[-1500:]
+        m = _ARGPARSE_BLAD_RE.search(_err)
+        if m:
+            return "komenda dała mu złe argumenty (" + short(m.group(0).splitlines()[-1].strip(), 160) + ")"
+    except Exception:
+        pass
+    return ""
+
+
 def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
     """
     v205: kod Bartka wlasnie sie wykonal. Wynik wraca do niego (v202),
@@ -46756,6 +47143,13 @@ def _po_uruchomieniu_kodu_bartka(sciezka, wynik):
     if not _winny and not _plik_sie_wysypal(sciezka, wynik):
         log("MAIN", "Zadanie nie wyszło, ale " + Path(str(sciezka)).name
             + " sam się nie wysypał — bez przeglądu kodu.")
+        return
+
+    # v480md: plik padl, ale nie przez swoj kod — patrz _awaria_nie_z_kodu()
+    _nie_kod = _awaria_nie_z_kodu(sciezka, wynik)
+    if _nie_kod:
+        log("MAIN", Path(str(sciezka)).name + " padł, ale nie przez swój kod: " + _nie_kod
+            + " — bez przeglądu kodu.")
         return
 
     if _winny and Path(str(sciezka)).name != Path(_winny[0]).name:
@@ -61441,6 +61835,7 @@ def run_agent(goal):
                         + " jest już poprawiony na dysku ("
                         + str(_patch_wynik["size_before"]) + " B -> "
                         + str(_patch_wynik["size_after"]) + " B)."
+                        + _zmiana_z_zadania_juz_jest(task_text, _patch_wynik["path"])
                     )
 
                     # v432: bez "Nikt nie musi przepisywac calosci".
@@ -62158,6 +62553,7 @@ def run_agent(goal):
                         + " leży już na dysku ("
                         + str(len(engineer_code.encode("utf-8")))
                         + " B, kod Bartka)."
+                        + _zmiana_z_zadania_juz_jest(task_text, target_path)
                     )
 
                 except Exception as e:
