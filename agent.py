@@ -2718,6 +2718,9 @@ def _wyslano(role, text):
 
     tresc = str(text or "")
 
+    # v480mc: patrz _wysylka_przed_wiadomoscia / start_session
+    _ostatnia_wysylka_roli[str(role)] = time.time()
+
     # v432: patrz _tekst_pythona().
     _py_znaki, _py_linie = _tekst_pythona(tresc)
 
@@ -4596,11 +4599,31 @@ def _mark_role_truncated(name, truncated):
 #      Marka, mowimy wprost "najpierw to", zamiast wysypywac
 #      wszystko naraz i liczyc, ze kazdy sam wybierze wlasciwy watek.
 _role_seen_blocks = {}
+# v480mc: kiedy blok trafil do _role_seen_blocks (patrz start_session —
+# nowa rozmowa zapomina tylko bloki z wiadomosci wyslanych do starej).
+_role_seen_czas = {}
+# v480mc: kiedy ostatnio poszla wiadomosc do roli (_wyslano) i jaka byla
+# ta chwila na poczatku wiadomosci, ktora wlasnie idzie
+# (_deepseek_jedna_rozmowa) — granica miedzy stara rozmowa a ta.
+_ostatnia_wysylka_roli = {}
+_wysylka_przed_wiadomoscia = {}
 
 
 def _reset_step_by_step_memory():
     """Nowy cel = zaczynamy rozmowe od zera."""
     _role_seen_blocks.clear()
+    _role_seen_czas.clear()
+
+
+def _zapomnij_bloki_starej_rozmowy(name):
+    """v480mc: nowa rozmowa roli — zapomniane bloki z wiadomosci wyslanych
+    do starej; bloki wiadomosci, ktora wlasnie idzie, zostaja (patrz
+    start_session)."""
+    _granica = _wysylka_przed_wiadomoscia.get(name, _ostatnia_wysylka_roli.get(name, 0.0))
+    for _slot in [k for k in _role_seen_blocks if k[0] == name]:
+        if _role_seen_czas.get(_slot, 0.0) <= _granica:
+            _role_seen_blocks.pop(_slot, None)
+            _role_seen_czas.pop(_slot, None)
 
 
 # v392: "| bounds=[191,17][239,107]" — wspolrzedne do stuknięcia.
@@ -4955,6 +4978,7 @@ def _only_if_new(role, key, block):
         return ""
 
     _role_seen_blocks[slot] = odcisk
+    _role_seen_czas[slot] = time.time()
 
     if str(key) in _KLUCZE_ZDARZEN:
         # v480ma: pelny blok idzie tez wtedy, gdy wraca po czyms innym
@@ -5542,6 +5566,82 @@ _URUCHOMIENIE_ID = (
 _CEL_WYSLANY_FILE = STATE_DIR / "cel_wyslany.json"
 
 
+def _rozmowa_zdan(rola):
+    """Rozmowa, przy ktorej pamietamy wyslane zdania uzytkownika."""
+    if rola == "PROGRESS_ESTIMATOR":
+        # Ela zaczyna czysta rozmowe w kazdym uruchomieniu (v480).
+        return "uruchomienie-" + _URUCHOMIENIE_ID
+    _s = sessions.get(rola)
+    return (
+        getattr(_s, "chat_session_id", None)
+        if _s is not None
+        else (_load_session_state(rola) or {}).get("chat_session_id")
+    )
+
+
+def _zdania_dla_nowej_rozmowy(rola, wiadomosc=""):
+    """
+    v480mc: rozmowa, ktora wlasnie dostaje cel (nowa po limicie albo
+    zerwaniu), dostaje tez zdania uzytkownika, ktorych nie ma w tej
+    wiadomosci — i wszystkie sa zapamietane przy TEJ rozmowie. Dotad
+    wiadomosc skladana jeszcze przy starej rozmowie zapisywala nowe zdanie
+    pod stara, wiec pierwsza pozniejsza wiadomosc niosla wszystkie zdania
+    od nowa — takze to, ktore nowa rozmowa juz miala. Bieg 2026-11-06
+    (druzyna 2): Bartek w nowej rozmowie o 15:39 dostal jedno zdanie
+    ("ZALECENIE STRATEGICZNE…"), a o 17:11 wszystkie piec (2930 znakow),
+    z tamtym drugi raz; cztery starsze doszly do nowej rozmowy dopiero
+    wtedy. Zwraca liste brakujacych zdan (najstarsze pierwsze). Nigdy nie rzuca.
+    """
+    try:
+        if rola in _ROLE_TYLKO_PYTANIE or rola in _ROLE_BEZ_CELU or rola == "ARBITER":
+            return []
+        rozmowa = _rozmowa_zdan(rola)
+        if not rozmowa or not USER_SAID_FILE.exists():
+            return []
+        zdania = [l.strip() for l in USER_SAID_FILE.read_text(encoding="utf-8").splitlines()
+                  if l.strip() and not l.startswith(_CEL_ZDAN_PREFIX)]
+        zdania = list(dict.fromkeys(zdania))
+        if not zdania:
+            return []
+
+        def _odcisk(z):
+            return hashlib.sha1(z.encode("utf-8")).hexdigest()[:16]
+
+        wszystko = read_json(_ZDANIA_WYSLANE_FILE, {})
+        if not isinstance(wszystko, dict):
+            wszystko = {}
+        wpis = wszystko.get(rola) or {}
+        wyslane = set(wpis.get("zdania") or []) if wpis.get("rozmowa") == rozmowa else set()
+        tresc = str(wiadomosc or "")
+        brakuje = [z for z in zdania if _odcisk(z) not in wyslane and z not in tresc]
+        wszystko[rola] = {"rozmowa": rozmowa,
+                          "zdania": sorted(wyslane | {_odcisk(z) for z in zdania})}
+        _ZDANIA_WYSLANE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _ZDANIA_WYSLANE_FILE.write_text(json.dumps(wszystko, ensure_ascii=False), encoding="utf-8")
+        return brakuje
+    except Exception:
+        return []
+
+
+def _z_brakujacymi_zdaniami(rola, wiadomosc):
+    """v480mc: wiadomosc z brakujacymi zdaniami uzytkownika (patrz
+    _zdania_dla_nowej_rozmowy) — w jej bloku "Użytkownik:" przed nowymi
+    zdaniami, a gdy go nie ma, na poczatku. Nigdy nie rzuca."""
+    t = str(wiadomosc or "")
+    try:
+        brakuje = _zdania_dla_nowej_rozmowy(rola, t)
+        if not brakuje:
+            return t
+        zd = _slowa_ludzi(rola, "\n\n".join(brakuje))
+        if t.startswith("Użytkownik:\n"):
+            return "Użytkownik:\n" + zd + "\n\n" + t[len("Użytkownik:\n"):]
+        if "\nUżytkownik:\n" in t:
+            return t.replace("\nUżytkownik:\n", "\nUżytkownik:\n" + zd + "\n\n", 1)
+        return "Użytkownik:\n" + zd + "\n\n" + t
+    except Exception:
+        return t
+
+
 def _jeszcze_niewyslane_zdania(rola, zdania):
     """
     v480: kazde zdanie uzytkownika idzie do roli raz.
@@ -5557,18 +5657,7 @@ def _jeszcze_niewyslane_zdania(rola, zdania):
     """
 
     try:
-        if rola == "PROGRESS_ESTIMATOR":
-            # Ela zaczyna czysta rozmowe w kazdym uruchomieniu (v480).
-            rozmowa = "uruchomienie-" + _URUCHOMIENIE_ID
-        else:
-            _s = sessions.get(rola)
-            rozmowa = (
-                getattr(_s, "chat_session_id", None)
-                if _s is not None
-                else (_load_session_state(rola) or {}).get(
-                    "chat_session_id"
-                )
-            )
+        rozmowa = _rozmowa_zdan(rola)
 
         wszystko = read_json(_ZDANIA_WYSLANE_FILE, {})
         if not isinstance(wszystko, dict):
@@ -6289,8 +6378,13 @@ def start_session(name, system_prompt):
             # cel, ale bloki stanu (postep, pliki, wyniki, co mowili
             # koledzy) byly juz "widziane" w poprzednim czacie i
             # _only_if_new je pomijal. Teraz dostaje je od nowa, raz.
-            for _slot in [k for k in _role_seen_blocks if k[0] == name]:
-                _role_seen_blocks.pop(_slot, None)
+            # v480mc: tylko te z wiadomosci wyslanych do STAREJ rozmowy.
+            # Wiadomosc, ktora wlasnie idzie (zlozona przed nowa rozmowa),
+            # niesie swoje bloki do nowej — dotad i one byly zapominane i
+            # szly drugi raz przy nastepnej wiadomosci. Bieg 2026-11-06
+            # (druzyna 2, krok 22): Bartek dostal w nowej rozmowie "Tomek
+            # (wcześniej, krok 10)" (2450 znakow), a zaraz potem drugi raz.
+            _zapomnij_bloki_starej_rozmowy(name)
 
         sessions[name] = session
         if session is not None and _token_czeka.pop(_account_of(name), None):
@@ -9372,12 +9466,41 @@ def _deepseek_od_programu(rola, wiadomosc):
         _runda_programu_tl.aktywna = _bylo
 
 
+def _bez_sprawdzonych_plikow(tresc, sciezki):
+    """
+    v480mc: linia "- <plik>: jest (N B), …" z bloku "Sprawdziłem to teraz na
+    dysku:" wypada, gdy ta sama wiadomosc zaczyna sie od "Od czasu, gdy ten
+    plik był w tej rozmowie, zmieniono na dysku: <plik> (kto, kiedy)" —
+    jeden plik, jedno zdanie (bieg 2026-11-06 17:11, druzyna 2: STAN.md dwa
+    razy w jednej wiadomosci do Bartka). Pusty blok znika z naglowkiem.
+    """
+    t = str(tresc or "")
+    naglowek = "Sprawdziłem to teraz na dysku:\n"
+    i = t.find(naglowek)
+    if i < 0 or not sciezki:
+        return t
+    linie = t[i + len(naglowek):].split("\n")
+    j = 0
+    while j < len(linie) and linie[j].startswith("- "):
+        j += 1
+    zostaja = [l for l in linie[:j]
+               if not any(l.startswith("- " + s + ": ") for s in sciezki)]
+    if len(zostaja) == j:
+        return t
+    reszta = "\n".join(linie[j:])
+    if zostaja:
+        return t[:i] + naglowek + "\n".join(zostaja) + ("\n" + reszta if j < len(linie) else "")
+    przed, po = t[:i].rstrip("\n"), reszta.lstrip("\n")
+    return (przed + "\n\n" + po) if (przed and po) else (przed or po)
+
+
 def deepseek(name, message):
     if name in _ROLE_Z_PODGLADEM:
         try:
-            _st = _znane_pliki_zmienione(name, message)
+            _sc = []
+            _st = _znane_pliki_zmienione(name, message, _sc)
             if _st:
-                message = _st + "\n\n" + str(message)
+                message = _st + "\n\n" + _bez_sprawdzonych_plikow(message, _sc)
         except Exception:
             pass
     with _KOLEJKA_KONTA:
@@ -9416,7 +9539,78 @@ _PODGLAD_RE = re.compile(
     r"^[ \t>*_`-]*(?:PODGL(?:Ą|A)D|URUCHOM)[*_]*:[*_]*\s*(.+?)\s*$", re.M)
 
 
-def _komenda_z_podgladu(k):
+def _znacznik_zamykajacy(linia, zn, od=0):
+    """v480mc: pozycja znacznika `zn` ("**", "__", "`"), ktory zamyka
+    pogrubienie albo kod z markdownu: poza cudzyslowem, zaraz po znaku
+    innym niz spacja, a po nim spacja albo koniec linii — albo None."""
+    w_cudz = None
+    i = od
+    while i < len(linia):
+        c = linia[i]
+        if w_cudz:
+            if c == "\\" and w_cudz == '"':
+                i += 2
+                continue
+            if c == w_cudz:
+                w_cudz = None
+            i += 1
+            continue
+        if c in "'\"":
+            w_cudz = c
+            i += 1
+            continue
+        if (linia.startswith(zn, i) and i > od and not linia[i - 1].isspace()
+                and (i + len(zn) >= len(linia) or linia[i + len(zn)].isspace())):
+            return i
+        i += 1
+    return None
+
+
+def _bez_komentarza_po_znaczniku(k, przed=""):
+    """
+    v480mc: "**URUCHOM: komenda** (opis)" albo "`URUCHOM: komenda` — opis":
+    pogrubienie (albo kod) z markdownu zamyka komende, a po nim stoi juz
+    zdanie dla ludzi. Dotad szlo do basha razem z nim. Bieg 2026-11-06
+    16:47 (druzyna 1): Piotr "**URUCHOM: LAPTOP: cd ~/MAIN_1 && python3 -u
+    kod/eval/prog_synth.py** (bez `--smoke`)" — bash: "błąd składni przy
+    nieoczekiwanym znaczniku `('", i runda na nowo. Na logach z 10 biegow
+    takie linie byly 3 razy (2 z backtickiem). `przed` — tekst linii przed
+    komenda (np. "**URUCHOM: ").
+    """
+    k = str(k or "")
+    zn = []
+    m0 = re.match(r"(\*\*|__|`+)\s*", k)
+    od = 0
+    if m0:
+        zn.append(m0.group(1)[:2] if m0.group(1)[0] != "`" else "`" * len(m0.group(1)))
+        od = m0.end()
+    p = str(przed or "")
+    for z in ("**", "__"):
+        if z in p and z not in zn:
+            zn.append(z)
+    if "`" in p and "`" not in zn:
+        zn.append("`")
+    if not zn:
+        return k
+    pierwsza, _nl, reszta = k.partition("\n")
+    naj = None
+    for z in zn:
+        i = _znacznik_zamykajacy(pierwsza, z, od)
+        if i is not None and (naj is None or i < naj):
+            naj = i
+    if naj is None:
+        return k
+    ucieta = pierwsza[:naj].rstrip()
+    if not ucieta[od:].strip():
+        return k
+    # heredoc z pierwszej linii ("**URUCHOM: cat > x <<'EOF'**") — reszta to
+    # jego tresc; inaczej dalsze linie dolozyl tylko otwarty cudzyslow z opisu
+    if reszta and _HEREDOC_URUCHOM_RE.search(ucieta):
+        return ucieta + "\n" + reszta
+    return ucieta
+
+
+def _komenda_z_podgladu(k, przed=""):
     k = str(k or "").strip()
     # v480gk: ogon znacznikow wywolania narzedzi DeepSeeka ("cat data.py
     # </parameter>") — bieg 2026-10-26 19:27: bash dostawal go jako czesc
@@ -9425,6 +9619,8 @@ def _komenda_z_podgladu(k):
     # v480iz: ogon DSML z pelnoszerokimi kreskami ("| cat -A</｜｜DSML｜｜
     # parameter>") — bieg 2026-10-31 21:52 (druzyna 1).
     k = re.sub(r"\s*</?\s*[｜|]+\s*DSML.*$", "", k, flags=re.S).strip()
+    # v480mc: opis po zamknietym pogrubieniu/kodzie z markdownu
+    k = _bez_komentarza_po_znaczniku(k, przed).strip()
     for _ in range(3):
         k2 = re.sub(r"^(?:\*\*|__|`+)\s*", "", k)
         k2 = re.sub(r"\s*(?:\*\*|__|`+)$", "", k2).strip()
@@ -10198,7 +10394,8 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         runda += 1
         komendy = []
         for m in _PODGLAD_RE.finditer(str(odp or "")):
-            k = _komenda_z_podgladu(_komenda_do_konca(str(odp or ""), m))
+            k = _komenda_z_podgladu(_komenda_do_konca(str(odp or ""), m),
+                                    m.group(0)[:m.start(1) - m.start(0)])
             if k and k not in komendy:
                 komendy.append(k)
         if not komendy:
@@ -10304,7 +10501,9 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         for k in komendy[:5]:
             # v480lx: linie [KOMENDA] pisze _uruchom_podglad — wie, czy to
             # sam odczyt ("zagląda"), uruchomienie czy odmowa
-            wyniki.append(_uruchom_podglad(k, rola))
+            _wyn = _uruchom_podglad(k, rola)
+            _zapamietaj_wynik_roli(rola, _wyn)
+            wyniki.append(_wyn)
         # v480hb: rola czyta log procesu, ktory liczy w tle (bieg 2026-10-27
         # 13:55: Bartek w jednym pytaniu w kolko "tail -3 resume.log; ps aux")
         # — dostaje jego postep i to, ze wynik przyjdzie sam.
@@ -10520,6 +10719,10 @@ def _deepseek_jedna_rozmowa(name, message):
 
     global _continue_action_supported
 
+    # v480mc: chwila ostatniej wysylki PRZED ta wiadomoscia — bloki
+    # zapamietane pozniej sa juz w tej wiadomosci (patrz start_session)
+    _wysylka_przed_wiadomoscia[str(name)] = _ostatnia_wysylka_roli.get(str(name), 0.0)
+
     # v480ha: "Tomek:\nTomek, wcześniej (krok 337):" — imie dwa razy pod
     # soba (bieg 2026-10-27 13:30, wiadomosc do Marka); zostaje jeden
     # naglowek "Tomek (wcześniej, krok 337):".
@@ -10666,10 +10869,14 @@ def _deepseek_jedna_rozmowa(name, message):
                 # restarcie zerwanej rozmowy cel wraca (patrz
                 # _goal_briefed.discard). Log ma pokazywac to, co
                 # naprawde poszlo w TEJ probie.
+                _cel_tu = _goal_briefing_for(name)
                 _tresc_wyslana = (
-                    _goal_briefing_for(name)
+                    _cel_tu
                     + _length_notice_for(name)
-                    + message
+                    # v480mc: rozmowa, ktora dostaje cel, dostaje tez zdania
+                    # uzytkownika, ktorych jeszcze nie ma (w tym samym bloku
+                    # "Użytkownik:" co nowe) — patrz _zdania_dla_nowej_rozmowy
+                    + (_z_brakujacymi_zdaniami(name, message) if _cel_tu.strip() else message)
                 )
 
                 # v354: pustej wiadomosci nie wysylamy.
@@ -24130,12 +24337,18 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
                 pamiec[k] = None
         return pamiec[k]
 
+    def _stan(t, stary, nowy):
+        # v480mc: "wciecia" — fragment stoi w tym pliku (wybor celu jak
+        # przy "ok"); powod podaje dopiero nalozenie (_naloz_pary_na_plik)
+        s = _naloz_pare(t, stary, nowy)[1]
+        return "ok" if s == "wciecia" else s
+
     def _stany(pliki, stary, nowy):
         out = {}
         for p in pliki:
             t = _tresc(p)
             if t is not None:
-                out[p] = _naloz_pare(t, stary, nowy)[1]
+                out[p] = _stan(t, stary, nowy)
         return out
 
     poza = []
@@ -24240,7 +24453,7 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
             st = {}
             for p in wskazane:
                 t = _tresc(p)
-                st[p] = _naloz_pare(t, stary, nowy)[1] if t is not None else "brak"
+                st[p] = _stan(t, stary, nowy) if t is not None else "brak"
             ok = [p for p in wskazane if st[p] == "ok"]
             jest = [p for p in wskazane if st[p] == "juz"]
             wiele = [p for p in wskazane if st[p] == "wiele"]
@@ -40799,7 +41012,37 @@ def _wyrownaj_blok(raw):
                 for l in linie
             ]
 
-    return "\n".join(linie).lstrip(" ").rstrip()
+    return "\n".join(_bez_zablakanej_spacji(linie)).rstrip()
+
+
+def _bez_zablakanej_spacji(linie, inne_wciecia=()):
+    """
+    v480mc: zablakana spacja na poczatku PIERWSZEJ linii bloku (v192:
+    DeepSeek zostawia ja zaraz po ```python) — tylko wtedy, gdy to
+    naprawde zablakana spacja: 1-3 znaki wciecia, ktorych nie ma zadna
+    inna linia bloku. Dotad lstrip zdejmowal z pierwszej linii KAZDE
+    wciecie. Bieg 2026-11-06 15:43 (druzyna 1, tweedie_fit.py): Stary
+    fragment Piotra zaczynal sie w petli (12 spacji), a konczyl na
+    "    return p_cal" — po zdjeciu wspolnych 4 spacji pierwsza linia
+    tracila swoje 8, program dopasowal fragment luzno i jedna poprawka
+    dala "unexpected indent", a druga po cichu wstawila "return p_cal"
+    do srodka petli. Na logach z 10 biegow (3854 bloki) zmienia sie
+    tylko 9 blokow — wszystkie to takie fragmenty poprawek.
+    inne_wciecia: wciecia drugiego bloku pary (Stary/Nowy) — spacja, ktora
+    ma tez tamten blok, nie jest zablakana.
+    """
+    linie = list(linie)
+    if not linie:
+        return linie
+    pierwsza = linie[0]
+    if not pierwsza.strip():
+        linie[0] = pierwsza.lstrip(" ")
+        return linie
+    wc = len(pierwsza) - len(pierwsza.lstrip(" "))
+    inne = {len(l) - len(l.lstrip(" ")) for l in linie[1:] if l.strip()} | set(inne_wciecia or ())
+    if 0 < wc < 4 and wc not in inne:
+        linie[0] = pierwsza.lstrip(" ")
+    return linie
 
 
 def _rozszerzenie_jezyka(sciezka):
@@ -41847,6 +42090,64 @@ def _w_tle_niedostarczone():
         ]
 
 
+# v480mc: wyniki komend, ktore rola dostala w rozmowie (PODGLĄD/URUCHOM) —
+# [(czas, tekst)], ostatnie 10 — patrz _bez_juz_pokazanego.
+_wyniki_roli = {}
+
+
+def _zapamietaj_wynik_roli(rola, tekst):
+    try:
+        if rola and str(tekst or "").strip():
+            _l = _wyniki_roli.setdefault(str(rola), [])
+            _l.append((time.time(), str(tekst)))
+            del _l[:-10]
+    except Exception:
+        pass
+
+
+def _n_linii(n):
+    n = int(n)
+    if n == 1:
+        return "1 linia"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return str(n) + " linie"
+    return str(n) + " linii"
+
+
+def _bez_juz_pokazanego(rola, od, tekst):
+    """
+    v480mc: wynik komendy skonczonej w tle bez kawalkow (co najmniej 5
+    linii), ktore autor dostal juz po jej starcie z innej swojej komendy.
+    Bieg 2026-11-06 17:14 (druzyna 2, krok 22): Bartek puscil "echo …; sed
+    -n '78,105p' gru_cli.py; time python3 gru_cli.py …", a w tej samej
+    odpowiedzi osobno sam sed; trening poszedl w tlo, a po 2 min wynik w
+    tle niosl drugi raz te same 28 linii gru_cli.py. Nigdy nie rzuca.
+    """
+    try:
+        linie = str(tekst or "").split("\n")
+        for ts, wcz in list(_wyniki_roli.get(str(rola), ())):
+            if ts < od:
+                continue
+            wl = str(wcz).split("\n")
+            if len(wl) < 6:
+                continue
+            sm = difflib.SequenceMatcher(None, linie, wl, autojunk=False)
+            bloki = [b for b in sm.get_matching_blocks()
+                     if b.size >= 5 and b.a > 0
+                     and sum(len(x) for x in linie[b.a:b.a + b.size]) >= 200]
+            if not bloki:
+                continue
+            kom = wl[0][2:] if wl[0].startswith("$ ") else wl[0]
+            kom = re.sub(r"\s*\((?:w|uruchomione w) [^()]*\)\s*$", "", kom)
+            for b in reversed(bloki):
+                linie[b.a:b.a + b.size] = [
+                    "(… " + _n_linii(b.size) + " — to samo, co dostałeś już z „"
+                    + _komenda_jedna_linia(kom, 90) + "”)"]
+        return "\n".join(linie)
+    except Exception:
+        return tekst
+
+
 def _rzecz_w_tle(rodzaj, komenda, sekundy, pominiete, czeka_na=None):
     _w_tle_licznik[0] += 1
     return {
@@ -41887,7 +42188,10 @@ def _uruchom_rzecz(rzecz, praca, cichy):
                 _role_inbox.setdefault(rzecz["autor"], []).append((
                     "Program",
                     "Twoja komenda puszczona " + _temu(rzecz["start"]) + " skończyła się w tle:\n"
-                    + _opis_dla_zespolu(rzecz["komenda"], rzecz.get("cwd") or "~", wynik)))
+                    # v480mc: bez kawalkow, ktore autor juz dostal (patrz
+                    # _bez_juz_pokazanego)
+                    + _bez_juz_pokazanego(rzecz["autor"], rzecz["start"], _opis_dla_zespolu(
+                        rzecz["komenda"], rzecz.get("cwd") or "~", wynik))))
             except Exception:
                 pass
         if w_tle and not rzecz.get("anulowane"):
@@ -45871,10 +46175,67 @@ def _etykieta_bloku(tekst):
 
 
 def _bloki_kodu(tekst):
-    """v480ly: [(start, koniec, kod)] blokow ```…``` w kolejnosci — takze
-    pustych (pusty "Stary fragment" to dopisanie, pusty "Nowy" — usuniecie)."""
-    return [(m.start(), m.end(), _wyrownaj_blok(m.group(1)))
+    """v480ly: [(start, koniec, kod, surowy)] blokow ```…``` w kolejnosci —
+    takze pustych (pusty "Stary fragment" to dopisanie, pusty "Nowy" —
+    usuniecie). v480mc: surowy tekst bloku (z wcieciem) do _wyrownaj_pare."""
+    return [(m.start(), m.end(), _wyrownaj_blok(m.group(1)), m.group(1))
             for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n(.*?)```", str(tekst or ""), re.DOTALL)]
+
+
+def _wspolne_linie_przesuniete_o(linie_st, linie_nw, d):
+    """v480mc: czy kazda linia, ktora stoi raz w Starym i raz w Nowym (ta
+    sama tresc), ma w Nowym wciecie o d kolumn mniejsze (brak takich
+    linii: tak)."""
+    def jedne(linie):
+        out = {}
+        for l in linie:
+            t = l.strip()
+            if t:
+                out[t] = None if t in out else len(l) - len(l.lstrip(" "))
+        return out
+    a, b = jedne(linie_st), jedne(linie_nw)
+    return all(a[t] - b[t] == d for t in a if a[t] is not None and b.get(t) is not None)
+
+
+def _wyrownaj_pare(surowy_stary, surowy_nowy):
+    """
+    v480mc: Stary i Nowy fragment z JEDNYM wspolnym wcieciem zdjetym z obu
+    blokow naraz — dotad kazdy blok tracil swoje wlasne, wiec przepadalo
+    przesuniecie miedzy nimi. Bieg 2026-11-06 15:46 (druzyna 1,
+    tweedie_fit.py): Stary fragment Bartka stal caly na 12 spacjach (w
+    petli), a Nowy mial te same linie na 12 i dwie ostatnie na 4 (po
+    petli). Osobno: Stary bez wciecia, Nowy z 8 i 0 — program dodal do
+    Nowego wciecie pliku (12) i wyszlo 20 i 12: "unexpected indent", runda
+    u autora, a potem caly plik od nowa.
+
+    Dwa wyjatki. Stary z numerami linii (grep -n, „Najbliższy tekst w
+    pliku”): jego pierwsze znaki to numer, nie wciecie — oba bloki zostaja
+    jak u autora, numery zdejmuje i wciecia wyrownuje _bez_numerow. Tylko
+    jeden blok bez wciecia (Stary skopiowany z pliku z wcieciem, a Nowy
+    napisany od zera bez niego, albo odwrotnie), a linie obecne w obu
+    blokach przesuniete dokladnie o roznice wciec — kazdy blok traci
+    swoje wlasne wciecie, jak dotad.
+    """
+    st = str(surowy_stary or "").replace("\t", "    ").split("\n")
+    nw = str(surowy_nowy or "").replace("\t", "    ").split("\n")
+    tr_st = [l for l in st if l.strip()]
+    tr_nw = [l for l in nw if l.strip()]
+    if not tr_st or not tr_nw:
+        return _wyrownaj_blok(surowy_stary), _wyrownaj_blok(surowy_nowy)
+    if all(_NUMER_LINII_RE.match(l) for l in tr_st):
+        return ("\n".join(_bez_zablakanej_spacji(st)).rstrip(),
+                "\n".join(_bez_zablakanej_spacji(nw)).rstrip())
+    m_st = min(len(l) - len(l.lstrip(" ")) for l in tr_st)
+    m_nw = min(len(l) - len(l.lstrip(" ")) for l in tr_nw)
+    if (m_st == 0) != (m_nw == 0) and _wspolne_linie_przesuniete_o(tr_st, tr_nw, m_st - m_nw):
+        return _wyrownaj_blok(surowy_stary), _wyrownaj_blok(surowy_nowy)
+    wsp = min(m_st, m_nw)
+    st = [l[wsp:] if l.strip() else l for l in st]
+    nw = [l[wsp:] if l.strip() else l for l in nw]
+    wc_st = {len(l) - len(l.lstrip(" ")) for l in st if l.strip()}
+    wc_nw = {len(l) - len(l.lstrip(" ")) for l in nw if l.strip()}
+    return ("\n".join(_bez_zablakanej_spacji(st, wc_nw)).rstrip(),
+            "\n".join(_bez_zablakanej_spacji(nw, wc_st)).rstrip())
 
 
 # v480ly: blok zapowiedziany jako dopisanie na koncu pliku ("Dopisz na końcu
@@ -45925,8 +46286,8 @@ def _pary_stary_nowy(text, z_miejscem=False):
 
     for i in range(len(bloki) - 1):
 
-        poz_stary, kon_stary, stary = bloki[i]
-        poz_nowy, kon_nowy, nowy = bloki[i + 1]
+        poz_stary, kon_stary, stary, surowy_stary = bloki[i]
+        poz_nowy, kon_nowy, nowy, surowy_nowy = bloki[i + 1]
 
         # Zapowiedz to ostatnie zdanie PRZED blokiem — kawalek tekstu
         # miedzy koncem poprzedniego bloku a tym.
@@ -45946,6 +46307,11 @@ def _pary_stary_nowy(text, z_miejscem=False):
         if stary == nowy or not (stary.strip() or nowy.strip()):
             continue
 
+        # v480mc: jedno wspolne wciecie dla obu blokow (patrz _wyrownaj_pare).
+        # Caly blok przesuniety o tyle samo (wyzej: rowne po wyrownaniu
+        # kazdego osobno) dalej nie jest poprawka — jak dotad.
+        stary, nowy = _wyrownaj_pare(surowy_stary, surowy_nowy)
+
         if not stary.strip():
             stary = ""
         if not nowy.strip():
@@ -45955,7 +46321,7 @@ def _pary_stary_nowy(text, z_miejscem=False):
         pary.append((stary, nowy, poz_stary, kon_nowy))
 
     # v480ly: pojedynczy blok pod "Dopisz na końcu <plik>:" — dopisanie
-    for j, (poz, kon, kod) in enumerate(bloki):
+    for j, (poz, kon, kod, _surowy) in enumerate(bloki):
         if j in uzyte or not kod.strip():
             continue
         przed = tekst[(bloki[j - 1][1] if j else 0):poz]
@@ -46525,17 +46891,61 @@ def _dodaj_wciecie(kod, wc):
 
 
 _NUMER_LINII_RE = re.compile(r"^\s*\d+\s*(?:[:|]\s?|\t)")
+_NUMER_PREFIKS_RE = re.compile(r"^\s*\d+\s*([:|]|\t)")
+
+
+def _spacje_po_numerze(linie_st, nowy):
+    """v480mc: 0 albo 1 — ile spacji po ":"/"|" nalezy do numeru linii, a
+    nie do wciecia kodu. grep -n pisze "12:    x" (wciecie zaraz po
+    dwukropku), program w „Najbliższy tekst w pliku” i autorzy recznie —
+    " 9 | x" / "12: x" (jedna spacja). Rozstrzygaja linie Nowego bez
+    numeru z ta sama trescia, bez nich — parzystosc wciec (kod ma je
+    parzyste), a gdy i to nic nie mowi — jedna, jak dotad."""
+    po = []
+    for l in linie_st:
+        m = _NUMER_PREFIKS_RE.match(l)
+        if m and m.group(1) != "\t":
+            r = l[m.end():]
+            if r.strip():
+                po.append((r.strip(), len(r) - len(r.lstrip(" "))))
+    if not po or min(s for _t, s in po) == 0:
+        return 0
+    nowe = {}
+    for l in str(nowy or "").split("\n"):
+        if l.strip() and not _NUMER_LINII_RE.match(l):
+            nowe.setdefault(l.strip(), []).append(len(l) - len(l.lstrip(" ")))
+    roznice = {s - w for t, s in po for w in nowe.get(t, ())}
+    if len(roznice) == 1 and roznice <= {0, 1}:
+        return roznice.pop()
+    if all(s % 2 == 0 for _t, s in po):
+        return 0
+    return 1
 
 
 def _bez_numerow(stary, nowy):
     """v480lq: fragment skopiowany z wyniku grep -n ("76:    return x") albo
     z "Najbliższy tekst w pliku" (" 9 | import x") — bez numerow linii,
-    gdy maja je wszystkie niepuste linie starego fragmentu."""
+    gdy maja je wszystkie niepuste linie starego fragmentu.
+    v480mc: spacja po ":"/"|" zdejmowana tylko wtedy, gdy nalezy do numeru
+    (_spacje_po_numerze) — dotad zawsze jedna, wiec z "12:    x" (grep -n)
+    zostawaly 3 spacje i Nowy z wcieciem z pliku szedl na 5 ("unexpected
+    indent"). Potem oba fragmenty wyrownane jak para (_wyrownaj_pare)."""
     ls = [l for l in str(stary or "").split("\n") if l.strip()]
     if not ls or not all(_NUMER_LINII_RE.match(l) for l in ls):
         return stary, nowy
-    zdejmij = lambda t: "\n".join(_NUMER_LINII_RE.sub("", l, count=1) for l in str(t or "").split("\n"))
-    return zdejmij(stary), zdejmij(nowy)
+    k = _spacje_po_numerze(ls, nowy)
+
+    def zdejmij(t):
+        out = []
+        for l in str(t or "").split("\n"):
+            m = _NUMER_PREFIKS_RE.match(l)
+            if m:
+                l = l[m.end():]
+                if k and m.group(1) != "\t" and l.startswith(" "):
+                    l = l[1:]
+            out.append(l)
+        return "\n".join(out)
+    return _wyrownaj_pare(zdejmij(stary), zdejmij(nowy))
 
 
 def _fragment_luzno(tekst, frag):
@@ -46568,15 +46978,82 @@ def _fragment_luzno(tekst, frag):
     return out
 
 
+def _szerokosc_wciecia(l):
+    """v480mc: szerokosc wciecia linii w kolumnach (tab = 4)."""
+    l = str(l or "")
+    return len(l[:len(l) - len(l.lstrip())].expandtabs(4))
+
+
+def _wciecie_o_szerokosci(n, tabami=False):
+    n = max(0, int(n))
+    return ("\t" * (n // 4) + " " * (n % 4)) if tabami else " " * n
+
+
 def _przenies_wciecie(kod, wc_z, wc_do):
     out = []
+    _tab = "\t" in str(wc_do or "")
+    _o_ile = len(str(wc_do or "").expandtabs(4)) - len(str(wc_z or "").expandtabs(4))
     for l in str(kod or "").strip("\n").split("\n"):
         if not l.strip():
             out.append("")
             continue
         lead = l[:len(l) - len(l.lstrip())]
-        out.append(wc_do + (lead[len(wc_z):] if lead.startswith(wc_z) else "") + l.lstrip())
+        if lead.startswith(wc_z):
+            out.append(wc_do + lead[len(wc_z):] + l.lstrip())
+        else:
+            # v480mc: linia z MNIEJSZYM wcieciem niz pierwsza linia fragmentu
+            # (np. "return" po petli) przesuwa sie o tyle samo kolumn, a nie
+            # staje na poziomie pierwszej linii. Bieg 2026-11-06 15:44
+            # (druzyna 1, tweedie_fit.py): "p_cal /= …" i "return p_cal" z
+            # Nowego fragmentu Piotra trafily do srodka petli — skladnia OK,
+            # wiec program napisal "naniesione", a Bartek szukal potem
+            # "swojego" bledu "return w petli".
+            out.append(_wciecie_o_szerokosci(_szerokosc_wciecia(l) + _o_ile, _tab) + l.lstrip())
     return "\n".join(out) + "\n"
+
+
+def _wciecia_luznego(tekst, a, b, frag):
+    """v480mc: [(wciecie we fragmencie, wciecie w pliku, linia)] — niepuste
+    linie fragmentu i linie pliku, na ktore trafily (_fragment_luzno)."""
+    fl = [l for l in str(frag or "").split("\n") if l.strip()]
+    pl = [l for l in str(tekst or "")[a:b].split("\n") if l.strip()]
+    return [(_szerokosc_wciecia(f), _szerokosc_wciecia(p), f.strip()) for f, p in zip(fl, pl)]
+
+
+def _mapa_wciec(pary):
+    """v480mc: wciecie fragmentu -> wciecie pliku albo None, gdy to samo
+    wciecie fragmentu stoi w pliku na dwoch roznych poziomach."""
+    mapa = {}
+    for f, p, _l in pary:
+        if mapa.setdefault(f, p) != p:
+            return None
+    return mapa
+
+
+def _powod_wciec(tekst, stary, nazwa):
+    """v480mc: zdanie do odmowy, gdy Stary fragment stoi w pliku, ale jego
+    linie maja tam inne wciecia wzgledem siebie (patrz _naloz_pare)."""
+    st2 = _bez_numerow(stary, "")[0]
+    przyklad = ""
+    try:
+        luz = _fragment_luzno(tekst, st2)
+        if len(luz) == 1:
+            pw = _wciecia_luznego(tekst, luz[0][0], luz[0][1], st2)
+            if pw:
+                f0, p0, l0 = pw[0]
+                for f, p, l in pw[1:]:
+                    if p - f != p0 - f0:
+                        przyklad = (" (np. „" + short(l, 50) + "” ma w pliku wcięcie " + str(p)
+                                    + ", a pierwsza linia fragmentu " + str(p0) + "; w Starym fragmencie "
+                                    + str(f) + " i " + str(f0) + ")")
+                        break
+    except Exception:
+        pass
+    return ("Fragment " + _poczatek_fragmentu(stary) + " stoi w pliku " + str(nazwa) + ", ale jego linie mają "
+            "tam inne wcięcia względem siebie niż w Starym fragmencie" + przyklad + " — program nie zgaduje, "
+            "na jakim poziomie postawić linie Nowego fragmentu. Nic nie zmieniono. Skopiuj Stary fragment "
+            "z wcięciami 1:1 z pliku (PODGLĄD: sed -n 'od,dop' " + str(nazwa) + "), a Nowy napisz z takimi "
+            "wcięciami, jakie mają mieć w pliku.")
 
 
 # v480lz: "..." (albo "…") w starym fragmencie — skrot autora. Bieg
@@ -46776,7 +47253,9 @@ def _naloz_pare(tekst, stary, nowy):
     """
     v480lq: jedna para (stary, nowy) na tekst. Zwraca (tekst_po, stan,
     ile): stan "ok" (jedno miejsce, podmienione), "juz" (zmiana juz jest),
-    "wiele" (stary stoi kilka razy), "brak" (nie stoi).
+    "wiele" (stary stoi kilka razy), "brak" (nie stoi), v480mc: "wciecia"
+    (stoi raz, ale jego linie maja w pliku inne wciecia wzgledem siebie —
+    tekst bez zmian, powod: _powod_wciec).
     """
     tekst = str(tekst or "")
     # v480ly: pusty stary fragment — dopisanie nowego na koncu pliku
@@ -46828,7 +47307,27 @@ def _naloz_pare(tekst, stary, nowy):
     luz = _fragment_luzno(tekst, st2)
     if len(luz) == 1:
         a, b, wc_pl, wc_fr = luz[0]
-        nw = _przenies_wciecie(nw2, wc_fr, wc_pl) if nw2.strip() else ""
+        nw = ""
+        if nw2.strip():
+            # v480mc: wciecie pierwszej linii przenosi sie na reszte tylko
+            # wtedy, gdy linie Starego fragmentu stoja w pliku z tym samym
+            # przesunieciem. Inaczej: kazdy poziom fragmentu ma w pliku
+            # jeden poziom (np. pierwsza linia skopiowana bez wciecia) —
+            # Nowy stawia sie wedlug tych poziomow; gdy jeden poziom stoi
+            # w pliku na dwoch (wszystkie linie splaszczone do zera, a w
+            # pliku petla i "return" po niej), program nie zgaduje — dotad
+            # po cichu wstawial wszystko na poziom pierwszej linii.
+            _pw = _wciecia_luznego(tekst, a, b, st2)
+            if len({p - f for f, p, _l in _pw}) <= 1:
+                nw = _przenies_wciecie(nw2, wc_fr, wc_pl)
+            else:
+                _mapa = _mapa_wciec(_pw)
+                _poziomy = {_szerokosc_wciecia(l) for l in nw2.split("\n") if l.strip()}
+                if _mapa is None or not _poziomy <= set(_mapa):
+                    return tekst, "wciecia", 1
+                _tab = any("\t" in l[:len(l) - len(l.lstrip())] for l in tekst[a:b].split("\n"))
+                nw = "\n".join((_wciecie_o_szerokosci(_mapa[_szerokosc_wciecia(l)], _tab) + l.lstrip())
+                               if l.strip() else "" for l in nw2.strip("\n").split("\n")) + "\n"
         if not (b > a and tekst[b - 1:b] == "\n"):
             nw = nw.rstrip("\n")
         return tekst[:a] + nw + tekst[b:], "ok", 1
@@ -46916,6 +47415,9 @@ def _naloz_pary_na_plik(path, bloki, zapisz=True, kto=None):
         if stan == "juz":
             juz_byly += 1
             continue
+
+        if stan == "wciecia":
+            return {"applied": False, "reason": _powod_wciec(zmieniony, stary, target.name)}
 
         if stan == "brak":
             _blisko = _najblizszy_fragment(zmieniony, stary)
@@ -56290,6 +56792,41 @@ def _record_python_written_file(path):
         pass
 
 
+_SUFIKSY_NIE_KOD = (".md", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".yaml", ".yml",
+                    ".toml", ".cfg", ".ini", ".log")
+
+
+def _czyj_plik_teraz(p):
+    """
+    v480mc: "kod Bartka" tylko wtedy, gdy ostatnio plik napisal albo
+    poprawial jego autor; inaczej kto i kiedy zmienil go ostatnio (dziennik
+    zmian). Bieg 2026-11-06 17:11 (druzyna 2): Bartek dostal "STAN.md: jest
+    (3192 B), kod Bartka", a w tej samej wiadomosci "zmieniono na dysku:
+    STAN.md (MAIN, 16:57)" — Bartek tylko dopisal do niego notatke o
+    15:59, potem MAIN dopisal swoja. Notatki (.md, .json…) to "plik", nie
+    "kod".
+    """
+    p = Path(str(p))
+    _aut = _autor_pliku.get(p.name, "ENGINEER")
+    _im, _dop = _IMIE_AUTORA.get(_aut, ("Bartek", "Bartka"))
+    _opis = ("plik " if p.suffix.lower() in _SUFIKSY_NIE_KOD else "kod ") + _dop
+    try:
+        _hist = list(_zmiany_plikow().get(_klucz_pliku(p)) or [])
+    except Exception:
+        _hist = []
+    if _hist:
+        _w = _hist[-1]
+        _k = str(_w.get("kto") or "")
+        _j = str(_w.get("jak") or "")
+        if not (_k == _im and re.match(r"(?:nowy plik|nowa pełna wersja|poprawka)", _j)):
+            try:
+                _t = datetime.fromtimestamp(float(_w.get("ts") or 0)).strftime("%H:%M")
+            except Exception:
+                _t = ""
+            _opis = "ostatnia zmiana: " + ", ".join(x for x in (_k, _t) if x)
+    return _opis
+
+
 def _python_written_files_lines(already_listed):
     """
     Linie stanu faktycznego dla plików zapisanych przez samego
@@ -56340,10 +56877,9 @@ def _python_written_files_lines(already_listed):
         # v480gt: bez "Treść: "import os os.environ…" … (pominięto 4610
         # znaków)" — kod splaszczony do jednej linii nikomu nic nie mowi;
         # kto chce, zaglada do pliku. Autor z mapy autorow, nie zawsze Bartek.
-        _kto = _IMIE_AUTORA.get(_autor_pliku.get(p.name, "ENGINEER"), ("Bartek", "Bartka"))[1]
         lines.append(
-            "- " + _sciezka_od_domu(str(p)) + ": jest (" + str(size) + " B), kod "
-            + _kto
+            "- " + _sciezka_od_domu(str(p)) + ": jest (" + str(size) + " B), "
+            + _czyj_plik_teraz(p)
         )
 
     return lines
@@ -57178,7 +57714,7 @@ def _rola_zna_plik(rola, p):
 _zmiana_zgloszona = {}
 
 
-def _znane_pliki_zmienione(rola, tresc=""):
+def _znane_pliki_zmienione(rola, tresc="", sciezki=None):
     rozm = _rozmowa_roli(rola)
     nazwy = []
     for (r, c, sciezka), h in list(_tresc_znana_roli.items()):
@@ -57199,6 +57735,8 @@ def _znane_pliki_zmienione(rola, tresc=""):
         if poczatek and poczatek in str(tresc or ""):
             continue  # ta wiadomosc i tak niesie nowa tresc
         nazwy.append(_sciezka_od_domu(str(p)) + _kto_zmienil_ostatnio(p, rola))
+        if sciezki is not None:
+            sciezki.append(_sciezka_od_domu(str(p)))
     if not nazwy:
         return ""
     # v480ma: kto zmienil (z dziennika zmian), nie "ktos" — bieg 2026-11-05

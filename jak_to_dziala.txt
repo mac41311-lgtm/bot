@@ -4889,3 +4889,51 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      Sprawdzone na 10 biegach (noc 5/6.11 i osiem wcześniejszych): odpada
      tylko komenda, wzór, cytat albo fragment poprawki; prawdziwe pliki
      zespołu zapisują się jak dotąd.
+
+344. (v480mc) Kod, pliki i rozmowa zespołu w biegu 6.11 od 14:26 (na v480mb).
+     - Poprawka fragmentem z wcięciem (drużyna 1, kod/eval/tweedie_fit.py).
+       15:43 pierwsza poprawka Piotra: „unexpected indent (line 123)”.
+       15:44 druga „naniesiona”, ale „p_cal /= …” i „return p_cal” trafiły
+       do środka pętli (składnia OK, więc nikt się nie dowiedział). 15:46
+       poprawka Bartka: „unexpected indent (line 122)”; Bartek wziął to na
+       siebie („Mój patch zostawił `return` w pętli `for d`”) i o 15:49
+       napisał cały plik od nowa. Przyczyna była w programie: Stary i Nowy
+       fragment traciły wcięcie każdy osobno (przepadało przesunięcie
+       między nimi), z pierwszej linii znikało każde wcięcie, a przy
+       dopasowaniu luźnym wszystkie linie Nowego szły na poziom pierwszej.
+       Teraz oba bloki tracą jedno wspólne wcięcie; z pierwszej linii znika
+       tylko zabłąkana spacja (1–3 znaki, których nie ma żadna inna linia);
+       linia płycej niż pierwsza przesuwa się o tyle samo kolumn; gdy linie
+       Starego stoją w pliku na różnych poziomach, Nowy staje według tych
+       poziomów, a gdy się nie da — program odmawia z powodem („… ma
+       w pliku wcięcie 4, a pierwsza linia fragmentu 12 …”), zamiast po
+       cichu wstawić kod w złe miejsce. Wszystkie trzy odpowiedzi z 15:43–
+       15:46 wchodzą teraz poprawnie. Fragment z numerami linii z grep -n
+       („12:    x”) traci sam numer: spacja po „:” / „|” znika tylko wtedy,
+       gdy należy do numeru (dotąd zawsze jedna i Nowy szedł na 5 spacji).
+     - URUCHOM w pogrubieniu z komentarzem (drużyna 1, 16:47): Piotr napisał
+       „**URUCHOM: cd ~/MAIN_1 && python3 -u kod/eval/prog_synth.py** (bez
+       `--smoke`)”, a do powłoki poszło „… prog_synth.py** (bez `--smoke`)”
+       — błąd składni, kod 2. Teraz komenda kończy się na zamykającym
+       ** / __ / `, a komentarz za nim zostaje tekstem. Na 1013 komendach
+       z logów zmieniają się 3, wszystkie zepsute.
+     - Sekcja o plikach (drużyna 2, krok 22, 17:11): STAN.md dwa razy
+       w jednej wiadomości (w „Od czasu, gdy ten plik był w tej rozmowie…”
+       i w „Sprawdziłem to teraz na dysku”) z opisem „kod Bartka”, choć
+       ostatnio zmienił go MAIN o 16:57 (Bartek tylko dopisał o 15:59).
+       Teraz plik stoi raz, a opis mówi, kto zmienił go ostatnio i kiedy
+       („ostatnia zmiana: MAIN, 16:57”); „kod X” tylko wtedy, gdy ostatni
+       był autor kodu.
+     - Nowa rozmowa Bartka (drużyna 2, od 15:39): w kroku 22 przyszedł drugi
+       raz list Tomka z kroku 10 (2450 znaków) i wszystkie pięć zdań
+       użytkownika (2930 znaków, z ZALECENIEM STRATEGICZNYM) — cztery
+       starsze dotarły do nowej rozmowy dopiero wtedy. Teraz nowa rozmowa
+       zapomina tylko to, co poszło do starej, a brakujące zdania
+       użytkownika idą w pierwszej wiadomości nowej rozmowy, w tym samym
+       jednym bloku „Użytkownik:”.
+     - Koniec komendy w tle (drużyna 2, 17:14): wynik powtarzał 28 linii sed
+       z gru_cli.py, które autor dostał chwilę wcześniej. Teraz taki kawałek
+       to jedna linia „(… 28 linii — to samo, co dostałeś już z „…”)”; ta
+       wiadomość 2053 → 1051 znaków.
+     Sprawdzone na logach z 10 biegów: z 432 par poprawek zmienia się 5
+     (wszystkie z błędnym wcięciem), z 3854 bloków kodu 9, z 1013 komend 3.
