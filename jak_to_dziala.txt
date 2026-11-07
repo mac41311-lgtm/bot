@@ -5084,3 +5084,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      „invalid message status” (DeepSeek nie uznał tej odpowiedzi za
      urwaną) nie wyłącza już przycisku do końca uruchomienia. Sklejona
      odpowiedź idzie dalej jak zwykle — pliki z niej program zapisuje.
+
+356. (v480mm) Dwie poprawki z biegu 7.11 (drużyna 2).
+     - Opis laptopa radzi venv w podfolderze venv folderu drużyny
+       (LAPTOP: python3 -m venv venv). Do v480ml radził ~/venv_MAIN_n, a to
+       w rywalizacji dostawało odmowę „sięga poza ten folder” (19:43,
+       krok 35). Folderu venv program nie kopiuje na telefon.
+     - Blok kodu kończy się na ``` na początku albo na końcu linii.
+       Do v480ml także ``` w środku zdania (Bartek, 17:47: „bloków ` ``` `
+       ze ścieżką”) zamykało blok i notatka do DLA_UZYTKOWNIKA.md urwała się
+       w połowie.

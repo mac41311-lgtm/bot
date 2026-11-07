@@ -23715,7 +23715,7 @@ def _bez_postepu(historia, blad, odp):
             and not re.search(r"(?im)^\s*(?:<{3,}|>{3,}|={3,}|ZNAJD|SEARCH|ZAMIE|REPLACE)", tekst):
         return True
     klucz = (re.sub(r"\s+", " ", str(blad or "")).strip()[-400:],
-             _klucz_tresci("\n".join(re.findall(r"```[^\n]*\n(.*?)```", tekst, re.DOTALL)) or tekst))
+             _klucz_tresci("\n".join(re.findall(r"```[^\n]*\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", tekst, re.DOTALL)) or tekst))
     if historia and historia[-1] == klucz:
         return True
     historia.append(klucz)
@@ -24150,7 +24150,7 @@ def _pliki_pod_naglowkami(text):
     text = str(text or "")
     out = []
     widziane = set()
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", text, re.DOTALL):
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", text, re.DOTALL):
         przed = text[:m.start()]
         k = przed.rfind("```")
         linie = [l for l in (przed[k + 3:] if k >= 0 else przed).splitlines() if l.strip()]
@@ -24203,7 +24203,7 @@ def _notatki_pod_naglowkami(text):
     w jednej wypowiedzi — liczy sie ostatnia wersja."""
     text = str(text or "")
     out = []
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", text, re.DOTALL):
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", text, re.DOTALL):
         if m.group(1).lower() not in ("", "markdown", "md", "text", "txt", "plaintext"):
             continue
         przed = text[:m.start()]
@@ -24533,7 +24533,7 @@ def _wzmianki_poza_kodem(tekst, wym):
     diffa (--- a/x.py, +++ b/x.py) w bloku ```diff liczy sie jak proza.
     """
     tekst = str(tekst or "")
-    spany = [(m.start(), m.end()) for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n.*?```", tekst, re.DOTALL)]
+    spany = [(m.start(), m.end()) for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n.*?(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", tekst, re.DOTALL)]
     out = []
     for q, p in wym:
         if any(a <= q < b for a, b in spany):
@@ -24569,7 +24569,7 @@ def _wstrzymania(tekst, miejsca):
     out = {}
     if not miejsca:
         return out
-    spany = [(m.start(), m.end()) for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n.*?```", tekst, re.DOTALL)]
+    spany = [(m.start(), m.end()) for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n.*?(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", tekst, re.DOTALL)]
     for m in _WSTRZYMANA_RE.finditer(tekst):
         q = m.start()
         if any(a <= q < b for a, b in spany):
@@ -25503,7 +25503,7 @@ def _dla_maina_z_zapisem(rola, tekst):
     # odpowiedzi tej roli.
     def _bloki(t):
         return {_znormalizuj_kod(_wyrownaj_blok(b))
-                for b in re.findall(r"```[^\n`]*\n(.*?)```", str(t or ""), re.DOTALL)}
+                for b in re.findall(r"```[^\n`]*\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", str(t or ""), re.DOTALL)}
     # v480ls: takze gdy ostatnia odpowiedz nie ma zadnego bloku. Bieg
     # 2026-11-03 02:59 (druzyna 2): Bartek odpowiedzial na ASK bez kodu,
     # a jego starszy glos z poprawka (z kroku wczesniej) poszedl przez
@@ -25530,7 +25530,7 @@ def _dla_maina_z_zapisem(rola, tekst):
 
 def _wstaw_zdanie_za_blok(odp, kod, zdanie):
     """Blok z tym kodem w odpowiedzi zamieniony zdaniem (albo zdanie na koncu)."""
-    for mb in re.finditer(r"```[^\n`]*\n(.*?)```", odp, re.DOTALL):
+    for mb in re.finditer(r"```[^\n`]*\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", odp, re.DOTALL):
         if _wyrownaj_blok(mb.group(1)).strip() == str(kod or "").strip():
             return odp[:mb.start()] + zdanie + odp[mb.end():]
     return odp.rstrip() + "\n\n" + zdanie
@@ -25906,7 +25906,7 @@ def _poloz_nowy_plik_autora(rola, odp, pytanie=""):
             na_dysku = p.read_text(encoding="utf-8", errors="replace").strip()
             blok = None
             if na_dysku == kod.strip():
-                for mb in re.finditer(r"```[^\n`]*\n(.*?)```", odp, re.DOTALL):
+                for mb in re.finditer(r"```[^\n`]*\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", odp, re.DOTALL):
                     if _wyrownaj_blok(mb.group(1)).strip() == kod.strip():
                         blok = mb
                         break
@@ -30716,14 +30716,19 @@ def _laptop_instalowanie_zdanie():
         brak_n = [t for t in ("gcc", "g++", "make", "cmake", "git") if t not in narz]
         z.append(" Kompilatory i narzędzia: " + (", ".join(narz) if narz else "żadnych")
                  + ("; brak: " + ", ".join(brak_n) if brak_n else "") + ".")
-    venv_dir = "~/venv_" + _laptop_folder()
+    # v480mm: venv w podfolderze "venv" folderu druzyny — tego folderu program
+    # nie kopiuje na telefon (_laptop_wyrownaj pomija venv/.venv), a sciezka
+    # poza folderem (~/venv_MAIN_n, do v480ml) w rywalizacji dostawala
+    # LAPTOP_ODMOWA (bieg 2026-11-07 19:43, druzyna 2, krok 35).
+    venv_dir = "venv"
     if _laptop.get("pip") is False:
         z.append(" pip nie jest zainstalowany — poproście użytkownika o pakiet python3-pip "
                  "(DLA_UZYTKOWNIKA.md).")
     elif _laptop.get("pep668") and _laptop.get("venv"):
         z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo. System odmawia zwykłego "
-                 "pip install (externally-managed-environment), więc zróbcie własne środowisko poza "
-                 "folderem drużyny (pliki z folderu program kopiuje na telefon): LAPTOP: python3 -m venv "
+                 "pip install (externally-managed-environment), więc zróbcie własne środowisko w "
+                 "podfolderze venv Waszego folderu (folderu o tej nazwie program nie kopiuje na "
+                 "telefon): LAPTOP: python3 -m venv "
                  + venv_dir + ", potem LAPTOP: " + venv_dir + "/bin/pip install <nazwa> i skrypty "
                  "puszczajcie przez " + venv_dir + "/bin/python.")
     elif _laptop.get("pep668"):
@@ -44824,7 +44829,7 @@ def _fragment_poprawki(text, kod):
         if re.match(r"^\**\s*(?:(?:stary|nowy|old|new)\s+fragment\b[^:\n]{0,40}:|"
                     r"(?:SZUKAJ|ZAMIE[ŃN](?:\s+NA)?)\b[^:\n]{0,40}:)", _pierwsza, re.I):
             return True
-        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)```", t, re.DOTALL):
+        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", t, re.DOTALL):
             if _wyrownaj_blok(m.group(2)).strip() == k and _blok_poprawki(t, m.start()):
                 return True
         return False
@@ -44853,7 +44858,7 @@ def _blok_dokladnie_dla(text, sciezka):
     # check.py" z "from baselines import main, load_text, ...") i dopiero
     # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
     # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
-    _bloki = list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))
+    _bloki = list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", str(text or ""), re.DOTALL))
     for _ib in range(len(_bloki) - 1, -1, -1):
         m = _bloki[_ib]
 
@@ -44914,7 +44919,7 @@ def _blok_podpisany(text, sciezka):
     # check.py" z "from baselines import main, load_text, ...") i dopiero
     # na koncu czysty plik; na dysk szedl pierwszy szkic, ktory sie nie
     # kompilowal, a Bartek tracil rundy na szukanie, skad sie wzial.
-    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", str(text or ""), re.DOTALL))):
+    for m in reversed(list(re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", str(text or ""), re.DOTALL))):
 
         kod = _wyrownaj_blok(m.group(2))
 
@@ -44972,7 +44977,7 @@ def _kod_zamiast_wyniku(text, sciezka, wybrany):
             pass
         tekst = str(text or "")
         lepszy = None
-        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)```", tekst, re.DOTALL):
+        for m in re.finditer(r"```([a-zA-Z0-9_+:./~-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", tekst, re.DOTALL):
             kod = _wyrownaj_blok(m.group(2))
             if not kod.strip() or kod.strip() == str(wybrany).strip():
                 continue
@@ -45038,7 +45043,7 @@ def _nad_blokiem_inny_plik(text, kod, sciezka):
 
     tekst = str(text or "")
 
-    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)```", tekst, re.DOTALL):
+    for m in re.finditer(r"```([a-zA-Z0-9_+-]*)\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", tekst, re.DOTALL):
         if _wyrownaj_blok(m.group(2)).strip() != str(kod).strip():
             continue
         przed = tekst[:m.start()]
@@ -46300,7 +46305,7 @@ def _engineer_for_team(text, limit=LIMIT_BEZPIECZENSTWA):
     # skracana, a BLOKI KODU ida w calosci, nawet gdy przez to
     # przekroczymy limit. Integralnosc kodu jest wazniejsza niz
     # oszczednosc znakow.
-    parts = re.split(r"(```[a-zA-Z0-9_+-]*\n.*?```)", text, flags=re.DOTALL)
+    parts = re.split(r"(```[a-zA-Z0-9_+-]*\n.*?(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$))))", text, flags=re.DOTALL)
 
     code_parts = [p for p in parts if p.startswith("```")]
 
@@ -46849,7 +46854,7 @@ def _bloki_kodu(tekst):
     takze pustych (pusty "Stary fragment" to dopisanie, pusty "Nowy" —
     usuniecie). v480mc: surowy tekst bloku (z wcieciem) do _wyrownaj_pare."""
     return [(m.start(), m.end(), _wyrownaj_blok(m.group(1)), m.group(1))
-            for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n(.*?)```", str(tekst or ""), re.DOTALL)]
+            for m in re.finditer(r"```[a-zA-Z0-9_+-]*\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))", str(tekst or ""), re.DOTALL)]
 
 
 def _wspolne_linie_przesuniete_o(linie_st, linie_nw, d):
@@ -58243,7 +58248,7 @@ def _extract_commands_from_text(text):
     text = str(text or "")
     znalezione = []
 
-    for blok in re.findall(r"```(?:bash|sh|shell)?\s*\n(.*?)```",
+    for blok in re.findall(r"```(?:bash|sh|shell)?\s*\n(.*?)(?:(?<=\n)[ \t]*```|```(?=[ \t]*(?:\n|$)))",
                            text, re.DOTALL):
         for linia in blok.split("\n"):
             linia = linia.strip()
