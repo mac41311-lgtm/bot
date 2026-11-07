@@ -5046,3 +5046,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      programy, sterowniki i ustawienia systemu zmienia sam (LAPTOP: sudo …),
      a MAIN dostaje jedno zdanie „doszło pełne sudo”. Sudo tylko do apt i
      brak sudo — teksty jak dotąd.
+
+350. (v480mh) Wykonawca może sam poprawić fragment pliku z kodem
+     (termux_patch_file) — z kopią w .kopie/, sprawdzeniem składni i wpisem
+     w dzienniku zmian, jak każda poprawka. Wcześniej dostawał odmowę
+     BRAK_KODU_DO_ZAPISU i zadanie wracało do MAIN-a.
+
+351. (v480mh) Przeglądy kodu (Piotr i Ania) bez limitu na cel. Ta sama
+     wersja pliku (bajt w bajt) nie idzie do przeglądu drugi raz — nowy
+     przegląd dopiero po zmianie pliku.

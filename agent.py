@@ -34549,8 +34549,20 @@ def termux_patch_file(path, search, replace):
     # krok 29 (i 2026-10-10 23:03, krok 19): patch MAIN-a odrzucony,
     # krok pozniej ta sama zmiana przeszla przez termux_run z Pythonem
     # w heredocu — strata kroku, nic wiecej.
+    # v480mh: uzytkownik 2026-11-07: "wykonawca też może poprawić". Poprawka
+    # fragmentu istniejacego pliku z kodem przechodzi takze wtedy, gdy wymyslilo
+    # ja wykonanie (backup, sprawdzenie skladni i dziennik zmian jak zawsze).
+    # Do v480mg: odmowa BRAK_KODU_DO_ZAPISU i zadanie wracalo do MAIN-a (bieg
+    # 2026-11-06 15:31, druzyna 1, ppm_c_v3_mut.c).
     if (
         target.suffix.lower() in _KOD_SUFIKSY
+        and not _wykonuje_main
+        and not _kopia_kodu_zespolu(str(replace if replace is not None else ""))
+    ):
+        log("GEMINI", "Wykonawca sam poprawia fragment " + target.name + ".")
+    if (
+        False
+        and target.suffix.lower() in _KOD_SUFIKSY
         and not _wykonuje_main
         and not _kopia_kodu_zespolu(str(replace if replace is not None else ""))
     ):
@@ -47094,7 +47106,11 @@ def _verify_patched_syntax(path, content):
 # KOSZT: dwa dodatkowe zapytania do DeepSeeka i TYLKO wtedy, gdy kod
 # faktycznie sie wysypal. Limit na cel pilnuje, zeby przy uporczywym
 # bledzie nie kreciło sie to w kolko.
-CODE_REVIEW_MAX_PER_GOAL = 3
+# v480mh: bez limitu na cel (uzytkownik 2026-11-07: "ten limit usuń").
+# Zamiast niego: ten sam plik bajt w bajt, ktory juz byl przegladany, nie
+# idzie do przegladu drugi raz — nowy przeglad dopiero po zmianie pliku.
+CODE_REVIEW_MAX_PER_GOAL = None
+_przegladane_wersje = {}
 
 _code_review_used = 0
 
@@ -47102,6 +47118,7 @@ _code_review_used = 0
 def _reset_code_review_budget():
     global _code_review_used
     _code_review_used = 0
+    _przegladane_wersje.clear()
 
 
 def review_and_fix_project_file(path, run_result):
@@ -47115,7 +47132,7 @@ def review_and_fix_project_file(path, run_result):
 
     global _code_review_used
 
-    if _code_review_used >= CODE_REVIEW_MAX_PER_GOAL:
+    if CODE_REVIEW_MAX_PER_GOAL is not None and _code_review_used >= CODE_REVIEW_MAX_PER_GOAL:
         log(
             "MAIN",
             "Piotr/Ania: wyczerpany limit przeglądów kodu na ten cel ("
@@ -47133,6 +47150,16 @@ def review_and_fix_project_file(path, run_result):
     if not tresc.strip():
         return None
 
+    _odcisk = hashlib.sha1(tresc.encode("utf-8", "replace")).hexdigest()
+    if _przegladane_wersje.get(str(target)) == _odcisk:
+        log(
+            "MAIN",
+            "Piotr/Ania: " + target.name + " jest bez zmian od ostatniego przeglądu — "
+            "nie przeglądam tej samej wersji drugi raz."
+        )
+        return None
+    _przegladane_wersje[str(target)] = _odcisk
+
     _code_review_used += 1
 
     co_sie_stalo = _opis_awarii(run_result)
@@ -47141,7 +47168,8 @@ def review_and_fix_project_file(path, run_result):
         "MAIN",
         "Kod się wysypał — proszę Piotra o niezależne spojrzenie na "
         + target.name + " (przegląd " + str(_code_review_used)
-        + "/" + str(CODE_REVIEW_MAX_PER_GOAL) + ")."
+        + ("/" + str(CODE_REVIEW_MAX_PER_GOAL) if CODE_REVIEW_MAX_PER_GOAL is not None else "")
+        + ")."
     )
 
     analiza = deepseek(
