@@ -5067,3 +5067,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      i cudzych; kod w środek pliku wstawia się poprawką fragmentu. MAIN
      („Kod.”, przepisany w całości) wie, że wykonawca w TASK też poprawia
      fragment pliku. Role i ich prompty bez zmian.
+
+354. (v480mk) Długie odpowiedzi i pliki w heredocu.
+     - Ucięta odpowiedź roli: program prosi o dalszy ciąg do skutku (było:
+       raz na odpowiedź i najwyżej 12 razy na uruchomienie), skleja całość;
+       przestaje, gdy dokończenie nic nie dokleja.
+     - URUCHOM: cat > plik <<'EOF' … EOF — bez limitu 400 linii.
+     - Komenda, która zapisuje plik heredokiem i nic nie wypisuje, oddaje
+       „Zapisany plik ~/MAIN_n/x.py: 600 linii, 6380 B.” zamiast samego
+       „nic nie wypisało”.

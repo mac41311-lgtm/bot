@@ -9335,7 +9335,9 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
 
 # Ile razy w CALYM uruchomieniu prosimy o dokonczenie. Zabezpiecza
 # przed spirala, gdyby detektor zaczal falszywie alarmowac.
-CONTINUATION_MAX_PER_RUN = 12
+# v480mk: bez limitu (bylo 12 na uruchomienie) — uzytkownik: bez limitow;
+# Bartek 2026-11-07: plik >12 tys. znakow urywal sie w polowie.
+CONTINUATION_MAX_PER_RUN = None
 _continuation_used = 0
 
 # Ile ostatnich znakow pokazujemy roli, zeby wiedziala GDZIE
@@ -9449,7 +9451,7 @@ def _ask_for_missing_tail(name, session, text, reason):
 
     global _continuation_used
 
-    if _continuation_used >= CONTINUATION_MAX_PER_RUN:
+    if CONTINUATION_MAX_PER_RUN is not None and _continuation_used >= CONTINUATION_MAX_PER_RUN:
         log(
             "DEEPSEEK",
             name + ": odpowiedz urwana (" + str(reason) + "), ale "
@@ -10274,7 +10276,40 @@ def _opis_dla_zespolu(komenda, cwd, wynik):
     if len(opis) > 5000:
         # przy bledzie liczy sie koniec (traceback), wiec zostaje poczatek i koniec
         opis = opis[:1500] + "\n(… " + str(len(opis) - 4500) + " znaków pominięte …)\n" + opis[-3000:]
+    # v480mk: komenda zapisujaca plik heredokiem (cat > x <<'EOF') nic nie
+    # wypisuje — Bartek (2026-11-07, OGRANICZENIA PROGRAMU) czytal "(skończone
+    # bez błędu, nic nie wypisało)" jako "heredoc nie działa". Mowimy, jaki
+    # plik powstal i jak duzy.
+    try:
+        _zapisane = _pliki_z_heredokow(komenda, cwd)
+    except Exception:
+        _zapisane = []
+    if _zapisane:
+        opis = opis.replace("(skończone bez błędu, nic nie wypisało)", "").rstrip()
+        opis = (opis + "\n" if opis else "") + "\n".join(_zapisane)
     return "$ " + komenda + " (uruchomione w " + _sciezka_od_domu(cwd) + ")\n" + (opis or "(nic nie wypisało)")
+
+
+def _pliki_z_heredokow(komenda, cwd):
+    """v480mk: pliki zapisane heredokiem cat/tee w tej komendzie, ze stanem na dysku."""
+    wynik = []
+    for linia in str(komenda or "").split("\n"):
+        m = _HEREDOC_URUCHOM_RE.search(linia)
+        if not m or not re.search(r"\b(?:cat|tee)\b", linia):
+            continue
+        reszta = linia[:m.start()] + " " + linia[m.end():]
+        mt = (re.search(r"(?<![<>&\d])>{1,2}\s*(['\"]?)([^\s<>|;&'\"]+)\1", reszta)
+              or re.search(r"\btee\s+(?:-a\s+)?(['\"]?)([^\s<>|;&'\"-][^\s<>|;&'\"]*)\1", reszta))
+        if not mt or "$" in mt.group(2):
+            continue
+        cel = Path(os.path.expanduser(mt.group(2)))
+        if not cel.is_absolute():
+            cel = Path(str(cwd or HOME)) / cel
+        if cel.is_file():
+            dane = cel.read_bytes()
+            wynik.append("Zapisany plik " + _sciezka_od_domu(str(cel)) + ": "
+                         + str(dane.count(b"\n")) + " linii, " + str(len(dane)) + " B.")
+    return wynik
 
 
 def _cudzyslow_otwarty(k):
@@ -10326,7 +10361,8 @@ def _komenda_do_konca(tekst, m):
     if _hd:
         _zn = _hd.group(2)
         linie = [k]
-        for l in tekst[m.end():].split("\n")[1:401]:
+        # v480mk: bez limitu linii (bylo 400) — dlugi plik w heredocu
+        for l in tekst[m.end():].split("\n")[1:]:
             if re.match(r"^\s*```", l):
                 continue
             linie.append(l)
@@ -11206,9 +11242,16 @@ def _deepseek_jedna_rozmowa(name, message):
                     # dalszy ciag". Jedno zadanie zamiast dwoch
                     # spalonych rund wymiany zdan i jednego BLOKUJ
                     # (patrz _ask_for_missing_tail).
-                    text, truncated = _ask_for_missing_tail(
-                        name, session, text, reason
-                    )
+                    # v480mk: do skutku — dlugi plik potrzebuje kilku
+                    # dokonczen (bylo jedno). Koniec, gdy dokonczenie nic
+                    # nie dokleja (pusty tekst, blad, ten sam ogon).
+                    while truncated:
+                        _przed = len(str(text or ""))
+                        text, truncated = _ask_for_missing_tail(
+                            name, session, text, reason
+                        )
+                        if len(str(text or "")) <= _przed + 20:
+                            break
 
                 # v201: zapamietujemy to DLA ODBIORCOW tej wypowiedzi
                 # (patrz _role_truncated) — inaczej beda ja czytac jak
