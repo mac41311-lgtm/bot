@@ -11153,7 +11153,15 @@ def _deepseek_jedna_rozmowa(name, message):
                     text, status
                 )
 
-                if truncated and _continue_action_supported:
+                # v480mk: przycisk "Kontynuuj" do skutku (uzytkownik
+                # 2026-11-07: "ten przycisk dociskać" dla całego zespołu).
+                # Bylo: jedno nacisniecie, a pierwsza odmowa wylaczala go do
+                # konca procesu — takze biz_code 22 "invalid message status",
+                # ktorym serwer mowi tylko, ze TA odpowiedz nie jest urwana
+                # (logi 31.10-6.11: 10 takich odmow, potem prawdziwe urwania
+                # kodu szly juz bez przycisku).
+                while truncated and _continue_action_supported:
+                    _przed_cont = len(str(text or ""))
 
                     # Eksperyment z v75: natywne action='continue'.
                     # Zostaje, bo gdyby serwer je kiedys przyjal,
@@ -11207,6 +11215,8 @@ def _deepseek_jedna_rozmowa(name, message):
                                 + str(len(continue_text))
                                 + " znakow, doklejone."
                             )
+                        if len(str(text or "")) <= _przed_cont + 20:
+                            break
 
                     except Exception as continue_error:
 
@@ -11218,6 +11228,20 @@ def _deepseek_jedna_rozmowa(name, message):
                                 and not _rozmowa_zerwana(str(continue_error))):
 
                             _limit_telefonu(name, str(continue_error))
+
+                        elif ("invalid message status" in str(continue_error)
+                              or '"biz_code":22' in str(continue_error).replace(" ", "")):
+
+                            # v480mk: serwer: ta odpowiedz nie jest
+                            # INCOMPLETE, wiec przycisku nie ma — prosimy
+                            # zwykla wiadomoscia (jak dotad), a przycisk
+                            # zostaje wlaczony na prawdziwe urwania.
+                            log(
+                                "DEEPSEEK",
+                                name + ": przycisk 'continue' niedostępny dla "
+                                "tej odpowiedzi (DeepSeek nie uznał jej za "
+                                "urwaną) — pytam o dalszy ciąg wiadomością."
+                            )
 
                         else:
 
@@ -11233,6 +11257,8 @@ def _deepseek_jedna_rozmowa(name, message):
                                 "do konca uruchomienia i pytam o dalszy "
                                 "ciag zwykla wiadomoscia."
                             )
+
+                        break
 
                 if truncated:
 
