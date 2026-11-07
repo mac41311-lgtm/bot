@@ -5055,3 +5055,7 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 351. (v480mh) Przeglądy kodu (Piotr i Ania) bez limitu na cel. Ta sama
      wersja pliku (bajt w bajt) nie idzie do przeglądu drugi raz — nowy
      przegląd dopiero po zmianie pliku.
+
+352. (v480mi) Opis rozmowy dla ról mówi wprost, że „Dopisz na końcu
+     <plik>:” działa też dla kodu (np. nowa funkcja na końcu kod/model.py),
+     więc duży plik można budować kawałkami w kolejnych wypowiedziach.
