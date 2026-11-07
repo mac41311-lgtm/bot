@@ -5059,3 +5059,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
 352. (v480mi) Opis rozmowy dla ról mówi wprost, że „Dopisz na końcu
      <plik>:” działa też dla kodu (np. nowa funkcja na końcu kod/model.py),
      więc duży plik można budować kawałkami w kolejnych wypowiedziach.
+
+353. (v480mj) Wspólny opis rozmowy dla zespołu (akapit o plikach przepisany
+     w całości): cztery sposoby zmiany pliku — nowy plik, swój plik od nowa
+     w całości (stara wersja w .kopie/), poprawka fragmentu, dopisanie na
+     końcu — działają na wszystkich plikach (kod, skrypty, notatki), swoich
+     i cudzych; kod w środek pliku wstawia się poprawką fragmentu. MAIN
+     („Kod.”, przepisany w całości) wie, że wykonawca w TASK też poprawia
+     fragment pliku. Role i ich prompty bez zmian.

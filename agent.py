@@ -56957,6 +56957,8 @@ def _jak_rozmawiamy_laptop():
 
 
 def _jak_rozmawiamy(laptop=True):
+    # v480mi: akapit przepisany w calosci — cztery sposoby zmiany pliku, na
+    # wszystkich plikach (uzytkownik 2026-11-07), wstawianie w srodek.
     # v480lz: akapit przepisany w calosci — doszlo zdanie o „...” w
     # poprawce fragmentu (bieg 2026-11-05 17:48: Bartek nie umial
     # przepisac 1:1 linii z 640 znakami tablicy i poprawka wracala).
@@ -56976,10 +56978,14 @@ def _jak_rozmawiamy(laptop=True):
         "pip install pakiet albo URUCHOM: pkg install -y pakiet) — program "
         "czeka, aż instalacja się skończy, i oddaje jej wynik. "
         + (_jak_rozmawiamy_laptop() if laptop else "")
-        + "Nowy plik "
-        "z kodem piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
-        "nim; program od razu kładzie go na dysk, sprawdza i krótko "
-        "uruchamia, a błąd wraca do autora. Zmianę w pliku, który już "
+        + "Pliki "
+        "zmieniacie na cztery sposoby i każdy działa na wszystkich plikach "
+        "— kod, skrypty, notatki — swoich i cudzych. Nowy "
+        "plik piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
+        "nim; program od razu kładzie go na dysk, a plik z kodem sprawdza "
+        "i krótko uruchamia, błąd wraca do autora. Swój plik możecie też "
+        "napisać od nowa w całości pod tą samą ścieżką; poprzednia wersja "
+        "zostaje w .kopie/. Zmianę w pliku, który już "
         "jest — swoim albo cudzym — podajecie jako poprawkę fragmentu: "
         "nad nią ścieżka pliku (np. „Poprawka do kod/model.py”), pod nią "
         "blok „Stary fragment:” skopiowany 1:1 z pliku i blok „Nowy "
@@ -56994,7 +57000,9 @@ def _jak_rozmawiamy(laptop=True):
         "fragment:” albo „Dopisz na końcu <plik>:” nad blokiem dopisuje "
         "blok na końcu pliku, np. nową funkcję na końcu kod/model.py "
         "albo notatkę do NOTES.md, więc duży plik możecie budować "
-        "kawałkami w kolejnych wypowiedziach. Poprawka, przy "
+        "kawałkami w kolejnych wypowiedziach. Kod w środek pliku "
+        "wstawiacie poprawką fragmentu: w „Starym” linia, za którą ma "
+        "wejść, w „Nowym” ta sama linia i nowy kod pod nią. Poprawka, przy "
         "której napiszecie, że jej jeszcze nie nanosicie, zostaje "
         "propozycją. Kto, kiedy i jak zmieniał plik, program pokazuje "
         "przy PODGLĄDZIE i uruchomieniu z tym plikiem. W zespole są: Tomek "
@@ -57198,6 +57206,7 @@ _JAK_TO_DZIALA = (
     # v480gt: przepisany w calosci — dlugie uruchomienie samo idzie w tlo.
     # v480ib: przepisany w calosci — kiedy program sam budzi MAIN-a
     # (koniec/blad, co 25%, przyrost logu 3-24 min, linia co minute).
+    # v480mi: przepisany w calosci — wykonawca w TASK tez poprawia fragment.
     "Kod. Kod piszą Bartek i zespół: Ty mówisz, co ma powstać albo "
     "co poprawić, a Bartek pisze, Piotr szuka przyczyny błędu, Ania "
     "pisze poprawkę. Zespół sam uruchamia swój kod i widzi błędy, więc "
@@ -57212,7 +57221,9 @@ _JAK_TO_DZIALA = (
     "Bartka w ~/projekt/prep.py (…, składnia OK; próba uruchomienia … "
     "OK). … uruchomienie: python3 ~/projekt/prep.py [--wejscie "
     "--wyjscie] …]. Poprawkę fragmentu od autora program nanosi od razu "
-    "i też mówi to jedną linią. Kod podany bez ścieżki widzisz jako "
+    "i też mówi to jedną linią. Wykonawca w TASK też może sam poprawić "
+    "fragment pliku, gdy po drodze trafi na błąd; program nanosi to z "
+    "kopią w .kopie/ i sprawdza składnię. Kod podany bez ścieżki widzisz jako "
     "[nazwa — liczba znaków]; program położy go z wypowiedzi autora, "
     "1:1, gdy w TASK podasz write_engineer_code_to ze ścieżką pliku "
     "albo katalogu. Kod, który już jest na dysku, widzisz jako ścieżkę, "
