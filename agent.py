@@ -30477,6 +30477,7 @@ def _laptop_sprawdz():
                                    "python3 -m pip --version >/dev/null 2>&1 && echo PIP_OK; "
                                    "python3 -c 'import venv, ensurepip' 2>/dev/null && echo VENV_OK; "
                                    "ls /usr/lib/python3*/EXTERNALLY-MANAGED >/dev/null 2>&1 && echo PEP668; "
+                                   "sudo -n -l /usr/bin/apt >/dev/null 2>&1 && echo SUDO_OK; "
                                    "true"],
             capture_output=True, text=True, timeout=20, errors="replace")
         ok = r.returncode == 0
@@ -30520,6 +30521,7 @@ def _laptop_sprawdz():
             _laptop["pip"] = "PIP_OK" in out
             _laptop["venv"] = "VENV_OK" in out
             _laptop["pep668"] = "PEP668" in out
+            _laptop["sudo"] = "SUDO_OK" in out
             _laptop["blad"] = ""
         else:
             _laptop["blad"] = short(err.splitlines()[-1] if err else "brak odpowiedzi", 200)
@@ -30579,9 +30581,26 @@ def _laptop_instalowanie_zdanie():
     else:
         z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo: LAPTOP: pip install "
                  "--user <nazwa>.")
-    z.append(" Programy systemowe i sterowniki (apt) instaluje użytkownik — napiszcie o to w "
-             "DLA_UZYTKOWNIKA.md.")
+    if _laptop.get("sudo"):
+        z.append(" Programy systemowe i sterowniki możecie instalować sami — konto ma sudo do apt bez "
+                 "hasła: LAPTOP: sudo apt install -y <pakiet> (bez -y apt czeka na odpowiedź).")
+    else:
+        z.append(" Programy systemowe i sterowniki (apt) instaluje użytkownik — napiszcie o to w "
+                 "DLA_UZYTKOWNIKA.md.")
     return "".join(z)
+
+
+def _laptop_sudo_zdanie(krotko=False):
+    """v480md: jedno zdanie o instalowaniu na laptopie do tekstow dla zespolu —
+    zalezne od tego, czy konto na laptopie ma sudo do apt (odczyt co minute)."""
+    if _laptop.get("sudo"):
+        return ("Na laptopie macie sudo do apt: programy systemowe i sterowniki instalujecie sami "
+                "(LAPTOP: sudo apt install -y <pakiet>), biblioteki Pythona w venv albo przez pip "
+                "install --user. ")
+    return ("Na laptopie nie ma sudo: biblioteki instalujecie w venv albo przez pip install --user. "
+            if not krotko else
+            "Na laptopie nie ma sudo — biblioteki instaluje się tam w venv albo przez pip install "
+            "--user. ")
 
 
 def _laptop_sygnatura():
@@ -30599,6 +30618,8 @@ def _laptop_sygnatura():
         s.append("pip")
     if _laptop.get("venv"):
         s.append("venv")
+    if _laptop.get("sudo"):
+        s.append("sudo do apt")
     return sorted(s)
 
 
@@ -32004,13 +32025,19 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
             if co == "programu":
                 wynik["podpowiedz"] = (
                     gdzie + " nie ma programu „" + nazwa + "” (albo to literówka w nazwie). "
-                    + ("Programy systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
-                       "potrzebny, napiszcie to w DLA_UZYTKOWNIKA.md; czasem jest też wersja przez pip."
+                    + (("Na laptopie możecie go doinstalować sami: LAPTOP: sudo apt install -y <pakiet> "
+                        "(konto ma sudo do apt); czasem jest też wersja przez pip."
+                        if _laptop.get("sudo") else
+                        "Programy systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
+                        "potrzebny, napiszcie to w DLA_UZYTKOWNIKA.md; czasem jest też wersja przez pip.")
                        if na_laptopie else "Możecie go doinstalować, np. pkg install <nazwa>."))
             elif lap is None and na_laptopie:
                 wynik["podpowiedz"] = (
-                    gdzie + " brakuje " + co + " „" + nazwa + "”. Biblioteki systemowe na laptopie "
-                    "instaluje użytkownik (sudo) — jeśli jest potrzebna, napiszcie to w DLA_UZYTKOWNIKA.md.")
+                    gdzie + " brakuje " + co + " „" + nazwa + "”. "
+                    + ("Możecie ją doinstalować sami: LAPTOP: sudo apt install -y <pakiet> (konto ma sudo do apt)."
+                       if _laptop.get("sudo") else
+                       "Biblioteki systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
+                       "potrzebna, napiszcie to w DLA_UZYTKOWNIKA.md."))
             else:
                 wynik["podpowiedz"] = (
                     gdzie + " brakuje " + co + " „" + nazwa + "”. Możecie to doinstalować, np. "
@@ -56792,8 +56819,8 @@ def _jak_rozmawiamy_laptop():
         "„na laptopie” — np. URUCHOM: LAPTOP: python3 test.py. W jednej linii po ; albo && "
         "przechodzicie na drugą maszynę słowem LAPTOP: albo TELEFON:. Kod i małe pliki "
         "tekstowe program trzyma takie same na obu maszynach, a duże pliki przenosicie scp "
-        "(URUCHOM: scp dane.bin " + _LAPTOP_HOST + ":" + f + "/ i z powrotem). Na laptopie "
-        "nie ma sudo: biblioteki instalujecie w venv albo przez pip install --user. "
+        "(URUCHOM: scp dane.bin " + _LAPTOP_HOST + ":" + f + "/ i z powrotem). "
+        + _laptop_sudo_zdanie()
         + ("Drużyna ma tam stałą połowę procesora i pamięci, więc najszybciej liczy jeden "
            "skrypt naraz z dwoma wątkami, a gdy skrypty dojdą do tej połowy pamięci, zwalniają. "
            if _DRUZYNA else "")
@@ -56927,8 +56954,7 @@ def _laptop_dla_maina_akapit():
         "maszynach te same: przed każdą komendą LAPTOP: i po niej program przenosi nowszą "
         "wersję w drugą stronę. Duże pliki przenosi scp " + tel + "/dane.bin " + _LAPTOP_HOST
         + ":" + f + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + f + "/model.bin " + tel + "/. "
-        "Na laptopie nie ma sudo — biblioteki instaluje się tam w venv albo przez pip install "
-        "--user. "
+        + _laptop_sudo_zdanie(krotko=True)
         + ("Wasza drużyna ma tam stałą połowę procesora i pamięci (drugą ma rywal, trochę "
            "zostaje dla systemu), więc najszybciej liczy jeden skrypt naraz z dwoma wątkami. "
            if _DRUZYNA else "")
