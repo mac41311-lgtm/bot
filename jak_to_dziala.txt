@@ -5040,3 +5040,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      z pytaniem). Zdanie z cytatem „rm -rf” dopisywane do notatki (.md,
      .txt, .log, .json, .csv) przez echo/printf albo cat/tee <<EOF nie jest
      usuwaniem. Plik .sh/.py i $(…) w tekście liczą się jak dotąd.
+
+349. (v480mh) Pełne sudo na laptopie. Program co minutę sprawdza też
+     „sudo -n true”. Gdy konto ma pełne sudo bez hasła, zespół czyta, że
+     programy, sterowniki i ustawienia systemu zmienia sam (LAPTOP: sudo …),
+     a MAIN dostaje jedno zdanie „doszło pełne sudo”. Sudo tylko do apt i
+     brak sudo — teksty jak dotąd.

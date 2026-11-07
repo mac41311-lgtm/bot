@@ -30558,6 +30558,7 @@ def _laptop_sprawdz():
                                    "python3 -c 'import venv, ensurepip' 2>/dev/null && echo VENV_OK; "
                                    "ls /usr/lib/python3*/EXTERNALLY-MANAGED >/dev/null 2>&1 && echo PEP668; "
                                    "sudo -n -l /usr/bin/apt >/dev/null 2>&1 && echo SUDO_OK; "
+                                   "sudo -n true >/dev/null 2>&1 && echo SUDO_ALL; "
                                    "true"],
             capture_output=True, text=True, timeout=20, errors="replace")
         ok = r.returncode == 0
@@ -30601,7 +30602,10 @@ def _laptop_sprawdz():
             _laptop["pip"] = "PIP_OK" in out
             _laptop["venv"] = "VENV_OK" in out
             _laptop["pep668"] = "PEP668" in out
-            _laptop["sudo"] = "SUDO_OK" in out
+            # v480mh: pelne sudo bez hasla (uzytkownik 2026-11-07: "sudo mieli
+            # mieć cały dostęp") — sudo do apt tez wtedy jest
+            _laptop["sudo_pelne"] = "SUDO_ALL" in out
+            _laptop["sudo"] = "SUDO_OK" in out or _laptop["sudo_pelne"]
             _laptop["blad"] = ""
         else:
             _laptop["blad"] = short(err.splitlines()[-1] if err else "brak odpowiedzi", 200)
@@ -30661,7 +30665,11 @@ def _laptop_instalowanie_zdanie():
     else:
         z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo: LAPTOP: pip install "
                  "--user <nazwa>.")
-    if _laptop.get("sudo"):
+    if _laptop.get("sudo_pelne"):
+        z.append(" Programy systemowe, sterowniki i ustawienia systemu zmieniacie sami — konto ma pełne "
+                 "sudo bez hasła: LAPTOP: sudo apt install -y <pakiet> (bez -y apt czeka na odpowiedź), "
+                 "LAPTOP: sudo <komenda>.")
+    elif _laptop.get("sudo"):
         z.append(" Programy systemowe i sterowniki możecie instalować sami — konto ma sudo do apt bez "
                  "hasła: LAPTOP: sudo apt install -y <pakiet> (bez -y apt czeka na odpowiedź).")
     else:
@@ -30673,6 +30681,10 @@ def _laptop_instalowanie_zdanie():
 def _laptop_sudo_zdanie(krotko=False):
     """v480md: jedno zdanie o instalowaniu na laptopie do tekstow dla zespolu —
     zalezne od tego, czy konto na laptopie ma sudo do apt (odczyt co minute)."""
+    if _laptop.get("sudo_pelne"):
+        return ("Na laptopie macie pełne sudo bez hasła: programy systemowe, sterowniki i ustawienia "
+                "systemu zmieniacie sami (LAPTOP: sudo apt install -y <pakiet>, LAPTOP: sudo <komenda>), "
+                "biblioteki Pythona w venv albo przez pip install --user. ")
     if _laptop.get("sudo"):
         return ("Na laptopie macie sudo do apt: programy systemowe i sterowniki instalujecie sami "
                 "(LAPTOP: sudo apt install -y <pakiet>), biblioteki Pythona w venv albo przez pip "
@@ -30681,6 +30693,11 @@ def _laptop_sudo_zdanie(krotko=False):
             if not krotko else
             "Na laptopie nie ma sudo — biblioteki instaluje się tam w venv albo przez pip install "
             "--user. ")
+
+
+def _laptop_sudo_jakie():
+    """v480mh: krotko, jakie sudo ma konto na laptopie."""
+    return "konto ma pełne sudo" if _laptop.get("sudo_pelne") else "konto ma sudo do apt"
 
 
 def _laptop_sygnatura():
@@ -30698,7 +30715,9 @@ def _laptop_sygnatura():
         s.append("pip")
     if _laptop.get("venv"):
         s.append("venv")
-    if _laptop.get("sudo"):
+    if _laptop.get("sudo_pelne"):
+        s.append("pełne sudo")
+    elif _laptop.get("sudo"):
         s.append("sudo do apt")
     return sorted(s)
 
@@ -32106,7 +32125,7 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
                 wynik["podpowiedz"] = (
                     gdzie + " nie ma programu „" + nazwa + "” (albo to literówka w nazwie). "
                     + (("Na laptopie możecie go doinstalować sami: LAPTOP: sudo apt install -y <pakiet> "
-                        "(konto ma sudo do apt); czasem jest też wersja przez pip."
+                        "(" + _laptop_sudo_jakie() + "); czasem jest też wersja przez pip."
                         if _laptop.get("sudo") else
                         "Programy systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
                         "potrzebny, napiszcie to w DLA_UZYTKOWNIKA.md; czasem jest też wersja przez pip.")
@@ -32114,7 +32133,7 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
             elif lap is None and na_laptopie:
                 wynik["podpowiedz"] = (
                     gdzie + " brakuje " + co + " „" + nazwa + "”. "
-                    + ("Możecie ją doinstalować sami: LAPTOP: sudo apt install -y <pakiet> (konto ma sudo do apt)."
+                    + ("Możecie ją doinstalować sami: LAPTOP: sudo apt install -y <pakiet> (" + _laptop_sudo_jakie() + ")."
                        if _laptop.get("sudo") else
                        "Biblioteki systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
                        "potrzebna, napiszcie to w DLA_UZYTKOWNIKA.md."))
