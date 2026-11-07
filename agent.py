@@ -30464,7 +30464,20 @@ def _laptop_sprawdz():
                                    "echo GPU:$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -2 "
                                    "| sed 's/^[^:]*: //' | tr '\\n' ';'); "
                                    "for d in /dev/dri/renderD*; do [ -r \"$d\" ] && [ -w \"$d\" ] "
-                                   "&& echo DRI_OK && break; done; true"],
+                                   "&& echo DRI_OK && break; done; "
+                                   # v480md: co jest do instalowania i do liczenia na karcie
+                                   "python3 -c \"import importlib.util as u; print('PY:'+','.join(m for m "
+                                   "in 'numpy scipy pandas sklearn matplotlib torch numba'.split() "
+                                   "if u.find_spec(m)))\" 2>/dev/null; "
+                                   "echo TOOLS:$(for c in gcc g++ make cmake git; do command -v $c "
+                                   ">/dev/null && echo $c; done | tr '\\n' ','); "
+                                   "echo OCL:$(ls /etc/OpenCL/vendors/*.icd 2>/dev/null | wc -l) "
+                                   "VK:$(ls /usr/share/vulkan/icd.d/*.json 2>/dev/null | grep -vi lvp "
+                                   "| wc -l); "
+                                   "python3 -m pip --version >/dev/null 2>&1 && echo PIP_OK; "
+                                   "python3 -c 'import venv, ensurepip' 2>/dev/null && echo VENV_OK; "
+                                   "ls /usr/lib/python3*/EXTERNALLY-MANAGED >/dev/null 2>&1 && echo PEP668; "
+                                   "true"],
             capture_output=True, text=True, timeout=20, errors="replace")
         ok = r.returncode == 0
         out, err = r.stdout or "", (r.stderr or "").strip()
@@ -30495,10 +30508,129 @@ def _laptop_sprawdz():
             m = re.search(r"^GPU:(.*)$", out, re.MULTILINE)
             _laptop["gpu"] = short(m.group(1).strip(" ;"), 160) if m else ""
             _laptop["gpu_dostep"] = "DRI_OK" in out
+            # v480md: biblioteki, narzedzia, sterowniki karty, pip/venv (None = nie
+            # udalo sie odczytac, wtedy opis o tym milczy zamiast zgadywac)
+            m = re.search(r"^PY:(.*)$", out, re.MULTILINE)
+            _laptop["biblioteki"] = [x for x in m.group(1).strip().split(",") if x] if m else None
+            m = re.search(r"^TOOLS:(.*)$", out, re.MULTILINE)
+            _laptop["narzedzia"] = [x for x in m.group(1).strip().split(",") if x] if m else None
+            m = re.search(r"^OCL:(\d+)\s+VK:(\d+)", out, re.MULTILINE)
+            _laptop["ocl"] = int(m.group(1)) if m else None
+            _laptop["vk"] = int(m.group(2)) if m else None
+            _laptop["pip"] = "PIP_OK" in out
+            _laptop["venv"] = "VENV_OK" in out
+            _laptop["pep668"] = "PEP668" in out
             _laptop["blad"] = ""
         else:
             _laptop["blad"] = short(err.splitlines()[-1] if err else "brak odpowiedzi", 200)
     _laptop_do_srodowiska()
+
+
+_LAPTOP_BIBLIOTEKI = ("numpy", "scipy", "pandas", "sklearn", "matplotlib", "torch", "numba")
+
+
+def _laptop_karta_stan():
+    """v480md: stan sterownikow karty — bez zgadywania, gdy nie udalo sie odczytac."""
+    if _laptop.get("ocl") is None:
+        return " (konto ma do niej dostęp — /dev/dri)"
+    ocl, vk = bool(_laptop.get("ocl")), bool(_laptop.get("vk"))
+    z = (" (konto ma do niej dostęp — /dev/dri; sterownik OpenCL: " + ("jest" if ocl else "brak")
+         + ", Vulkan: " + ("jest" if vk else "brak"))
+    if not ocl and not vk:
+        z += (" — bez sterownika karta do liczenia się nie nada; sterowniki systemowe instaluje "
+              "użytkownik (np. mesa-vulkan-drivers), napiszcie o to w DLA_UZYTKOWNIKA.md")
+    return z + ")"
+
+
+def _laptop_instalowanie_zdanie():
+    """v480md: co jest na laptopie i co zespol moze doinstalowac sam (a co robi
+    uzytkownik). Bieg 2026-11-07: zespol uznal "GPU niedostepne, brak PyTorch" za
+    koniec drogi, choc biblioteki Pythona moze doinstalowac sam, a o sterownik
+    prosi sie uzytkownika. Puste, gdy nie udalo sie nic odczytac."""
+    lib, narz = _laptop.get("biblioteki"), _laptop.get("narzedzia")
+    if lib is None and narz is None:
+        return ""
+    nazwa = lambda m: "scikit-learn" if m == "sklearn" else m
+    z = []
+    if lib is not None:
+        jest = [nazwa(m) for m in _LAPTOP_BIBLIOTEKI if m in lib]
+        brak = [nazwa(m) for m in _LAPTOP_BIBLIOTEKI if m not in lib]
+        z.append(" Biblioteki Pythona na laptopie: " + (", ".join(jest) if jest else "żadnej z podstawowych")
+                 + ("; brak: " + ", ".join(brak) if brak else "") + ".")
+    if narz is not None:
+        brak_n = [t for t in ("gcc", "g++", "make", "cmake", "git") if t not in narz]
+        z.append(" Kompilatory i narzędzia: " + (", ".join(narz) if narz else "żadnych")
+                 + ("; brak: " + ", ".join(brak_n) if brak_n else "") + ".")
+    venv_dir = "~/venv_" + _laptop_folder()
+    if _laptop.get("pip") is False:
+        z.append(" pip nie jest zainstalowany — poproście użytkownika o pakiet python3-pip "
+                 "(DLA_UZYTKOWNIKA.md).")
+    elif _laptop.get("pep668") and _laptop.get("venv"):
+        z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo. System odmawia zwykłego "
+                 "pip install (externally-managed-environment), więc zróbcie własne środowisko poza "
+                 "folderem drużyny (pliki z folderu program kopiuje na telefon): LAPTOP: python3 -m venv "
+                 + venv_dir + ", potem LAPTOP: " + venv_dir + "/bin/pip install <nazwa> i skrypty "
+                 "puszczajcie przez " + venv_dir + "/bin/python.")
+    elif _laptop.get("pep668"):
+        z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo: LAPTOP: pip install "
+                 "--user --break-system-packages <nazwa> (system odmawia zwykłego pip install; pakietu "
+                 "python3-venv na laptopie nie ma, więc własnego środowiska nie zrobicie — jeśli wolicie "
+                 "środowisko, poproście użytkownika o python3-venv).")
+    else:
+        z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo: LAPTOP: pip install "
+                 "--user <nazwa>.")
+    z.append(" Programy systemowe i sterowniki (apt) instaluje użytkownik — napiszcie o to w "
+             "DLA_UZYTKOWNIKA.md.")
+    return "".join(z)
+
+
+def _laptop_sygnatura():
+    """v480md: to, co zmienia uzytkownik (karta, sterowniki, narzedzia, pip) — nie
+    biblioteki, bo te zespol dokłada sam i wie o nich."""
+    s = []
+    if _laptop.get("gpu_dostep"):
+        s.append("dostęp do karty")
+    if _laptop.get("ocl"):
+        s.append("OpenCL")
+    if _laptop.get("vk"):
+        s.append("Vulkan")
+    s += list(_laptop.get("narzedzia") or [])
+    if _laptop.get("pip"):
+        s.append("pip")
+    if _laptop.get("venv"):
+        s.append("venv")
+    return sorted(s)
+
+
+def _laptop_sprzet_plik():
+    return HOME / (".ael_laptop_sprzet_" + (_DRUZYNA or "0") + ".txt")
+
+
+def _laptop_sprzet_zmiana():
+    """v480md: zdanie dla MAIN-a, gdy na laptopie zmienilo sie to, co robi
+    uzytkownik (doszedl dostep do karty, sterownik, kompilator…). Przy pierwszym
+    odczycie po aktualizacji — caly opis raz. Inaczej "". Wywolywane pod
+    _laptop_lock."""
+    if _laptop.get("ocl") is None:
+        return ""
+    nowa = _laptop_sygnatura()
+    try:
+        stara = json.loads(_laptop_sprzet_plik().read_text(encoding="utf-8"))
+    except Exception:
+        stara = None
+    if stara == nowa:
+        return ""
+    try:
+        _laptop_sprzet_plik().write_text(json.dumps(nowa, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    if not isinstance(stara, list):
+        return _laptop_opis()
+    doszlo = [x for x in nowa if x not in stara]
+    zniklo = [x for x in stara if x not in nowa]
+    return ("Na laptopie zmieniło się to, co ustawia użytkownik" + (": doszło " + ", ".join(doszlo) if doszlo else "")
+            + ("; zniknęło " + ", ".join(zniklo) if zniklo else "")
+            + ". Pełny opis: ~/AEL_SRODOWISKO.txt.")
 
 
 def _laptop_opis():
@@ -30511,8 +30643,7 @@ def _laptop_opis():
                    if _laptop.get("wolne_mb") else "")
                 + (", " + _laptop["python"] if _laptop.get("python") else "")
                 + (", karta graficzna: " + _laptop["gpu"]
-                   + (" (konto ma do niej dostęp — /dev/dri, np. przez OpenCL albo Vulkan)"
-                      if _laptop.get("gpu_dostep") else
+                   + (_laptop_karta_stan() if _laptop.get("gpu_dostep") else
                       " (konto nie ma jeszcze dostępu do /dev/dri — potrzebna grupa render/video, "
                       "ustawia użytkownik)")
                    if _laptop.get("gpu") else "")
@@ -30529,7 +30660,8 @@ def _laptop_opis():
                 + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "plik") + "/plik " + _LAPTOP_HOST + ":"
                 + _laptop_folder() + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + _laptop_folder()
                 + "/wynik.txt ~/" + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "") + ". Bez "
-                "przedrostka komenda leci na telefonie, jak dotąd.")
+                "przedrostka komenda leci na telefonie, jak dotąd."
+                + _laptop_instalowanie_zdanie())
     if _laptop.get("ok") is False:
         return ("Laptop (" + _LAPTOP_HOST + ") jest teraz niedostępny (" + str(_laptop.get("blad") or "")
                 + "). Komendy LAPTOP: nie ruszą; liczcie na telefonie albo spróbujcie później — "
@@ -30573,12 +30705,18 @@ def _laptop_dla_maina():
             except Exception:
                 pass
         if _laptop.get("powiedziane") == ok:
-            return ""
+            return _laptop_sprzet_zmiana() if ok else ""
         _laptop["powiedziane"] = ok
         try:
             _laptop_powiedziane_plik().write_text("1" if ok else "0")
         except Exception:
             pass
+        if ok and _laptop.get("ocl") is not None:
+            try:
+                _laptop_sprzet_plik().write_text(json.dumps(_laptop_sygnatura(), ensure_ascii=False),
+                                                 encoding="utf-8")
+            except Exception:
+                pass
     return _laptop_opis()
 
 

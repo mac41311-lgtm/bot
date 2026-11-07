@@ -5005,3 +5005,27 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      5 (wszystkie to program_v0.dsl.py), z 172 komend z argumentami 3
      (wszystkie z komentarzem za komendą), a notatek pod nagłówkiem jest
      6 (same README: bench/ i eksperymenty/gra_v2/).
+346. (v480me) Opis laptopa pokazuje stan i to, co zespół może instalować sam
+     (bieg 7.11, po dodaniu użytkownika do grup render/video na laptopie).
+     Zespół napisał do Tomka: „GPU: potwierdzone jako niedostępne
+     (llvmpipe, brak OpenCL ICD, brak PyTorch)” i pytał, czy karta w ogóle
+     do czegoś służy. Program mówił tylko, czy konto ma dostęp do
+     /dev/dri, a o bibliotekach, kompilatorach i sterownikach nie mówił
+     nic — zespół nie wiedział, co może doinstalować sam, a o co prosić
+     użytkownika.
+     Teraz jedno sprawdzenie przez ssh (co minutę, jak dotąd) czyta też:
+     które z numpy/scipy/pandas/scikit-learn/matplotlib/torch/numba są,
+     które z gcc/g++/make/cmake/git, sterownik OpenCL i Vulkan karty, pip,
+     venv i blokadę zwykłego pip (PEP 668 — Python 3.12 na laptopie).
+     Opis (sekcja „Laptop” w pierwszej wiadomości MAIN-a i w
+     ~/AEL_SRODOWISKO.txt) podaje: czego jest, czego brak, że biblioteki
+     Pythona zespół doinstalowuje sam bez sudo (przy PEP 668 we własnym
+     środowisku POZA folderem drużyny, bo pliki z folderu program kopiuje
+     na telefon: python3 -m venv ~/venv_MAIN_n), a programy systemowe
+     i sterowniki (apt) instaluje użytkownik — zespół ma o to napisać
+     w DLA_UZYTKOWNIKA.md. Czego nie udało się odczytać, o tym opis milczy,
+     zamiast zgadywać.
+     MAIN dostaje jedno zdanie, gdy zmieni się to, co robi użytkownik
+     (doszedł dostęp do karty, sterownik, kompilator, pip): „doszło
+     dostęp do karty, Vulkan”. Biblioteki, które zespół dokłada sam, nie
+     są zmianą. Raz po aktualizacji — cały nowy opis.
