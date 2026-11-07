@@ -5029,3 +5029,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      (doszedł dostęp do karty, sterownik, kompilator, pip): „doszło
      dostęp do karty, Vulkan”. Biblioteki, które zespół dokłada sam, nie
      są zmianą. Raz po aktualizacji — cały nowy opis.
+
+347. (v480mf) Teksty o instalowaniu na laptopie zależą od sudo: gdy konto ma
+     sudo do apt, zespół instaluje programy i sterowniki sam; bez sudo teksty
+     jak dotąd. Doszło sudo = jedno zdanie dla MAIN-a.
+
+348. (v480mg) Porządki we własnym folderze i notatki bez pytania w terminalu.
+     „rm -rf $PWD/tmp/*.cm” albo „$HOME/MAIN_n/…” wewnątrz folderu drużyny
+     liczy się jak zwykła ścieżka w tym folderze (cały folder naraz dalej
+     z pytaniem). Zdanie z cytatem „rm -rf” dopisywane do notatki (.md,
+     .txt, .log, .json, .csv) przez echo/printf albo cat/tee <<EOF nie jest
+     usuwaniem. Plik .sh/.py i $(…) w tekście liczą się jak dotąd.

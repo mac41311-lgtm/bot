@@ -17214,9 +17214,77 @@ _DELETE_COMMAND_PATTERN = re.compile(
 )
 
 
+# v480mg: tekst, ktory komenda tylko ZAPISUJE do notatki (.md, .txt, …),
+# niczego nie usuwa. Bieg 2026-11-07 (druzyna 2, OGRANICZENIA PROGRAMU w
+# DLA_UZYTKOWNIKA.md): dopisanie do notatki zdania z cytatem "rm -rf"
+# stawalo na "Usunięcie odrzucone — nikt nie potwierdził w terminalu" i
+# zespol obchodzil to przez termux_write_file. Pomijamy tylko tresc
+# heredoka cat/tee do takiego pliku i caly czlon echo/printf z
+# przekierowaniem do niego — i tylko gdy nic w nich nie wykona sie w
+# powloce ($( albo `). Plik .sh/.py dalej liczy sie jak dotad.
+_ROZSZERZENIA_NOTATEK = (".md", ".txt", ".log", ".csv", ".tsv", ".json", ".jsonl", ".rst")
+
+
+def _do_notatki(cel):
+    cel = str(cel or "").strip().strip("'\"").lower()
+    return bool(cel) and cel.endswith(_ROZSZERZENIA_NOTATEK)
+
+
+def _bez_tekstu_notatek(command):
+    tekst = str(command or "")
+    if "<<" in tekst:
+        linie = tekst.split("\n")
+        wynik, i = [], 0
+        while i < len(linie):
+            m = re.search(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", linie[i])
+            if not m:
+                wynik.append(linie[i])
+                i += 1
+                continue
+            reszta = linie[i][:m.start()] + " " + linie[i][m.end():]
+            cel = None
+            mc = re.search(r"\b(?:cat|tee)\b", reszta)
+            if mc:
+                mt = re.search(r"(?<![<>&\d])>{1,2}\s*(['\"]?)([^\s<>|;&'\"]+)\1", reszta[mc.start():])
+                if mt:
+                    cel = mt.group(2)
+                else:
+                    mt = re.search(r"\btee\s+(?:-a\s+)?(['\"]?)([^\s<>|;&'\"-][^\s<>|;&'\"]*)\1", reszta)
+                    if mt:
+                        cel = mt.group(2)
+            j = i + 1
+            while j < len(linie):
+                lj = linie[j].lstrip("\t") if m.group(1) else linie[j]
+                if lj.rstrip() == m.group(3):
+                    break
+                j += 1
+            wynik.append(linie[i])
+            if j >= len(linie):
+                i += 1
+                continue
+            cialo = linie[i + 1:j]
+            wykona = not m.group(2) and any(("$(" in l or "`" in l) for l in cialo)
+            if not (cel and _do_notatki(cel) and not wykona):
+                wynik.extend(cialo)
+            wynik.append(linie[j])
+            i = j + 1
+        tekst = "\n".join(wynik)
+    if not re.search(r"\b(?:echo|printf)\b", tekst):
+        return tekst
+    czesci = []
+    for czlon in _czlony_komendy(tekst):
+        c = czlon.strip()
+        mt = re.search(r"(?<![<>&\d])>{1,2}\s*(['\"]?)([^\s<>|;&'\"]+)\1\s*$", c)
+        if (re.match(r"(?:echo|printf)\b", c) and mt and _do_notatki(mt.group(2))
+                and "$(" not in c and "`" not in c):
+            continue
+        czesci.append(czlon)
+    return "\n".join(czesci)
+
+
 def _looks_like_delete_command(command):
     return bool(
-        _DELETE_COMMAND_PATTERN.search(str(command or ""))
+        _DELETE_COMMAND_PATTERN.search(_bez_tekstu_notatek(command))
     )
 
 
@@ -17454,6 +17522,7 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
         return any(w == cel or w in cel.parents for w in wlasne)
 
     cwd = warsztat if folder is not None else Path.home()
+    cwd_pewny = True
     usuwajace = 0
     for czlon in _czlony_komendy(command):
         try:
@@ -17470,6 +17539,8 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
             if len(slowa) < 2:
                 cwd = Path.home()
             else:
+                if any(z in slowa[1] for z in "$`*?"):
+                    cwd_pewny = False
                 cwd = (Path(os.path.expanduser(slowa[1]))
                        if slowa[1].startswith(("/", "~"))
                        else cwd / slowa[1])
@@ -17482,6 +17553,15 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
         if not cele:
             return False
         for arg in cele:
+            # v480mg: "$PWD/tmp/*.cm", "$HOME/MAIN_2/x" — znane zmienne na
+            # poczatku sciezki to katalog, w ktorym ta komenda wlasnie jest
+            # (sledzony po cd) albo ~. Bieg 2026-11-07 (druzyna 2): "rm -rf
+            # $PWD/tmp/*.cm" we wlasnym folderze stanelo na pytaniu w
+            # terminalu, a druzyna 2 terminala nie ma.
+            mz = re.match(r"\$(?:\{(PWD|HOME)\}|(PWD|HOME)\b)", arg)
+            if mz and (mz.group(1) or mz.group(2)) and cwd_pewny:
+                baza = cwd if (mz.group(1) or mz.group(2)) == "PWD" else Path.home()
+                arg = str(baza) + arg[mz.end():]
             if any(z in arg for z in "$`"):
                 # v480fz: w warsztacie druzyny `rm -f "$out"`, gdzie out to
                 # nazwa ustawiona w tej samej komendzie (out="$slug.txt",
