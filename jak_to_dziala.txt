@@ -5112,3 +5112,11 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - "Dopisz na końcu X" trafia tylko do pliku X; jeśli X nie ma, a ścieżka
        jest w folderze drużyny, program zakłada nowy plik (wcześniej tekst
        drużyny 1 z 7.11 23:02 trafił do wynik.json).
+
+359. (v480mp) Notatka w bloku ```markdown z blokiem kodu w środku (np.
+     ```bash … ``` jako "komenda do powtórzenia") nie urywa się już na
+     wewnętrznym ```. Program zamienia płoty wewnętrznych bloków na ~~~
+     (Markdown czyta je tak samo), zanim czyta odpowiedź roli; blok
+     otwarty czterema ```` też działa. Wcześniej: 9.11 03:36 drużyna 2
+     — spec zapisany do połowy, ogon w run.py; 05:21 spec w 17 liniach;
+     8.11 drużyna 1 — "Komenda (jeśli chcesz sam sprawdzić):" bez komendy.

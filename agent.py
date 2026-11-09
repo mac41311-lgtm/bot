@@ -11815,6 +11815,8 @@ def _deepseek_jedna_rozmowa(name, message):
 
                 # v480cl: ostatnia odpowiedz MAIN-a — z niej RUN bierze
                 # pytania, ktore staly obok (patrz petla run_agent).
+                text = _zagniezdzone_bloki_md(text)
+
                 if name == "MAIN":
                     globals()["_ostatnia_odpowiedz_maina"] = text
 
@@ -24226,6 +24228,88 @@ _NOTATKA_NAGLOWEK_RE = re.compile(
     r"[\s*_#>`]*(?:\d+[.)]\s*)?[\s*_`]*"
     r"((?:~/|/data/data/com\.termux/files/home/)?(?:[\w-][\w.-]*/)*[\w-]+(?:\.[\w-]+)*\.(?:md|txt))"
     r"[\s*_`]*:?[\s*_`]*")
+
+
+_PLOT_LINIA_RE = re.compile(r"^([ \t]*)(`{3,})([A-Za-z0-9_+-]*)[ \t]*$")
+
+
+def _zagniezdzone_bloki_md(text):
+    """v480mp: notatka w bloku ```markdown z blokiem kodu w srodku
+    (```bash … ```) — wewnetrzny ``` zamykal cala notatke. Bieg 2026-11-09
+    03:36 (druzyna 2): spec/lin_uwaga_v0.md zapisany do polowy, ogon
+    (916 B markdownu) wyladowal w run.py; 05:21 lin_rule_memory_v0.md
+    zapisal sie w 17 liniach i wykonawca skladal go recznie w 6 zapisach.
+    Druzyna 1, 8.11: "**Komenda (jesli chcesz sam sprawdzic):**" bez
+    komendy. Tu, zanim cokolwiek czyta odpowiedz roli: w bloku
+    ```markdown/```md (albo otwartym czterema i wiecej `) wewnetrzne
+    bloki kodu dostaja plot ~~~ (Markdown czyta go tak samo), a zewnetrzny
+    plot — zwykle ```. Blok bez domkniecia i blok poprawki
+    (Stary/Nowy fragment) zostaja, jak byly."""
+    t = str(text or "")
+    if "```" not in t:
+        return text
+    try:
+        linie = t.split("\n")
+        n = len(linie)
+        out = []
+        i = 0
+        zmiana = False
+        while i < n:
+            m = _PLOT_LINIA_RE.match(linie[i])
+            jez = (m.group(3) if m else "").lower()
+            if not m or (len(m.group(2)) == 3 and jez not in ("markdown", "md")):
+                out.append(linie[i])
+                i += 1
+                continue
+            _wyzej = [l for l in out[-3:] if l.strip()]
+            if _wyzej and re.search(r"(?i)stary|nowy|fragment|search|replace", _wyzej[-1]):
+                out.append(linie[i])
+                i += 1
+                continue
+            dl = len(m.group(2))
+            glebokosc = 0
+            koniec = None
+            wewn = []
+            for j in range(i + 1, n):
+                mm = _PLOT_LINIA_RE.match(linie[j])
+                if not mm:
+                    continue
+                if dl > 3:
+                    if len(mm.group(2)) >= dl and not mm.group(3):
+                        koniec = j
+                        break
+                    if len(mm.group(2)) < dl:
+                        wewn.append(j)
+                    continue
+                if mm.group(3):
+                    glebokosc += 1
+                    wewn.append(j)
+                elif glebokosc > 0:
+                    glebokosc -= 1
+                    wewn.append(j)
+                else:
+                    koniec = j
+                    break
+            if koniec is None or (dl == 3 and not wewn):
+                out.append(linie[i])
+                i += 1
+                continue
+            out.append(m.group(1) + "```" + m.group(3))
+            for j in range(i + 1, koniec):
+                if j in wewn:
+                    mm = _PLOT_LINIA_RE.match(linie[j])
+                    out.append(mm.group(1) + "~" * len(mm.group(2)) + mm.group(3))
+                else:
+                    out.append(linie[j])
+            out.append(_PLOT_LINIA_RE.match(linie[koniec]).group(1) + "```")
+            zmiana = True
+            i = koniec + 1
+        if zmiana:
+            log("PROGRAM", "Notatka z blokiem kodu w środku — wewnętrzne bloki dostały plot ~~~, żeby notatka nie urwała się na nich.")
+            return "\n".join(out)
+    except Exception:
+        pass
+    return text
 
 
 def _notatki_pod_naglowkami(text):
