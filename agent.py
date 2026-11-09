@@ -9240,6 +9240,26 @@ def _deepseek_looks_truncated(text, status):
             + " — zapowiedz bez ciagu dalszego"
         )
 
+    # v480mo: odpowiedz konczaca sie komenda URUCHOM/PODGLĄD rozpisana na kilka
+    # linii (python3 -c "…" i dalej "… | tail -6") jest skonczona — ostatnia
+    # linia to dalszy ciag komendy, nie urwane zdanie. Bieg 2026-11-08
+    # (druzyna 2, Bartek): 15 prosb o dokonczenie po samych komendach, 3-6 min
+    # kazda, raz 4 rundy z rzedu (19:27-19:36).
+    try:
+        _linie_k = stripped.split("\n")
+        for _i in range(len(_linie_k) - 1, max(-1, len(_linie_k) - 120), -1):
+            if _PODGLAD_RE.match(_linie_k[_i]):
+                _ogon = _linie_k[_i + 1:]
+                # komenda idzie do konca tekstu: bez pustej linii po niej
+                # albo z cudzyslowem otwartym w jej linii i domknietym na koncu
+                if (not any(not l.strip() for l in _ogon)
+                        or (_cudzyslow_otwarty(_linie_k[_i])
+                            and not _cudzyslow_otwarty("\n".join(_linie_k[_i:])))):
+                    return False, None
+                break
+    except Exception:
+        pass
+
     if stripped[-1] not in _SENTENCE_END:
         return True, (
             "brak znaku konca zdania (" + str(len(stripped))
@@ -11236,6 +11256,17 @@ def _deepseek_jedna_rozmowa(name, message):
                             # INCOMPLETE, wiec przycisku nie ma — prosimy
                             # zwykla wiadomoscia (jak dotad), a przycisk
                             # zostaje wlaczony na prawdziwe urwania.
+                            # v480mo: gdy jedynym powodem byl brak kropki na
+                            # koncu (poszlaka), wierzymy serwerowi — odpowiedz
+                            # jest skonczona i nie prosimy o dalszy ciag.
+                            if str(reason or "").startswith("brak znaku konca zdania"):
+                                truncated = False
+                                log(
+                                    "DEEPSEEK",
+                                    name + ": DeepSeek mówi, że odpowiedź jest "
+                                    "skończona — biorę ją tak, jak jest."
+                                )
+                                break
                             log(
                                 "DEEPSEEK",
                                 name + ": przycisk 'continue' niedostępny dla "
@@ -24411,7 +24442,15 @@ _SUFIKSY_TEKSTU = (
     ".sh", ".py", ".js", ".rb", ".pl", ".lua", ".bash", ".java", ".kt", ".kts", ".gradle",
     ".c", ".h", ".cpp", ".cc", ".hpp", ".go", ".rs", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
     ".php", ".swift", ".dart", ".cs",
-    ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".csv", ".tsv")
+    ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".csv", ".tsv") + (
+    # v480mo: strony i inne zrodla. Bieg 2026-11-08 11:23-14:32 (druzyna 2):
+    # 9 poprawek Bartka i Ani do "index.html" (Three.js) nie weszlo —
+    # program nie widzial .html jako pliku, szukal fragmentu w server.py,
+    # ppm_d.py i latency_test.py, a zespol obchodzil to Pythonem z replace().
+    ".html", ".htm", ".css", ".scss", ".xml", ".svg", ".sql", ".vue", ".svelte", ".tex",
+    ".rst", ".cmake", ".mk", ".r", ".jl", ".scala", ".hs", ".cu", ".cl", ".glsl", ".wgsl",
+    ".proto")
+_SUFIKSY_ZRODEL_POZA_KODEM = _SUFIKSY_TEKSTU[_SUFIKSY_TEKSTU.index(".html"):]
 _PLIK_W_TEKSCIE_RE = re.compile(
     r"(?<![\w/.~$-])((?:~/|/data/data/com\.termux/files/home/)?(?:[\w.-]+/)*[\w-][\w.-]*"
     r"(?:" + "|".join(re.escape(x) for x in _SUFIKSY_TEKSTU) + r"))(?![\w-])",
@@ -24504,7 +24543,7 @@ def _pliki_kodu_w(foldery):
                     "__pycache__", "node_modules", "venv", "site-packages", "archiwum_od_uzytkownika")]
                 for fn in files:
                     n += 1
-                    if fn.lower().endswith(_KOD_SUFIKSY):
+                    if fn.lower().endswith(_KOD_SUFIKSY + _SUFIKSY_ZRODEL_POZA_KODEM):
                         out.append(Path(root) / fn)
                 if n > _LATKA_SKAN_MAKS:
                     break
@@ -24836,6 +24875,36 @@ def _plan_poprawki(rola, odp, pary, foldery, tylko_autorskie=False):
             wstrzymane.append((nazwany, stary, negacje[idx]))
             continue
         dopisanie = not str(stary or "").strip()
+        if dopisanie and not tylko_autorskie:
+            # v480mo: "Dopisz na końcu X:" tuz nad blokiem — X i tylko X, takze
+            # gdy go jeszcze nie ma (wtedy nowy plik). Bieg 2026-11-07 23:02
+            # (druzyna 1): "Dopisz na końcu docs/LANG_EVOLVE_LOG.md" — pliku nie
+            # bylo, a program dopisal tekst Bartka do wynik.json, wymienionego
+            # wyzej (JSON zepsuty na 2 minuty).
+            try:
+                _nad = [l for l in tekst[max(0, a_poz - 400):a_poz].split("\n") if l.strip()]
+                _l = _nad[-1] if _nad else ""
+                _mx = _PLIK_W_TEKSCIE_RE.search(_l) if _dopisanie_nad(_l) else None
+                if _mx and foldery:
+                    _s = _mx.group(1).rstrip(".")
+                    _px = (_resolve_home_relative_path(_s) if _s.startswith(("~", "/"))
+                           else Path(foldery[0]) / _s)
+                    if not _px.exists() and ".." not in _s.split("/"):
+                        _fr = Path(foldery[0]).resolve()
+                        if _px.parent.resolve() == _fr or _fr in _px.parent.resolve().parents or (
+                                not _px.parent.exists() and _fr in _px.resolve().parents):
+                            _px.parent.mkdir(parents=True, exist_ok=True)
+                            _px.write_text("", encoding="utf-8")
+                            log("PLIK", _sc(_px) + " — nie było go, dopisanie zaczyna nowy plik.")
+                    if _px.is_file() and _wolno_latac(_px, foldery):
+                        nazwany, wskazane = _px, [_px]
+                    elif _px.name != (nazwany.name if nazwany else None):
+                        bledy.append("„" + _l.strip()[:120] + "” — " + _s + " jest poza folderem drużyny "
+                                     "albo nie da się go założyć, więc program niczego nie dopisał. "
+                                     "Napisz ścieżkę w folderze drużyny.")
+                        continue
+            except Exception:
+                pass
         if dopisanie:
             if nazwany is None:
                 if len(wskazane) > 1:
