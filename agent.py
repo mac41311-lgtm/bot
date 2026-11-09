@@ -33052,7 +33052,10 @@ def _termux_run_wew(command):
                     "message": ("Usunięcie na laptopie odrzucone — nikt nie potwierdził w terminalu. "
                                 "Bez pytania wolno usuwać pliki i podfoldery w środku folderu drużyny "
                                 "na laptopie (ścieżką względną albo ~/" + _laptop_folder() + "/…), "
-                                "ale nie cały folder naraz."), "duration_s": 0.0}
+                                "także całe podfoldery (rm -rf build), ale nie cały folder naraz. "
+                                "Poza nim (np. /tmp) laptop jest wspólny z rywalem, więc tam "
+                                "program nie usuwa bez pytania — budujcie i sprzątajcie w swoim "
+                                "folderze."), "duration_s": 0.0}
     try:
         _przed = _laptop_wyrownaj()
     except Exception:

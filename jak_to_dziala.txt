@@ -5094,3 +5094,8 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        Do v480ml także ``` w środku zdania (Bartek, 17:47: „bloków ` ``` `
        ze ścieżką”) zamykało blok i notatka do DLA_UZYTKOWNIKA.md urwała się
        w połowie.
+
+357. (v480mn) Odmowa usuwania na laptopie mówi wprost, że w folderze drużyny
+     wolno usuwać też całe podfoldery (rm -rf build), a poza nim (np. /tmp)
+     laptop jest wspólny z rywalem, więc tam program pyta — budować i
+     sprzątać w swoim folderze. Lista Bartka z 7.11 (drużyna 1).
