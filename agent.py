@@ -17332,7 +17332,7 @@ def _do_notatki(cel):
     return bool(cel) and cel.endswith(_ROZSZERZENIA_NOTATEK)
 
 
-def _bez_tekstu_notatek(command):
+def _bez_tekstu_notatek(command, interpretery=True):
     tekst = str(command or "")
     if "<<" in tekst:
         linie = tekst.split("\n")
@@ -17366,6 +17366,17 @@ def _bez_tekstu_notatek(command):
                 continue
             cialo = linie[i + 1:j]
             wykona = not m.group(2) and any(("$(" in l or "`" in l) for l in cialo)
+            # v480mq: tresc dla interpretera (python3 - <<'PY' …) to nie
+            # komendy powloki — "rm=d.get(...)" to zmienna Pythona. Bieg
+            # 2026-11-09 22:43 (druzyna 2): MAIN poprawial wynik.json
+            # skryptem z heredoca i stanal na "Usuniecie odrzucone".
+            interpreter = re.search(
+                r"(?:^|[\s;&|(])(?:\S*/)?(?:python[0-9.]*|node|perl|ruby|Rscript|julia|lua|php)\b",
+                reszta)
+            if interpreter and interpretery and not wykona:
+                wynik.append(linie[j])
+                i = j + 1
+                continue
             if not (cel and _do_notatki(cel) and not wykona):
                 wynik.extend(cialo)
             wynik.append(linie[j])
@@ -17635,6 +17646,12 @@ def _usuwa_tylko_wlasne_katalogi(command, folder=None):
         # powloki przed komenda nie zmienia tego, co usuwa
         while slowa and slowa[0] in ("do", "then", "else", "{", "(", "!"):
             slowa = slowa[1:]
+        # v480mq: "(rmdir tmp 2>/dev/null && echo …)" — nawias przyklejony
+        # do komendy i przekierowania to nie cele usuwania. Bieg 2026-11-09
+        # 22:15 (druzyna 2): porzadki we wlasnym folderze stanely dwa razy.
+        if slowa and slowa[0][:1] in ("(", "{") and len(slowa[0]) > 1:
+            slowa = [slowa[0].lstrip("({")] + slowa[1:]
+        slowa = [w for w in slowa if not re.match(r"^\d*(?:[<>]|&>)", w)]
         if not slowa:
             continue
         if slowa[0] == "cd":
@@ -28816,6 +28833,10 @@ def _zatrzymalaby_program(command):
     """
     try:
         tekst = str(command or "")
+        # v480mq: tekst notatki (cat >> X.md <<'EOF' … "kill switch … >0.5%")
+        # to nie komenda. Bieg 2026-11-09 20:50 (druzyna 1): "0" z "0.5%"
+        # wziete za kill 0 — zapis burzy mozgow nie poszedl.
+        tekst = _bez_tekstu_notatek(tekst, interpretery=False)
         tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
         if not re.search(r"\b(?:pkill|killall|kill|force-stop|kill-all)\b|os\.kill", tekst):
             return ""
@@ -28936,6 +28957,7 @@ def _zabilaby_rywala(command):
         if not _DRUZYNA:
             return ""
         tekst = str(command or "")
+        tekst = _bez_tekstu_notatek(tekst, interpretery=False)
         tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
         if not _ZABIJAJACE_RE.search(tekst):
             return ""
@@ -29038,6 +29060,7 @@ def _zabilaby_sedziego(command):
         if not _DRUZYNA:
             return ""
         tekst = str(command or "")
+        tekst = _bez_tekstu_notatek(tekst, interpretery=False)
         tekst = tekst + "\n" + _tresc_uruchamianego_skryptu(tekst)
         if not _ZABIJAJACE_RE.search(tekst):
             return ""
@@ -45263,9 +45286,22 @@ def _podpis_w_naglowku(kod, sciezka):
                       re.sub(r"^\s*(?:#|//)\s*", "", l).replace("~/", " ").replace("/", " "))
         return m.group(1) if m else ""
 
+    # v480mq: "# interpreter.py:10" albo "# run.py, linia 80" — to wycinek
+    # z istniejacego pliku pokazany w wypowiedzi, nie nowy plik. Bieg
+    # 2026-11-09 21:19 (druzyna 2): Piotr pokazal 3 linie z
+    # eksperymenty/…/interpreter.py:10, program zapisal je jako nowy
+    # ~/MAIN_2/interpreter.py (95 B, blad skladni) i Bartek ("znowu")
+    # sprzatal go do .kopie/.
+    def _wycinek(l):
+        m = wzor.search(l)
+        return bool(m) and bool(re.match(
+            r"\s*(?::\s*\d|,?\s*\(?\s*(?:linia|linie|linii|liniach|line|lines|wiersz\w*|l\.)\s*\d)",
+            l[m.end():], re.I))
+
     return any(
         l.startswith(("#", "//")) and wzor.search(l)
         and _pierwsza_nazwa(l) in ("", nazwa)
+        and not _wycinek(l)
         for l in linie
     )
 

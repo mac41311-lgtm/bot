@@ -5120,3 +5120,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      otwarty czterema ```` też działa. Wcześniej: 9.11 03:36 drużyna 2
      — spec zapisany do połowy, ogon w run.py; 05:21 spec w 17 liniach;
      8.11 drużyna 1 — "Komenda (jeśli chcesz sam sprawdzić):" bez komendy.
+
+360. (v480mq) Fałszywe blokady z logów 9.11 wieczorem:
+     - "(rmdir tmp 2>/dev/null && …)" i "rm -rf __pycache__" we własnym
+       folderze nie pytają już w terminalu (nawias przy komendzie
+       i przekierowanie 2>/dev/null nie są celem usuwania).
+     - Treść dla interpretera w heredocu (python3 - <<'PY' …) to nie
+       komendy powłoki: zmienna Pythona "rm=d.get(...)" nie jest
+       usuwaniem (MAIN drużyny 2 o 22:43 nie mógł poprawić wynik.json).
+       Gdy w heredocu bez cudzysłowu jest $( ) albo `, sprawdzanie zostaje.
+     - Ochrona przed zatrzymaniem programu i procesów rywala/Sędziego
+       pomija tekst notatek (cat >> X.md <<'EOF'): "kill switch … >0.5%"
+       w burzy mózgów drużyny 1 (20:50) było brane za "kill 0".
+     - Blok z pierwszą linią "# interpreter.py:10" albo "# run.py, linia
+       80" to wycinek istniejącego pliku, nie nowy plik — wcześniej
+       program zapisywał go jako nowy plik w głównym folderze drużyny.
