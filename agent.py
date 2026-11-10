@@ -8252,6 +8252,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # od jednego do dwoch znakow. To sa dwie rozne sciezki w tym
     # czytniku i trzeba zobaczyc, ktora.
     poczatek_strumienia = []
+    koniec_strumienia = []
     _limit_rozmowy = [""]
     _za_szybko = [""]
 
@@ -8288,6 +8289,11 @@ def _deepseek_raw_post_with_action(session, prompt, action):
 
             if len(poczatek_strumienia) < 5:
                 poczatek_strumienia.append(raw_data[:400])
+            # v480ms: i trzy ostatnie kawalki — do meldunku o zdublowanej
+            # odpowiedzi (nizej).
+            koniec_strumienia.append(raw_data[:300])
+            if len(koniec_strumienia) > 3:
+                del koniec_strumienia[0]
 
             data = json.loads(raw_data)
             content = ""
@@ -8440,6 +8446,12 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                                 # liste wynikow — `str += list` to
                                 # TypeError, ktory zabijal CALY
                                 # strumien (patrz nizej).
+                                # v480ms: obiekt response wraca czasem z
+                                # cala narosla trescia fragmentu — to, co
+                                # juz mamy, nie idzie drugi raz.
+                                if (isinstance(_c, str) and len(_c) >= 200
+                                        and full_text.endswith(_c)):
+                                    continue
                                 if isinstance(_c, str):
                                     content += _c
 
@@ -8637,6 +8649,21 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         full_text = _mysl + full_text
         _mysl = ""
         znakow_myslenia[0] = 0
+
+    # v480ms: odpowiedz przyszla dwa razy pod rzad, znak w znak. Bieg
+    # 2026-11-09/10: 29 odpowiedzi obu druzyn (np. Marek, krok 72 druzyny
+    # 1: 17102 znaki = 2 x 8551) szlo do MAIN-a i zespolu zdublowane, bez
+    # zadnego odstepu miedzy kopiami. Zostaje jedna kopia; koncowka
+    # strumienia idzie do logu, zeby bylo widac, skad sie wziela druga.
+    _pol = len(full_text) // 2
+    if len(full_text) >= 400 and len(full_text) % 2 == 0 and full_text[:_pol] == full_text[_pol:]:
+        full_text = full_text[:_pol]
+        log(
+            "DEEPSEEK",
+            "odpowiedź przyszła w strumieniu dwa razy pod rząd (2 × "
+            + str(_pol) + " znaków) — zostawiam jedną kopię. Koniec strumienia: "
+            + " || ".join(koniec_strumienia)
+        )
 
     globals()["_ostatnie_myslenie_znaki"] = znakow_myslenia[0]
     globals()["_poczatek_strumienia"] = " || ".join(
@@ -11815,6 +11842,16 @@ def _deepseek_jedna_rozmowa(name, message):
 
                 # v480cl: ostatnia odpowiedz MAIN-a — z niej RUN bierze
                 # pytania, ktore staly obok (patrz petla run_agent).
+                # v480ms: siatka pod czytaniem strumienia — ta sama odpowiedz dwa
+                # razy pod rzad (takze po doklejeniu dalszego ciagu) idzie raz.
+                try:
+                    _pol_t = len(text) // 2
+                    if len(text) >= 400 and len(text) % 2 == 0 and text[:_pol_t] == text[_pol_t:]:
+                        text = text[:_pol_t]
+                        log("DEEPSEEK", str(name) + ": odpowiedź była zdublowana (2 × "
+                            + str(_pol_t) + " znaków) — dalej idzie jedna kopia.")
+                except Exception:
+                    pass
                 text = _zagniezdzone_bloki_md(text)
 
                 if name == "MAIN":
@@ -26924,6 +26961,16 @@ def termux_read_file(path, max_bytes=20000):
     try:
         p = _resolve_home_relative_path(path)
 
+        # v480ms: jak w termux_patch_file — wzgledna sciezka z podfolderem
+        # w rywalizacji to plik w folderze druzyny.
+        if not p.exists():
+            try:
+                _w_druzynie = _resolve_home_relative_path(_sciezka_zapisu_w_druzynie(path))
+                if _w_druzynie != p and _w_druzynie.exists():
+                    p = _w_druzynie
+            except Exception:
+                pass
+
         if not p.exists():
             _wynik = {
                 "ok": False,
@@ -34315,6 +34362,7 @@ def termux_run_background(
 
         if (
             _looks_like_delete_command(command)
+            and not _LAPTOP_RE.match(command)  # v480ms: laptop ma wlasna kontrole nizej
             and not _usuwa_tylko_nasze_logi_z_tego_biegu(command)
             and not _usuwa_tylko_wlasne_katalogi(command)
             and not _usuwa_wlasny_plik_tymczasowy(command)
@@ -34414,11 +34462,42 @@ def termux_run_background(
         if _powt and _powt.get("ok") is False:
             return _powt
 
+        # v480ms: "LAPTOP: komenda" w tle idzie na laptopa tak samo jak na
+        # wierzchu. Bieg 2026-11-10 08:26 (druzyna 1): MAIN puscil w tle
+        # "LAPTOP: cd ~/MAIN_1 && ./kod/ppm_c_v3_m3 …" i dostal z telefonu
+        # "bash: LAPTOP:: command not found". Log zostaje na telefonie, pod
+        # sciezka podana w log_file.
+        _do_uruchomienia = command
+        _lap_tlo = _na_laptopa(command) if _LAPTOP_RE.match(command) else None
+        if isinstance(_lap_tlo, dict):
+            return _lap_tlo
+        if _lap_tlo:
+            _polecenie_lap = _LAPTOP_RE.match(command).group(1)
+            if _looks_like_delete_command(_polecenie_lap) and not _laptop_usuwa_w_folderze(_polecenie_lap):
+                return {
+                    "ok": False,
+                    "error": "USUWANIE_ODRZUCONE",
+                    "command": command,
+                    "message": ("Nie uruchomiłem w tle — komenda usuwa coś na laptopie poza folderem "
+                                "drużyny (~/" + _laptop_folder() + "), a o takie usunięcie program pyta "
+                                "użytkownika tylko przy zwykłym uruchomieniu. Usuwaj w środku swojego "
+                                "folderu albo puść tę komendę zwyczajnie (nie w tle).")
+                }
+            globals()["log"]("LAPTOP", "W tle na laptopie (~/" + _laptop_folder() + "): "
+                             + short(_polecenie_lap, 200))
+            try:
+                _zapisz_kill_zespolu(_polecenie_lap, "laptop")
+                _laptop_moje_cache["t"] = 0.0
+                _laptop_wyrownaj()
+            except Exception:
+                pass
+            _do_uruchomienia = _lap_tlo
+
         _log_fh = open(log, "a", encoding="utf-8")
 
         try:
             proc = subprocess.Popen(
-                command,
+                _do_uruchomienia,
                 shell=True,
                 executable=_SHELL_EXECUTABLE,
                 cwd=cwd,
@@ -34882,6 +34961,18 @@ def termux_patch_file(path, search, replace):
 
     target = _resolve_home_relative_path(path)
 
+    # v480ms: wzgledna sciezka z podfolderem ("kod/x.py") w rywalizacji to
+    # plik w folderze druzyny, tak jak przy zapisie (v480lu). Bieg
+    # 2026-11-10 08:45 (druzyna 1): "Plik nie istnieje: ~/kod/selfimprove/
+    # ast_mut_v1.py", a plik lezal w ~/MAIN_1/kod/selfimprove/.
+    if not target.exists():
+        try:
+            _w_druzynie = _resolve_home_relative_path(_sciezka_zapisu_w_druzynie(path))
+            if _w_druzynie != target and _w_druzynie.is_file():
+                target = _w_druzynie
+        except Exception:
+            pass
+
     if not target.exists():
         _wynik = {
             "ok": False,
@@ -34961,6 +35052,30 @@ def termux_patch_file(path, search, replace):
 
     occurrences = source.count(search)
 
+    # v480ms: te same luzniejsze dopasowania, co przy poprawce autora w
+    # wypowiedzi (_naloz_pare): wspolne wciecie, biale znaki na koncach
+    # linii, numery linii z grep -n. Bieg 2026-11-10 05:04-05:14 i 08:45
+    # (druzyna 1): wykonawca osiem razy dostal "nie występuje 1:1" na
+    # fragmencie, ktory roznil sie od pliku tylko wcieciem.
+    _luzne_zrodlo = None
+    if occurrences == 0:
+        try:
+            _po, _stan, _ile = _naloz_pare(source, search, replace)
+        except Exception:
+            _po, _stan, _ile = source, "brak", 0
+        if _stan == "ok" and _po != source:
+            _luzne_zrodlo = _po
+            occurrences = 1
+        elif _stan == "juz":
+            return {
+                "ok": True,
+                "path": str(target),
+                "message": ("Tej zmiany nie trzeba nanosić — nowy fragment już stoi w "
+                            + target.name + ", plik bez zmian.")
+            }
+        elif _stan == "wiele":
+            occurrences = max(2, int(_ile or 2))
+
     if occurrences == 0:
         _wynik = {
             "ok": False,
@@ -35002,7 +35117,7 @@ def termux_patch_file(path, search, replace):
             "error": "Nie udało się utworzyć backupu: " + str(e)
         }
 
-    new_source = source.replace(search, replace, 1)
+    new_source = _luzne_zrodlo if _luzne_zrodlo is not None else source.replace(search, replace, 1)
 
     try:
         target.write_text(new_source, encoding="utf-8")

@@ -5158,3 +5158,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Decyzja z gołym cudzysłowem w tekście pola ('„nasz wynik" — …')
        jest czytana w całości. Wcześniej MAIN dostawał UCIETA_AKCJA
        ("pole nie ma końca"), choć nic nie było ucięte (6 razy tej nocy).
+
+362. (v480ms) Z logów 10.11 rano i zgłoszeń drużyny 1:
+     - Odpowiedź, która przyszła ze strumienia dwa razy pod rząd, znak
+       w znak, idzie dalej raz (29 odpowiedzi tej nocy, np. Marek 2 × 8551
+       znaków w wiadomości do MAIN-a). Koniec strumienia trafia do logu.
+     - "LAPTOP: komenda" w termux_run_background idzie na laptopa jak
+       zwykła komenda; log zostaje na telefonie. Wcześniej: "bash:
+       LAPTOP:: command not found".
+     - termux_patch_file dopasowuje fragment tak jak poprawki autorów:
+       wspólne wcięcie, spacje na końcach linii, numery z grep -n; gdy
+       zmiana już stoi w pliku, mówi to zamiast błędu.
+     - Względna ścieżka z podfolderem ("kod/x.py") w termux_patch_file
+       i termux_read_file to w rywalizacji plik w folderze drużyny.
+     - Bez zmian celowo: wykonawca nie pisze plików z kodem ani
+       programów w komendzie (pisze zespół).
