@@ -5135,3 +5135,26 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Blok z pierwszą linią "# interpreter.py:10" albo "# run.py, linia
        80" to wycinek istniejącego pliku, nie nowy plik — wcześniej
        program zapisywał go jako nowy plik w głównym folderze drużyny.
+
+361. (v480mr) Z nocnych logów 9/10.11:
+     - Wycinek pod nagłówkiem "Propozycja — `TABELA` w `state.py`:" albo
+       "funkcja flash w state.py:" to część pliku, nie nowy plik. Do nowego
+       katalogu zadania nie trafia też blok ponad dwa razy mniejszy od
+       pliku o tej nazwie, który drużyna już ma gdzie indziej (chyba że
+       blok jest podpisany ścieżką). Drużyna 2 o 02:53 i 03:31: zaślepki
+       Piotra zajęły miejsce state.py i eval_chat.py, Bartek nie dostał
+       pytania o kod, MAIN po 5 próbach porzucił v0.5.
+     - Odmowa BRAK_KODU_DO_ZAPISU mówi, że zapis próbował zrobić
+       wykonawca zadania, i jak dostać kod od autora (ASK po imieniu).
+     - Program w cudzysłowie (python3 -c "…", node -e '…') czyta
+       interpreter, nie powłoka: "rm=" jako zmienna albo "rm -f" w
+       napisie zapisywanym do JSON-a nie jest usuwaniem. Z $( ) albo `
+       w podwójnym cudzysłowie sprawdzanie zostaje.
+     - Połowa poprawki ("Stary fragment:") albo kawałek istniejącego
+       pliku nie jest zapisywany jako cały plik ani przez zadanie MAIN-a
+       z zapisem, ani przez wykonawcę. Drużyna 1 o 04:54: po naniesieniu
+       poprawki do kod/lz_ppm_v1.c (8652 B) plik został zastąpiony jedną
+       linią (42 B).
+     - Decyzja z gołym cudzysłowem w tekście pola ('„nasz wynik" — …')
+       jest czytana w całości. Wcześniej MAIN dostawał UCIETA_AKCJA
+       ("pole nie ma końca"), choć nic nie było ucięte (6 razy tej nocy).

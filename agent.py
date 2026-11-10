@@ -17332,6 +17332,11 @@ def _do_notatki(cel):
     return bool(cel) and cel.endswith(_ROZSZERZENIA_NOTATEK)
 
 
+_PROGRAM_W_CUDZYSLOWIE_RE = re.compile(
+    r"(?:^|(?<=[\s;&|(]))(?:\S*/)?(?:python[0-9.]*(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c|"
+    r"(?:node|perl|ruby)(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*e|php\s+-r)\s+(['\"])")
+
+
 def _bez_tekstu_notatek(command, interpretery=True):
     tekst = str(command or "")
     if "<<" in tekst:
@@ -17382,6 +17387,34 @@ def _bez_tekstu_notatek(command, interpretery=True):
             wynik.append(linie[j])
             i = j + 1
         tekst = "\n".join(wynik)
+    # v480mr: to samo dla programu podanego w cudzyslowie (python3 -c "…",
+    # node -e '…'): jego tresc czyta interpreter, nie powloka. Bieg
+    # 2026-11-09 23:06, 23:39 i 10.11 07:20 (druzyna 2): zmienna "rm=" w
+    # Pythonie, slowa "mv/rm/cp" w napisie i komenda zapisywana do JSON-a
+    # trzy razy daly "Usuniecie odrzucone". Tresc w podwojnym cudzyslowie
+    # z $( albo ` zostaje sprawdzana, bo te wstawki wykonuje powloka.
+    if interpretery and re.search(r"\s-[A-Za-z]*[cer]\s", tekst):
+        wynik, poz = [], 0
+        for m in _PROGRAM_W_CUDZYSLOWIE_RE.finditer(tekst):
+            if m.start() < poz:
+                continue
+            q, k = m.group(1), m.end()
+            while k < len(tekst):
+                if tekst[k] == "\\" and q == '"':
+                    k += 2
+                    continue
+                if tekst[k] == q:
+                    break
+                k += 1
+            if k >= len(tekst):
+                continue
+            cialo = tekst[m.end():k]
+            if q == '"' and ("$(" in cialo or re.search(r"(?<!\\)`", cialo)):
+                continue
+            wynik.append(tekst[poz:m.end()])
+            poz = k
+        wynik.append(tekst[poz:])
+        tekst = "".join(wynik)
     if not re.search(r"\b(?:echo|printf)\b", tekst):
         return tekst
     czesci = []
@@ -24218,6 +24251,18 @@ def _pliki_pod_naglowkami(text):
                      r"k[lł]ad[zź])\w*\b[^.!?;:\n]{0,25}$",
                      linie[-1][:_gdzie] if _gdzie >= 0 else linie[-1], re.IGNORECASE):
             continue
+        # v480mr: "Propozycja — `STIMULUS_TABLE` w `state.py`:" albo "funkcja
+        # flash w state.py:" — nad blokiem stoi CZESC pliku (cos w pliku),
+        # nie plik. Bieg 2026-11-10 02:53 i 03:31 (druzyna 2): taki wycinek
+        # Piotra (745 B) program polozyl jako nowy state.py w katalogu
+        # zadania, wiec Bartka o kod nikt nie zapytal, a wykonawca piec razy
+        # dostawal zaslepke bez klasy BrainState.
+        _przed_n = linie[-1][:_gdzie] if _gdzie >= 0 else ""
+        if (re.search(r"`[^`\n]+`\s+(?:w|we|do|dla|in|into|to|for)\s+[`*_]*$", _przed_n)
+                or re.search(r"(?i)\b(?:funkcj\w*|metod\w*|klas\w*|tabel\w*|fragment\w*|sta[łl]\w+|sekcj\w*|"
+                             r"lini\w*|function|method|class|snippet)\b[^.!?;:\n]{0,40}\s(?:w|we|do|in)\s+[`*_]*$",
+                             _przed_n)):
+            continue
         kod = _wyrownaj_blok(m.group(2))
         if (len(kod.strip()) < 40 or _blok_poprawki(text, m.start())
                 or _obcy_jezyk_dla(nazwa, m.group(1), kod)
@@ -24446,6 +24491,22 @@ def _poloz_pliki_w_katalogu(katalog, team):
             kod = _tresc_bloku_dla(kod, p, tekst)
             if not kod or _nie_wyglada_na_plik(p, kod):
                 continue
+            # v480mr: plik o tej nazwie lezy juz gdzie indziej w folderze
+            # druzyny i jest ponad dwa razy wiekszy — blok to wycinek albo
+            # szkic nastepnej wersji, nie caly plik do nowego katalogu
+            # ("Kod eval_chat.py po fixie": 300 B przy pliku 4905 B). Caly
+            # plik napisze autor (patrz _zlec_kod_bartkowi). Blok podpisany
+            # pelna sciezka w pierwszej linii zostaje plikiem.
+            try:
+                _baza_dr = _folder_druzyny(_DRUZYNA) if _DRUZYNA else katalog.parent
+                _inne = [x.stat().st_size for x in _pliki_w_folderze(_baza_dr, nazwa) if x.is_file()]
+                _pierwsza = ([l for l in str(kod).splitlines() if l.strip() and not l.startswith("#!")] or [""])[0]
+                if (_inne and len(str(kod).encode("utf-8")) < 0.5 * max(_inne)
+                        and not (_podpis_w_naglowku(kod, nazwa) and "/" in _pierwsza)):
+                    nazwy.discard(nazwa)
+                    continue
+            except Exception:
+                pass
             if not any(w.get("rola") == rola and w.get("tekst") == tekst for w in _kod_autorow[-8:]):
                 _zapamietaj_kod_autora(rola, tekst)
             w = _zapis_autora(rola, p, kod)
@@ -26244,6 +26305,19 @@ def _termux_write_file(path, content, append=False):
                     "on się nie kompiluje (" + _zly_zast + "), a plik na dysku działa.")
                 _kod = None
 
+            # v480mr: polowa poprawki albo kawalek istniejacego pliku to
+            # nie jest jego cala tresc (ten sam bieg: wykonawca trzy razy
+            # dostal "kod Bartka (42 B)" w miejsce pliku 8652 B).
+            _to_fragment = False
+            try:
+                if _kod and p.is_file() and (
+                        _fragment_poprawki(_kod_bartka_teraz or "", _kod)
+                        or _blok_to_fragment_pliku(p, _kod)):
+                    _to_fragment = True
+                    _kod = None
+            except Exception:
+                pass
+
             _blokada = (
                 _code_target_rejection(str(p), _kod) if _kod else None
             )
@@ -26360,6 +26434,23 @@ def _termux_write_file(path, content, append=False):
                     )
                 }
 
+            if _to_fragment:
+                try:
+                    _ile_b = str(p.stat().st_size)
+                except Exception:
+                    _ile_b = "?"
+                log("GEMINI", p.name + ": od autora jest tylko fragment poprawki, plik na "
+                    "dysku (" + _ile_b + " B) zostaje bez zmian.")
+                return {
+                    "ok": True,
+                    "path": str(p),
+                    "message": (
+                        "Nie zapisałem treści z wywołania: " + p.name + " już leży na dysku ("
+                        + _ile_b + " B) w wersji autora z zespołu, a jego ostatnia wypowiedź "
+                        "to poprawka fragmentu, nie cały plik. Plik zostaje bez zmian — "
+                        "uruchom go.")
+                }
+
             # Kodu Bartka nie ma albo nie wolno go tu polozyc
             # (_code_target_rejection: plik z danymi). Mowimy o tym
             # krotko i po ludzku, bez rozpisywania regul.
@@ -26400,6 +26491,16 @@ def _termux_write_file(path, content, append=False):
                 "path": str(p),
                 "message": (
                     "Nie zapisałem " + p.name + " — " + _powod + "."
+                    # v480mr: co dalej i kto probowal. Bieg 2026-11-10
+                    # 03:38-03:45 (druzyna 2): MAIN piec razy zlecal TASK
+                    # "napisz caly state.py w wypowiedzi", wykonawca pisal
+                    # go narzedziem, a MAIN czytal odmowe jako "Bartek znowu
+                    # uzyl termux_write_file" i w koncu porzucil v0.5.
+                    + ("" if _blokada else
+                       " Tę próbę zapisu zrobił wykonawca zadania, nie ktoś z zespołu. "
+                       "Kod do pliku pisze zespół w swojej wypowiedzi: zapytaj autora po imieniu "
+                       "(ASK, np. Bartka) o cały plik w bloku kodu ze ścieżką nad blokiem — "
+                       "program zapisze go sam, a zadanie dla wykonawcy może go potem uruchomić.")
                 )
             }
 
@@ -56136,6 +56237,61 @@ def parse_json(text):
         return d
 
 
+def _json_z_golymi_cudzyslowami(text):
+    """
+    v480mr: JSON decyzji, w ktorym autor nie poprzedzil ukosnikiem
+    cudzyslowu w srodku tekstu. Cudzyslow konczy napis tylko wtedy, gdy
+    po nim idzie skladnia JSON-a (dwukropek, przecinek i nowy element,
+    klamra, nawias); kazdy inny nalezy do tekstu. Wynik liczy sie tylko,
+    gdy calosc daje sie potem wczytac jako decyzja.
+    """
+    try:
+        t = str(text or "")
+        b = t.rfind("}")
+        poczatki = [m.start() for m in re.finditer(r"\{\s*\"(?:type|reason)\"\s*:", t)]
+        for a in poczatki[:3]:
+            obj = _json_z_golymi_cudzyslowami_od(t[a:b + 1]) if b > a else None
+            if obj is not None:
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _json_z_golymi_cudzyslowami_od(s):
+    try:
+        out, w_napisie, i, n, zmian = [], False, 0, len(s), 0
+        koniec = re.compile(r"\s*(?::\s*(?:[\"{\[\d-]|true|false|null)|,\s*[\"{\[]|[}\]])")
+        while i < n:
+            c = s[i]
+            if not w_napisie:
+                if c == '"':
+                    w_napisie = True
+                out.append(c)
+            elif c == "\\":
+                out.append(s[i:i + 2])
+                i += 2
+                continue
+            elif c == '"':
+                if koniec.match(s, i + 1):
+                    w_napisie = False
+                    out.append(c)
+                else:
+                    out.append('\\"')
+                    zmian += 1
+            else:
+                out.append(c)
+            i += 1
+        if not zmian or w_napisie:
+            return None
+        obj = json.loads("".join(out), strict=False)
+        if isinstance(obj, dict) and _tylko_decyzja(obj):
+            return obj
+    except Exception:
+        pass
+    return None
+
+
 def _parse_json_surowe(text):
 
     if not text:
@@ -56218,6 +56374,16 @@ def _parse_json_surowe(text):
     # API, więc formatowanie bywa mniej stabilne. Jeśli json_repair
     # nie jest zainstalowany, _repair_json jest None i ten blok jest
     # po prostu pomijany — zachowanie identyczne jak wcześniej.
+    # v480mr: decyzja jest cala, tylko w tekscie pola stoi goly
+    # cudzyslow ('„nasz wynik" — w DLA'). Bieg 2026-11-09 19:02 i 10.11
+    # 03:20, 03:29 (druzyna 2): MAIN trzy razy dostal "pole nie ma konca"
+    # (UCIETA_AKCJA) i zapisal to jako ograniczenie programu, choc nic
+    # nie bylo uciete.
+    obj = _json_z_golymi_cudzyslowami(text)
+
+    if obj is not None:
+        return obj
+
     if _repair_json is not None:
 
         try:
@@ -62867,6 +63033,25 @@ def run_agent(goal):
                 # "to tylko fragment". Kod autora laduje na dysku; czy
                 # dziala, pokaze uruchomienie. Zostaje tylko ochrona
                 # istniejacego pliku przed nadpisaniem duzo krotszym.
+                # v480mr: blok, ktory jest polowa poprawki ("Stary
+                # fragment:" / "Nowy fragment:") albo kawalkiem pliku,
+                # nie jest cala nowa wersja. Bieg 2026-11-10 04:54
+                # (druzyna 1, krok 61): program naniosl poprawke Bartka
+                # do kod/lz_ppm_v1.c (8497 -> 8652 B), a zaraz potem
+                # zadanie MAIN-a z zapisem do tego pliku wpisalo jako
+                # caly plik jedna linie starego fragmentu (42 B).
+                try:
+                    if target_path.is_file() and (
+                            _fragment_poprawki(team.get("engineer_full", ""), engineer_code)
+                            or _blok_to_fragment_pliku(target_path, engineer_code)):
+                        log("MAIN", target_path.name + ": blok z wypowiedzi autora ("
+                            + str(len(engineer_code.encode("utf-8"))) + " B) to fragment "
+                            "poprawki, nie cały plik — plik na dysku zostaje, zadanie "
+                            "idzie do wykonania.")
+                        engineer_code = target_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
                 if target_path.exists():
 
                     try:
