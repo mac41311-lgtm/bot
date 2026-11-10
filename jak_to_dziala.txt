@@ -5173,3 +5173,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        i termux_read_file to w rywalizacji plik w folderze drużyny.
      - Bez zmian celowo: wykonawca nie pisze plików z kodem ani
        programów w komendzie (pisze zespół).
+
+363. (v480mt) Z logów 10.11 po południu (chodzenie po telefonie, echo):
+     - chrome_open nie wczytuje adresu do karty, której program sam nie
+       otworzył (bieg 18:22, drużyna 2: strona drużyny weszła w kartę
+       użytkownika z rozmową na claude.ai). Taki adres idzie do nowej
+       karty. Bez zmian: karta wskazana po tab_id / contains, karta
+       otwarta wcześniej przez program, pusta karta, ta sama witryna.
+     - chrome_open na file:// mówi, jak pokazać stronę z pliku
+       (http.server w tle + http://localhost:8080/plik).
+     - screencap z powłoki Termuksa: podpowiedź, że zrzut robi
+       android_screenshot, a ze skryptu adb exec-out screencap.
+     - Zdublowana odpowiedź: strumień podaje gotową treść jeszcze raz
+       długim kawałkiem — taki kawałek nie jest dopisywany; siatka z
+       v480ms zostaje i wypisuje koniec strumienia.
+     - termux_patch_file: fragment z dosłownymi \n i \" (wykonawca
+       zapisuje je podwójnie) jest dopasowywany po zamianie na
+       prawdziwe znaki (6 z 7 nietrafionych poprawek tego dnia).
+     - "kill $pid" w pętli po ps | grep 'skrypt.py' liczy się jako
+       zatrzymanie przez zespół (było: "nikt go nie zatrzymał").

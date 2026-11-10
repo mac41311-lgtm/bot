@@ -8253,6 +8253,7 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # czytniku i trzeba zobaczyc, ktora.
     poczatek_strumienia = []
     koniec_strumienia = []
+    powtorka_tresci = [0]
     _limit_rozmowy = [""]
     _za_szybko = [""]
 
@@ -8505,6 +8506,8 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                             if isinstance(_c, str):
                                 znakow_myslenia[0] += len(_c)
                                 tekst_myslenia.append(_c)
+                        elif isinstance(_c, str) and len(_c) >= 200 and full_text.endswith(_c):
+                            powtorka_tresci[0] += 1  # v480mt, jak nizej
                         elif isinstance(_c, str):
                             content += _c
 
@@ -8561,6 +8564,15 @@ def _deepseek_raw_post_with_action(session, prompt, action):
                     if _to_myslenie or "thinking" in current_patch_target:
                         znakow_myslenia[0] += len(val)
                         tekst_myslenia.append(val)
+                    # v480mt: dlugi kawalek, ktory niesie to, co juz mamy
+                    # (cala tresc fragmentu podana jeszcze raz na koniec),
+                    # nie jest dopisywany — bieg 2026-11-10 po poludniu:
+                    # szesc odpowiedzi zdublowanych mimo siatki z v480ms.
+                    elif len(val) >= 200 and full_text and full_text.endswith(val):
+                        powtorka_tresci[0] += 1
+                    elif len(val) >= 200 and len(full_text) >= 200 and val.startswith(full_text):
+                        powtorka_tresci[0] += 1
+                        content = val[len(full_text):]
                     else:
                         content = val
 
@@ -8665,6 +8677,11 @@ def _deepseek_raw_post_with_action(session, prompt, action):
             + " || ".join(koniec_strumienia)
         )
 
+    globals()["_koniec_strumienia"] = " || ".join(koniec_strumienia)
+    if powtorka_tresci[0]:
+        log("DEEPSEEK", "strumień podał gotową treść jeszcze raz ("
+            + str(powtorka_tresci[0]) + " kawałek/ki) — nie dopisuję jej drugi raz. "
+            "Koniec strumienia: " + " || ".join(koniec_strumienia))
     globals()["_ostatnie_myslenie_znaki"] = znakow_myslenia[0]
     globals()["_poczatek_strumienia"] = " || ".join(
         poczatek_strumienia
@@ -11849,7 +11866,8 @@ def _deepseek_jedna_rozmowa(name, message):
                     if len(text) >= 400 and len(text) % 2 == 0 and text[:_pol_t] == text[_pol_t:]:
                         text = text[:_pol_t]
                         log("DEEPSEEK", str(name) + ": odpowiedź była zdublowana (2 × "
-                            + str(_pol_t) + " znaków) — dalej idzie jedna kopia.")
+                            + str(_pol_t) + " znaków) — dalej idzie jedna kopia. Koniec strumienia: "
+                            + str(globals().get("_koniec_strumienia") or ""))
                 except Exception:
                     pass
                 text = _zagniezdzone_bloki_md(text)
@@ -19701,6 +19719,13 @@ def _chrome_open_wynik(
     ktorej nie ma. Teraz patrzymy, co naprawde sie otworzylo.
     """
 
+    try:
+        if tab is not None and tab.get("id"):
+            _karty_programu.add(str(tab.get("id")))
+    except Exception:
+        pass
+
+
     stan = _stan_strony(tab)
     tresc = _tresc_strony(tab)
 
@@ -19857,6 +19882,32 @@ def _karta_po_am_start(url, karty_przed, limit=12.0, na_koniec=True):
     return karta
 
 
+_karty_programu = set()
+
+
+def _witryna(adres):
+    m = re.match(r"(?i)^https?://([^/?#]+)", str(adres or "").strip())
+    return m.group(1).lower() if m else ""
+
+
+def _cudza_karta(tab, tab_id, contains, url):
+    """v480mt: karta wybrana "z wierzchu" (nie ta, o ktora proszono), z
+    prawdziwa strona innej witryny, ktorej program w tym biegu nie otwieral."""
+    kid = str(tab.get("id") or "")
+    if kid in _karty_programu:
+        return False
+    if tab_id and str(tab_id) == kid:
+        return False
+    adres = str(tab.get("url") or "")
+    if contains and not tab_id and (str(contains).lower() in adres.lower()
+                                    or str(contains).lower() in str(tab.get("title") or "").lower()):
+        return False
+    w = _witryna(adres)
+    if not w or w == _witryna(url):
+        return False
+    return True
+
+
 def chrome_open(
     url,
     tab_id=None,
@@ -19880,6 +19931,12 @@ def chrome_open(
                 + short(_adres, 120) + "” nim nie jest. Plik z dysku "
                 "czyta termux_read_file (tekst), a zrzut ekranu ogląda "
                 "android_screenshot_ocr."
+                # v480mt: jak pokazac wlasna strone w Chrome (bieg
+                # 2026-11-10 17:40, druzyna 2: file:///…/index_v1.html)
+                + (" Żeby obejrzeć w Chrome stronę z pliku: uruchom w jej folderze "
+                   "serwer w tle (termux_run_background: cd <folder> && python3 -m "
+                   "http.server 8080) i otwórz http://localhost:8080/<plik>."
+                   if _adres.lower().startswith("file:") or _adres.startswith(("/", "~")) else "")
             )
         }
 
@@ -19936,6 +19993,21 @@ def chrome_open(
         tab_id,
         contains
     )
+
+    # v480mt: karta, ktorej program sam nie otworzyl, nie jest nadpisywana
+    # nowym adresem. Bieg 2026-11-10 18:22 (druzyna 2, krok 37): chrome_open
+    # bez tab_id wzial karte z wierzchu — rozmowe uzytkownika na claude.ai —
+    # i wczytal w niej strone druzyny. Adres idzie wtedy do nowej karty;
+    # zostaje bez zmian: karta wskazana i znaleziona po tab_id / contains,
+    # karta otwarta wczesniej przez program, pusta karta i ta sama witryna.
+    try:
+        if tab is not None and _cudza_karta(tab, tab_id, contains, url):
+            log("CHROME", "Karta " + str(tab.get("id")) + " ("
+                + short(str(tab.get("url") or ""), 80) + ") nie jest kartą programu — "
+                "adres otwieram w nowej karcie, tej nie ruszam.")
+            tab = None
+    except Exception:
+        pass
 
     # WAŻNE:
     # NIE TWORZYMY NOWEJ KARTY przez CDP (/json/new nie jest
@@ -32479,6 +32551,18 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
                 "skopiowane. Dopisz folder docelowy na końcu (np. " + m.group(1)
                 + " plik1 plik2 kod/archiwum/) i sprawdź wynik przez ls.")
             return wynik
+        # v480mt: zrzut ekranu z powloki Termuksa. Bieg 2026-11-10 16:50
+        # (druzyna 2): "screencap: command not found", potem /system/bin/
+        # screencap — "Capturing failed"; skrypt mial brac obraz co 2 s.
+        if (not na_laptopie and re.search(r"\bscreencap\b", str(command_str or ""))
+                and not re.search(r"\badb\b", str(command_str or ""))
+                and re.search(r"command not found|Capturing failed|Failed to take|Permission denied|inaccessible", tekst)):
+            wynik["podpowiedz"] = (
+                "Termux sam nie ma prawa robić zrzutu ekranu (screencap działa tylko przez ADB). "
+                "Jednorazowy zrzut robi narzędzie android_screenshot (path = gdzie zapisać PNG). "
+                "Z własnego skryptu albo w pętli: adb -s 127.0.0.1:5555 exec-out screencap -p > plik.png "
+                "— to samo połączenie ADB, którego używa program.")
+            return wynik
         _brak = re.findall(r"\b(?:mv|cp): (?:cannot stat|nie można wykonać stat dla) ['‘`\"]?([^'’`\"\n:]+)", tekst)
         if _brak:
             wynik["podpowiedz"] = (
@@ -34932,6 +35016,45 @@ def termux_check_apk(path):
     }
 
 
+def _bez_podwojnych_znakow(source, search, replace):
+    """
+    v480mt: wariant (search, replace), w ktorym doslowne \\n, \\t, \\" i
+    \\' sa zamienione na prawdziwe znaki — pierwszy, ktorego `search`
+    stoi w pliku. W `replace` \\n zamienia sie tylko tam, gdzie to koniec
+    linii kodu (caly tekst bez prawdziwych koncow linii albo \\n przed
+    wcieciem / na koncu), zeby "print('a\\n')" zostalo napisem.
+    Zwraca (None, None), gdy zaden wariant nie pasuje.
+    """
+    def nl(t, wszystko):
+        if wszystko:
+            return t.replace("\\n", "\n").replace("\\t", "\t")
+        return re.sub(r"\\n(?=[ \t]{2,}|\n|$)", "\n", t)
+
+    def cudz(t):
+        return t.replace('\\"', '"').replace("\\'", "'")
+
+    search, replace = str(search or ""), str(replace or "")
+    bez_nl = "\n" not in replace
+    for z_nl, z_c in ((True, False), (False, True), (True, True)):
+        s2 = search
+        r2 = replace
+        if z_nl:
+            s2 = nl(s2, "\n" not in search)
+            if s2 == search:
+                s2 = nl(search, True)
+            r2 = nl(r2, bez_nl)
+        if z_c:
+            s2, r2 = cudz(s2), cudz(r2)
+        if s2 == search:
+            continue
+        try:
+            if _naloz_pare(source, s2, r2)[1] in ("ok", "juz", "wiele"):
+                return s2, r2
+        except Exception:
+            pass
+    return None, None
+
+
 def termux_patch_file(path, search, replace):
     """
     Podmienia DOKŁADNIE JEDNO wystąpienie fragmentu `search` na
@@ -35063,6 +35186,16 @@ def termux_patch_file(path, search, replace):
             _po, _stan, _ile = _naloz_pare(source, search, replace)
         except Exception:
             _po, _stan, _ile = source, "brak", 0
+        # v480mt: fragment z podwojnie zapisanymi znakami — doslowne "\n"
+        # w miejscu konca linii i \" w miejscu cudzyslowu (wykonawca,
+        # bieg 2026-11-10: 6 z 7 nietrafionych poprawek obu druzyn).
+        if _stan == "brak" and ("\\n" in search or '\\"' in search or "\\'" in search):
+            try:
+                _s2, _r2 = _bez_podwojnych_znakow(source, search, replace)
+                if _s2 is not None:
+                    _po, _stan, _ile = _naloz_pare(source, _s2, _r2)
+            except Exception:
+                pass
         if _stan == "ok" and _po != source:
             _luzne_zrodlo = _po
             occurrences = 1
@@ -65599,6 +65732,13 @@ def _kill_trafia(komenda, pid, nazwa, kom):
                     return True
                 continue
             if "$(" in tok or "`" in tok:
+                return True
+            # v480mt: "for pid in $(ps aux | grep 'x.py' …); do kill $pid" —
+            # numer w zmiennej, a nazwa skryptu stoi w tej samej komendzie.
+            # Bieg 2026-11-10 18:05 (druzyna 2): MAIN tak zatrzymal serwer,
+            # a program napisal "nikt z programu ani zespołu go nie zatrzymał".
+            if tok.startswith("$") and nazwa and (
+                    nazwa in str(komenda) or os.path.splitext(nazwa)[0] in str(komenda)):
                 return True
             wz = tok.replace("[", "").replace("]", "")
             if wz and (wz in kom or wz in nazwa or os.path.splitext(nazwa)[0] == wz):
