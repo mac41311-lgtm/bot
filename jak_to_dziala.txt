@@ -5192,3 +5192,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        prawdziwe znaki (6 z 7 nietrafionych poprawek tego dnia).
      - "kill $pid" w pętli po ps | grep 'skrypt.py' liczy się jako
        zatrzymanie przez zespół (było: "nikt go nie zatrzymał").
+
+364. (v480mu) Z notatki drużyny 1 (10.11, TMPDIR na laptopie):
+     - Komenda "LAPTOP:" dostaje własny TMPDIR: ~/MAIN_n/.tmp na
+       laptopie (ukryty folder w folderze drużyny: nie wraca na telefon,
+       rywal go nie widzi). Wcześniej TMPDIR na laptopie był pusty, więc
+       "$TMPDIR/x" znaczyło "/x", a skrypt z termuksową ścieżką wpisaną
+       na sztywno padał na "Permission denied: '/data'".
+     - Błąd na ścieżce /data/... po stronie laptopa dostaje podpowiedź:
+       ścieżki Termuksa tam nie istnieją, pliki tymczasowe przez
+       $TMPDIR / tempfile.gettempdir(), reszta względnie albo ~/MAIN_n.
+     - Podpowiedź "w Termuksie nie ma /tmp" nie podaje już termuksowej
+       ścieżki na sztywno (stąd wziął się zapis w skrypcie), tylko
+       $TMPDIR / tempfile.gettempdir(), które działają na obu maszynach.

@@ -17821,9 +17821,10 @@ def _po_komendzie(command, wynik, effective_timeout):
             "/tmp/" in tekst and ("Permission denied" in tekst or "No such file" in tekst))):
         wynik["podpowiedz"] = (
             "W Termuksie nie ma /tmp — zapis i odczyt /tmp/… się nie udają (także po cichu, "
-            "gdy błąd idzie do 2>/dev/null). Pliki tymczasowe: $TMPDIR, czyli "
-            + str(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
-            + "/tmp, albo folder drużyny."
+            # v480mu: bez pelnej sciezki Termuksa — druzyna wpisywala ja
+            # potem na stale w skrypty, ktore padaly na laptopie.
+            "gdy błąd idzie do 2>/dev/null). Pliki tymczasowe: $TMPDIR (w Pythonie "
+            "tempfile.gettempdir()) — działa i na telefonie, i na laptopie — albo folder drużyny."
         )
     if "no devices/emulators found" in tekst and "adb" in str(command):
         if not globals().get("_adb_ponowka_w_toku"):
@@ -32011,7 +32012,13 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
     k = str(_laptop_watki(druzyna))
     _f = _laptop_folder(druzyna)
     _d_eksport = _DRUZYNA if druzyna is None else str(druzyna or "")
-    zdalnie = ("mkdir -p ~/" + _f + " && cd ~/" + _f
+    # v480mu: TMPDIR jest na laptopie ustawiony tak jak na telefonie — na
+    # ukryty podfolder druzyny (.tmp: nie idzie na telefon, rywal tam nie
+    # siega, usuwanie bez pytania). Bieg 2026-11-10 17:10 (druzyna 1):
+    # skrypt z os.environ.get('TMPDIR', <sciezka Termuksa>) padl na laptopie
+    # "Permission denied: '/data'", a "$TMPDIR/x" w komendzie dawalo "/x".
+    zdalnie = ("mkdir -p ~/" + _f + "/.tmp && cd ~/" + _f
+               + " && export TMPDIR=\"$HOME/" + _f + "/.tmp\""
                + " && export OMP_NUM_THREADS=" + k + " OPENBLAS_NUM_THREADS=" + k
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
@@ -32550,6 +32557,17 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
                 + m.group(2).strip() + "” nie jest folderem — nic nie zostało przeniesione ani "
                 "skopiowane. Dopisz folder docelowy na końcu (np. " + m.group(1)
                 + " plik1 plik2 kod/archiwum/) i sprawdź wynik przez ls.")
+            return wynik
+        # v480mu: sciezka Termuksa uzyta na laptopie (wpisana w skrypt
+        # albo komende) — tam jej nie ma.
+        if na_laptopie and re.search(
+                r"(?:Permission denied|No such file or directory|Nie ma takiego pliku)[^\n]*['\"]?/data(?:/data/com\.termux[^\s'\"]*)?['\"]?"
+                r"|/data/data/com\.termux[^\n]*(?:Permission denied|No such file|Nie ma takiego pliku)", tekst):
+            wynik["podpowiedz"] = (
+                "Na laptopie nie ma ścieżek Termuksa (/data/data/com.termux/…) — skrypt albo komenda "
+                "ma taką wpisaną na stałe. Folder tymczasowy bierz z $TMPDIR (program ustawia go na obu "
+                "maszynach; w Pythonie tempfile.gettempdir()), a pliki drużyny adresuj względnie albo "
+                "przez ~/" + str(_laptop_folder() or "") + "/….")
             return wynik
         # v480mt: zrzut ekranu z powloki Termuksa. Bieg 2026-11-10 16:50
         # (druzyna 2): "screencap: command not found", potem /system/bin/
