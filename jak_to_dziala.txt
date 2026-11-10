@@ -5205,3 +5205,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Podpowiedź "w Termuksie nie ma /tmp" nie podaje już termuksowej
        ścieżki na sztywno (stąd wziął się zapis w skrypcie), tylko
        $TMPDIR / tempfile.gettempdir(), które działają na obu maszynach.
+
+365. (v480mv) Użytkownik 10.11: zespół ma wiedzieć, kim jest Gemini.
+     - Akapit "Wykonanie." w pierwszej wiadomości MAIN-a mówi teraz
+       wprost: Gemini jest wykonawcą (uruchamia komendy, chodzi po
+       plikach, stronach i telefonie, układa pliki zespołu, nanosi
+       poprawki napisane przez zespół), kodu sam nie pisze, więc skrypt
+       potrzebny w zadaniu powstaje wcześniej u Bartka. Wcześniej było
+       tylko "TASK oddaje dłuższą robotę Gemini, który ma te same
+       narzędzia", stąd zadania typu "napisz plik test_sanity.py".
+     - Zachowanie programu bez zmian (odmowa BRAK_KODU_DO_ZAPISU).
