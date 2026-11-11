@@ -6235,6 +6235,10 @@ def start_session(name, system_prompt):
 
         _activate_account_for_role(name)
 
+        # v480my: zalozenie rozmowy to tez zapytanie do DeepSeeka — nie
+        # przy STOP ani przy niepewnym wspolnym stanie.
+        _czekaj_na_stop(name)
+
         session = (
             deepseek_model.start_chat()
         )
@@ -7064,6 +7068,7 @@ def _czat_testowy_odpowiada(name):
         # trakcie przerwy.
         _deepseek_pace(name)
         _activate_account_for_role(name)
+        _czekaj_na_stop(name)  # v480my
         probny = deepseek_model.start_chat()
         try:
             probny.thinking_enabled = False
@@ -7843,18 +7848,46 @@ _TELEFON_CZEKA_WAZNE_S = 90.0
 _telefon_lokalnie = {"pauza_do": 0.0, "nr": 0, "zepsuty": False, "stop_od": 0.0}
 
 
-class _StopTelefonu(Exception):
-    """v480mx: wewnetrzny sygnal _limit_telefonu -> STOP."""
+
+class _BladStanuTelefonu(Exception):
+    """v480my: wspolnego stanu telefonu nie da sie pewnie odczytac, zapisac
+    albo zablokowac. Zasada: brak pewnosci = brak wysylki (fail closed)."""
 
 
 class _ZamekTelefonu:
-    """Wylacznosc na plik tempa telefonu (miedzy procesami druzyn)."""
+    """Wylacznosc na plik tempa telefonu (miedzy procesami druzyn).
+
+    v480my: bez czekania w nieskonczonosc i bez cichego bledu — zamek,
+    ktorego nie da sie wziac w _ZAMEK_CZEKAJ_S, to _BladStanuTelefonu
+    (wolajacy nie wysyla, loguje i probuje znowu). flock zwalnia system
+    takze wtedy, gdy proces trzymajacy zamek padnie."""
+
+    _ZAMEK_CZEKAJ_S = 30.0
 
     def __enter__(self):
         import fcntl
-        self._f = open(_TELEFON_ZAMEK, "a+")
-        fcntl.flock(self._f.fileno(), fcntl.LOCK_EX)
-        return self
+        try:
+            self._f = open(_TELEFON_ZAMEK, "a+")
+        except Exception as e:
+            raise _BladStanuTelefonu("nie da się otworzyć pliku zamka " + str(_TELEFON_ZAMEK)
+                                     + ": " + str(e))
+        koniec = time.time() + self._ZAMEK_CZEKAJ_S
+        while True:
+            try:
+                fcntl.flock(self._f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except (BlockingIOError, InterruptedError):
+                if time.time() >= koniec:
+                    self._f.close()
+                    raise _BladStanuTelefonu("zamek wspólnego stanu zajęty dłużej niż "
+                                             + str(int(self._ZAMEK_CZEKAJ_S)) + " s")
+                time.sleep(0.05)
+            except Exception as e:
+                try:
+                    self._f.close()
+                except Exception:
+                    pass
+                raise _BladStanuTelefonu("błąd zamka: " + str(e))
 
     def __exit__(self, *_a):
         try:
@@ -7865,18 +7898,69 @@ class _ZamekTelefonu:
         return False
 
 
+# v480my: klucze, ktore musza byc liczbami (gdy sa w pliku)
+_TELEFON_KLUCZE_LICZBOWE = ("pauza_do", "pauza_nr", "pauza_od", "stop_od", "budzet",
+                            "budzet_kiedy", "budzet_ciety")
+
+
 def _telefon_czytaj():
+    """Wspolny stan telefonu. Brak pliku = pierwszy start (pusty stan).
+    v480my: uszkodzony, pusty albo dziwny plik to NIE pusty stan, tylko
+    _BladStanuTelefonu — inaczej znikalby STOP i budzet (bylo: {})."""
     try:
-        d = json.loads(_TELEFON_PLIK.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:
+        surowe = _TELEFON_PLIK.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
+    except Exception as e:
+        raise _BladStanuTelefonu("nie da się odczytać " + str(_TELEFON_PLIK) + ": " + str(e))
+    try:
+        d = json.loads(surowe)
+    except Exception as e:
+        raise _BladStanuTelefonu("plik " + str(_TELEFON_PLIK) + " jest uszkodzony ("
+                                 + short(str(e), 80) + ", " + str(len(surowe)) + " B)")
+    if not isinstance(d, dict):
+        raise _BladStanuTelefonu("plik " + str(_TELEFON_PLIK) + " nie zawiera słownika")
+    for k in _TELEFON_KLUCZE_LICZBOWE:
+        if d.get(k) is not None:
+            try:
+                float(d[k])
+            except (TypeError, ValueError):
+                raise _BladStanuTelefonu("plik " + str(_TELEFON_PLIK) + ": pole " + k
+                                         + " nie jest liczbą (" + short(repr(d[k]), 40) + ")")
+    if d.get("wyslane") is not None and not isinstance(d.get("wyslane"), list):
+        raise _BladStanuTelefonu("plik " + str(_TELEFON_PLIK) + ": pole wyslane nie jest listą")
+    if d.get("proba_po_wznowieniu") is not None and not isinstance(d.get("proba_po_wznowieniu"), dict):
+        raise _BladStanuTelefonu("plik " + str(_TELEFON_PLIK) + ": pole proba_po_wznowieniu "
+                                 "nie jest słownikiem")
+    return d
 
 
 def _telefon_zapisz(st):
+    """v480my: zapis odporny na przerwanie — plik tymczasowy, fsync, potem
+    os.replace (atomowo); po bledzie plik tymczasowy znika, a wolajacy
+    dostaje _BladStanuTelefonu (bez wysylki)."""
     tmp = _TELEFON_PLIK.with_name(_TELEFON_PLIK.name + "." + str(os.getpid()) + ".tmp")
-    tmp.write_text(json.dumps(st), encoding="utf-8")
-    os.replace(tmp, _TELEFON_PLIK)
+    try:
+        dane = json.dumps(st)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(dane)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _TELEFON_PLIK)
+    except Exception as e:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise _BladStanuTelefonu("nie da się zapisać " + str(_TELEFON_PLIK) + ": " + str(e))
+    try:
+        fd = os.open(str(_TELEFON_PLIK.parent), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except Exception:
+        pass
 
 
 def _kto_wysyla(name):
@@ -7933,82 +8017,172 @@ def _telefon_wyslane(st, teraz):
     return wys
 
 
+_PLIK_WZNOW = "AEL_DEEPSEEK_WZNOW"
+# v480my: proba po wznowieniu, ktora nie wrocila (proces padl) — po tylu
+# sekundach kolejna wiadomosc moze byc proba.
+_PROBA_PO_WZNOWIENIU_WAZNA_S = 900.0
+_telefon_zly_log = [0.0]
+
+
+def _log_stan_niepewny(name, e):
+    """Raz na 10 min: wspolny stan niepewny, nic nie wysylam."""
+    if time.time() - _telefon_zly_log[0] < 600:
+        return
+    _telefon_zly_log[0] = time.time()
+    log("DEEPSEEK", "Wspólny stan DeepSeeka na telefonie jest niepewny (" + short(str(e), 160)
+        + ") — " + _ROLE_DISPLAY_NAME.get(name, str(name)) + " nic nie wysyła, czeka i sprawdza "
+        "znowu co 30 s. Gdy plik jest uszkodzony: zatrzymaj obie drużyny, usuń ~/"
+        + _TELEFON_PLIK.name + " (to kasuje też STOP i przerwę) i uruchom program; "
+        "zamek zwalnia się sam po zamknięciu procesu.")
+
+
+def _wznowienie_wazne(st):
+    """Plik ~/AEL_DEEPSEEK_WZNOW nowszy niz STOP (stary plik nie wznawia)."""
+    try:
+        return (HOME / _PLIK_WZNOW).stat().st_mtime > float(st.get("stop_od") or 0)
+    except Exception:
+        return False
+
+
+def _sprobuj_wznowic(st):
+    """Pod zamkiem: STOP + wazny plik wznowienia -> STOP zdjety, plik
+    zjedzony, jedna proba. Zwraca True, gdy wznowil (stan do zapisania)."""
+    if not st.get("stop_od") or not _wznowienie_wazne(st):
+        return False
+    for k in ("stop_od", "stop_kto", "stop_powod"):
+        st.pop(k, None)
+    st["pauza_nr"] = max(1, int(float(st.get("pauza_nr") or 0)))  # nastepny limit = STOP
+    st["pauza_do"] = 0
+    st["proba_po_wznowieniu"] = {"od": time.time()}
+    return True
+
+
+def _po_wznowieniu_sprzataj():
+    try:
+        (HOME / _PLIK_WZNOW).unlink()
+    except Exception:
+        pass
+    log("DEEPSEEK", "Wznowienie DeepSeeka (~/" + _PLIK_WZNOW + ") — najpierw jedna czekająca "
+        "wiadomość; reszta czeka na jej odpowiedź, a kolejny limit zatrzyma telefon znowu.")
+
+
 def _czekaj_na_telefon(name, znaki=0):
     """
     Czeka na miejsce we wspolnym tempie telefonu i je zajmuje. Nie trzyma
     blokady pliku w trakcie czekania; co kilkanascie sekund sprawdza od
-    nowa. Gdy plik nie dziala — tylko lokalna przerwa po limicie.
+    nowa.
+    v480my: sprawdzenie STOP, wznowienie, proba po wznowieniu i rezerwacja
+    to jedna sekcja pod jednym zamkiem. Niepewny stan wspolny (zamek,
+    odczyt, zapis) = brak wysylki: log i czekanie (fail closed).
     """
     import random as _los
     kto = _kto_wysyla(name)
     waga = _waga_wiadomosci(znaki)
     powiedziane = set()
-    # v480mx: STOP po limicie — nic nie idzie do wznowienia przez uzytkownika
     _stop_log = 0.0
-    while _stop_telefonu_trwa():
-        if time.time() - _stop_log >= 3600:
-            _stop_log = time.time()
-            log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + " czeka: DeepSeek "
-                "zatrzymany na całym telefonie po limicie — wznowienie: touch ~/" + _PLIK_WZNOW + ".")
-        time.sleep(20)
     while True:
+        stan = None
+        wznowil = False
         try:
             with _ZamekTelefonu():
                 st = _telefon_czytaj()
                 teraz = time.time()
-                wys = _telefon_wyslane(st, teraz)
-                budzet = _telefon_budzet(st, teraz)
-                na_program = max(1, budzet - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
-                odstep = _OKNO_BUDZETU / float(na_program)
-                czeka = {}
-                for k, v in (st.get("czeka") or {}).items():
-                    try:
-                        if teraz - float(v) < _TELEFON_CZEKA_WAZNE_S:
-                            czeka[str(k)] = float(v)
-                    except Exception:
-                        continue
-                czeka[kto] = teraz
-                pauza = float(st.get("pauza_do") or 0) - teraz
-                ost = wys[-1] if wys else None
-                po_ostatniej = (ost[0] + odstep * ost[2] * ost[3] - teraz) if ost else 0.0
-                na_budzet = 0.0
-                suma = sum(w[2] for w in wys)
-                if wys and suma + waga > na_program:
-                    nadmiar, zw = suma + waga - na_program, 0.0
-                    for w in wys:
-                        zw += w[2]
-                        if zw >= nadmiar - 1e-9:
-                            na_budzet = w[0] + _OKNO_BUDZETU - teraz
-                            break
-                # na zmiane: ostatnia byla moja, a ktos inny czeka
-                ustap = bool(ost and ost[1] == kto and any(k != kto for k in czeka))
-                czekaj = max(pauza, po_ostatniej, na_budzet, 0.0)
-                if czekaj <= 0 and not ustap:
-                    wys.append([round(teraz, 2), kto, waga, round(1.0 + _los.random() * 0.1, 3)])
-                    czeka.pop(kto, None)
-                    st["wyslane"], st["czeka"] = wys, czeka
-                    _telefon_zapisz(st)
-                    return
-                st["wyslane"], st["czeka"] = wys, czeka
-                _telefon_zapisz(st)
-                pauza_kto = str(st.get("pauza_kto") or "")
-                pauza_od = float(st.get("pauza_od") or 0)
+                if st.get("stop_od"):
+                    wznowil = _sprobuj_wznowic(st)
+                    if wznowil:
+                        _telefon_zapisz(st)
+                        try:
+                            (HOME / _PLIK_WZNOW).unlink()
+                        except Exception:
+                            pass
+                        stan = "wznowil"  # rezerwacja w nastepnym obrocie
+                    else:
+                        stan = "stop"
+                if stan is None:
+                    proba = st.get("proba_po_wznowieniu")
+                    _ja_proba = False
+                    if proba:
+                        _ts = float(proba.get("ts") or 0)
+                        if _ts and teraz - _ts < _PROBA_PO_WZNOWIENIU_WAZNA_S:
+                            stan = "proba"
+                        else:
+                            _ja_proba = True
+                if stan is None:
+                    wys = _telefon_wyslane(st, teraz)
+                    budzet = _telefon_budzet(st, teraz)
+                    na_program = max(1, budzet - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
+                    odstep = _OKNO_BUDZETU / float(na_program)
+                    czeka = {}
+                    for k, v in (st.get("czeka") or {}).items():
+                        try:
+                            if teraz - float(v) < _TELEFON_CZEKA_WAZNE_S:
+                                czeka[str(k)] = float(v)
+                        except Exception:
+                            continue
+                    czeka[kto] = teraz
+                    pauza = max(float(st.get("pauza_do") or 0), _telefon_lokalnie["pauza_do"]) - teraz
+                    ost = wys[-1] if wys else None
+                    po_ostatniej = (ost[0] + odstep * ost[2] * ost[3] - teraz) if ost else 0.0
+                    na_budzet = 0.0
+                    suma = sum(w[2] for w in wys)
+                    if wys and suma + waga > na_program:
+                        nadmiar, zw = suma + waga - na_program, 0.0
+                        for w in wys:
+                            zw += w[2]
+                            if zw >= nadmiar - 1e-9:
+                                na_budzet = w[0] + _OKNO_BUDZETU - teraz
+                                break
+                    # na zmiane: ostatnia byla moja, a ktos inny czeka
+                    ustap = bool(ost and ost[1] == kto and any(k != kto for k in czeka)) and not _ja_proba
+                    czekaj = max(pauza, po_ostatniej, na_budzet, 0.0)
+                    if czekaj <= 0 and not ustap:
+                        wys.append([round(teraz, 2), kto, waga, round(1.0 + _los.random() * 0.1, 3)])
+                        czeka.pop(kto, None)
+                        st["wyslane"], st["czeka"] = wys, czeka
+                        if _ja_proba:
+                            st["proba_po_wznowieniu"] = {"od": float(proba.get("od") or teraz),
+                                                         "ts": teraz, "kto": kto}
+                        _telefon_zapisz(st)
+                        stan = "wolno"
+                    else:
+                        st["wyslane"], st["czeka"] = wys, czeka
+                        _telefon_zapisz(st)
+                        stan = "czekaj"
+                        pauza_kto = str(st.get("pauza_kto") or "")
+                        pauza_od = float(st.get("pauza_od") or 0)
         except Exception as e:
-            if not _telefon_lokalnie["zepsuty"]:
-                _telefon_lokalnie["zepsuty"] = True
-                log("DEEPSEEK", "Wspólne tempo telefonu nie działa (" + short(str(e), 120)
-                    + ") — ten proces pilnuje tylko swojego konta i swojej przerwy po limicie.")
-            zostalo = _telefon_lokalnie["pauza_do"] - time.time()
-            if zostalo > 0:
-                time.sleep(min(zostalo, 60.0))
-                continue
+            _log_stan_niepewny(name, e)
+            time.sleep(30)
+            continue
+        if wznowil:
+            _po_wznowieniu_sprzataj()
+            continue
+        if stan == "wolno":
+            if _ja_proba:
+                log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": próba po wznowieniu — "
+                    "ta wiadomość idzie jako jedyna, reszta czeka na jej odpowiedź.")
             return
+        if stan == "stop":
+            if time.time() - _stop_log >= 3600:
+                _stop_log = time.time()
+                log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + " czeka: DeepSeek "
+                    "zatrzymany na całym telefonie po limicie — nic nie wysyłam. Wznowienie: "
+                    "touch ~/" + _PLIK_WZNOW + ".")
+            time.sleep(20)
+            continue
+        if stan == "proba":
+            if "proba" not in powiedziane:
+                powiedziane.add("proba")
+                log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + " czeka: po wznowieniu "
+                    "idzie jedna próbna wiadomość innej roli — czekam na jej odpowiedź.")
+            time.sleep(15)
+            continue
         if pauza > 0 and "pauza" not in powiedziane:
             powiedziane.add("pauza")
             log("DEEPSEEK", "Przerwa dla DeepSeeka na całym telefonie (obie drużyny i Sędzia) — "
                 "„za dużo wiadomości” dostał(a) " + _kto_wysyla_po_ludzku(pauza_kto)
                 + (" o " + datetime.fromtimestamp(pauza_od).strftime("%H:%M") if pauza_od else "")
-                + ". Czekam jeszcze " + _min_s(pauza) + "; potem idzie ta sama wiadomość.")
+                + ". Czekam jeszcze " + _min_s(pauza) + "; potem JEDNA próba tej samej wiadomości.")
         elif pauza <= 0 and na_budzet > 120 and "budzet" not in powiedziane:
             powiedziane.add("budzet")
             log("DEEPSEEK", "Telefon wysłał już w tej godzinie tyle, ile wolno razem obu drużynom "
@@ -8018,87 +8192,52 @@ def _czekaj_na_telefon(name, znaki=0):
         time.sleep(min(max(czekaj, 0.25), 15.0) if czekaj > 0 else 1.0)
 
 
-def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
-    """
-    DeepSeek odpowiedzial "za duzo wiadomosci": przerwa dla calego
-    telefonu (10 min, kolejny limit z rzedu x1,5, najwyzej 30 min) i
-    jedno sciecie wspolnego budzetu. Ten sam limit w drugim procesie nie
-    przedluza przerwy.
-    """
-    kto = _kto_wysyla(name)
-    try:
-        with _ZamekTelefonu():
-            st = _telefon_czytaj()
-            teraz = time.time()
-            if float(st.get("pauza_do") or 0) > teraz + 5 or st.get("stop_od"):
-                return
-            # v480mx: drugi limit bez udanej wiadomosci pomiedzy = STOP
-            if int(st.get("pauza_nr") or 0) >= 1 or drugi_dla_wiadomosci:
-                _stop = True
-            else:
-                _stop = False
-            if _stop:
-                st["pauza_nr"] = int(st.get("pauza_nr") or 0) + 1
-                _telefon_zapisz(st)
-                raise _StopTelefonu()
-            nr = int(st.get("pauza_nr") or 0) + 1
-            dl = min(_TELEFON_PRZERWA_S * (1.5 ** (nr - 1)), _TELEFON_PRZERWA_MAKS_S)
-            st.update(pauza_do=teraz + dl, pauza_nr=nr, pauza_kto=kto, pauza_od=teraz)
-            stary = _telefon_budzet(st, teraz)
-            nowy = stary
-            if teraz - float(st.get("budzet_ciety") or 0) >= _JEDEN_LIMIT_S:
-                nowy = max(_TELEFON_BUDZET_MIN, int(stary * 0.66))
-                if nowy < stary:
-                    st.update(budzet=nowy, budzet_kiedy=teraz, budzet_ciety=teraz)
-            _telefon_zapisz(st)
-    except _StopTelefonu:
-        _stop_telefonu(name, "DeepSeek drugi raz z rzędu odpowiedział „za dużo wiadomości” ("
-                       + short(str(blad or ""), 100) + "), mimo przerwy po pierwszym.")
-        return
-    except Exception as e:
-        if _telefon_lokalnie["nr"] >= 1 or drugi_dla_wiadomosci:
-            _telefon_lokalnie["nr"] += 1
-            _stop_telefonu(name, "DeepSeek drugi raz z rzędu odpowiedział „za dużo wiadomości”.")
+def _czekaj_na_stop(name):
+    """v480my: dla zapytan poza budzetem (zalozenie rozmowy): tylko STOP i
+    pewny stan wspolny, bez rezerwacji miejsca w tempie."""
+    _stop_log = 0.0
+    while True:
+        wznowil = False
+        try:
+            with _ZamekTelefonu():
+                st = _telefon_czytaj()
+                stop = bool(st.get("stop_od"))
+                if stop and _sprobuj_wznowic(st):
+                    _telefon_zapisz(st)
+                    try:
+                        (HOME / _PLIK_WZNOW).unlink()
+                    except Exception:
+                        pass
+                    wznowil, stop = True, False
+        except Exception as e:
+            _log_stan_niepewny(name, e)
+            time.sleep(30)
+            continue
+        if wznowil:
+            _po_wznowieniu_sprzataj()
+        if not stop:
             return
-        dl = min(_TELEFON_PRZERWA_S * (1.5 ** _telefon_lokalnie["nr"]), _TELEFON_PRZERWA_MAKS_S)
-        _telefon_lokalnie["nr"] += 1
-        _telefon_lokalnie["pauza_do"] = time.time() + dl
-        log("DEEPSEEK", "DeepSeek: „za dużo wiadomości” — przerwa " + _min_s(dl) + " w tym "
-            "procesie (wspólny plik tempa nie działa: " + short(str(e), 100) + "); potem ta sama "
-            "wiadomość.")
-        return
-    na_program = lambda b: max(1, b - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
-    log("DEEPSEEK", "DeepSeek: „za dużo wiadomości” (" + _kto_wysyla_po_ludzku(kto)
-        + ", konto " + str(_account_of(name)) + "). Liczy się cały telefon, więc obie drużyny "
-        "i Sędzia robią przerwę " + _min_s(dl) + " (do "
-        + datetime.fromtimestamp(time.time() + dl).strftime("%H:%M") + ") — bez ponawiania w tym "
-        "czasie; potem JEDNA próba tej samej wiadomości (kolejny limit zatrzyma telefon do "
-        "Twojego wznowienia), nic nie przepada."
-        + (" Wspólne tempo: z " + str(stary) + " na " + str(nowy) + " wiadomości na godzinę "
-           "(jedna co ~" + str(int(_OKNO_BUDZETU / na_program(nowy))) + " s)." if nowy < stary else ""))
+        if time.time() - _stop_log >= 3600:
+            _stop_log = time.time()
+            log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + " nie zakłada rozmowy: "
+                "DeepSeek zatrzymany na całym telefonie. Wznowienie: touch ~/" + _PLIK_WZNOW + ".")
+        time.sleep(20)
 
 
-_PLIK_WZNOW = "AEL_DEEPSEEK_WZNOW"
-
-
-def _stop_telefonu(name, powod):
-    """v480mx: STOP wysylania do DeepSeeka na calym telefonie (obie druzyny
-    i Sedzia), az uzytkownik utworzy ~/AEL_DEEPSEEK_WZNOW. Nic nie przepada:
-    kazda rola czeka z niewyslana wiadomoscia."""
-    teraz = time.time()
+def _ustaw_stop(st, name, powod, teraz):
+    """Pod zamkiem: STOP w stanie (bez zapisu). Stary plik wznowienia znika."""
+    st.update(stop_od=teraz, stop_kto=_kto_wysyla(name), stop_powod=str(powod)[:300])
+    st.pop("proba_po_wznowieniu", None)
     try:
-        with _ZamekTelefonu():
-            st = _telefon_czytaj()
-            if st.get("stop_od"):
-                return
-            st.update(stop_od=teraz, stop_kto=_kto_wysyla(name), stop_powod=str(powod)[:300])
-            _telefon_zapisz(st)
-    except Exception:
-        _telefon_lokalnie["stop_od"] = teraz
-    try:
-        (HOME / _PLIK_WZNOW).unlink()
+        p = HOME / _PLIK_WZNOW
+        if p.exists() and p.stat().st_mtime <= teraz:
+            p.unlink()
     except Exception:
         pass
+
+
+def _oglos_stop(powod):
+    """Po zwolnieniu zamka: log, powiadomienie, kopia logu (bez zamka)."""
     log("DEEPSEEK", "STOP: " + str(powod) + " Cały telefon (obie drużyny i Sędzia) przestaje "
         "wysyłać do DeepSeeka i nie ponawia sam. Niedokończone wiadomości czekają. Wznowienie, "
         "gdy uznasz, że można: touch ~/" + _PLIK_WZNOW + " — wtedy pójdzie jedna wiadomość, a "
@@ -8115,41 +8254,98 @@ def _stop_telefonu(name, powod):
         pass
 
 
-def _stop_telefonu_trwa():
-    """True, gdy STOP trwa. Plik ~/AEL_DEEPSEEK_WZNOW go konczy (raz)."""
+def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
+    """
+    DeepSeek odpowiedzial "za duzo wiadomosci": przerwa dla calego
+    telefonu (10 min) i jedno sciecie wspolnego budzetu. Ten sam limit w
+    drugim procesie nie przedluza przerwy.
+    v480mx/my: drugi limit bez udanej odpowiedzi pomiedzy (dowolna rola,
+    dowolny proces) albo drugi dla tej samej wiadomosci = STOP calego
+    telefonu, ustawiony atomowo w tej samej sekcji pod zamkiem.
+    """
+    kto = _kto_wysyla(name)
+    stop_powod = ""
     try:
         with _ZamekTelefonu():
             st = _telefon_czytaj()
-            od = float(st.get("stop_od") or 0)
-            if not od:
-                return False
-            p = HOME / _PLIK_WZNOW
-            if p.exists():
-                st.pop("stop_od", None)
-                st.pop("stop_kto", None)
-                st.pop("stop_powod", None)
-                st["pauza_nr"] = 1  # nastepny limit od razu znowu STOP
-                st["pauza_do"] = 0
+            teraz = time.time()
+            if st.get("stop_od"):
+                return
+            nr_przed = int(float(st.get("pauza_nr") or 0))
+            if nr_przed >= 1 or drugi_dla_wiadomosci:
+                stop_powod = ("DeepSeek drugi raz z rzędu odpowiedział „za dużo wiadomości” ("
+                              + short(str(blad or ""), 100) + "), mimo przerwy po pierwszym.")
+                st["pauza_nr"] = nr_przed + 1
+                _ustaw_stop(st, name, stop_powod, teraz)
                 _telefon_zapisz(st)
-                try:
-                    p.unlink()
-                except Exception:
-                    pass
-                log("DEEPSEEK", "Wznowienie DeepSeeka (~/" + _PLIK_WZNOW + ") — jedna wiadomość; "
-                    "kolejny limit zatrzyma znowu.")
-                return False
-            return True
+            else:
+                if float(st.get("pauza_do") or 0) > teraz + 5:
+                    return
+                nr = nr_przed + 1
+                dl = min(_TELEFON_PRZERWA_S * (1.5 ** (nr - 1)), _TELEFON_PRZERWA_MAKS_S)
+                st.update(pauza_do=teraz + dl, pauza_nr=nr, pauza_kto=kto, pauza_od=teraz)
+                stary = _telefon_budzet(st, teraz)
+                nowy = stary
+                if teraz - float(st.get("budzet_ciety") or 0) >= _JEDEN_LIMIT_S:
+                    nowy = max(_TELEFON_BUDZET_MIN, int(stary * 0.66))
+                    if nowy < stary:
+                        st.update(budzet=nowy, budzet_kiedy=teraz, budzet_ciety=teraz)
+                _telefon_zapisz(st)
+    except Exception as e:
+        # v480my: limitu nie da sie zapisac we wspolnym stanie. Ten proces
+        # i tak nie wysle nic, dopoki stan jest niepewny (_czekaj_na_telefon),
+        # a lokalna przerwa obowiazuje takze, gdy stan wroci.
+        _telefon_lokalnie["nr"] += 1
+        _telefon_lokalnie["pauza_do"] = max(_telefon_lokalnie["pauza_do"],
+                                            time.time() + _TELEFON_PRZERWA_S)
+        log("DEEPSEEK", "DeepSeek: „za dużo wiadomości”, ale wspólnego stanu nie da się zapisać ("
+            + short(str(e), 120) + ") — ten proces nic nie wysyła, dopóki stan jest niepewny, i "
+            "trzyma przerwę " + _min_s(_TELEFON_PRZERWA_S) + ".")
+        return
+    if stop_powod:
+        _oglos_stop(stop_powod)
+        return
+    na_program = lambda b: max(1, b - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
+    log("DEEPSEEK", "DeepSeek: „za dużo wiadomości” (" + _kto_wysyla_po_ludzku(kto)
+        + ", konto " + str(_account_of(name)) + "). Liczy się cały telefon, więc obie drużyny "
+        "i Sędzia robią przerwę " + _min_s(dl) + " (do "
+        + datetime.fromtimestamp(time.time() + dl).strftime("%H:%M") + ") — bez ponawiania w tym "
+        "czasie; potem JEDNA próba tej samej wiadomości (kolejny limit zatrzyma telefon do "
+        "Twojego wznowienia), nic nie przepada."
+        + (" Wspólne tempo: z " + str(stary) + " na " + str(nowy) + " wiadomości na godzinę "
+           "(jedna co ~" + str(int(_OKNO_BUDZETU / na_program(nowy))) + " s)." if nowy < stary else ""))
+
+
+def _stop_telefonu(name, powod):
+    """v480mx/my: STOP calego telefonu, atomowo pod zamkiem; ogloszenie po
+    zwolnieniu zamka. Gdy stanu nie da sie zapisac — lokalnie (ten proces
+    i tak nie wysyla przy niepewnym stanie)."""
+    ustawil = False
+    try:
+        with _ZamekTelefonu():
+            st = _telefon_czytaj()
+            if not st.get("stop_od"):
+                _ustaw_stop(st, name, powod, time.time())
+                _telefon_zapisz(st)
+                ustawil = True
+    except Exception as e:
+        _telefon_lokalnie["stop_od"] = time.time()
+        log("DEEPSEEK", "STOP nie zapisał się we wspólnym stanie (" + short(str(e), 120)
+            + ") — ten proces nic nie wysyła, dopóki stan jest niepewny.")
+        return
+    if ustawil:
+        _oglos_stop(powod)
+
+
+def _stop_telefonu_trwa():
+    """v480my: tylko odczyt (bez zjadania wznowienia). True takze wtedy,
+    gdy stanu nie da sie pewnie odczytac (fail closed)."""
+    try:
+        with _ZamekTelefonu():
+            st = _telefon_czytaj()
+            return bool(st.get("stop_od")) and not _wznowienie_wazne(st)
     except Exception:
-        if _telefon_lokalnie.get("stop_od"):
-            if (HOME / _PLIK_WZNOW).exists():
-                _telefon_lokalnie["stop_od"] = 0
-                try:
-                    (HOME / _PLIK_WZNOW).unlink()
-                except Exception:
-                    pass
-                return False
-            return True
-        return False
+        return True
 
 
 def _przerwa_telefonu(name, sekundy, powod):
@@ -8162,24 +8358,30 @@ def _przerwa_telefonu(name, sekundy, powod):
             if float(st.get("pauza_do") or 0) < do:
                 st.update(pauza_do=do, pauza_kto=_kto_wysyla(name), pauza_od=time.time())
                 _telefon_zapisz(st)
-    except Exception:
+    except Exception as e:
         _telefon_lokalnie["pauza_do"] = max(_telefon_lokalnie["pauza_do"], do)
+        log("DEEPSEEK", "Przerwy nie da się zapisać we wspólnym stanie (" + short(str(e), 120)
+            + ") — trzyma ją ten proces.")
     log("DEEPSEEK", "DeepSeek: " + powod + ". Cały telefon czeka do "
         + datetime.fromtimestamp(do).strftime("%H:%M") + "; potem ta sama wiadomość, nic nie przepada.")
 
 
 def _telefon_po_sukcesie(name):
-    """Odpowiedz przyszla — licznik limitow z rzedu od zera."""
+    """Odpowiedz przyszla — licznik limitow z rzedu od zera, proba po
+    wznowieniu zaliczona. v480my: wolac tylko po NIEPUSTEJ odpowiedzi."""
     _telefon_lokalnie["nr"] = 0
     try:
         with _ZamekTelefonu():
             st = _telefon_czytaj()
-            if not int(st.get("pauza_nr") or 0):
+            if not int(float(st.get("pauza_nr") or 0)) and not st.get("proba_po_wznowieniu"):
                 return
             st["pauza_nr"] = 0
+            st.pop("proba_po_wznowieniu", None)
             _telefon_zapisz(st)
-    except Exception:
-        pass
+    except Exception as e:
+        log("DEEPSEEK", "Odpowiedź przyszła, ale licznika limitów nie da się wyzerować we "
+            "wspólnym stanie (" + short(str(e), 120) + ") — następny limit może od razu "
+            "zatrzymać telefon (bezpieczniejsza strona).")
 
 
 def _pauza_telefonu_do():
@@ -8221,6 +8423,9 @@ def _deepseek_pace(name, znaki=0):
         _zapisz_budzet_konta(account)
 
 
+_WYSLIJ_LIMITOW_MAKS = 3  # v480my: limitow na jedna wiadomosc w _wyslij_w_tempie
+
+
 def _wyslij_w_tempie(name, session, tekst, odczekane=False):
     """
     v480lt: jedna wiadomosc w tempie calego telefonu. Po "za duzo
@@ -8238,9 +8443,16 @@ def _wyslij_w_tempie(name, session, tekst, odczekane=False):
             if not (_wyglada_na_przeciazenie(str(e))
                     and not _rozmowa_zerwana(str(e))):
                 raise
-            # v480mx: po 3 limitach z rzedu jedna proba na godzine
+            # v480mx/my: pierwszy limit = przerwa i jedna proba, drugi =
+            # STOP telefonu (czekamy w _deepseek_pace na wznowienie). Jawny
+            # koniec: po _WYSLIJ_LIMITOW_MAKS limitach blad idzie w gore.
             _limity += 1
             _po_limicie(name, str(e), _limity)
+            if _limity >= _WYSLIJ_LIMITOW_MAKS:
+                log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": ta sama wiadomość "
+                    "dostała „za dużo wiadomości” " + str(_limity) + " razy — nie ponawiam jej "
+                    "więcej, błąd idzie wyżej.")
+                raise
             _deepseek_pace(name, len(str(tekst or "")))
 
 
@@ -9675,6 +9887,9 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
 # v480mk: bez limitu (bylo 12 na uruchomienie) — uzytkownik: bez limitow;
 # Bartek 2026-11-07: plik >12 tys. znakow urywal sie w polowie.
 CONTINUATION_MAX_PER_RUN = None
+# v480my: jawne limity na jedna wiadomosc roli
+_CONTINUE_NA_WIADOMOSC_MAKS = 6
+_OGON_NA_WIADOMOSC_MAKS = 4
 _continuation_used = 0
 
 # Ile ostatnich znakow pokazujemy roli, zeby wiedziala GDZIE
@@ -11499,7 +11714,13 @@ def _deepseek_jedna_rozmowa(name, message):
                 # ktorym serwer mowi tylko, ze TA odpowiedz nie jest urwana
                 # (logi 31.10-6.11: 10 takich odmow, potem prawdziwe urwania
                 # kodu szly juz bez przycisku).
+                _ile_continue = 0  # v480my: jawny limit nacisniec na wiadomosc
                 while truncated and _continue_action_supported:
+                    _ile_continue += 1
+                    if _ile_continue > _CONTINUE_NA_WIADOMOSC_MAKS:
+                        log("DEEPSEEK", name + ": 'continue' już " + str(_CONTINUE_NA_WIADOMOSC_MAKS)
+                            + " razy dla tej odpowiedzi — dalej bez przycisku.")
+                        break
                     _przed_cont = len(str(text or ""))
 
                     # Eksperyment z v75: natywne action='continue'.
@@ -11621,7 +11842,13 @@ def _deepseek_jedna_rozmowa(name, message):
                     # v480mk: do skutku — dlugi plik potrzebuje kilku
                     # dokonczen (bylo jedno). Koniec, gdy dokonczenie nic
                     # nie dokleja (pusty tekst, blad, ten sam ogon).
+                    _ile_ogon = 0  # v480my: jawny limit prosb na wiadomosc
                     while truncated:
+                        _ile_ogon += 1
+                        if _ile_ogon > _OGON_NA_WIADOMOSC_MAKS:
+                            log("DEEPSEEK", name + ": o dalszy ciąg tej odpowiedzi prosiłem już "
+                                + str(_OGON_NA_WIADOMOSC_MAKS) + " razy — zostaje, jak jest.")
+                            break
                         _przed = len(str(text or ""))
                         text, truncated = _ask_for_missing_tail(
                             name, session, text, reason
@@ -12124,7 +12351,9 @@ def _deepseek_jedna_rozmowa(name, message):
                 health["trip_count"] = 0
 
                 _przyspiesz_po_sukcesie(name)
-                _telefon_po_sukcesie(name)
+                # v480my: licznik limitow zeruje tylko prawdziwa odpowiedz
+                if str(text or "").strip():
+                    _telefon_po_sukcesie(name)
 
                 _resume_unverified.discard(name)
                 # v480bj: czat testowy wskazal zablokowana rozmowe —
@@ -12188,6 +12417,13 @@ def _deepseek_jedna_rozmowa(name, message):
 
                     _limity_tej += 1
                     _po_limicie(name, str(e), _limity_tej)
+                    # v480my: jawny koniec — kazda kolejna proba i tak
+                    # czekala na Twoje wznowienie po STOP.
+                    if _limity_tej >= _WYSLIJ_LIMITOW_MAKS:
+                        log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": ta sama "
+                            "wiadomość dostała „za dużo wiadomości” " + str(_limity_tej)
+                            + " razy — nie ponawiam jej więcej.")
+                        return "DEEPSEEK ERROR [" + name + "]: " + str(e)
                     _proby.powtorz()
                     continue
 

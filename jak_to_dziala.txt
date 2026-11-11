@@ -5259,3 +5259,18 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        rozmowa, której serwer już nie zna — długość, zerwana).
      - Czat testowy po błędach serwera nie jest ponawiany po limicie.
      - Brak internetu: bez zmian (czekanie bez zapytań do DeepSeeka).
+
+368. (v480my) Audyt wysyłania do DeepSeeka (użytkownik 11.11, raport w
+     notatki/audyt_wysylania_deepseek_2026-11-11.md w plikach projektu):
+     - Brak pewnego wspólnego stanu = brak wysyłki (uszkodzony/pusty JSON,
+       zły typ pola, błąd odczytu/zapisu, zamek zajęty > 30 s). Log co
+       10 min z instrukcją, sprawdzanie co 30 s.
+     - STOP, wznowienie i rezerwacja w jednej sekcji pod zamkiem; drugi
+       limit ustawia STOP w tym samym zapisie, co go wykrył.
+     - Wznowienie: tylko plik ~/AEL_DEEPSEEK_WZNOW nowszy niż STOP,
+       zjadany raz; po nim jedna próbna wiadomość, reszta czeka na jej
+       odpowiedź (próba wygasa po 15 min).
+     - Zapis stanu z fsync; plik tymczasowy znika po błędzie.
+     - Założenie rozmowy (start_chat) też czeka na STOP.
+     - Jawne limity: 'continue' 6, prośba o koniec 4, ta sama wiadomość
+       3 limity; reset licznika limitów tylko po niepustej odpowiedzi.
