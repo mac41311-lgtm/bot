@@ -354,6 +354,82 @@ def wypisz_rozmowe(plik, rola=None, krok=None):
             print()
 
 
+# v480na: raport z rejestru ruchu DeepSeeka (patrz _ruch). Bez startu programu:
+#   python3 ~/agent/agent.py --raport-ruchu [godziny]
+def raport_ruchu(godziny=24.0, plik=None):
+    """Tekst raportu z rejestru ruchu za ostatnie `godziny`."""
+    from datetime import datetime
+    plik = Path(plik) if plik else Path.home() / "AEL_RUCH_DEEPSEEK.jsonl"
+    od = time.time() - float(godziny) * 3600
+    wpisy = []
+    for p in (Path(str(plik) + ".1"), plik):
+        try:
+            with open(p, encoding="utf-8") as f:
+                for linia in f:
+                    try:
+                        w = json.loads(linia)
+                    except Exception:
+                        continue
+                    if isinstance(w, dict) and float(w.get("t") or 0) >= od:
+                        wpisy.append(w)
+        except Exception:
+            continue
+    wpisy.sort(key=lambda w: float(w.get("t") or 0))
+    if not wpisy:
+        return "Rejestr ruchu DeepSeeka: brak wpisów z ostatnich " + str(godziny) + " h (" + str(plik) + ")."
+    ile = {}
+    for w in wpisy:
+        ile[w.get("r")] = ile.get(w.get("r"), 0) + 1
+    klasy = {}
+    for w in wpisy:
+        if w.get("r") == "blad":
+            klasy[w.get("klasa")] = klasy.get(w.get("klasa"), 0) + 1
+    czasy = [float(w.get("sekundy") or 0) for w in wpisy if w.get("r") == "odpowiedz"]
+    dupl = sum(1 for w in wpisy if w.get("r") == "wyslano" and w.get("duplikat"))
+    wiersze = [
+        "Rejestr ruchu DeepSeeka — ostatnie " + str(godziny) + " h (" + str(len(wpisy)) + " zdarzeń)",
+        "  wysłane wiadomości: " + str(ile.get("wyslano", 0))
+        + " (w tym ta sama treść do tej samej roli w 10 min: " + str(dupl) + ")",
+        "  „continue”: " + str(ile.get("continue", 0)) + ", prośby o dalszy ciąg: " + str(ile.get("ogon", 0)),
+        "  nowe rozmowy: " + str(ile.get("nowa_rozmowa", 0)) + ", ponowienia tej samej wiadomości: "
+        + str(ile.get("ponowienie", 0)),
+        "  błędy: " + str(ile.get("blad", 0)) + ((" — " + ", ".join(
+            k + " " + str(v) for k, v in sorted(klasy.items(), key=lambda kv: -kv[1]))) if klasy else ""),
+        "  niepewne wysyłki (bez ponowienia): " + str(ile.get("niepewna", 0)),
+        "  STOP: " + str(ile.get("stop", 0)) + ", wznowienia: " + str(ile.get("wznowienie", 0))
+        + ", przerwy telefonu: " + str(ile.get("przerwa", 0)),
+    ]
+    if czasy:
+        wiersze.append("  czas odpowiedzi: śr. " + str(round(sum(czasy) / len(czasy), 1)) + " s, maks. "
+                       + str(round(max(czasy), 1)) + " s (" + str(len(czasy)) + " odpowiedzi)")
+    dl = [int(w.get("dlugosc_rozmowy") or 0) for w in wpisy if w.get("r") in ("wyslano", "continue")]
+    if dl:
+        wiersze.append("  najdłuższa rozmowa (znaki wysłane + odebrane w tym procesie): " + str(max(dl)))
+    wazne = [w for w in wpisy if w.get("r") == "stop" or (w.get("r") == "blad" and w.get("klasa") in (
+        "odmowa_dostepu", "limit_tempa", "limit_dlugosci", "nieznany"))]
+    if wazne:
+        wiersze.append("  Co poprzedzało ograniczenia (wysłane / nowe rozmowy / continue w 10 i 60 min przed):")
+        for w in wazne[-15:]:
+            t = float(w.get("t") or 0)
+
+            def _n(rodz, s, _t=t):
+                return sum(1 for x in wpisy if x.get("r") == rodz and _t - s <= float(x.get("t") or 0) < _t)
+            wiersze.append(
+                "   " + datetime.fromtimestamp(t).strftime("%m-%d %H:%M:%S") + " "
+                + str(w.get("klasa") or w.get("r")) + " (" + str(w.get("rola") or "?") + ", konto "
+                + str(w.get("konto")) + "): " + str(_n("wyslano", 600)) + "/" + str(_n("nowa_rozmowa", 600))
+                + "/" + str(_n("continue", 600)) + " w 10 min, " + str(_n("wyslano", 3600)) + "/"
+                + str(_n("nowa_rozmowa", 3600)) + "/" + str(_n("continue", 3600)) + " w 60 min"
+                + ((" — " + str(w.get("blad"))[:120]) if w.get("blad") else ""))
+    return "\n".join(wiersze)
+
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "--raport-ruchu":
+    print(raport_ruchu(float(sys.argv[2]) if len(sys.argv) > 2 else 24.0))
+    raise SystemExit(0)
+
+
 if len(sys.argv) > 2 and sys.argv[1] == "--rozmowa":
     wypisz_rozmowe(
         sys.argv[2],
@@ -6262,6 +6338,7 @@ def start_session(name, system_prompt):
         session = (
             deepseek_model.start_chat()
         )
+        _ruch("nowa_rozmowa", name)  # v480na
 
         # v453: Ola (streszcza) i Ela (procent) bez myslenia — patrz
         # _ROLE_BEZ_MYSLENIA.
@@ -7092,6 +7169,7 @@ def _czat_testowy_odpowiada(name):
         _activate_account_for_role(name)
         _czekaj_na_stop(name)  # v480my
         probny = deepseek_model.start_chat()
+        _ruch("nowa_rozmowa", name, testowa=True)  # v480na
         try:
             probny.thinking_enabled = False
         except Exception:
@@ -7382,6 +7460,185 @@ def _rozmowa_zerwana(blad):
     """Czy serwer mowi, ze tej rozmowy juz nie ma."""
 
     return bool(_ZERWANA_ROZMOWA_RE.search(str(blad or "")))
+
+
+# ------------------------------------------------------------
+# v480na: CZY WIADOMOSC DOSZLA, KLASA BLEDU I REJESTR RUCHU
+# ------------------------------------------------------------
+# Uzytkownik (2026-11-11): nie ponawiac wysylki, gdy nie wiadomo, czy
+# poprzednia zostala przyjeta; taki przypadek zapisac do recznego
+# rozstrzygniecia. Dotad zerwane polaczenie (ReadTimeout, RemoteDisconnected,
+# urwany strumien) szlo droga "brak sieci" albo "restart sesji" i ta sama
+# wiadomosc szla jeszcze raz — choc serwer mogl ja juz miec (wtedy w
+# rozmowie stoi dwa razy, a DeepSeek liczy obie).
+#
+# Faza wysylki (pole .wysylka wyjatku _BladWysylki):
+#   "nie_wyslano" — polaczenie nie powstalo (DNS, odmowa polaczenia, brak
+#                   trasy, timeout laczenia): ponowienie jest bezpieczne;
+#   "niepewna"    — zapytanie moglo wyjsc, a odpowiedzi nie bylo (timeout
+#                   czytania, zerwane polaczenie przed naglowkami): NIE
+#                   ponawiamy, zapis do ~/AEL_NIEPEWNE_WYSYLKI.md;
+#   "przyjeta"    — serwer odpowiedzial 200 i zaczal strumien, ktory sie
+#                   urwal bez tresci: wiadomosc jest w rozmowie, NIE
+#                   ponawiamy (urwany strumien Z trescia idzie jako urwana
+#                   odpowiedz — dalszy ciag przyciskiem "continue", jak na
+#                   stronie, bez ponownego wysylania pytania).
+_BLAD_POLACZENIA_RE = re.compile(
+    r"Failed to resolve|NameResolution|getaddrinfo|Name or service not known"
+    r"|No address associated|Temporary failure in name resolution"
+    r"|Network is unreachable|No route to host|Connection refused|ConnectTimeout"
+    r"|Could not resolve|Failed to connect|Couldn't connect"
+    r"|Errno 101|Errno 111|Errno 113|Errno -2|Errno -3|Errno 7\b"
+    r"|curl: \((?:6|7|35)\)",
+    re.IGNORECASE
+)
+
+
+class _BladWysylki(RuntimeError):
+    """v480na: blad wysylki z faza: nie_wyslano / niepewna / przyjeta."""
+
+    def __init__(self, tekst, wysylka):
+        super().__init__(tekst)
+        self.wysylka = wysylka
+
+
+def _faza_wysylki(e):
+    return getattr(e, "wysylka", "") if isinstance(e, BaseException) else ""
+
+
+def _blad_przed_naglowkami(e):
+    """Wyjatek z samego POST (zanim przyszly naglowki odpowiedzi): czy
+    polaczenie w ogole nie powstalo, czy zapytanie moglo juz wyjsc."""
+    tekst = type(e).__name__ + ": " + str(e)
+    if _BLAD_POLACZENIA_RE.search(tekst):
+        return _BladWysylki(tekst, "nie_wyslano")
+    return _BladWysylki(tekst, "niepewna")
+
+
+_PLIK_NIEPEWNYCH = "AEL_NIEPEWNE_WYSYLKI.md"
+
+
+def _zapisz_niepewna(name, session, tresc, blad):
+    """Wiadomosc mogla dojsc (albo doszla bez odpowiedzi): bez ponowienia.
+    Jeden wpis do ~/AEL_NIEPEWNE_WYSYLKI.md, log i powiadomienie."""
+    faza = _faza_wysylki(blad) or "niepewna"
+    kto = _ROLE_DISPLAY_NAME.get(name, str(name))
+    co = ("serwer przyjął wiadomość, ale odpowiedź się urwała bez treści" if faza == "przyjeta"
+          else "zapytanie mogło dojść, a odpowiedź nie przyszła")
+    try:
+        wpis = (
+            "\n## " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " — " + kto
+            + " (konto " + str(_account_of(name)) + ")\n"
+            "- co się stało: " + co + " (" + short(str(blad), 200) + ")\n"
+            "- rozmowa: " + str(getattr(session, "chat_session_id", "") or "?")
+            + ", poprzednia wiadomość: " + str(getattr(session, "parent_message_id", "") or "?") + "\n"
+            "- początek wiadomości: " + short(str(tresc or "").replace("\n", " "), 300) + "\n"
+            "- program jej NIE ponowił. Jeśli chcesz, sprawdź tę rozmowę na chat.deepseek.com; "
+            "rola dostaje kolejne wiadomości normalnie.\n"
+        )
+        with open(HOME / _PLIK_NIEPEWNYCH, "a", encoding="utf-8") as f:
+            f.write(wpis)
+    except Exception:
+        pass
+    _ruch("niepewna", name, faza=faza, blad=short(str(blad), 160))
+    log("DEEPSEEK", kto + ": " + co + " — nie wysyłam jej drugi raz (mogłaby stanąć w rozmowie "
+        "dwa razy). Zapisane w ~/" + _PLIK_NIEPEWNYCH + "; ta wiadomość roli wraca jako błąd, "
+        "następne idą normalnie.")
+    try:
+        subprocess.run(["termux-notification", "--id", "ael_niepewna", "-t",
+                        "AEL: niepewna wysyłka (" + kto + ")", "-c",
+                        "Nie ponowiono. Szczegóły: ~/" + _PLIK_NIEPEWNYCH],
+                       capture_output=True, timeout=15)
+    except Exception:
+        pass
+
+
+def _klasa_bledu(e):
+    """v480na: jedna klasa bledu DeepSeeka (do rejestru i raportu). Oparte
+    na tym, co serwer naprawde przysyla (kody biz/HTTP, finish_reason ze
+    strumienia), nie na samej nazwie wyjatku. Limitu dziennego ani limitu
+    liczby wiadomosci w rozmowie DeepSeek dotad nam nie pokazal — takie
+    komunikaty wpadna jako "nieznany" z trescia w rejestrze."""
+    t = (type(e).__name__ + ": " + str(e)) if isinstance(e, BaseException) else str(e or "")
+    faza = _faza_wysylki(e)
+    if faza in ("niepewna", "przyjeta"):
+        return faza
+    if _odmowa_dostepu(t):
+        return "odmowa_dostepu"
+    if re.search(r"context_length_exceeded|length\s+limit", t, re.IGNORECASE):
+        return "limit_dlugosci"
+    if _wyglada_na_przeciazenie(t) and not _rozmowa_zerwana(t):
+        return "limit_tempa"
+    if _rozmowa_zerwana(t):
+        return "rozmowa_zerwana"
+    if faza == "nie_wyslano" or _wyglada_na_blad_sieci(e if isinstance(e, BaseException) else t):
+        return "siec"
+    if re.search(r"HTTP 5\d\d|Server busy|temporarily unavailable|backend_err", t, re.IGNORECASE):
+        return "przeciazenie_serwera"
+    if _odmowa_serwera(t):
+        return "odmowa_serwera"
+    return "nieznany"
+
+
+# Rejestr ruchu: jedna linia JSON na zdarzenie, wspolny dla calego
+# telefonu (obie druzyny i Sedzia dopisuja do tego samego pliku). Raport:
+#   python3 ~/agent/agent.py --raport-ruchu [godziny]
+_PLIK_RUCHU = HOME / "AEL_RUCH_DEEPSEEK.jsonl"
+_RUCH_MAKS_B = 5 * 1024 * 1024
+_dlugosc_rozmowy = {}
+_ostatnie_wyslane = {}
+_DUPLIKAT_OKNO_S = 600.0
+
+
+def _ruch(rodzaj, name="", **pola):
+    try:
+        wpis = {"t": round(time.time(), 1), "r": str(rodzaj), "rola": str(name or ""),
+                "konto": _account_of(name) if name else None,
+                "druzyna": str(globals().get("_DRUZYNA") or ""), "pid": os.getpid()}
+        wpis.update(pola)
+        try:
+            if _PLIK_RUCHU.stat().st_size > _RUCH_MAKS_B:
+                os.replace(str(_PLIK_RUCHU), str(_PLIK_RUCHU) + ".1")
+        except Exception:
+            pass
+        with open(_PLIK_RUCHU, "a", encoding="utf-8") as f:
+            f.write(json.dumps(wpis, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _ruch_wyslanie(name, session, tekst, action):
+    """Przed kazdym zapytaniem z trescia: rodzaj, rozmiar, dlugosc rozmowy
+    i to, czy ta sama tresc szla do tej roli w ostatnich 10 min (liczymy,
+    niczego nie blokujemy)."""
+    czat = str(getattr(session, "chat_session_id", "") or "")
+    znaki = len(str(tekst or ""))
+    _dlugosc_rozmowy[czat] = _dlugosc_rozmowy.get(czat, 0) + znaki
+    duplikat = False
+    if not action and znaki > 1:
+        klucz = hashlib.sha1(str(tekst).encode("utf-8", "replace")).hexdigest()
+        poprz = _ostatnie_wyslane.get(str(name))
+        teraz = time.time()
+        duplikat = bool(poprz and poprz[0] == klucz and teraz - poprz[1] < _DUPLIKAT_OKNO_S)
+        _ostatnie_wyslane[str(name)] = (klucz, teraz)
+    _ruch("continue" if action == "continue" else "wyslano", name, znaki=znaki,
+          czat=czat[:12], dlugosc_rozmowy=_dlugosc_rozmowy[czat], duplikat=duplikat)
+
+
+def _ruch_odpowiedz(name, session, tekst, status, sekundy):
+    czat = str(getattr(session, "chat_session_id", "") or "")
+    znaki = len(str(tekst or ""))
+    _dlugosc_rozmowy[czat] = _dlugosc_rozmowy.get(czat, 0) + znaki
+    _ruch("odpowiedz", name, znaki=znaki, sekundy=round(float(sekundy), 1),
+          status=str(status or "")[:40])
+
+
+def _retry_after_s(tekst):
+    """v480na: "Retry-After: N" dopisane do bledu HTTP (patrz
+    _deepseek_raw_post_with_action) -> N sekund albo None."""
+    m = re.search(r"Retry-After:\s*(\d{1,6})\b", str(tekst or ""), re.IGNORECASE)
+    return float(m.group(1)) if m else None
+
 
 # Ile najwyzej gotowi jestesmy czekac miedzy wiadomosciami. v302:
 # odstep bazowy wynika teraz z budzetu (3600/80 = 45 s), wiec sufit
@@ -8091,6 +8348,7 @@ def _sprobuj_wznowic(st):
 
 
 def _po_wznowieniu_sprzataj():
+    _ruch("wznowienie", "")  # v480na
     try:
         (HOME / _PLIK_WZNOW).unlink()
     except Exception:
@@ -8271,6 +8529,7 @@ def _ustaw_stop(st, name, powod, teraz):
 
 def _oglos_stop(powod):
     """Po zwolnieniu zamka: log, powiadomienie, kopia logu (bez zamka)."""
+    _ruch("stop", "", blad=str(powod)[:200])  # v480na
     log("DEEPSEEK", "STOP: " + str(powod) + " Cały telefon (obie drużyny i Sędzia) przestaje "
         "wysyłać do DeepSeeka i nie ponawia sam. Niedokończone wiadomości czekają. Wznowienie, "
         "gdy uznasz, że można: touch ~/" + _PLIK_WZNOW + " — wtedy pójdzie jedna wiadomość, a "
@@ -8316,6 +8575,10 @@ def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
                     return
                 nr = nr_przed + 1
                 dl = min(_TELEFON_PRZERWA_S * (1.5 ** (nr - 1)), _TELEFON_PRZERWA_MAKS_S)
+                # v480na: serwer powiedzial, ile czekac — nie krocej
+                _ra = _retry_after_s(blad)
+                if _ra:
+                    dl = max(dl, _ra)
                 st.update(pauza_do=teraz + dl, pauza_nr=nr, pauza_kto=kto, pauza_od=teraz)
                 stary = _telefon_budzet(st, teraz)
                 nowy = stary
@@ -8339,6 +8602,7 @@ def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
         _oglos_stop(stop_powod)
         return
     na_program = lambda b: max(1, b - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
+    _ruch("przerwa", name, sekundy=int(dl), powod="limit_tempa")  # v480na
     log("DEEPSEEK", "DeepSeek: „za dużo wiadomości” (" + _kto_wysyla_po_ludzku(kto)
         + ", konto " + str(_account_of(name)) + "). Liczy się cały telefon, więc obie drużyny "
         "i Sędzia robią przerwę " + _min_s(dl) + " (do "
@@ -8395,6 +8659,7 @@ def _przerwa_telefonu(name, sekundy, powod):
         _telefon_lokalnie["pauza_do"] = max(_telefon_lokalnie["pauza_do"], do)
         log("DEEPSEEK", "Przerwy nie da się zapisać we wspólnym stanie (" + short(str(e), 120)
             + ") — trzyma ją ten proces.")
+    _ruch("przerwa", name, sekundy=int(float(sekundy)), powod=str(powod)[:120])  # v480na
     log("DEEPSEEK", "DeepSeek: " + powod + ". Cały telefon czeka do "
         + datetime.fromtimestamp(do).strftime("%H:%M") + "; potem ta sama wiadomość, nic nie przepada.")
 
@@ -8628,13 +8893,20 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     except Exception:
         pass
 
-    response = model.session.post(
-        _ods_config.base_url + sciezka,
-        headers=headers,
-        json=payload,
-        stream=True,
-        timeout=_limit_dla_sesji(model.session),
-    )
+    # v480na: czy blad przyszedl, zanim polaczenie powstalo (ponowienie
+    # bezpieczne), czy gdy zapytanie moglo juz wyjsc (bez ponowienia)
+    try:
+        response = model.session.post(
+            _ods_config.base_url + sciezka,
+            headers=headers,
+            json=payload,
+            stream=True,
+            timeout=_limit_dla_sesji(model.session),
+        )
+    except (AttributeError, TypeError, ImportError, KeyError):
+        raise  # ksztalt biblioteki — deepseek() wraca wtedy do send_message()
+    except Exception as _e_post:
+        raise _blad_przed_naglowkami(_e_post) from None
 
     # v453: cialo odpowiedzi idzie do wyjatku — to w nim serwer mowi
     # "invalid message id" / "Messages too frequent" (patrz
@@ -8665,9 +8937,15 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     try:
         response.raise_for_status()
     except Exception as e:
+        # v480na: serwer moze powiedziec, ile czekac (Retry-After)
+        try:
+            _ra = str((response.headers or {}).get("Retry-After") or "").strip()
+        except Exception:
+            _ra = ""
         raise RuntimeError(
             "HTTP " + str(getattr(response, "status_code", "?"))
             + ": " + str(e) + " | " + _cialo()
+            + ((" | Retry-After: " + _ra) if _ra else "")
         ) from None
 
     if "text/event-stream" not in response.headers.get(
@@ -8784,7 +9062,19 @@ def _deepseek_raw_post_with_action(session, prompt, action):
     # Czy serwer szukal w sieci przy tej odpowiedzi (v328).
     szukanie_serwera = [None]
 
-    for line in response.iter_lines():
+    # v480na: urwany strumien (siec, serwer zamknal polaczenie) nie jest
+    # "nic nie poszlo" — serwer juz przyjal wiadomosc. Zapamietujemy blad i
+    # konczymy czytanie; co dalej — po petli.
+    _przerwany = [None]
+
+    def _linie_strumienia():
+        try:
+            for _l in response.iter_lines():
+                yield _l
+        except Exception as _e_str:
+            _przerwany[0] = _e_str
+
+    for line in _linie_strumienia():
 
         if not line:
             continue
@@ -9235,6 +9525,21 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         and getattr(session, "parent_message_id", None) != _rodzic_przed
     ):
         session.parent_message_id = _rodzic_przed
+
+    # v480na: strumien sie urwal. Z trescia — to urwana odpowiedz (dalszy
+    # ciag przyciskiem "continue", bez ponownego pytania). Bez tresci —
+    # wiadomosc jest w rozmowie, a odpowiedzi nie ma: blad "przyjeta", ktory
+    # deepseek() zapisuje do recznego rozstrzygniecia zamiast ponawiac.
+    if _przerwany[0] is not None and not (_limit_rozmowy[0] or _za_szybko[0]):
+        _opis_przerwy = type(_przerwany[0]).__name__ + ": " + short(str(_przerwany[0]), 200)
+        if not full_text.strip():
+            if not kontynuacja:
+                session.parent_message_id = _rodzic_przed
+            raise _BladWysylki("strumień urwał się po przyjęciu wiadomości, bez treści ("
+                               + _opis_przerwy + ")", "przyjeta")
+        log("DEEPSEEK", "strumień urwał się po " + str(len(full_text)) + " znakach ("
+            + _opis_przerwy + ") — biorę to jako urwaną odpowiedź.")
+        status_seen = "INCOMPLETE (strumień przerwany)"
 
     # v480w: rozmowa doszla do limitu dlugosci na stronie.
     #
@@ -9840,10 +10145,17 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
     przed tym eksperymentem.
     """
 
+    _ruch_wyslanie(name, session, prompt, action)  # v480na
+    _t0_ruch = time.time()
     try:
-        return _deepseek_raw_post_with_action(
+        _wynik_ruch = _deepseek_raw_post_with_action(
             session, prompt, action
         )
+        try:
+            _ruch_odpowiedz(name, session, _wynik_ruch[0], _wynik_ruch[1], time.time() - _t0_ruch)
+        except Exception:
+            pass
+        return _wynik_ruch
     except (AttributeError, TypeError, ImportError, KeyError) as e:
 
         # v453: powrot do send_message() biblioteki TYLKO, gdy nasza
@@ -9885,6 +10197,11 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
         if text is None:
             text = str(response)
         return text, None
+    except Exception as e:
+        # v480na: kazdy blad zapytania trafia do rejestru ruchu z klasa
+        _ruch("blad", name, klasa=_klasa_bledu(e), blad=short(type(e).__name__ + ": " + str(e), 200),
+              continue_=bool(action))
+        raise
 
 
 # ============================================================
@@ -10062,6 +10379,7 @@ def _ask_for_missing_tail(name, session, text, reason):
     try:
         # v480lt: prosba o dokonczenie to tez wiadomosc — w tempie
         # telefonu; po limicie ta sama prosba po przerwie
+        _ruch("ogon", name)  # v480na
         tail, tail_status = _wyslij_w_tempie(name, session, prosba)
     except Exception as e:
         log(
@@ -11602,6 +11920,8 @@ def _deepseek_jedna_rozmowa(name, message):
         _proby = _ProbyDeepSeek(2)
         _limity_tej = 0   # v480mx: "za duzo wiadomosci" dla tej wiadomosci
         _odmowy_tej = 0   # v480mx: odmowy serwera z kodem dla tej wiadomosci
+        _wyslan_tej = 0   # v480na: ile razy ta wiadomosc naprawde poszla
+        _tresc_wyslana = message
 
         for attempt in _proby:
 
@@ -11713,6 +12033,11 @@ def _deepseek_jedna_rozmowa(name, message):
 
                 _wyslano(name, _tresc_wyslana)
 
+                # v480na: kolejna proba tej samej wiadomosci — do rejestru
+                if _wyslan_tej:
+                    _ruch("ponowienie", name, proba=_wyslan_tej + 1)
+                _wyslan_tej += 1
+
                 text, status = _deepseek_send_experimental(
                     name,
                     session,
@@ -11812,6 +12137,21 @@ def _deepseek_jedna_rozmowa(name, message):
                             break
 
                     except Exception as continue_error:
+
+                        # v480na: siec padla, zanim prosba o dalszy ciag
+                        # wyszla — czekamy na siec i naciskamy jeszcze raz
+                        # (w limicie nacisniec). Wznowienie mogło dojść albo
+                        # strumien sie urwal — bez kolejnych prob dla tej
+                        # odpowiedzi. Zadne z tego nie wylacza przycisku.
+                        if _faza_wysylki(continue_error) == "nie_wyslano":
+                            _czekaj_na_internet(name, continue_error)
+                            continue
+                        if _faza_wysylki(continue_error) in ("niepewna", "przyjeta"):
+                            log("DEEPSEEK", name + ": 'continue' bez odpowiedzi ("
+                                + short(str(continue_error), 120) + ") — nie ponawiam, "
+                                "zostaje odpowiedź, jaka jest.")
+                            _czekaj_na_internet(name, continue_error)
+                            break
 
                         # v480lt: "za duzo wiadomosci" to nie odmowa
                         # wznawiania — przerwa telefonu, mechanizm
@@ -12420,6 +12760,18 @@ def _deepseek_jedna_rozmowa(name, message):
                     "DEEPSEEK",
                     f"{name} próba {attempt + 1} błąd: {e}"
                 )
+
+                # v480na: zapytanie moglo dojsc (albo doszlo bez
+                # odpowiedzi) — nie wysylamy go drugi raz. Zapis do
+                # recznego rozstrzygniecia; przy braku sieci czekamy na nia
+                # (nic nie wysylajac), zeby kolejne kroki nie mielily bledow.
+                if _faza_wysylki(e) in ("niepewna", "przyjeta"):
+                    _zapisz_niepewna(name, session, _tresc_wyslana, e)
+                    _czekaj_na_internet(name, e)
+                    return ("DEEPSEEK ERROR [" + name + "]: wiadomość mogła dojść do DeepSeeka, "
+                            "a odpowiedź nie przyszła (" + short(str(e), 160) + "). Program jej nie "
+                            "ponowił, żeby nie stała w rozmowie dwa razy; szczegóły w ~/"
+                            + _PLIK_NIEPEWNYCH + ". Następna wiadomość do tej roli pójdzie normalnie.")
 
                 # v480cd: brak internetu — czekamy na siec i ponawiamy
                 # TA SAMA probe w TEJ SAMEJ rozmowie. Bez restartu sesji,

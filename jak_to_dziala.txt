@@ -5284,3 +5284,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        nie ma), od razu zostaje zastąpiona nową rozmową z celem i stanem —
        przed regułą odmowy z kodem i bez limitu restartów (raz na rolę).
        Bez zmian: limity, STOP, odmowa dostępu.
+
+370. (v480na) Dodatkowe zabezpieczenia wysyłania do DeepSeeka (11.11):
+     - Faza wysyłki: błąd przed połączeniem (DNS, odmowa połączenia,
+       brak trasy) = wiadomość nie wyszła, ponowienie po powrocie sieci
+       jak dotąd. Błąd po wysłaniu bez odpowiedzi (timeout czytania,
+       zerwane połączenie) albo urwany strumień bez treści = wiadomość
+       mogła dojść: program jej NIE ponawia, zapisuje przypadek do
+       ~/AEL_NIEPEWNE_WYSYLKI.md (powiadomienie), rola dostaje błąd,
+       następne wiadomości idą normalnie.
+     - Urwany strumień z treścią = urwana odpowiedź: dalszy ciąg
+       przyciskiem „continue” (jak na stronie), bez ponownego pytania.
+     - Błąd sieci przy „continue” nie wyłącza już przycisku do końca
+       uruchomienia; niepewne „continue” nie jest ponawiane.
+     - Retry-After z odpowiedzi serwera: przerwa telefonu nie krótsza.
+     - Rejestr ruchu ~/AEL_RUCH_DEEPSEEK.jsonl (wspólny dla telefonu):
+       wysłane, continue, prośby o dalszy ciąg, nowe rozmowy, ponowienia,
+       błędy z klasą, niepewne, STOP, wznowienia, przerwy, czas odpowiedzi,
+       długość rozmowy, ta sama treść do tej samej roli w 10 min.
+       Raport: python3 ~/agent/agent.py --raport-ruchu [godziny].
