@@ -3656,13 +3656,30 @@ def _fakty_o_transporcie_deepseek():
     )
 
 
+def _czysty_token(t):
+    """v480mz: token wklejony z localStorage razem z cudzyslowami, przecinkiem
+    albo calym {"value":"…"} (bieg 2026-11-11 12:36: 66 i 65 znakow z " i ,
+    na koncu) — zostaje sam token. Nic poza tym nie zmieniamy."""
+    t = str(t or "").strip()
+    if t.startswith("{"):
+        try:
+            d = json.loads(t)
+            if isinstance(d, dict) and isinstance(d.get("value"), str):
+                t = d["value"].strip()
+        except Exception:
+            m = re.search(r'"value"\s*:\s*"([^"]+)"', t)
+            if m:
+                t = m.group(1).strip()
+    return re.sub(r'^[\s"\'`]+|[\s"\'`,;]+$', "", t)
+
+
 def init_deepseek():
 
     global deepseek_model
 
-    token = read_text(
+    token = _czysty_token(read_text(
         TOKEN_FILE
-    ).strip()
+    ))
 
     if not token:
         print(
@@ -3671,9 +3688,9 @@ def init_deepseek():
         print(TOKEN_FILE)
         return False
 
-    token2 = read_text(
+    token2 = _czysty_token(read_text(
         TOKEN_FILE_2
-    ).strip()
+    ))
 
     _account_tokens[1] = token
     _account_tokens[2] = token2 or token
@@ -3685,7 +3702,10 @@ def init_deepseek():
             return "BRAK (pusty plik albo nie ma ~/" + plik.name + ")"
         if re.search(r"\s", t):
             return "UWAGA — w środku są spacje albo kilka linii (~/" + plik.name + ")"
-        return "OK (~/" + plik.name + ", " + _kawalek_klucza(t) + ", " + str(len(t)) + " znaków)"
+        _surowy = read_text(plik).strip()
+        _ocz = (" — oczyszczony z cudzysłowów/przecinka z localStorage, w pliku było "
+                + str(len(_surowy)) + " znaków") if _surowy != t else ""  # v480mz
+        return "OK (~/" + plik.name + ", " + _kawalek_klucza(t) + ", " + str(len(t)) + " znaków" + _ocz + ")"
     log("DEEPSEEK", "Klucz 1: " + _stan_klucza(token, TOKEN_FILE)
         + " | Klucz 2: " + _stan_klucza(token2, TOKEN_FILE_2)
         + " — sprawdzone tylko pliki, bez wysyłania czegokolwiek.")
@@ -6555,7 +6575,9 @@ def start_session(name, system_prompt):
         # opisu albo instrukcji poszla w nia jako pierwsza wiadomosc) —
         # od razu nowa rozmowa, zamiast "sesja niedostepna" przy kazdym
         # kolejnym wolaniu tej roli.
-        if _rozmowa_zerwana(error_text) and _load_session_state(name):
+        if (_rozmowa_zerwana(error_text) or (
+                name in _resume_unverified and not _wyglada_na_przeciazenie(error_text)
+                and not _odmowa_dostepu(error_text))) and _load_session_state(name):  # v480mz
             _clear_session_state(name)
             _resume_unverified.discard(name)
             log(
@@ -6918,7 +6940,7 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
                 _mt = plik.stat().st_mtime
             except Exception:
                 _mt = _mtime_przed
-            nowy = read_text(plik).strip()
+            nowy = _czysty_token(read_text(plik))
             if _mt != _mtime_przed and nowy and not re.search(r"\s", nowy):
                 _account_tokens[account] = nowy
                 if account == 1 and not read_text(TOKEN_FILE_2).strip():
@@ -6971,7 +6993,7 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
     _okno = 600 if time.time() - _token_czeka.get(account, od) < 3600 else 3600
     while time.time() - od < _okno:
         time.sleep(15)
-        nowy = read_text(plik).strip()
+        nowy = _czysty_token(read_text(plik))
         if nowy and nowy != stary and not re.search(r"\s", nowy):
             _account_tokens[account] = nowy
             if account == 1 and not read_text(TOKEN_FILE_2).strip():
@@ -7343,6 +7365,17 @@ def _wolno_zalozyc_nowa_po_bledzie(name):
         return False
     lista.append(teraz)
     return True
+
+
+def _prompt_roli(name):
+    """v480mz: poczatkowy prompt roli (ta sama mapa co przy restarcie)."""
+    return {
+        "MAIN": MAIN_PROMPT, "PLANNER": PLANNER_PROMPT, "RESEARCHER": RESEARCHER_PROMPT,
+        "CRITIC": CRITIC_PROMPT, "BROWSER": BROWSER_PROMPT, "CODE_REVIEWER": CODE_REVIEWER_PROMPT,
+        "CODE_FIXER": CODE_FIXER_PROMPT, "ENGINEER": ENGINEER_PROMPT,
+        "PROGRESS_ESTIMATOR": PROGRESS_ESTIMATOR_PROMPT, "WOJTEK": WOJTEK_PROMPT,
+        "ARBITER": ARBITER_PROMPT, "IGOR": IGOR_PROMPT,
+    }.get(name)
 
 
 def _rozmowa_zerwana(blad):
@@ -12426,6 +12459,27 @@ def _deepseek_jedna_rozmowa(name, message):
                         return "DEEPSEEK ERROR [" + name + "]: " + str(e)
                     _proby.powtorz()
                     continue
+
+                # v480mz: wznowiona rozmowa (z poprzedniego uruchomienia) nie
+                # przyjela pierwszej wiadomosci — np. token jest teraz z innego
+                # konta i tej rozmowy tam nie ma. Od razu nowa rozmowa z celem
+                # i stanem; to nie jest "zakladanie czatow w petli" (raz na
+                # role po starcie), wiec bez limitu restartow.
+                if name in _resume_unverified and attempt == 0:
+                    _resume_unverified.discard(name)
+                    _clear_session_state(name)
+                    log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": rozmowa z "
+                        "poprzedniego uruchomienia nie odpowiada (" + short(str(e), 120)
+                        + ") — np. token jest teraz z innego konta. Zaczynam nową rozmowę z "
+                        "celem i stanem pracy.")
+                    _prompt_wzn = _prompt_roli(name)
+                    if _prompt_wzn is not None:
+                        _goal_briefed.discard(name)
+                        _nowa = start_session(name, _prompt_wzn)
+                        if _nowa:
+                            session = _nowa
+                            _proby.powtorz()
+                            continue
 
                 # v480mx: inna odmowa serwera z kodem (40300 MISSING_HEADER
                 # itp.) — nowa rozmowa jej nie naprawi. Jedna spokojna

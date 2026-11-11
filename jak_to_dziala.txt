@@ -5274,3 +5274,13 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Założenie rozmowy (start_chat) też czeka na STOP.
      - Jawne limity: 'continue' 6, prośba o koniec 4, ta sama wiadomość
        3 limity; reset licznika limitów tylko po niepustej odpowiedzi.
+
+369. (v480mz) Token z innego konta i źle wklejony token (11.11, 12:36):
+     - Token wklejony z localStorage z cudzysłowami, przecinkiem albo
+       jako {"value":"…"} jest oczyszczany do samego tokena (start i
+       czekanie na nowy token); start mówi, że był oczyszczony.
+     - Rozmowa z poprzedniego uruchomienia, która nie przyjmuje pierwszej
+       wiadomości (np. token jest teraz z innego konta i tej rozmowy tam
+       nie ma), od razu zostaje zastąpiona nową rozmową z celem i stanem —
+       przed regułą odmowy z kodem i bez limitu restartów (raz na rolę).
+       Bez zmian: limity, STOP, odmowa dostępu.
