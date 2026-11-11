@@ -5303,3 +5303,16 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        błędy z klasą, niepewne, STOP, wznowienia, przerwy, czas odpowiedzi,
        długość rozmowy, ta sama treść do tej samej roli w 10 min.
        Raport: python3 ~/agent/agent.py --raport-ruchu [godziny].
+
+371. (v480nb) Dokańczanie odpowiedzi bez spamu (log drużyny 2, 11.11):
+     - Granica bloku kodu to ``` na początku linii; ``` w zdaniu (np.
+       „` ```markdown `”) nie robi już z pełnej odpowiedzi urwanej
+       (18:56: 4 zbędne prośby, 24 tys. znaków zamiast ~17).
+     - Gdy serwer mówi, że odpowiedź jest skończona (biz_code 22), a
+       urwanie widać tylko po wyglądzie tekstu: jedna prośba o dalszy
+       ciąg. Prawdziwe urwanie (status INCOMPLETE): do 4 dociśnięć.
+     - Prośba o dalszy ciąg mówi: jeśli było kompletne, odpisz
+       KOMPLETNA. Wtedy nic nie jest doklejane i nie ma kolejnych próśb.
+       „Dalszy ciąg” powtarzający już obecny tekst też kończy prośby.
+     - „invalid chat session id” = rozmowa zerwana (nowa rozmowa bez
+       limitu restartów); 12:56 role oddawały błąd przez limit.

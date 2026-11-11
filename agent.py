@@ -7378,6 +7378,8 @@ _PRZECIAZENIE_RE = re.compile(
 _ZERWANA_ROZMOWA_RE = re.compile(
     r"invalid\s+message\s+id|biz_code\"?\s*:\s*26|"
     r"session\s+not\s+found|chat\s+session.*not\s+exist|"
+    # v480nb: rozmowa z innego konta / skasowana — bieg 2026-11-11 12:56
+    r"invalid\s+chat\s+session\s+id|"
     # v480w: rozmowa dobila do limitu dlugosci na stronie — patrz
     # _deepseek_raw_post_with_action().
     r"context_length_exceeded|length\s+limit\s+reached",
@@ -10015,6 +10017,15 @@ def _domkniety_json(text):
         return False
 
 
+_PLOTEK_RE = re.compile(r"^[ \t]*```", re.MULTILINE)
+
+
+def _nieparzyste_plotki(t):
+    """v480nb: nieparzysta liczba ``` otwierajacych/zamykajacych blok (na
+    poczatku linii). ``` w srodku zdania to nie granica bloku."""
+    return len(_PLOTEK_RE.findall(str(t or ""))) % 2 == 1
+
+
 def _deepseek_looks_truncated(text, status):
 
     if status:
@@ -10060,7 +10071,10 @@ def _deepseek_looks_truncated(text, status):
     # Niedomkniety blok ``` to dowod, nie poszlaka — i dziala przy
     # KAZDEJ dlugosci. Tak wlasnie wygladaly dwa urwania z tego
     # logu ("# Proba 1:", "sed -i" — oba w srodku skryptu).
-    if stripped.count("```") % 2 == 1:
+    # v480nb: liczymy tylko ``` na poczatku linii — bieg 2026-11-11 18:56:
+    # Bartek napisal w zdaniu "` ```markdown `" i pelna odpowiedz (serwer:
+    # skonczona) dostala 4 prosby o dalszy ciag.
+    if _nieparzyste_plotki(stripped):
         return True, "niedomkniety blok ``` (kod urwany w polowie)"
 
     if len(stripped) < _TRUNCATION_MIN_LEN:
@@ -10293,7 +10307,7 @@ def _stitch_continuation(text, tail):
     # 129 ppm_c_v3_match.c, a druga czesc kodu poszla do osobnego bloku —
     # plik sie nie kompilowal. Kod laczy sie w jeden blok, bez zdania i bez
     # linii, ktore autor powtorzyl dla ciaglosci.
-    if text.count("```") % 2 == 1:
+    if _nieparzyste_plotki(text):  # v480nb: tylko ``` na poczatku linii
         # otwarcie z nazwa jezyka (```c, ```python) — zamkniecie jest gole;
         # przed nim najwyzej kilka linii zdania, bez sladu kodu
         _m_bl = re.match(r"((?:[^\n]*\n){0,4}?)[ \t]*```[A-Za-z][\w+-]*[ \t]*\n", tail)
@@ -10373,7 +10387,8 @@ def _ask_for_missing_tail(name, session, text, reason):
         "...\u201e" + koncowka + "\u201d\n\n"
         "To limit długości odpowiedzi, nie Twój błąd. Dopisz sam "
         "dalszy ciąg od tego miejsca — nie powtarzaj tego, co już "
-        "napisałeś, i nie zaczynaj od nowa."
+        "napisałeś, i nie zaczynaj od nowa. Jeśli Twoja odpowiedź była "
+        "już kompletna, odpisz tylko jednym słowem: KOMPLETNA."
     )
 
     try:
@@ -10397,6 +10412,20 @@ def _ask_for_missing_tail(name, session, text, reason):
         )
         return text, True
 
+    # v480nb: rola mowi, ze nic nie brakowalo — bierzemy odpowiedz tak, jak
+    # jest, bez doklejania i bez kolejnych prosb.
+    if _odpowiedz_kompletna(tail):
+        log("DEEPSEEK", name + ": na prośbę o dalszy ciąg odpowiada, że odpowiedź była "
+            "kompletna — biorę ją tak, jak jest.")
+        return text, False
+
+    # v480nb: "dalszy ciag" powtarza tekst, ktory juz jest — nic nowego
+    _pocz_t = str(tail).strip()[:200]
+    if len(_pocz_t) >= 80 and _pocz_t in str(text or ""):
+        log("DEEPSEEK", name + ": „dalszy ciąg” powtarza to, co już było — nie doklejam "
+            "i nie proszę dalej.")
+        return text, False
+
     sklejone = _stitch_continuation(text, tail)
 
     nadal, nadal_reason = _deepseek_looks_truncated(
@@ -10414,6 +10443,16 @@ def _ask_for_missing_tail(name, session, text, reason):
     )
 
     return sklejone, nadal
+
+
+def _odpowiedz_kompletna(tail):
+    """v480nb: krotka odpowiedz "KOMPLETNA" (albo jasne "nie ma dalszego
+    ciagu") na prosbe o dalszy ciag."""
+    t = str(tail or "").strip()
+    if len(t) > 300:
+        return False
+    return bool(re.search(r"\bKOMPLETN[AEY]\b|nie ma (?:żadnego |zadnego )?dalszego ci[ąa]gu",
+                          t, re.IGNORECASE))
 
 
 def _note_role_length_problem(name, truncated, length):
@@ -12073,6 +12112,7 @@ def _deepseek_jedna_rozmowa(name, message):
                 # (logi 31.10-6.11: 10 takich odmow, potem prawdziwe urwania
                 # kodu szly juz bez przycisku).
                 _ile_continue = 0  # v480my: jawny limit nacisniec na wiadomosc
+                _serwer_skonczyl = False  # v480nb: biz_code 22 — odpowiedz skonczona
                 while truncated and _continue_action_supported:
                     _ile_continue += 1
                     if _ile_continue > _CONTINUE_NA_WIADOMOSC_MAKS:
@@ -12165,6 +12205,7 @@ def _deepseek_jedna_rozmowa(name, message):
                         elif ("invalid message status" in str(continue_error)
                               or '"biz_code":22' in str(continue_error).replace(" ", "")):
 
+                            _serwer_skonczyl = True
                             # v480mk: serwer: ta odpowiedz nie jest
                             # INCOMPLETE, wiec przycisku nie ma — prosimy
                             # zwykla wiadomoscia (jak dotad), a przycisk
@@ -12216,11 +12257,17 @@ def _deepseek_jedna_rozmowa(name, message):
                     # dokonczen (bylo jedno). Koniec, gdy dokonczenie nic
                     # nie dokleja (pusty tekst, blad, ten sam ogon).
                     _ile_ogon = 0  # v480my: jawny limit prosb na wiadomosc
+                    # v480nb: serwer powiedzial, ze odpowiedz jest skonczona, a
+                    # urwanie widac tylko po poszlace (nie po statusie) — jedna
+                    # prosba wystarczy; drugie docisniecie tylko przy
+                    # prawdziwym urwaniu (status INCOMPLETE).
+                    _ogon_maks = (1 if (_serwer_skonczyl and not str(reason or "").startswith("status="))
+                                  else _OGON_NA_WIADOMOSC_MAKS)
                     while truncated:
                         _ile_ogon += 1
-                        if _ile_ogon > _OGON_NA_WIADOMOSC_MAKS:
+                        if _ile_ogon > _ogon_maks:
                             log("DEEPSEEK", name + ": o dalszy ciąg tej odpowiedzi prosiłem już "
-                                + str(_OGON_NA_WIADOMOSC_MAKS) + " razy — zostaje, jak jest.")
+                                + str(_ogon_maks) + " razy — zostaje, jak jest.")
                             break
                         _przed = len(str(text or ""))
                         text, truncated = _ask_for_missing_tail(
