@@ -5239,3 +5239,23 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        godzinie idą raz na godzinę zamiast co 10 min.
      - Bez zmian celowo: program nie udaje człowieka i nie obchodzi
        blokad serwisu.
+
+367. (v480mx) Użytkownik 11.11 po zawieszeniu obu kont: AEL-MINI nie może
+     sam pogarszać sytuacji. Zasady wysyłania do DeepSeeka:
+     - Odmowa dostępu (INVALID_TOKEN, 401, kody 40001-40199, "suspend",
+       "violation of user policies", "banned"): konto staje od razu. Bez
+       nowej rozmowy, bez prób tym samym tokenem. Wiadomość czeka; wraca
+       po zapisie pliku z tokenem (nowy albo ten sam — każdy zapis to
+       "spróbuj"). Też przy zakładaniu rozmowy.
+     - "Za dużo wiadomości" (rate_limit_reached): pierwszy raz przerwa
+       całego telefonu i JEDNA próba tej samej wiadomości. Drugi raz bez
+       żadnej udanej wiadomości pomiędzy (dowolna rola, dowolny proces):
+       STOP całego telefonu — nic nie idzie, aż użytkownik zrobi
+       touch ~/AEL_DEEPSEEK_WZNOW (powiadomienie na telefonie). Po
+       wznowieniu jedna wiadomość; kolejny limit znowu STOP.
+     - Inna odmowa z kodem (np. 40300 MISSING_HEADER): bez nowej rozmowy;
+       jedna spokojna próba po 10 min, potem błąd.
+     - Nowa rozmowa po błędzie: najwyżej 2 na konto w 30 min (wyjątek:
+       rozmowa, której serwer już nie zna — długość, zerwana).
+     - Czat testowy po błędach serwera nie jest ponawiany po limicie.
+     - Brak internetu: bez zmian (czekanie bez zapytań do DeepSeeka).

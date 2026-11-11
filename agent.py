@@ -6542,6 +6542,10 @@ def start_session(name, system_prompt):
         # siec i zakladamy (albo wznawiamy) te sama rozmowe jeszcze raz.
         if _czekaj_na_internet(name, e):
             return start_session(name, system_prompt)
+        # v480mx: odmowa dostepu — konto staje, bez prob, do zapisu tokena
+        if _odmowa_dostepu(error_text):
+            _zatrzymaj_konto(name, error_text)
+            return start_session(name, system_prompt)
 
         # v480lt: wznowiona rozmowa, ktorej serwer juz nie zna (zmiana
         # opisu albo instrukcji poszla w nia jako pierwsza wiadomosc) —
@@ -6843,13 +6847,87 @@ def _koniec_czekania_na_token(account):
         pass
 
 
-def _czekaj_na_nowy_token(name, account, token_file_name):
+def _plik_tokena_konta(account):
+    return TOKEN_FILE.name if account == 1 else TOKEN_FILE_2.name
+
+
+def _zatrzymaj_konto(name, blad):
+    """v480mx: serwer odmowil dostepu (INVALID_TOKEN, 401, zawieszone
+    konto). Konto staje od razu: bez nowej rozmowy, bez prob tym samym
+    tokenem. Czekamy, az uzytkownik zapisze plik z tokenem (nowy albo ten
+    sam — kazdy zapis to "sprobuj"). Wolajacy ponawia potem te sama
+    wiadomosc w tej samej rozmowie. Bieg 2026-11-11: po INVALID_TOKEN
+    program zakladal nowa rozmowe, a potem co 10 min probowal przez 6 h."""
+    account = _account_of(name)
+    return _czekaj_na_nowy_token(name, account, _plik_tokena_konta(account),
+                                 bez_prob=True, blad=blad)
+
+
+def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad=""):
     """v480lm: token konta nie dziala — czekamy, az uzytkownik wpisze nowy
     do pliku (program bierze go sam, bez restartu). Najdluzej 10 min na
-    raz, potem jedna proba tym samym tokenem. Zawsze True (ponow)."""
+    raz, potem jedna proba tym samym tokenem. Zawsze True (ponow).
+    v480mx: bez_prob=True (serwer wprost odmowil dostepu) — zadnej proby
+    obecnym tokenem; czekamy na zapis pliku z tokenem, choc by ten sam."""
     plik = HOME / token_file_name
     stary = _account_tokens.get(account) or ""
+    try:
+        _mtime_przed = plik.stat().st_mtime
+    except Exception:
+        _mtime_przed = 0.0
     pierwszy = account not in _token_czeka
+    if pierwszy and bez_prob:
+        _token_czeka[account] = time.time()
+        log(
+            "DEEPSEEK",
+            f"Konto {account} ({name}): DeepSeek odmówił dostępu ("
+            + short(str(blad or ""), 120) + "). Zatrzymuję to konto od razu: nie "
+            "zakładam nowych rozmów i nie próbuję tym samym tokenem, żeby nie dokładać "
+            "zapytań. Niedokończona wiadomość czeka i pójdzie, gdy konto wróci. Jak "
+            "naprawić: zaloguj się na chat.deepseek.com na TYM koncie. Gdy strona "
+            "pokazuje zawieszenie konta, trzeba poczekać do podanej tam daty. Potem "
+            f"zapisz userToken do ~/{token_file_name} (nowy albo ten sam — każdy zapis "
+            "pliku to sygnał „spróbuj”) — program weźmie go sam, bez restartu."
+        )
+        try:
+            subprocess.run(
+                ["termux-notification", "--id", "ael_token_" + str(account),
+                 "-t", "AEL: DeepSeek odmówił dostępu, konto " + str(account)
+                 + (" (drużyna " + _DRUZYNA + ")" if _DRUZYNA else ""),
+                 "-c", "Konto zatrzymane. Po zalogowaniu zapisz token do ~/"
+                 + token_file_name + " — program wtedy wróci."],
+                capture_output=True, timeout=15)
+        except Exception:
+            pass
+        try:
+            _plik_czekania_na_token(account).write_text(json.dumps({
+                "konto": account, "plik": token_file_name, "druzyna": _DRUZYNA,
+                "od": int(_token_czeka[account]), "pid": os.getpid()}), encoding="utf-8")
+        except Exception:
+            pass
+        skopiuj_przebieg_na_telefon()
+    if bez_prob:
+        _ost_log = time.time()
+        while True:
+            time.sleep(15)
+            try:
+                _mt = plik.stat().st_mtime
+            except Exception:
+                _mt = _mtime_przed
+            nowy = read_text(plik).strip()
+            if _mt != _mtime_przed and nowy and not re.search(r"\s", nowy):
+                _account_tokens[account] = nowy
+                if account == 1 and not read_text(TOKEN_FILE_2).strip():
+                    _account_tokens[2] = nowy
+                log("DEEPSEEK", "Plik z tokenem konta " + str(account) + " zapisany ("
+                    + _kawalek_klucza(nowy) + (", ten sam token" if nowy == stary else ", nowy token")
+                    + ") — jedna próba tej samej wiadomości.")
+                return True
+            if time.time() - _ost_log >= 3600:
+                _ost_log = time.time()
+                log("DEEPSEEK", "Konto " + str(account) + " nadal zatrzymane (od "
+                    + str(int((time.time() - _token_czeka.get(account, _ost_log)) / 60))
+                    + f" min) — czekam na zapis ~/{token_file_name}, nic nie wysyłam.")
     if pierwszy:
         _token_czeka[account] = time.time()
         log(
@@ -7003,8 +7081,13 @@ def _czat_testowy_odpowiada(name):
         # v480lt: "za duzo wiadomosci" to tez nie "konto nie odpowiada" —
         # przerwa telefonu i ta sama proba po niej, bez 2 h przerwy konta
         if _wyglada_na_przeciazenie(str(e)) and not _rozmowa_zerwana(str(e)):
+            # v480mx: czat testowy to dodatkowe zapytanie — po limicie
+            # nie ponawiamy go, tylko przerwa telefonu i "nie wiem".
             _limit_telefonu(name, str(e))
-            return _czat_testowy_odpowiada(name)
+            return False
+        if _odmowa_dostepu(str(e)):
+            _zatrzymaj_konto(name, str(e))
+            return True
         log("DEEPSEEK", "Czat testowy nie odpowiedział: " + short(str(e), 200))
         return False
 
@@ -7195,6 +7278,66 @@ _ZERWANA_ROZMOWA_RE = re.compile(
     r"context_length_exceeded|length\s+limit\s+reached",
     re.IGNORECASE
 )
+
+
+# v480mx: uzytkownik (2026-11-11, po zawieszeniu obu kont): jedna proba
+# wyslania, ponowienia tylko tam, gdzie sa bezpieczne, natychmiastowe
+# zatrzymanie po odmowie dostepu, zadnych nowych rozmow w petli, a
+# niedokonczone zadanie czeka w pamieci.
+#
+# Odmowa dostepu: serwer mowi, ze tego konta / tokena nie wpusci. Nowa
+# rozmowa ani kolejna proba tym samym tokenem nic tu nie da — program
+# staje na tym koncie i czeka, az uzytkownik zapisze plik z tokenem.
+_ODMOWA_DOSTEPU_RE = re.compile(
+    r"INVALID_TOKEN|\"code\"\s*:\s*40(?:00[1-9]|1\d\d)\b|\b401\b|unauthori[sz]ed|"
+    r"suspend|violation of user policies|\bbann?ed\b|account\s+(?:is\s+)?(?:disabled|locked|blocked)",
+    re.IGNORECASE
+)
+# Inna odmowa serwera z kodem (np. 40300 MISSING_HEADER): serwer odrzucil
+# TE prosbe. Nowa rozmowa jej nie naprawia — jedna spokojna proba pozniej.
+_ODMOWA_SERWERA_RE = re.compile(r"\"code\"\s*:\s*4\d{4}\b|\b403\b|forbidden", re.IGNORECASE)
+
+
+def _odmowa_dostepu(blad):
+    return bool(_ODMOWA_DOSTEPU_RE.search(str(blad or "")))
+
+
+def _odmowa_serwera(blad):
+    t = str(blad or "")
+    return bool(_ODMOWA_SERWERA_RE.search(t)) and not _odmowa_dostepu(t)
+
+
+def _po_limicie(name, blad, ktory):
+    """v480mx: "za duzo wiadomosci" po raz `ktory` dla tej samej wiadomosci.
+    Uzytkownik (2026-11-11, 10:28): po rate_limit_reached nie ponawiac
+    bezwarunkowo. Pierwszy limit — przerwa calego telefonu i JEDNA proba;
+    drugi limit z rzedu (bez zadnej udanej wiadomosci pomiedzy, w dowolnej
+    roli i w dowolnym procesie) — STOP calego telefonu do wznowienia przez
+    uzytkownika (patrz _stop_telefonu)."""
+    _limit_telefonu(name, blad, drugi_dla_wiadomosci=(ktory >= 2))
+
+
+# Nowa rozmowa po bledzie: najwyzej tyle na konto w oknie (patrz
+# _wolno_zalozyc_nowa_po_bledzie). Wiecej nowych czatow w krotkim czasie
+# to wlasnie "tworzenie sesji w petli".
+_RESTARTY_PO_BLEDZIE_MAKS = 2
+_RESTARTY_PO_BLEDZIE_OKNO_S = 1800.0
+_restarty_po_bledzie = {}
+
+
+def _wolno_zalozyc_nowa_po_bledzie(name):
+    account = _account_of(name)
+    teraz = time.time()
+    lista = [t for t in _restarty_po_bledzie.get(account, []) if teraz - t < _RESTARTY_PO_BLEDZIE_OKNO_S]
+    _restarty_po_bledzie[account] = lista
+    if len(lista) >= _RESTARTY_PO_BLEDZIE_MAKS:
+        log("DEEPSEEK", "Konto " + str(account) + ": w ostatnich "
+            + str(int(_RESTARTY_PO_BLEDZIE_OKNO_S // 60)) + " min były już "
+            + str(len(lista)) + " nowe rozmowy po błędach — nie zakładam kolejnej. "
+            + str(name) + " oddaje błąd, a następna wiadomość pójdzie w tej samej rozmowie.")
+        return False
+    lista.append(teraz)
+    return True
 
 
 def _rozmowa_zerwana(blad):
@@ -7697,7 +7840,11 @@ _TELEFON_ODBUDOWA_S = 900.0
 _TELEFON_ODBUDOWA_KROK = 5
 _TELEFON_CZEKA_WAZNE_S = 90.0
 # gdy wspolny plik nie dziala: przerwa po limicie tylko w tym procesie
-_telefon_lokalnie = {"pauza_do": 0.0, "nr": 0, "zepsuty": False}
+_telefon_lokalnie = {"pauza_do": 0.0, "nr": 0, "zepsuty": False, "stop_od": 0.0}
+
+
+class _StopTelefonu(Exception):
+    """v480mx: wewnetrzny sygnal _limit_telefonu -> STOP."""
 
 
 class _ZamekTelefonu:
@@ -7796,6 +7943,14 @@ def _czekaj_na_telefon(name, znaki=0):
     kto = _kto_wysyla(name)
     waga = _waga_wiadomosci(znaki)
     powiedziane = set()
+    # v480mx: STOP po limicie — nic nie idzie do wznowienia przez uzytkownika
+    _stop_log = 0.0
+    while _stop_telefonu_trwa():
+        if time.time() - _stop_log >= 3600:
+            _stop_log = time.time()
+            log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + " czeka: DeepSeek "
+                "zatrzymany na całym telefonie po limicie — wznowienie: touch ~/" + _PLIK_WZNOW + ".")
+        time.sleep(20)
     while True:
         try:
             with _ZamekTelefonu():
@@ -7863,7 +8018,7 @@ def _czekaj_na_telefon(name, znaki=0):
         time.sleep(min(max(czekaj, 0.25), 15.0) if czekaj > 0 else 1.0)
 
 
-def _limit_telefonu(name, blad=""):
+def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
     """
     DeepSeek odpowiedzial "za duzo wiadomosci": przerwa dla calego
     telefonu (10 min, kolejny limit z rzedu x1,5, najwyzej 30 min) i
@@ -7875,8 +8030,17 @@ def _limit_telefonu(name, blad=""):
         with _ZamekTelefonu():
             st = _telefon_czytaj()
             teraz = time.time()
-            if float(st.get("pauza_do") or 0) > teraz + 5:
+            if float(st.get("pauza_do") or 0) > teraz + 5 or st.get("stop_od"):
                 return
+            # v480mx: drugi limit bez udanej wiadomosci pomiedzy = STOP
+            if int(st.get("pauza_nr") or 0) >= 1 or drugi_dla_wiadomosci:
+                _stop = True
+            else:
+                _stop = False
+            if _stop:
+                st["pauza_nr"] = int(st.get("pauza_nr") or 0) + 1
+                _telefon_zapisz(st)
+                raise _StopTelefonu()
             nr = int(st.get("pauza_nr") or 0) + 1
             dl = min(_TELEFON_PRZERWA_S * (1.5 ** (nr - 1)), _TELEFON_PRZERWA_MAKS_S)
             st.update(pauza_do=teraz + dl, pauza_nr=nr, pauza_kto=kto, pauza_od=teraz)
@@ -7887,7 +8051,15 @@ def _limit_telefonu(name, blad=""):
                 if nowy < stary:
                     st.update(budzet=nowy, budzet_kiedy=teraz, budzet_ciety=teraz)
             _telefon_zapisz(st)
+    except _StopTelefonu:
+        _stop_telefonu(name, "DeepSeek drugi raz z rzędu odpowiedział „za dużo wiadomości” ("
+                       + short(str(blad or ""), 100) + "), mimo przerwy po pierwszym.")
+        return
     except Exception as e:
+        if _telefon_lokalnie["nr"] >= 1 or drugi_dla_wiadomosci:
+            _telefon_lokalnie["nr"] += 1
+            _stop_telefonu(name, "DeepSeek drugi raz z rzędu odpowiedział „za dużo wiadomości”.")
+            return
         dl = min(_TELEFON_PRZERWA_S * (1.5 ** _telefon_lokalnie["nr"]), _TELEFON_PRZERWA_MAKS_S)
         _telefon_lokalnie["nr"] += 1
         _telefon_lokalnie["pauza_do"] = time.time() + dl
@@ -7900,9 +8072,100 @@ def _limit_telefonu(name, blad=""):
         + ", konto " + str(_account_of(name)) + "). Liczy się cały telefon, więc obie drużyny "
         "i Sędzia robią przerwę " + _min_s(dl) + " (do "
         + datetime.fromtimestamp(time.time() + dl).strftime("%H:%M") + ") — bez ponawiania w tym "
-        "czasie; potem idzie ta sama wiadomość, nic nie przepada."
+        "czasie; potem JEDNA próba tej samej wiadomości (kolejny limit zatrzyma telefon do "
+        "Twojego wznowienia), nic nie przepada."
         + (" Wspólne tempo: z " + str(stary) + " na " + str(nowy) + " wiadomości na godzinę "
            "(jedna co ~" + str(int(_OKNO_BUDZETU / na_program(nowy))) + " s)." if nowy < stary else ""))
+
+
+_PLIK_WZNOW = "AEL_DEEPSEEK_WZNOW"
+
+
+def _stop_telefonu(name, powod):
+    """v480mx: STOP wysylania do DeepSeeka na calym telefonie (obie druzyny
+    i Sedzia), az uzytkownik utworzy ~/AEL_DEEPSEEK_WZNOW. Nic nie przepada:
+    kazda rola czeka z niewyslana wiadomoscia."""
+    teraz = time.time()
+    try:
+        with _ZamekTelefonu():
+            st = _telefon_czytaj()
+            if st.get("stop_od"):
+                return
+            st.update(stop_od=teraz, stop_kto=_kto_wysyla(name), stop_powod=str(powod)[:300])
+            _telefon_zapisz(st)
+    except Exception:
+        _telefon_lokalnie["stop_od"] = teraz
+    try:
+        (HOME / _PLIK_WZNOW).unlink()
+    except Exception:
+        pass
+    log("DEEPSEEK", "STOP: " + str(powod) + " Cały telefon (obie drużyny i Sędzia) przestaje "
+        "wysyłać do DeepSeeka i nie ponawia sam. Niedokończone wiadomości czekają. Wznowienie, "
+        "gdy uznasz, że można: touch ~/" + _PLIK_WZNOW + " — wtedy pójdzie jedna wiadomość, a "
+        "kolejny limit znowu zatrzyma.")
+    try:
+        subprocess.run(["termux-notification", "--id", "ael_deepseek_stop", "-t",
+                        "AEL: DeepSeek zatrzymany (limit)", "-c",
+                        "Wznów: touch ~/" + _PLIK_WZNOW], capture_output=True, timeout=15)
+    except Exception:
+        pass
+    try:
+        skopiuj_przebieg_na_telefon()
+    except Exception:
+        pass
+
+
+def _stop_telefonu_trwa():
+    """True, gdy STOP trwa. Plik ~/AEL_DEEPSEEK_WZNOW go konczy (raz)."""
+    try:
+        with _ZamekTelefonu():
+            st = _telefon_czytaj()
+            od = float(st.get("stop_od") or 0)
+            if not od:
+                return False
+            p = HOME / _PLIK_WZNOW
+            if p.exists():
+                st.pop("stop_od", None)
+                st.pop("stop_kto", None)
+                st.pop("stop_powod", None)
+                st["pauza_nr"] = 1  # nastepny limit od razu znowu STOP
+                st["pauza_do"] = 0
+                _telefon_zapisz(st)
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+                log("DEEPSEEK", "Wznowienie DeepSeeka (~/" + _PLIK_WZNOW + ") — jedna wiadomość; "
+                    "kolejny limit zatrzyma znowu.")
+                return False
+            return True
+    except Exception:
+        if _telefon_lokalnie.get("stop_od"):
+            if (HOME / _PLIK_WZNOW).exists():
+                _telefon_lokalnie["stop_od"] = 0
+                try:
+                    (HOME / _PLIK_WZNOW).unlink()
+                except Exception:
+                    pass
+                return False
+            return True
+        return False
+
+
+def _przerwa_telefonu(name, sekundy, powod):
+    """v480mx: przerwa calego telefonu (obie druzyny i Sedzia) o zadanej
+    dlugosci — wspolny plik tempa, jak przy _limit_telefonu."""
+    do = time.time() + float(sekundy)
+    try:
+        with _ZamekTelefonu():
+            st = _telefon_czytaj()
+            if float(st.get("pauza_do") or 0) < do:
+                st.update(pauza_do=do, pauza_kto=_kto_wysyla(name), pauza_od=time.time())
+                _telefon_zapisz(st)
+    except Exception:
+        _telefon_lokalnie["pauza_do"] = max(_telefon_lokalnie["pauza_do"], do)
+    log("DEEPSEEK", "DeepSeek: " + powod + ". Cały telefon czeka do "
+        + datetime.fromtimestamp(do).strftime("%H:%M") + "; potem ta sama wiadomość, nic nie przepada.")
 
 
 def _telefon_po_sukcesie(name):
@@ -7967,6 +8230,7 @@ def _wyslij_w_tempie(name, session, tekst, odczekane=False):
     """
     if not odczekane:
         _deepseek_pace(name, len(str(tekst or "")))
+    _limity = 0
     while True:
         try:
             return _deepseek_send_experimental(name, session, tekst)
@@ -7974,7 +8238,9 @@ def _wyslij_w_tempie(name, session, tekst, odczekane=False):
             if not (_wyglada_na_przeciazenie(str(e))
                     and not _rozmowa_zerwana(str(e))):
                 raise
-            _limit_telefonu(name, str(e))
+            # v480mx: po 3 limitach z rzedu jedna proba na godzine
+            _limity += 1
+            _po_limicie(name, str(e), _limity)
             _deepseek_pace(name, len(str(tekst or "")))
 
 
@@ -11086,6 +11352,8 @@ def _deepseek_jedna_rozmowa(name, message):
                 )
 
         _proby = _ProbyDeepSeek(2)
+        _limity_tej = 0   # v480mx: "za duzo wiadomosci" dla tej wiadomosci
+        _odmowy_tej = 0   # v480mx: odmowy serwera z kodem dla tej wiadomosci
 
         for attempt in _proby:
 
@@ -11906,14 +12174,35 @@ def _deepseek_jedna_rozmowa(name, message):
                 # odpowiedzi i bez kasowania wznowionej rozmowy — limit
                 # to nie zepsuta rozmowa (bieg 2026-11-02 20:56: Ela po
                 # restarcie stracila przez limit cala historie).
+                # v480mx: odmowa dostepu — konto staje od razu (bez nowej
+                # rozmowy); po zapisie tokena ta sama wiadomosc tu.
+                if _odmowa_dostepu(str(e)):
+                    _zatrzymaj_konto(name, str(e))
+                    _proby.powtorz()
+                    continue
+
                 if (
                     _wyglada_na_przeciazenie(str(e))
                     and not _rozmowa_zerwana(str(e))
                 ):
 
-                    _limit_telefonu(name, str(e))
+                    _limity_tej += 1
+                    _po_limicie(name, str(e), _limity_tej)
                     _proby.powtorz()
                     continue
+
+                # v480mx: inna odmowa serwera z kodem (40300 MISSING_HEADER
+                # itp.) — nowa rozmowa jej nie naprawi. Jedna spokojna
+                # proba w tej samej rozmowie po 10 min, potem blad.
+                if _odmowa_serwera(str(e)):
+                    if not _odmowy_tej:
+                        _odmowy_tej += 1
+                        _przerwa_telefonu(name, 600, "serwer odrzucił wiadomość ("
+                                          + short(str(e), 100) + ") — nowa rozmowa tego nie "
+                                          "naprawi, więc jedna spokojna próba później")
+                        _proby.powtorz()
+                        continue
+                    return "DEEPSEEK ERROR [" + name + "]: " + str(e)
 
                 if name in _resume_unverified:
 
@@ -11945,7 +12234,11 @@ def _deepseek_jedna_rozmowa(name, message):
                 # v480lt: samo "za szybko" obsluguje przerwa telefonu
                 # wyzej (_limit_telefonu) — tu dochodza inne bledy.
 
-                if attempt == 0:
+                # v480mx: nowa rozmowa po bledzie najwyzej 2 razy na
+                # konto w 30 min — bez zakladania czatow w petli. Rozmowa,
+                # ktorej serwer juz nie zna (dlugosc, zerwana), dostaje
+                # nowa zawsze — bez niej rola nie ma gdzie pisac.
+                if attempt == 0 and (_rozmowa_zerwana(str(e)) or _wolno_zalozyc_nowa_po_bledzie(name)):
 
                     # Pierwsza awaria — próba restartu sesji.
                     log(
