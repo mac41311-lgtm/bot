@@ -5215,3 +5215,27 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        tylko "TASK oddaje dłuższą robotę Gemini, który ma te same
        narzędzia", stąd zadania typu "napisz plik test_sanity.py".
      - Zachowanie programu bez zmian (odmowa BRAK_KODU_DO_ZAPISU).
+
+366. (v480mw) Z logów 10/11.11 (zawieszone konta DeepSeek, prywatność):
+     - Karta użytkownika w Chrome (prawdziwa strona, której program nie
+       otwierał) nie jest kartą do pracy: narzędzia chrome_ jej nie
+       czytają, nie zmieniają i nie zamykają — ani wskazanej po tab_id /
+       contains, ani wziętej "z wierzchu", gdy wskazanej karty już nie
+       ma (bieg 00:21, drużyna 2: chrome_execute_js poszło do prywatnej
+       rozmowy użytkownika). Zamiast niej karta programu, a gdy takiej
+       nie ma — odmowa z radą (chrome_open otwiera osobną kartę z tym
+       samym zalogowaniem).
+     - W spisie kart dla zespołu (stan kroku, chrome_tabs, chrome_close)
+       karta użytkownika to tylko "[id] karta użytkownika (witryna)" —
+       bez tytułu i adresu (tytuł prywatnej rozmowy szedł do DeepSeeka).
+     - Karty programu są pamiętane w ~/.ael_karty_programu.json (także po
+       przeładowaniu); karta, która powstała w trakcie chrome_click /
+       chrome_type / chrome_execute_js / chrome_open, jest kartą
+       programu; strony localhost i puste karty nigdy nie są "użytkownika".
+     - Zmienna "top = …" w python3 -c nie zamienia już komendy na
+       "top -b -n 1" (ocena bez programu w cudzysłowie).
+     - Token konta nie działa: komunikat mówi też o zawieszeniu konta
+       (nowy token wtedy nie pomoże), a próby obecnym tokenem po pierwszej
+       godzinie idą raz na godzinę zamiast co 10 min.
+     - Bez zmian celowo: program nie udaje człowieka i nie obchodzi
+       blokad serwisu.

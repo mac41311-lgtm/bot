@@ -6858,8 +6858,13 @@ def _czekaj_na_nowy_token(name, account, token_file_name):
             "prawdopodobnie WYGASŁ albo jest nieprawidłowy. Wstrzymuję pracę na tym "
             "koncie i czekam. Jak naprawić: zaloguj się na chat.deepseek.com na TYM "
             "koncie, skopiuj świeży userToken z localStorage i wpisz go do "
-            f"~/{token_file_name} — program weźmie go sam, bez restartu. Co 10 min "
-            "spróbuję jeszcze raz obecnym tokenem."
+            f"~/{token_file_name} — program weźmie go sam, bez restartu. "
+            # v480mw: ten sam błąd daje konto zawieszone przez DeepSeek
+            # (2026-11-11: oba konta, 6 h prób co 10 min na zawieszonym koncie).
+            "Ten sam błąd daje też konto ZAWIESZONE przez DeepSeek: po zalogowaniu "
+            "w przeglądarce strona pokazuje wtedy komunikat z datą końca zawieszenia "
+            "— nowy token nic wtedy nie zmieni, trzeba poczekać do tej daty. Przez "
+            "pierwszą godzinę próbuję obecnym tokenem co 10 min, potem raz na godzinę."
         )
         try:
             subprocess.run(
@@ -6880,7 +6885,9 @@ def _czekaj_na_nowy_token(name, account, token_file_name):
             pass
         skopiuj_przebieg_na_telefon()
     od = time.time()
-    while time.time() - od < 600:
+    # v480mw: po godzinie bez skutku proba raz na godzine, nie co 10 min.
+    _okno = 600 if time.time() - _token_czeka.get(account, od) < 3600 else 3600
+    while time.time() - od < _okno:
         time.sleep(15)
         nowy = read_text(plik).strip()
         if nowy and nowy != stary and not re.search(r"\s", nowy):
@@ -18722,7 +18729,7 @@ def chrome_summary(budz=True):
 
     lines = []
 
-    for tab in tabs:
+    for tab in _karty_dla_zespolu(tabs):  # v480mw
 
         lines.append(
             f"[{tab['id']}] "
@@ -18755,7 +18762,7 @@ def _karta_z_tym_adresem(url):
 
     try:
         for karta in chrome_tabs():
-            if _ta_sama_strona(karta.get("url"), url):
+            if _ta_sama_strona(karta.get("url"), url) and not _karta_uzytkownika(karta):
                 return karta
     except Exception:
         pass
@@ -18879,6 +18886,15 @@ _ostatnio_aktywna_karta = [None]
 # v469: find_tab() wzial inna karte niz wskazana — dispatch_tool()
 # dopisuje to do wyniku narzedzia jako "karta".
 _uwaga_o_karcie = [None]
+# v480mw: czemu find_tab() nie dal zadnej karty (karta uzytkownika).
+_powod_braku_karty = [None]
+
+
+def _brak_karty():
+    return _powod_braku_karty[0] or (
+        "Brak istniejącej karty — otwórz stronę przez chrome_open(url); "
+        "chrome_tabs pokaże, jakie karty są teraz."
+    )
 
 
 def _aktywuj_karte(tab):
@@ -18945,6 +18961,15 @@ def find_tab(
 
     tab = _find_tab_bez_aktywacji(tab_id, contains)
 
+    # v480mw: karta uzytkownika nie jest karta do pracy — ani wskazana,
+    # ani wzieta "z wierzchu". Zamiast niej karta programu, a gdy takiej
+    # nie ma, narzedzie mowi, co zrobic (patrz _brak_karty()).
+    _powod_braku_karty[0] = None
+    _odrzucona = None
+    if tab is not None and _karta_uzytkownika(tab):
+        _odrzucona = tab
+        tab = None
+
     # v469: bieg 2026-09-30, kroki 60, 61, 64 — MAIN podal tab_id=1614,
     # a tej karty juz nie bylo (Chrome zamknal ja przy porzadkach), wiec
     # chrome_type, chrome_execute_js i chrome_click wrocily z "Brak
@@ -18956,13 +18981,37 @@ def find_tab(
     # regula, co bez tab_id — v468), a wynik mowi o zamianie.
     # chrome_close wola _find_tab_bez_aktywacji wprost — nigdy nie
     # zamknie karty innej niz wskazana.
-    if tab is None and (tab_id or contains):
+    if tab is None and (tab_id or contains or _odrzucona is not None):
 
         tab = _find_tab_bez_aktywacji(None, None)
 
+        if tab is not None and _karta_uzytkownika(tab):
+            # v480mw: z wierzchu wyszla karta uzytkownika — bierzemy
+            # pierwsza karte, ktora nia nie jest, a gdy zadnej nie ma, nic.
+            _odrzucona = _odrzucona or tab
+            tab = None
+            try:
+                for _k in chrome_tabs():
+                    if not _karta_uzytkownika(_k):
+                        tab = _k
+                        break
+            except Exception:
+                tab = None
+
+        if tab is None and _odrzucona is not None:
+            _powod_braku_karty[0] = (
+                "Karta " + str(_odrzucona.get("id")) + " to " + _opis_karty_uzytkownika(_odrzucona)
+                + ", a własnej karty program teraz nie ma. Otwórz stronę przez "
+                "chrome_open(url) — powstanie osobna karta (z tym samym zalogowaniem "
+                "w Chrome), na której działają wszystkie narzędzia chrome_."
+            )
+            log("CHROME", _powod_braku_karty[0])
+
         if tab is not None:
 
-            if tab_id and not contains:
+            if _odrzucona is not None:
+                _co = "Karta " + str(_odrzucona.get("id")) + " to " + _opis_karty_uzytkownika(_odrzucona)
+            elif tab_id and not contains:
                 _co = "Karty " + str(tab_id) + " już nie ma"
             elif tab_id:
                 _co = (
@@ -19877,18 +19926,113 @@ def _karta_po_am_start(url, karty_przed, limit=12.0, na_koniec=True):
         or _find_tab_bez_aktywacji(None, None)
     )
 
+    # v480mw: karta, ktora byla juz przed `am start` i nie jest karta
+    # programu, to nie jest "nowo otwarta strona" (bieg 2026-11-11 00:21:
+    # wynik chrome_open pokazal prywatna karte uzytkownika).
+    if karta is not None and _karta_uzytkownika(karta) and (
+        not karty_przed or str(karta.get("id")) in karty_przed
+    ):
+        if karty_przed or _witryna(karta.get("url")) != _witryna(url):
+            karta = None
+
     if karta is not None:
         _aktywuj_karte(karta)
 
     return karta
 
 
-_karty_programu = set()
+class _KartyProgramu(set):
+    """v480mw: karty, ktore otworzyl program (obie druzyny), pamietane
+    takze po przeladowaniu programu — plik ~/.ael_karty_programu.json."""
+
+    _PLIK = ".ael_karty_programu.json"
+
+    def _sciezka(self):
+        return HOME / self._PLIK
+
+    def wczytaj(self):
+        try:
+            for k in json.loads(self._sciezka().read_text(encoding="utf-8")):
+                set.add(self, str(k))
+        except Exception:
+            pass
+
+    def add(self, kid):
+        kid = str(kid or "")
+        if not kid or kid in self:
+            return
+        set.add(self, kid)
+        try:
+            self.wczytaj()  # druga druzyna mogla dopisac swoje
+            sc = self._sciezka()
+            tmp = sc.with_name(sc.name + ".tmp" + str(os.getpid()))
+            tmp.write_text(json.dumps(sorted(self)[-400:]), encoding="utf-8")
+            os.replace(str(tmp), str(sc))
+        except Exception:
+            pass
+
+
+_karty_programu = _KartyProgramu()
+_karty_programu.wczytaj()
 
 
 def _witryna(adres):
     m = re.match(r"(?i)^https?://([^/?#]+)", str(adres or "").strip())
     return m.group(1).lower() if m else ""
+
+
+_WITRYNA_LOKALNA_RE = re.compile(r"(?i)^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])(:\d+)?$")
+
+
+def _karta_uzytkownika(tab):
+    """v480mw: karta z prawdziwa strona, ktorej program nie otwieral — czyli
+    otwarta przez uzytkownika. Bieg 2026-11-11 00:21 (druzyna 2): po "Karty
+    2082 juz nie ma" narzedzie wzielo karte z wierzchu, a byla nia prywatna
+    rozmowa uzytkownika; jej tytul szedl tez do zespolu w spisie kart.
+    Program takiej karty nie czyta, nie zmienia i nie pokazuje jej tytulu.
+    Karty programu, puste karty i strony z tego telefonu (localhost) to nie
+    karty uzytkownika."""
+    try:
+        if str((tab or {}).get("id") or "") in _karty_programu:
+            return False
+        w = _witryna((tab or {}).get("url"))
+        return bool(w) and not _WITRYNA_LOKALNA_RE.match(w)
+    except Exception:
+        return False
+
+
+def _opis_karty_uzytkownika(tab):
+    return ("karta użytkownika (" + (_witryna((tab or {}).get("url")) or "?")
+            + ") — program jej nie czyta i nie zmienia")
+
+
+def _karty_dla_zespolu(tabs):
+    """v480mw: spis kart dla zespolu — karta uzytkownika bez tytulu i bez
+    adresu, sama witryna."""
+    wynik = []
+    for tab in tabs or []:
+        if _karta_uzytkownika(tab):
+            wynik.append({"id": tab.get("id", ""), "title": _opis_karty_uzytkownika(tab),
+                          "url": "https://" + _witryna(tab.get("url")) + "/…"})
+        else:
+            wynik.append({"id": tab.get("id", ""), "title": tab.get("title", ""),
+                          "url": tab.get("url", "")})
+    return wynik
+
+
+def _nowe_karty_po_narzedziu(przed):
+    """v480mw: karta, ktora pojawila sie w trakcie narzedzia chrome_
+    (klikniecie otwierajace nowa karte, logowanie w okienku), jest karta
+    programu."""
+    try:
+        if przed is None:
+            return
+        for k in chrome_tabs(budz=False):
+            kid = str(k.get("id") or "")
+            if kid and kid not in przed:
+                _karty_programu.add(kid)
+    except Exception:
+        pass
 
 
 def _cudza_karta(tab, tab_id, contains, url):
@@ -19897,6 +20041,8 @@ def _cudza_karta(tab, tab_id, contains, url):
     kid = str(tab.get("id") or "")
     if kid in _karty_programu:
         return False
+    if _karta_uzytkownika(tab):  # v480mw: takze wskazana po tab_id / tej samej witryny
+        return True
     if tab_id and str(tab_id) == kid:
         return False
     adres = str(tab.get("url") or "")
@@ -20606,7 +20752,7 @@ def chrome_upload_file(path, nr=None, selector=None, tab_id=None, contains=None)
     """
     tab = find_tab(tab_id, contains)
     if tab is None:
-        return {"ok": False, "error": "Brak istniejącej karty"}
+        return {"ok": False, "error": _brak_karty()}
     src = Path(os.path.expanduser(str(path or "").strip()))
     if not src.exists() or not src.is_file():
         return {"ok": False, "error": "Nie ma takiego pliku: " + str(src)}
@@ -20688,7 +20834,7 @@ def chrome_click(
         return {
             "ok": False,
             "error":
-                "Brak istniejącej karty"
+                _brak_karty()
         }
 
     # Klikniecie w strone, ktora sie jeszcze rysuje, trafia w pustke
@@ -21000,7 +21146,12 @@ def chrome_close(tab_id=None, contains=None):
     tab = _find_tab_bez_aktywacji(tab_id, contains)
 
     if tab is None:
-        return {"ok": False, "error": "Brak takiej karty"}
+        return {"ok": False, "error": "Brak takiej karty — chrome_tabs pokaże, jakie są teraz."}
+
+    if _karta_uzytkownika(tab):  # v480mw
+        return {"ok": False, "error": "Karta " + str(tab.get("id")) + " to "
+                + _opis_karty_uzytkownika(tab) + ", więc jej nie zamykam. "
+                "Zamykać można karty otwarte przez chrome_open."}
 
     if not ensure_chrome_cdp_forward():
         return {"ok": False, "error": "CDP niedostępne"}
@@ -21023,7 +21174,7 @@ def chrome_close(tab_id=None, contains=None):
     zostaly = [
         {"tab_id": k.get("id"), "title": short(str(k.get("title") or ""), 60),
          "url": short(str(k.get("url") or ""), 100)}
-        for k in (chrome_tabs() or [])[:12]
+        for k in _karty_dla_zespolu(chrome_tabs() or [])[:12]
     ]
 
     return {
@@ -21045,7 +21196,7 @@ def chrome_back(
     tab = find_tab(tab_id, contains)
 
     if tab is None:
-        return {"ok": False, "error": "Brak istniejącej karty"}
+        return {"ok": False, "error": _brak_karty()}
 
     _przed = _stan_strony(tab)
 
@@ -21108,7 +21259,7 @@ def chrome_type(
     if tab is None:
         return {
             "ok": False,
-            "error": "Brak istniejącej karty"
+            "error": _brak_karty()
         }
 
     szukane = json.dumps(str(pole or ""), ensure_ascii=False)
@@ -21361,7 +21512,7 @@ def chrome_execute_js(
         return {
             "ok": False,
             "error":
-                "Brak istniejącej karty"
+                _brak_karty()
         }
 
     # Ten sam powod co przy chrome_click i chrome_inspect: kod
@@ -33915,9 +34066,14 @@ def _termux_run_lokalnie(command):
         # v480ai: bez tresci heredoc — bieg 2026-10-13 22:41: linia
         # "top 150 per dlugosc" w tekscie dopisywanym do pliku zamienila
         # cala komende zapisu na `top -b -n 1`, a zapis przepadl.
-        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(
-            _bez_heredocow(command_str)
-        )
+        # v480mw: takze bez programu w cudzyslowie (python3 -c "…") — bieg
+        # 2026-11-11 05:03 (druzyna 2): zmienna "top = d['sprawdz']" w
+        # python3 -c zamienila cala komende na `top -b -n 1`.
+        try:
+            _do_oceny = _bez_tekstu_notatek(_bez_heredocow(command_str), interpretery=True)
+        except Exception:
+            _do_oceny = _bez_heredocow(command_str)
+        _dla_czlowieka = _POLECENIE_DLA_CZLOWIEKA_RE.search(_do_oceny)
 
         if _dla_czlowieka:
 
@@ -35981,10 +36137,21 @@ def dispatch_tool(
     # v480at: w rywalizacji ekranu i Chrome uzywa naraz jedna druzyna.
     _wez_ekran(name)
 
+    # v480mw: karty, ktore powstana w trakcie narzedzia chrome_ dzialajacego
+    # na stronie, sa kartami programu.
+    _karty_przed_narz = None
+    if str(name or "") in ("chrome_click", "chrome_type", "chrome_execute_js", "chrome_open"):
+        try:
+            _karty_przed_narz = {str(k.get("id") or "") for k in chrome_tabs(budz=False)}
+        except Exception:
+            _karty_przed_narz = None
+
     result = _dispatch_tool_inner(
         name,
         args
     )
+
+    _nowe_karty_po_narzedziu(_karty_przed_narz)
 
     result = _czekaj_az_sie_zmieni(name, args, result)
     result = _uwaga_ten_sam_odczyt(name, args, result)
@@ -37033,7 +37200,7 @@ def _dispatch_tool_inner(
             )
 
             if callable(fn):
-                return fn()
+                return _karty_dla_zespolu(fn())  # v480mw
 
             return {
                 "ok": False,
