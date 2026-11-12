@@ -30072,7 +30072,10 @@ _URUCHAMIANY_SKRYPT_RE = re.compile(
 # powloke albo Termuksa — nie rusza. Wlasne skrypty zespol zatrzymuje
 # dalej jak chce; liczy sie tylko, czy wzorzec trafia w program.
 _ZABIJAJACE_RE = re.compile(
-    r"\b(pkill|killall|kill)\b([^\n;|&)`]*)"
+    # v480nc: "kill = 0.40", "kill: 3", "kill)" to tekst/zmienna, nie komenda —
+    # bieg 2026-11-12 18:26 (druzyna 1): print('... kill = 0.40') w python3 -c
+    # dal "kill 0" i komenda MAIN-a nie poszla jako "zatrzymalaby program".
+    r"\b(pkill|killall|kill)\b(?!\s*[=:<>,.'\"\])}])([^\n;|&)`]*)"
 )
 _PODSTAWIENIE_RE = re.compile(r"\$\(([^)]*)\)|`([^`]*)`")
 
@@ -45643,6 +45646,13 @@ def _wykonaj_akcje_maina(decision, step):
                 args = {}
         if not isinstance(args, dict):
             args = {}
+        # v480nc: pola akcji obok "tool" zamiast w "args" ({"tool":
+        # "termux_write_file", "path": ..., "content": ...}) — bieg 2026-11-12
+        # 18:00 (druzyna 1): zapis szedl z pusta sciezka.
+        if not args:
+            args = {k: v for k, v in akcja.items()
+                    if k not in ("tool", "narzedzie", "name", "args", "arguments", "argumenty")
+                    and not str(k).startswith("_")}
 
         if not name:
             continue
@@ -57652,6 +57662,42 @@ def parse_json(text):
         return d
 
 
+def _akcje_z_brakujaca_klamra(text):
+    """v480nc: w liscie akcji jednej akcji brakuje "}" przed nastepna
+    ('"args": {"command": "…"},\n    {"tool"'). Dokladamy ja tylko tam, gdzie
+    po niej od razu zaczyna sie kolejna akcja, i tylko gdy CALOSC daje sie
+    potem wczytac jako decyzja — inaczej None."""
+    try:
+        t = str(text or "").strip()
+        if '"actions"' not in t:
+            return None
+        a, b = t.find("{"), t.rfind("}")
+        if a < 0 or b <= a:
+            return None
+        t = t[a:b + 1]
+        wzor = re.compile(r'"\}(\s*,\s*\{\s*"tool"\s*:)')
+        miejsca = [m.start() for m in wzor.finditer(t)]
+        for i in miejsca:
+            for kandydat in (t[:i + 2] + "}" + t[i + 2:],):
+                try:
+                    obj = json.loads(kandydat, strict=False)
+                except Exception:
+                    continue
+                if isinstance(obj, dict) and _tylko_decyzja(obj):
+                    return obj
+        if len(miejsca) > 1:
+            u = wzor.sub(lambda m: '"}}' + m.group(1), t)
+            try:
+                obj = json.loads(u, strict=False)
+                if isinstance(obj, dict) and _tylko_decyzja(obj):
+                    return obj
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
 def _json_z_golymi_cudzyslowami(text):
     """
     v480mr: JSON decyzji, w ktorym autor nie poprzedzil ukosnikiem
@@ -57752,6 +57798,12 @@ def _parse_json_surowe(text):
 
     except Exception:
         pass
+
+    # v480nc: akcja bez zamykajacej klamry ("…"},\n {"tool": …) — bieg
+    # 2026-11-12 17:10 (druzyna 1): druga akcja szla jako "uszkodzona".
+    obj = _akcje_z_brakujaca_klamra(text)
+    if obj is not None:
+        return obj
 
     match = re.search(
         r"```(?:json)?\s*(\{.*?\})\s*```",

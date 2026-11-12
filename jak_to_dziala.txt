@@ -5316,3 +5316,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        „Dalszy ciąg” powtarzający już obecny tekst też kończy prośby.
      - „invalid chat session id” = rozmowa zerwana (nowa rozmowa bez
        limitu restartów); 12:56 role oddawały błąd przez limit.
+
+372. (v480nc) Logi 12.11 (drużyna 1):
+     - „kill = 0.40” w tekście (print w python3 -c) nie jest już komendą
+       kill — 18:26 komenda MAIN-a nie poszła jako „zatrzymałaby program”.
+       Prawdziwe kill/pkill dalej są pilnowane.
+     - Akcja z polami obok "tool" (bez "args"), np. termux_write_file z
+       "path" i "content" — pola biorą się z akcji (18:00 zapis szedł z
+       pustą ścieżką).
+     - Akcja bez zamykającej klamry przed następną akcją: program dokłada
+       klamrę, tylko gdy całość daje się potem wczytać (17:10 druga akcja
+       szła jako „uszkodzona”).
