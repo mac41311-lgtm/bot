@@ -2019,6 +2019,11 @@ def skopiuj_przebieg_na_telefon():
 
 def _skopiuj_przebieg_na_telefon():
     try:
+        # v480ne: pliki wysylki DeepSeeka (wspolne dla telefonu) — tylko po zmianie
+        try:
+            _kopiuj_wysylke_na_telefon()
+        except Exception:
+            pass
         PRZEBIEG_NA_TELEFONIE.mkdir(parents=True, exist_ok=True)
 
         skopiowane = []
@@ -6631,7 +6636,7 @@ def start_session(name, system_prompt):
         sessions[name] = session
         if session is not None and _token_czeka.pop(_account_of(name), None):
             _koniec_czekania_na_token(_account_of(name))
-            log("DEEPSEEK", "Konto " + str(_account_of(name)) + " znowu działa — wracam do pracy.")
+            _log_wysylki("Konto " + str(_account_of(name)) + " znowu działa — wracam do pracy.")
 
         return session
 
@@ -6981,8 +6986,7 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
     pierwszy = account not in _token_czeka
     if pierwszy and bez_prob:
         _token_czeka[account] = time.time()
-        log(
-            "DEEPSEEK",
+        _log_wysylki(
             f"Konto {account} ({name}): DeepSeek odmówił dostępu ("
             + short(str(blad or ""), 120) + "). Zatrzymuję to konto od razu: nie "
             "zakładam nowych rozmów i nie próbuję tym samym tokenem, żeby nie dokładać "
@@ -7022,19 +7026,18 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
                 _account_tokens[account] = nowy
                 if account == 1 and not read_text(TOKEN_FILE_2).strip():
                     _account_tokens[2] = nowy
-                log("DEEPSEEK", "Plik z tokenem konta " + str(account) + " zapisany ("
+                _log_wysylki("Plik z tokenem konta " + str(account) + " zapisany ("
                     + _kawalek_klucza(nowy) + (", ten sam token" if nowy == stary else ", nowy token")
                     + ") — jedna próba tej samej wiadomości.")
                 return True
             if time.time() - _ost_log >= 3600:
                 _ost_log = time.time()
-                log("DEEPSEEK", "Konto " + str(account) + " nadal zatrzymane (od "
+                _log_wysylki("Konto " + str(account) + " nadal zatrzymane (od "
                     + str(int((time.time() - _token_czeka.get(account, _ost_log)) / 60))
                     + f" min) — czekam na zapis ~/{token_file_name}, nic nie wysyłam.")
     if pierwszy:
         _token_czeka[account] = time.time()
-        log(
-            "DEEPSEEK",
+        _log_wysylki(
             f"Sesja {name} (konto {account}): serwer nie założył rozmowy — token "
             "prawdopodobnie WYGASŁ albo jest nieprawidłowy. Wstrzymuję pracę na tym "
             "koncie i czekam. Jak naprawić: zaloguj się na chat.deepseek.com na TYM "
@@ -7075,7 +7078,7 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
             _account_tokens[account] = nowy
             if account == 1 and not read_text(TOKEN_FILE_2).strip():
                 _account_tokens[2] = nowy
-            log("DEEPSEEK", "Nowy token konta " + str(account) + " ("
+            _log_wysylki("Nowy token konta " + str(account) + " ("
                 + _kawalek_klucza(nowy) + ") — zakładam rozmowę od nowa.")
             _token_czeka.pop(account, None)
             _koniec_czekania_na_token(account)
@@ -7438,7 +7441,7 @@ def _wolno_zalozyc_nowa_po_bledzie(name):
     lista = [t for t in _restarty_po_bledzie.get(account, []) if teraz - t < _RESTARTY_PO_BLEDZIE_OKNO_S]
     _restarty_po_bledzie[account] = lista
     if len(lista) >= _RESTARTY_PO_BLEDZIE_MAKS:
-        log("DEEPSEEK", "Konto " + str(account) + ": w ostatnich "
+        _log_wysylki("Konto " + str(account) + ": w ostatnich "
             + str(int(_RESTARTY_PO_BLEDZIE_OKNO_S // 60)) + " min były już "
             + str(len(lista)) + " nowe rozmowy po błędach — nie zakładam kolejnej. "
             + str(name) + " oddaje błąd, a następna wiadomość pójdzie w tej samej rozmowie.")
@@ -7519,6 +7522,70 @@ def _blad_przed_naglowkami(e):
 
 _PLIK_NIEPEWNYCH = "AEL_NIEPEWNE_WYSYLKI.md"
 
+# v480ne (2026-11-13, uzytkownik: "logi niepewna wysylka itp niech sie tez
+# pojawiaja w AEL-MINI na telefonie"): ostrzezenia o wysylce do DeepSeeka
+# (niepewna wysylka, limit, przerwa, STOP, wznowienie, odmowa dostepu,
+# token, niepewny stan wspolny) ida tez do jednego pliku dla calego
+# telefonu, ~/AEL_WYSYLKA_DEEPSEEK.md. Ten plik i ~/AEL_NIEPEWNE_WYSYLKI.md
+# sa kopiowane do AEL-MINI (glowny folder, nie druzyna_<n> — obie druzyny
+# i Sedzia dziela jedno tempo) zaraz po zmianie i przy kazdej kopii logu.
+_PLIK_DZIENNIKA_WYSYLKI = "AEL_WYSYLKA_DEEPSEEK.md"
+_DZIENNIK_WYSYLKI_MAKS_B = 1024 * 1024
+_AEL_MINI_TELEFON = HOME / "storage" / "shared" / "AEL-MINI"
+
+
+def _kopiuj_wysylke_na_telefon():
+    """Kopia obu plikow wysylki do AEL-MINI, tylko gdy sie zmienily
+    (rozmiar albo czas). Atomowo (plik tymczasowy + replace), bo kopiuja
+    oba procesy druzyn. Cicho, gdy nie ma ~/storage/shared."""
+    if not (HOME / "storage" / "shared").exists():
+        return
+    for nazwa in (_PLIK_NIEPEWNYCH, _PLIK_DZIENNIKA_WYSYLKI):
+        try:
+            zr = HOME / nazwa
+            if not zr.exists():
+                continue
+            cel = _AEL_MINI_TELEFON / nazwa
+            s = zr.stat()
+            try:
+                c = cel.stat()
+                if c.st_size == s.st_size and c.st_mtime >= s.st_mtime:
+                    continue
+            except Exception:
+                pass
+            _AEL_MINI_TELEFON.mkdir(parents=True, exist_ok=True)
+            tmp = cel.with_name("." + nazwa + "." + str(os.getpid()) + ".tmp")
+            tmp.write_bytes(zr.read_bytes())
+            os.replace(str(tmp), str(cel))
+        except Exception:
+            pass
+
+
+def _log_wysylki(message):
+    """log("DEEPSEEK", …) + wpis do ~/AEL_WYSYLKA_DEEPSEEK.md + kopia w
+    AEL-MINI. Tylko dla ostrzezen o wysylce, nie dla tresci rozmow."""
+    log("DEEPSEEK", message)
+    try:
+        p = HOME / _PLIK_DZIENNIKA_WYSYLKI
+        try:
+            if p.stat().st_size > _DZIENNIK_WYSYLKI_MAKS_B:
+                os.replace(str(p), str(p) + ".1")
+        except Exception:
+            pass
+        nowy = not p.exists()
+        with open(p, "a", encoding="utf-8") as f:
+            if nowy:
+                f.write("# Wysyłka do DeepSeeka — ostrzeżenia (cały telefon)\n\n"
+                        "Limity, przerwy, STOP, wznowienia, odmowy dostępu, tokeny i "
+                        "niepewne wysyłki. Szczegóły niepewnych wysyłek: "
+                        + _PLIK_NIEPEWNYCH + ".\n")
+            f.write("\n- " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    + (" [drużyna " + str(_DRUZYNA) + "]" if _DRUZYNA else "")
+                    + " " + str(message).replace("\n", " ") + "\n")
+    except Exception:
+        pass
+    _kopiuj_wysylke_na_telefon()
+
 
 def _zapisz_niepewna(name, session, tresc, blad):
     """Wiadomosc mogla dojsc (albo doszla bez odpowiedzi): bez ponowienia.
@@ -7543,7 +7610,7 @@ def _zapisz_niepewna(name, session, tresc, blad):
     except Exception:
         pass
     _ruch("niepewna", name, faza=faza, blad=short(str(blad), 160))
-    log("DEEPSEEK", kto + ": " + co + " — nie wysyłam jej drugi raz (mogłaby stanąć w rozmowie "
+    _log_wysylki(kto + ": " + co + " — nie wysyłam jej drugi raz (mogłaby stanąć w rozmowie "
         "dwa razy). Zapisane w ~/" + _PLIK_NIEPEWNYCH + "; ta wiadomość roli wraca jako błąd, "
         "następne idą normalnie.")
     try:
@@ -8291,7 +8358,7 @@ def _telefon_budzet(st, teraz):
             st.pop("budzet", None)
         else:
             st["budzet"] = b
-        log("DEEPSEEK", "Telefon: od " + str(int(_TELEFON_ODBUDOWA_S // 60)) + " min bez "
+        _log_wysylki("Telefon: od " + str(int(_TELEFON_ODBUDOWA_S // 60)) + " min bez "
             "limitu — wspólne tempo z " + str(stary) + " na " + str(b) + " wiadomości na godzinę.")
     return b
 
@@ -8321,7 +8388,7 @@ def _log_stan_niepewny(name, e):
     if time.time() - _telefon_zly_log[0] < 600:
         return
     _telefon_zly_log[0] = time.time()
-    log("DEEPSEEK", "Wspólny stan DeepSeeka na telefonie jest niepewny (" + short(str(e), 160)
+    _log_wysylki("Wspólny stan DeepSeeka na telefonie jest niepewny (" + short(str(e), 160)
         + ") — " + _ROLE_DISPLAY_NAME.get(name, str(name)) + " nic nie wysyła, czeka i sprawdza "
         "znowu co 30 s. Gdy plik jest uszkodzony: zatrzymaj obie drużyny, usuń ~/"
         + _TELEFON_PLIK.name + " (to kasuje też STOP i przerwę) i uruchom program; "
@@ -8355,7 +8422,7 @@ def _po_wznowieniu_sprzataj():
         (HOME / _PLIK_WZNOW).unlink()
     except Exception:
         pass
-    log("DEEPSEEK", "Wznowienie DeepSeeka (~/" + _PLIK_WZNOW + ") — najpierw jedna czekająca "
+    _log_wysylki("Wznowienie DeepSeeka (~/" + _PLIK_WZNOW + ") — najpierw jedna czekająca "
         "wiadomość; reszta czeka na jej odpowiedź, a kolejny limit zatrzyma telefon znowu.")
 
 
@@ -8452,7 +8519,7 @@ def _czekaj_na_telefon(name, znaki=0):
             continue
         if stan == "wolno":
             if _ja_proba:
-                log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": próba po wznowieniu — "
+                _log_wysylki(_ROLE_DISPLAY_NAME.get(name, str(name)) + ": próba po wznowieniu — "
                     "ta wiadomość idzie jako jedyna, reszta czeka na jej odpowiedź.")
             return
         if stan == "stop":
@@ -8532,7 +8599,7 @@ def _ustaw_stop(st, name, powod, teraz):
 def _oglos_stop(powod):
     """Po zwolnieniu zamka: log, powiadomienie, kopia logu (bez zamka)."""
     _ruch("stop", "", blad=str(powod)[:200])  # v480na
-    log("DEEPSEEK", "STOP: " + str(powod) + " Cały telefon (obie drużyny i Sędzia) przestaje "
+    _log_wysylki("STOP: " + str(powod) + " Cały telefon (obie drużyny i Sędzia) przestaje "
         "wysyłać do DeepSeeka i nie ponawia sam. Niedokończone wiadomości czekają. Wznowienie, "
         "gdy uznasz, że można: touch ~/" + _PLIK_WZNOW + " — wtedy pójdzie jedna wiadomość, a "
         "kolejny limit znowu zatrzyma.")
@@ -8596,7 +8663,7 @@ def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
         _telefon_lokalnie["nr"] += 1
         _telefon_lokalnie["pauza_do"] = max(_telefon_lokalnie["pauza_do"],
                                             time.time() + _TELEFON_PRZERWA_S)
-        log("DEEPSEEK", "DeepSeek: „za dużo wiadomości”, ale wspólnego stanu nie da się zapisać ("
+        _log_wysylki("DeepSeek: „za dużo wiadomości”, ale wspólnego stanu nie da się zapisać ("
             + short(str(e), 120) + ") — ten proces nic nie wysyła, dopóki stan jest niepewny, i "
             "trzyma przerwę " + _min_s(_TELEFON_PRZERWA_S) + ".")
         return
@@ -8605,7 +8672,7 @@ def _limit_telefonu(name, blad="", drugi_dla_wiadomosci=False):
         return
     na_program = lambda b: max(1, b - DEEPSEEK_REZERWA_DLA_CZLOWIEKA)
     _ruch("przerwa", name, sekundy=int(dl), powod="limit_tempa")  # v480na
-    log("DEEPSEEK", "DeepSeek: „za dużo wiadomości” (" + _kto_wysyla_po_ludzku(kto)
+    _log_wysylki("DeepSeek: „za dużo wiadomości” (" + _kto_wysyla_po_ludzku(kto)
         + ", konto " + str(_account_of(name)) + "). Liczy się cały telefon, więc obie drużyny "
         "i Sędzia robią przerwę " + _min_s(dl) + " (do "
         + datetime.fromtimestamp(time.time() + dl).strftime("%H:%M") + ") — bez ponawiania w tym "
@@ -8629,7 +8696,7 @@ def _stop_telefonu(name, powod):
                 ustawil = True
     except Exception as e:
         _telefon_lokalnie["stop_od"] = time.time()
-        log("DEEPSEEK", "STOP nie zapisał się we wspólnym stanie (" + short(str(e), 120)
+        _log_wysylki("STOP nie zapisał się we wspólnym stanie (" + short(str(e), 120)
             + ") — ten proces nic nie wysyła, dopóki stan jest niepewny.")
         return
     if ustawil:
@@ -8659,10 +8726,10 @@ def _przerwa_telefonu(name, sekundy, powod):
                 _telefon_zapisz(st)
     except Exception as e:
         _telefon_lokalnie["pauza_do"] = max(_telefon_lokalnie["pauza_do"], do)
-        log("DEEPSEEK", "Przerwy nie da się zapisać we wspólnym stanie (" + short(str(e), 120)
+        _log_wysylki("Przerwy nie da się zapisać we wspólnym stanie (" + short(str(e), 120)
             + ") — trzyma ją ten proces.")
     _ruch("przerwa", name, sekundy=int(float(sekundy)), powod=str(powod)[:120])  # v480na
-    log("DEEPSEEK", "DeepSeek: " + powod + ". Cały telefon czeka do "
+    _log_wysylki("DeepSeek: " + powod + ". Cały telefon czeka do "
         + datetime.fromtimestamp(do).strftime("%H:%M") + "; potem ta sama wiadomość, nic nie przepada.")
 
 
@@ -8679,7 +8746,7 @@ def _telefon_po_sukcesie(name):
             st.pop("proba_po_wznowieniu", None)
             _telefon_zapisz(st)
     except Exception as e:
-        log("DEEPSEEK", "Odpowiedź przyszła, ale licznika limitów nie da się wyzerować we "
+        _log_wysylki("Odpowiedź przyszła, ale licznika limitów nie da się wyzerować we "
             "wspólnym stanie (" + short(str(e), 120) + ") — następny limit może od razu "
             "zatrzymać telefon (bezpieczniejsza strona).")
 
@@ -8749,7 +8816,7 @@ def _wyslij_w_tempie(name, session, tekst, odczekane=False):
             _limity += 1
             _po_limicie(name, str(e), _limity)
             if _limity >= _WYSLIJ_LIMITOW_MAKS:
-                log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": ta sama wiadomość "
+                _log_wysylki(_ROLE_DISPLAY_NAME.get(name, str(name)) + ": ta sama wiadomość "
                     "dostała „za dużo wiadomości” " + str(_limity) + " razy — nie ponawiam jej "
                     "więcej, błąd idzie wyżej.")
                 raise
@@ -12852,7 +12919,7 @@ def _deepseek_jedna_rozmowa(name, message):
                     # v480my: jawny koniec — kazda kolejna proba i tak
                     # czekala na Twoje wznowienie po STOP.
                     if _limity_tej >= _WYSLIJ_LIMITOW_MAKS:
-                        log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": ta sama "
+                        _log_wysylki(_ROLE_DISPLAY_NAME.get(name, str(name)) + ": ta sama "
                             "wiadomość dostała „za dużo wiadomości” " + str(_limity_tej)
                             + " razy — nie ponawiam jej więcej.")
                         return "DEEPSEEK ERROR [" + name + "]: " + str(e)

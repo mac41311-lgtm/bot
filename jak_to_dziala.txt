@@ -5338,3 +5338,15 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Rejestr procesów nie dokłada drugiej, sprzecznej linii „nie wiadomo”,
        gdy koniec tego skryptu MAIN dostał już z komendy w tle (5 min).
      - Bez linii „Drugie konto … role  będą go używać” z pustą listą ról.
+
+374. (v480ne) Logi wysyłki DeepSeeka w AEL-MINI (prośba użytkownika 13.11):
+     - Ostrzeżenia o wysyłce (niepewna wysyłka, „za dużo wiadomości”,
+       przerwa/STOP całego telefonu, wznowienie i próba po wznowieniu,
+       odmowa dostępu, token nie działa / zapisany / konto znowu działa,
+       limit nowych rozmów, niepewny stan wspólny) idą też do jednego pliku
+       dla całego telefonu: ~/AEL_WYSYLKA_DEEPSEEK.md (linia z datą i
+       numerem drużyny; powyżej 1 MB stary plik idzie do .1).
+     - Ten plik i ~/AEL_NIEPEWNE_WYSYLKI.md są kopiowane do głównego
+       folderu AEL-MINI (nie druzyna_N — tempo jest wspólne) zaraz po
+       każdym wpisie i przy każdej kopii logu, tylko gdy się zmieniły.
+     - Treść rozmów ról tam nie trafia. Kod proof-of-work bez zmian.
