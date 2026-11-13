@@ -3799,7 +3799,7 @@ def init_deepseek():
         + " s, na zmianę; duża wiadomość (np. Sędziego) liczy się jak kilka. Po „za dużo "
         "wiadomości” wszyscy robią przerwę (10–30 min), potem idzie ta sama wiadomość.")
 
-    if token2:
+    if token2 and any(a == 2 for a in _ROLE_ACCOUNT.values()):  # v480nd: bez pustej listy rol
         log(
             "DEEPSEEK",
             "Drugie konto wykryte (" + TOKEN_FILE_2.name + ") — "
@@ -45722,6 +45722,14 @@ def _wykonaj_akcje_maina(decision, step):
                 _zm_pl = _nowe_zmiany_dla("MAIN", _pliki_z_komendy(_cmd_akcji))
                 if _zm_pl:
                     result["zmiany_plikow"] = " | ".join(_zm_pl)
+                # v480nd: pytanie do uzytkownika wypisane echem (bieg
+                # 2026-11-13, druzyna 1: "pytanie A/B/C do uzytkownika") —
+                # uzytkownik terminala zespolu nie czyta.
+                if _ECHO_DO_UZYTKOWNIKA_RE.search(_cmd_akcji):
+                    result["Uwaga programu"] = (
+                        "użytkownik nie czyta wyjścia komend, więc to, co wypisałeś dla niego, do niego "
+                        "nie dotarło. Zapisz to w " + _plik_dla_uzytkownika_domyslny()
+                        + " — program da mu znać i skopiuje plik do jego telefonu.")
         except Exception:
             pass
 
@@ -61468,6 +61476,9 @@ def _decision_returns_delegated_choice(decision, goal):
 # na ktorego nie ma jak poczekac. Jedyny kanal, ktory naprawde
 # zatrzymuje petle i pokazuje sie uzytkownikowi, to
 # NEED_USER_LOGIN.
+_ECHO_DO_UZYTKOWNIKA_RE = re.compile(
+    r"\b(?:echo|printf)\b[^\n|;&>]*\b(?:do|dla)\s+u[zż]ytkownika\b", re.IGNORECASE)
+
 _TEKST_DLA_UZYTKOWNIKA_RE = re.compile(
     r"(?:wy[śs]wietl|przeka[żz]|poka[żz]|poinformuj|popro[śs]|"
     r"przypomnij)\s+(?:mu\s+|go\s+|ponownie\s+)?u[żz]ytkownik\w*|"
@@ -67257,6 +67268,9 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                                                     ", a nie pisał do pliku (brak przekierowania > plik)")))
 
 
+_tlo_konce_nazw = {}
+
+
 def _rejestr_krok(stan):
     teraz = _procesy_druzyny_telefon()
     if _laptop_skonfigurowany() and _laptop.get("ok") is True:
@@ -67301,6 +67315,11 @@ def _rejestr_krok(stan):
         trwal = _min_s(max(0, float(d.get("widziany") or t) - float(d.get("start") or t)))
         _rejestr_zapisz("KONIEC  " + k.split(":")[0].ljust(7) + " " + d.get("nazwa", "?")
                         + "  po ok. " + trwal + " — " + opis)
+        # v480nd: koniec tego skryptu MAIN dostal juz z wlasnej komendy w tle
+        # (z kodem albo sygnalem) — bez drugiej, sprzecznej linii "nie wiadomo"
+        # (bieg 2026-11-13 14:48 i 15:17, druzyna 2).
+        if rodzaj == "nie_wiadomo" and time.time() - _tlo_konce_nazw.get(str(d.get("nazwa") or ""), 0) < 300:
+            continue
         if rodzaj in ("system", "nie_wiadomo") and not (k.startswith("laptop:") and rodzaj == "nie_wiadomo"):
             _rejestr_dla_maina.append(
                 "• " + d.get("nazwa", "?") + " (na " + ("laptopie" if k.startswith("laptop:") else "telefonie")
@@ -67373,6 +67392,10 @@ def _raport_z_tla():
                 continue
             _tlo_zgloszone_konce.add(pid)
             _tlo_ostatnio_widziane.pop(pid, None)
+            try:  # v480nd: patrz _rejestr_krok
+                _tlo_konce_nazw[_nazwa_w_tle(str(getattr(proces, "args", ""))).split(" (")[0].strip()] = time.time()
+            except Exception:
+                pass
             if kod == 0:
                 jak = "skończył się poprawnie (kod 0)"
                 pokaz = linie[-8:]
@@ -67594,6 +67617,22 @@ def _jeszcze_zyje(pid):
         return True
 
 
+_NAZWA_DLA_UZYTKOWNIKA_RE = re.compile(
+    r"U[ZŻ]YTKOWNIK|FOR[_ -]?(?:THE[_ -]?)?USER|TO[_ -]USER|USER[_ -](?:REPORT|NOTE|STATUS)|DLA[_ -]CIEBIE",
+    re.IGNORECASE)
+
+
+def _nazwa_dla_uzytkownika(n):
+    """v480nd: plik zespolu do uzytkownika po nazwie: *DLA_UZYTKOWNIKA*, a
+    takze angielskie REPORT_FINAL_FOR_USER.md (bieg 2026-11-13, druzyna 2:
+    raport dla uzytkownika nie trafial do AEL-MINI). Bez OD_UZYTKOWNIKA."""
+    n = str(n or "")
+    N = n.upper()
+    return bool(_NAZWA_DLA_UZYTKOWNIKA_RE.search(n)
+                and "OD_U" not in N and "FROM_USER" not in N
+                and Path(n).suffix.lower() in (".md", ".txt"))
+
+
 def _pliki_dla_uzytkownika():
     """Pliki zespolu do uzytkownika: DLA_UZYTKOWNIKA.md i podobne
     (RAPORT_DLA_UZYTKOWNIKA.md, DECYZJA_DLA_UZYTKOWNIKA.md, ...).
@@ -67604,22 +67643,14 @@ def _pliki_dla_uzytkownika():
     program patrzyl tylko w korzen, wiec uzytkownik nie dostal ani
     powiadomienia, ani kopii w AEL-MINI."""
     def _pasuje(n):
-        N = n.upper()
-        return ("UZYTKOWNIK" in N and "OD_UZYTKOWNIKA" not in N
-                and Path(n).suffix.lower() in (".md", ".txt"))
+        return _nazwa_dla_uzytkownika(n)
     if _DRUZYNA in ("1", "2"):
         return [p for p in _pliki_zespolu_wg_nazwy(_pasuje) if p.is_file()]
     dla = Path(os.path.expanduser(_plik_dla_uzytkownika_domyslny()))
     pliki = []
     try:
         for p in sorted(dla.parent.iterdir()):
-            nazwa = p.name.upper()
-            if (
-                "UZYTKOWNIK" in nazwa
-                and "OD_UZYTKOWNIKA" not in nazwa
-                and p.suffix.lower() in (".md", ".txt")
-                and p.is_file()
-            ):
+            if _nazwa_dla_uzytkownika(p.name) and p.is_file():
                 pliki.append(p)
     except Exception:
         pass

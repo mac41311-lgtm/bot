@@ -5327,3 +5327,14 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Akcja bez zamykającej klamry przed następną akcją: program dokłada
        klamrę, tylko gdy całość daje się potem wczytać (17:10 druga akcja
        szła jako „uszkodzona”).
+
+373. (v480nd) Logi 13.11:
+     - Poczta do użytkownika łapie też angielskie nazwy: *FOR_USER*,
+       *TO_USER*, USER_REPORT/NOTE/STATUS, DLA_CIEBIE (.md/.txt). Drużyna 2
+       pisała REPORT_FINAL_FOR_USER.md, który nie trafiał do AEL-MINI.
+     - MAIN, który wypisuje coś „do użytkownika” przez echo/printf, dostaje
+       przy wyniku uwagę: użytkownik nie czyta wyjścia komend, zapisz to
+       w DLA_UZYTKOWNIKA.md (drużyna 1: „pytanie A/B/C do uzytkownika”).
+     - Rejestr procesów nie dokłada drugiej, sprzecznej linii „nie wiadomo”,
+       gdy koniec tego skryptu MAIN dostał już z komendy w tle (5 min).
+     - Bez linii „Drugie konto … role  będą go używać” z pustą listą ról.
