@@ -16146,6 +16146,17 @@ def _pilnuj_aktualizacji():
 
 def uruchom_pilnowanie_aktualizacji():
 
+    # v480nf (2026-11-13, uzytkownik: "nie chce jej", "chce po prostu
+    # zmienic kod tam"): cicha aktualizacja WYLACZONA. Program w trakcie
+    # biegu nie pyta GitHuba, nie puszcza ~/update_agent.sh i nie
+    # przeladowuje sie, gdy ~/agent/agent.py na dysku sie zmieni — kod
+    # poprawiony recznie na telefonie nie zostanie nadpisany ani
+    # wczytany w pol edycji. Nowa wersja (reczna zmiana albo reczne
+    # `bash ~/update_agent.sh`) dziala od nastepnego uruchomienia
+    # programu. Wlaczenie z powrotem: AEL_AUTO_AKTUALIZACJA=1.
+    if os.environ.get("AEL_AUTO_AKTUALIZACJA", "").strip() != "1":
+        return
+
     try:
         import threading
 

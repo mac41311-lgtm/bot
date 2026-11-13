@@ -1320,6 +1320,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        wiadomosci o aktualizacji
      - gdy aktualizacja albo przeladowanie nie wyjdzie, bieg idzie
        dalej na starej wersji
+     - v480nf (2026-11-13, uzytkownik): WYLACZONE. Program sam nic nie
+       pobiera ani nie przeladowuje; reczne zmiany w ~/agent/agent.py
+       zostaja. Nowa wersja: `bash ~/update_agent.sh` i ponowne
+       uruchomienie programu. Wlaczenie: AEL_AUTO_AKTUALIZACJA=1.
 
  12. (bieg 2026-10-11 16:58, krok 9) ENGINEER: status INCOMPLETE,
      action='continue' -> 422, wiec program dopytywal zwykla
