@@ -5353,3 +5353,10 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        folderu AEL-MINI (nie druzyna_N — tempo jest wspólne) zaraz po
        każdym wpisie i przy każdej kopii logu, tylko gdy się zmieniły.
      - Treść rozmów ról tam nie trafia. Kod proof-of-work bez zmian.
+
+ v480ng (2026-11-13, uzytkownik: "nie mozemy tak przepisywac"): pusty
+     ~/api_token_2.txt nie przenosi juz rol konta 2 na konto 1. Takie role
+     czekaja (bez zapytan do DeepSeeka), az uzytkownik zapisze token do
+     ~/api_token_2.txt; na starcie jedna linia UWAGA, przy czekaniu linia
+     w ~/AEL_WYSYLKA_DEEPSEEK.md i powiadomienie. Nowy token konta 1 tez nie
+     trafia juz po cichu do konta 2.

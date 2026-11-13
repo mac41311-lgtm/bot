@@ -3598,7 +3598,7 @@ def _ustaw_konta_druzyny():
             _ROLE_ACCOUNT[_rola] = int(_DRUZYNA)
 
 
-# {1: token_konta_1, 2: token_konta_2_lub_1_jesli_brak_drugiego}
+# {1: token_konta_1, 2: token_konta_2} — v480ng: bez zastepowania kontem 1
 _account_tokens = {}
 
 
@@ -3618,13 +3618,16 @@ def _activate_account_for_role(name):
 
     account = _ROLE_ACCOUNT.get(name, 1)
 
-    token = (
-        _account_tokens.get(account)
-        or _account_tokens.get(1)
-    )
+    # v480ng (2026-11-13, uzytkownik: "nie mozemy tak przepisywac"): rola
+    # konta, ktore nie ma tokenu, NIE pisze z tokenem drugiego konta. Dotad
+    # pusty ~/api_token_2.txt cicho przenosil role konta 2 na konto 1.
+    # Teraz rola czeka (bez zadnego zapytania do DeepSeeka), az uzytkownik
+    # zapisze token do pliku swojego konta — tak jak przy odmowie dostepu.
+    while not _account_tokens.get(account):
+        _zatrzymaj_konto(name, "brak tokena w ~/" + _plik_tokena_konta(account)
+                         + " (rola nie przechodzi na drugie konto)")
 
-    if token:
-        opendeep.configure(api_key=token)
+    opendeep.configure(api_key=_account_tokens[account])
 
 
 # ============================================================
@@ -3774,7 +3777,9 @@ def init_deepseek():
     ))
 
     _account_tokens[1] = token
-    _account_tokens[2] = token2 or token
+    # v480ng: pusty plik 2 = konto 2 bez tokena (jego role czekaja), a nie
+    # konto 1 za nie
+    _account_tokens[2] = token2
 
     # v480jx: uzytkownik 2026-11-01 — na starcie krotko, czy klucze sa w
     # plikach; tylko odczyt plikow, bez zadnej wiadomosci do DeepSeeka
@@ -3804,6 +3809,12 @@ def init_deepseek():
         + " s, na zmianę; duża wiadomość (np. Sędziego) liczy się jak kilka. Po „za dużo "
         "wiadomości” wszyscy robią przerwę (10–30 min), potem idzie ta sama wiadomość.")
 
+    if not token2 and any(a == 2 for a in _ROLE_ACCOUNT.values()):
+        log("DEEPSEEK", "UWAGA: brak tokena konta 2 (~/" + TOKEN_FILE_2.name + ") — role "
+            + ", ".join(r for r, a in _ROLE_ACCOUNT.items() if a == 2)
+            + " nie przechodzą na konto 1, tylko czekają. Jak naprawić: zaloguj się na "
+            "chat.deepseek.com na drugim koncie i zapisz jego userToken do ~/"
+            + TOKEN_FILE_2.name + " — program weźmie go sam, bez restartu.")
     if token2 and any(a == 2 for a in _ROLE_ACCOUNT.values()):  # v480nd: bez pustej listy rol
         log(
             "DEEPSEEK",
@@ -6986,8 +6997,10 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
     pierwszy = account not in _token_czeka
     if pierwszy and bez_prob:
         _token_czeka[account] = time.time()
+        _brak = str(blad or "").startswith("brak tokena")  # v480ng
         _log_wysylki(
-            f"Konto {account} ({name}): DeepSeek odmówił dostępu ("
+            f"Konto {account} ({name}): "
+            + ("nie ma tokena (" if _brak else "DeepSeek odmówił dostępu (")
             + short(str(blad or ""), 120) + "). Zatrzymuję to konto od razu: nie "
             "zakładam nowych rozmów i nie próbuję tym samym tokenem, żeby nie dokładać "
             "zapytań. Niedokończona wiadomość czeka i pójdzie, gdy konto wróci. Jak "
@@ -6999,7 +7012,7 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
         try:
             subprocess.run(
                 ["termux-notification", "--id", "ael_token_" + str(account),
-                 "-t", "AEL: DeepSeek odmówił dostępu, konto " + str(account)
+                 "-t", ("AEL: brak tokena, konto " if _brak else "AEL: DeepSeek odmówił dostępu, konto ") + str(account)
                  + (" (drużyna " + _DRUZYNA + ")" if _DRUZYNA else ""),
                  "-c", "Konto zatrzymane. Po zalogowaniu zapisz token do ~/"
                  + token_file_name + " — program wtedy wróci."],
@@ -7024,8 +7037,6 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
             nowy = _czysty_token(read_text(plik))
             if _mt != _mtime_przed and nowy and not re.search(r"\s", nowy):
                 _account_tokens[account] = nowy
-                if account == 1 and not read_text(TOKEN_FILE_2).strip():
-                    _account_tokens[2] = nowy
                 _log_wysylki("Plik z tokenem konta " + str(account) + " zapisany ("
                     + _kawalek_klucza(nowy) + (", ten sam token" if nowy == stary else ", nowy token")
                     + ") — jedna próba tej samej wiadomości.")
@@ -7076,8 +7087,6 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
         nowy = _czysty_token(read_text(plik))
         if nowy and nowy != stary and not re.search(r"\s", nowy):
             _account_tokens[account] = nowy
-            if account == 1 and not read_text(TOKEN_FILE_2).strip():
-                _account_tokens[2] = nowy
             _log_wysylki("Nowy token konta " + str(account) + " ("
                 + _kawalek_klucza(nowy) + ") — zakładam rozmowę od nowa.")
             _token_czeka.pop(account, None)
