@@ -16003,171 +16003,13 @@ _PLIK_ZATRZYMANYCH = AGENT_DIR / "zatrzymane_przy_zamknieciu.json"
 
 
 # ============================================================
-# v480k: CICHA AKTUALIZACJA W TRAKCIE BIEGU
+# v480nf: AKTUALIZACJA USUNIETA Z PROGRAMU
 # ============================================================
 #
-# Uzytkownik: "w programie najlepiej niech sprawdza co 15 min",
-# "i sie cicho resetuje bez zmian w czacie", "jakby caly czas
-# dzialal, ale z aktualizacja".
-#
-# Co 15 minut watek w tle pyta GitHuba, czy na galezi, z ktorej
-# telefon bierze program (~/.ael-repo), jest nowszy commit. Gdy jest,
-# na granicy krokow puszczamy ~/update_agent.sh (pobiera, sprawdza
-# skladnie, podmienia ~/agent/agent.py) i przeladowujemy program
-# os.execv — ten sam pid, wiec robota w tle (treningi) zyje dalej i
-# dalej jest nasza. Przed przeladowaniem zapisujemy stan biegu (krok,
-# ostatni wynik, co ktora rola juz widziala, pliki logu, procesy w
-# tle); nowa wersja go wczytuje i ciagnie bieg dalej. Agentom nic
-# nie mowimy — ich rozmowy sa wznawiane, nic sie w nich nie zmienia.
-
-AKTUALIZACJA_CO_SEKUND = 15 * 60
-_REPO_TELEFONU = HOME / ".ael-repo"
-_SKRYPT_AKTUALIZACJI = HOME / "update_agent.sh"
-_nowa_wersja = {"commit": ""}
-_ostatnie_pytanie_githuba = [time.time()]
-
-
-def _git_telefonu(*argumenty, czas=60):
-
-    return subprocess.run(
-        ["git", "-C", str(_REPO_TELEFONU)] + list(argumenty),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        text=True,
-        timeout=czas
-    )
-
-
-def _commit_na_dysku():
-    try:
-        _c = _git_telefonu("rev-parse", "--short=7", "HEAD", czas=10).stdout.strip()
-        return _c or "wgrana na dysk"
-    except Exception:
-        return "wgrana na dysk"
-
-
-def _sprawdz_nowa_wersje():
-    """Commit z GitHuba, gdy rozni sie od wgranego; inaczej ""."""
-
-    # v480aq: druzyna 2 nie pobiera sama — robi to druzyna 1. Druzyna 2
-    # przeladowuje sie, gdy agent.py na dysku jest nowszy niz ten,
-    # z ktorym wystartowala.
-    # v480hg: tak samo drużyna 1 i zwykły program — użytkownik wgrał nową
-    # wersję ręcznie (bash ~/update_agent.sh w drugim terminalu), więc
-    # GitHub i ~/.ael-repo są już równe i porównanie commitów nic nie
-    # widziało; program działał na starym kodzie do zamknięcia.
-    try:
-        _mt = os.path.getmtime(_SCIEZKA_PROGRAMU)
-        if _mt > _MTIME_PROGRAMU + 1:
-            # v480ih: ten sam kod zapisany jeszcze raz (druga druzyna albo
-            # reczne update_agent.sh na tej samej wersji) to nie nowa
-            # wersja. Bieg 2026-10-29: druzyna 1 przeladowala sie na
-            # c52aa46 trzy razy (19:28, 19:43, 19:51).
-            _o = _odcisk_programu()
-            if _o and _o == _ODCISK_PROGRAMU:
-                globals()["_MTIME_PROGRAMU"] = _mt
-            else:
-                return "nowy-plik"
-    except Exception:
-        pass
-    if _DRUZYNA == "2" or time.time() - _ostatnie_pytanie_githuba[0] < AKTUALIZACJA_CO_SEKUND:
-        return ""
-    _ostatnie_pytanie_githuba[0] = time.time()
-
-    try:
-        if not (_REPO_TELEFONU / ".git").exists():
-            return ""
-
-        if not _SKRYPT_AKTUALIZACJI.exists():
-            return ""
-
-        # v480m: galaz bierzemy z ~/update_agent.sh, a nie z nazwy
-        # galezi w ~/.ael-repo. Bieg 2026-10-11 16:58: klon na telefonie
-        # nazywa sie wciaz claude/android-termux-agent-repair-18dvrp
-        # (stara v450), a skrypt od dawna pobiera inna galaz (fetch +
-        # reset nie zmienia nazwy). Porownywalismy wiec z obca galezia:
-        # "nowa wersja 3a034ba" co 15 minut i przeladowanie na ten sam
-        # kod.
-        galaz = os.environ.get("BRANCH", "").strip()
-
-        if not galaz:
-            _m = re.search(
-                r'BRANCH="\$\{BRANCH:-([^}"]+)\}"',
-                _SKRYPT_AKTUALIZACJI.read_text(encoding="utf-8", errors="replace")
-            )
-            galaz = _m.group(1).strip() if _m else ""
-
-        if not galaz:
-            return ""
-
-        wgrany = _git_telefonu("rev-parse", "HEAD").stdout.strip()
-
-        zdalny = _git_telefonu(
-            "ls-remote", "origin", "refs/heads/" + galaz
-        ).stdout.split()
-
-        if not zdalny or not wgrany:
-            return ""
-
-        return zdalny[0] if zdalny[0] != wgrany else ""
-
-    except Exception:
-        return ""
-
-
-def _pilnuj_aktualizacji():
-
-    while True:
-
-        # v480ax: druzyna 2 sprawdza tylko date pliku na dysku (nic nie
-        # pobiera), wiec moze co pol minuty — nowa wersje, ktora wgrala
-        # druzyna 1, ma od razu, a nie do 15 min pozniej.
-        # v480hg: co 30 s także drużyna 1 — data pliku jest tania, GitHub
-        # dalej co 15 min (_sprawdz_nowa_wersje pilnuje odstępu).
-        time.sleep(30)
-
-        if _nowa_wersja["commit"]:
-            continue
-
-        _commit = _sprawdz_nowa_wersje()
-
-        if _commit:
-            _nowa_wersja["commit"] = _commit
-            log(
-                "AKTUALIZACJA",
-                (
-                    ("Nowa wersja jest już na dysku" + (" (pobrała ją drużyna 1)" if _DRUZYNA == "2" else ""))
-                    if _commit == "nowy-plik" else
-                    "Na GitHubie jest nowa wersja (" + _commit[:7] + ")"
-                ) + " — wgram ją po tym kroku."
-            )
-
-
-def uruchom_pilnowanie_aktualizacji():
-
-    # v480nf (2026-11-13, uzytkownik: "nie chce jej", "chce po prostu
-    # zmienic kod tam"): cicha aktualizacja WYLACZONA. Program w trakcie
-    # biegu nie pyta GitHuba, nie puszcza ~/update_agent.sh i nie
-    # przeladowuje sie, gdy ~/agent/agent.py na dysku sie zmieni — kod
-    # poprawiony recznie na telefonie nie zostanie nadpisany ani
-    # wczytany w pol edycji. Nowa wersja (reczna zmiana albo reczne
-    # `bash ~/update_agent.sh`) dziala od nastepnego uruchomienia
-    # programu. Wlaczenie z powrotem: AEL_AUTO_AKTUALIZACJA=1.
-    if os.environ.get("AEL_AUTO_AKTUALIZACJA", "").strip() != "1":
-        return
-
-    try:
-        import threading
-
-        threading.Thread(
-            target=_pilnuj_aktualizacji,
-            name="aktualizacja",
-            daemon=True
-        ).start()
-
-    except Exception as e:
-        log("AKTUALIZACJA", "Nie ruszyło sprawdzanie wersji: " + str(e))
+# Uzytkownik (2026-11-13): "nie chce jej", "i reczna tez usun z
+# programu, bede recznie z pliku uruchamial". Program nie pyta
+# GitHuba, nie puszcza ~/update_agent.sh i sam sie nie przeladowuje.
+# Ponizej zostaja tylko pomocnicze klasy/funkcje stanu biegu.
 
 
 class _ProcesPoAktualizacji:
@@ -16440,127 +16282,6 @@ def _przywroc_procesy_w_tle():
             _zmiana_zgloszona[tuple(r[:3])] = r[3]
     except Exception:
         pass
-
-
-def _przeladuj_po_aktualizacji(step, last_result, signatures):
-    """
-    Wgrywa nowa wersje i przeladowuje program w tym samym procesie.
-    Gdy cokolwiek nie wyjdzie — zostajemy na starej wersji i bieg
-    idzie dalej. Nigdy nie rzuca.
-    """
-
-    _commit = _nowa_wersja["commit"]
-    _nowa_wersja["commit"] = ""
-
-    try:
-        if _DRUZYNA == "2" or _commit == "nowy-plik":
-            # Nowy agent.py jest juz na dysku (druzyna 1 albo uzytkownik).
-            wynik = subprocess.CompletedProcess([], 0, "")
-        else:
-            wynik = subprocess.run(
-                ["bash", str(_SKRYPT_AKTUALIZACJI)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                timeout=600
-            )
-    except Exception as e:
-        log("AKTUALIZACJA", "Aktualizacja nie przeszła: " + str(e))
-        return
-
-    if wynik.returncode != 0 or not _SCIEZKA_PROGRAMU:
-        log(
-            "AKTUALIZACJA",
-            "Aktualizacja nie przeszła — zostaję na obecnej wersji: "
-            + short(str(wynik.stdout or "").strip(), 400)
-        )
-        return
-
-    stan = {
-        "commit": _commit,
-        "krok": int(step or 0),
-        "last_result": last_result,
-        "signatures": signatures,
-        "goal_briefed": sorted(_goal_briefed),
-        "role_seen_blocks": [
-            [k[0], k[1], v] for k, v in _role_seen_blocks.items()
-        ],
-        "pliki_biegu": (
-            [str(_plik_przebiegu), str(_plik_zdarzen)]
-            if _plik_przebiegu and _plik_zdarzen else []
-        ),
-        "procesy_w_tle": [
-            {"pid": pid, "args": str(getattr(p, "args", ""))[:300]}
-            for pid, p in list(_procesy_w_tle.items())
-            if p.poll() is None
-        ],
-        "logi_w_tle": {k: list(v) for k, v in _logi_w_tle.items()},
-        "glos": {"krotkie": _glos_krotkie[0], "postep_byl": _glos_postep_byl[0],
-                 "ask_krok": _ostatni_ask_krok[0], "czemu_krok": _glos_czemu_krok[0]},
-        # v480hs: co kto z zespolu juz ma w swojej rozmowie (pliki, spisy)
-        "znane_roli": {
-            "pliki": [list(k) + [v] for k, v in _tresc_znana_roli.items()],
-            "katalogi": [list(k) + [v] for k, v in _katalog_znany_roli.items()],
-        },
-        "raz_na_rozmowe": {
-            "stopka": [list(k) for k in _stopka_rundy_dana],
-            "zlecenie": {str(r): v for r, v in _zlecenie_u_roli.items() if isinstance(v, dict)},
-            "zgloszone": [list(k) + [v] for k, v in _zmiana_zgloszona.items()],
-        },
-        "grupy_z_komend": {
-            str(k): list(v) for k, v in _grupy_z_komend.items()
-        },
-        "autorzy_grup": {str(k): v for k, v in _autor_grupy.items()},
-        "komendy_w_tle": _komendy_w_tle_do_zapisu(),
-        # v480lv: rozmowa w toku przezywa przeladowanie — pytania MAIN-a
-        # przeniesione na nastepny krok, uwagi programu dla MAIN-a,
-        # skrzynki zespolu i to, kto kogo zawolal. Bieg 2026-11-03 18:14
-        # (druzyna 1, krok 13): szoste pytanie z burzy mozgow (do Ani)
-        # "poszlo na poczatek kroku 14", program sie przeladowal po
-        # aktualizacji i pytanie przepadlo; MAIN zadal je od nowa dopiero
-        # w kroku 18 ("nie doszlo do skutku").
-        "rozmowa": _rozmowa_do_zapisu(),
-        # v480lx: klucze, ktore juz odpowiadaly — po przeladowaniu bez
-        # drugiej linii "Klucz 1 (…) odpowiada" (bieg 2026-11-04 17:01)
-        "klucze_ok": sorted(_klucz_odpowiada),
-    }
-
-    try:
-        _PLIK_STANU_AKTUALIZACJI.write_text(
-            json.dumps(stan, ensure_ascii=False, default=str),
-            encoding="utf-8"
-        )
-    except Exception as e:
-        log("AKTUALIZACJA", "Nie zapisałem stanu biegu — nie przeładowuję: " + str(e))
-        return
-
-    log(
-        "AKTUALIZACJA",
-        "Wgrana nowa wersja ("
-        + (_commit_na_dysku() if _commit == "nowy-plik" else _commit[:7])
-        + ") — przeładowuję program, "
-        "bieg idzie dalej od kroku " + str(int(step or 0) + 1) + "."
-    )
-
-    try:
-        sys.stdout.flush()
-        sys.stderr.flush()
-    except Exception:
-        pass
-
-    os.environ["AEL_PO_AKTUALIZACJI"] = "1"
-    os.environ["AEL_URUCHOMIENIE_ID"] = _URUCHOMIENIE_ID
-
-    # v480ay: Sedzia nie moze zostac przerwany w pol odpowiedzi.
-    _KOLEJKA_KONTA.acquire()
-    try:
-        os.execv(sys.executable, [sys.executable, _SCIEZKA_PROGRAMU] + sys.argv[1:])
-    except Exception as e:
-        _KOLEJKA_KONTA.release()
-        os.environ.pop("AEL_PO_AKTUALIZACJI", None)
-        os.environ.pop("AEL_URUCHOMIENIE_ID", None)
-        log("AKTUALIZACJA", "Przeładowanie nie wyszło — zostaję na starej wersji: " + str(e))
 
 
 def _zatrzymane_przy_zamknieciu_blok():
@@ -62996,17 +62717,13 @@ def run_agent(goal):
             _przywroc_procesy_w_tle()
             globals()["_restart_powiedziany"] = True
             ustaw_krok(step)
-            _c = str(_stan_przed_aktualizacja.get("commit", ""))
             log(
                 "AKTUALIZACJA",
-                "Działa nowa wersja ("
-                + (_commit_na_dysku() if _c == "nowy-plik" else _c[:7])
-                + ") — ciągnę bieg dalej od kroku " + str(step + 1) + "."
+                "Ciągnę bieg dalej od kroku " + str(step + 1) + "."
             )
         except Exception as e:
             log("AKTUALIZACJA", "Nie odtworzyłem całego stanu biegu: " + str(e))
 
-    uruchom_pilnowanie_aktualizacji()
     uruchom_sedziego()
 
     while MAX_STEPS is None or step < MAX_STEPS:
@@ -63147,10 +62864,6 @@ def run_agent(goal):
                 "krok_bez_wykonania",
                 status=str(_powod_przepadku)
             )
-
-        # v480k: nowa wersja z GitHuba — wgrywamy na granicy krokow.
-        if _nowa_wersja["commit"]:
-            _przeladuj_po_aktualizacji(step, last_result, signatures)
 
         step += 1
 
