@@ -68269,15 +68269,15 @@ def _rywalizacja_tekst():
         "także w Debianie. Czas próby zależy więc też od tego, czy druga "
         "drużyna akurat liczy — wolniejszy krok nie musi znaczyć, że "
         "Wasz kod jest gorszy.\n\n"
-        # v480nl: akapit o Sedzim przepisany w calosci — Sedzia sam nic nie
-        # uruchamia, potwierdza liczbe z przebiegu druzyny.
-        "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
-        "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
+        # v480nm: akapit o Sedzim przepisany w calosci — same fakty o tym,
+        # jak wynik jest potwierdzany, bez powodow i bez wskazowek.
+        "Sędzią jest sam program. Wynik drużyny to plik "
+        "~/MAIN_" + my + "/wynik.json w postaci {\"opis\": \"co osiągnęliście\", "
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
         "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
-        "liczbę\"}. Program sam tej komendy nie uruchamia, żeby nie zabierać "
-        "Wam procesora: wynik jest potwierdzony, gdy program widział, jak "
-        "dokładnie ta komenda, puszczona przez Was w Waszym folderze"
+        "liczbę\"}. Program tej komendy nie uruchamia. Wynik jest "
+        "potwierdzony, gdy program widział, że dokładnie ta komenda, "
+        "uruchomiona w folderze drużyny"
         + (" (na telefonie albo, z LAPTOP:, na laptopie)" if _laptop_skonfigurowany() else "")
         + ", wypisała tę liczbę w ostatniej linii, a pliki, których używa, "
         "od tamtej pory się nie zmieniły. Mniej więcej co pół godziny Sędzia ocenia obie "
@@ -69748,7 +69748,8 @@ def _sedzia_ocen(numer):
     except Exception as e:
         log("RYWALIZACJA", "Sędzia: sprawdzenie widzianych przebiegów nie wyszło: " + str(e)[:200])
     # v480nl: Sedzia sam nic nie uruchamia — potwierdza tylko to, co program
-    # widzial w przebiegu samej druzyny (patrz _widziana_liczba).
+    # widzial w przebiegu samej druzyny (patrz _widziana_liczba). v480nm:
+    # szczegol to same fakty, bez powodu i bez wskazowki, co zrobic.
     if not _SEDZIA_URUCHAMIA:
         werdykt.update(werdykt="czeka na przebieg", czeka_na_przebieg=True, szczegol=(
             "program nie widział jeszcze, żeby ta komenda wypisała " + str(dane.get("wynik"))
@@ -69756,9 +69757,8 @@ def _sedzia_ocen(numer):
             + ((" (" + str(locals().get("_wid_powod")) + ")") if locals().get("_wid_powod")
                and locals().get("_wid_powod") not in ("program nie widział tej komendy z tą liczbą",
                                       "brak widzianych przebiegów") else "")
-            + ". Sędzia sam jej nie uruchamia, żeby nie zabierać Wam procesora — gdy uruchomicie "
-            "dokładnie tę komendę ze \"sprawdz\" (URUCHOM albo RUN, w folderze drużyny) i wypisze "
-            "tę liczbę w ostatniej linii, program potwierdzi wynik od razu"))
+            + ". Wynik zostanie potwierdzony, gdy program zobaczy przebieg tej komendy "
+            "w folderze drużyny z tą liczbą w ostatniej linii"))
         log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": czeka, aż drużyna sama uruchomi "
             "komendę ze \"sprawdz\" — sam jej nie uruchamia.")
         return werdykt

@@ -5434,3 +5434,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      - Rzeczywiście (rejestr procesów drużyny 1, 01–14.11): Sędzia puścił
        "sprawdz" ok. 12 razy, zwykle <1 min, najdłużej 8 min (przerwane
        timeoutem); 14.11 raz, o 02:31 (31 s).
+
+v480nm (2026-11-14)
+     - Akapit o Sędzim w tekście rywalizacji przepisany w całości: same fakty
+       (gdzie jest wynik, że program komendy nie uruchamia, kiedy wynik jest
+       potwierdzony), bez powodu ("żeby nie zabierać procesora") i bez
+       wskazówek, co drużyna ma zrobić.
+     - Werdykt "czeka na przebieg" do MAIN-a też tylko stwierdza fakt:
+       wynik zostanie potwierdzony, gdy program zobaczy przebieg tej komendy
+       w folderze drużyny z tą liczbą w ostatniej linii.
