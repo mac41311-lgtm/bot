@@ -70186,8 +70186,18 @@ def _daj_ocene(o, step):
     except Exception:
         _bez_zmian = False
     if _bez_zmian and not _skala:
-        log("RYWALIZACJA", "Ocena Sędziego z " + str(o.get("czas", "")) + " bez zmian (te same procenty "
-            "i prowadzenie) — zespołowi jej nie wysyłam, ma poprzednią.")
+        # v480nj (uzytkownik 2026-11-14): zamiast calej oceny jedna krotka
+        # linia "bez zmian" — zespol wie, ze Sedzia patrzyl, i nic wiecej.
+        _rywal = "2" if str(_DRUZYNA) == "1" else "1"
+        _prow = str(o.get("prowadzi", "")).strip()
+        _krotko = ("Ocena Sędziego z " + str(o.get("czas", ""))[11:16] + ": bez zmian — wy "
+                   + str((o.get("druzyna_" + str(_DRUZYNA)) or {}).get("procent")) + "%, drużyna " + _rywal + " "
+                   + str((o.get("druzyna_" + _rywal) or {}).get("procent")) + "%, "
+                   + ("remis." if _prow.lower().startswith("remis") or not _prow
+                      else ("prowadzicie." if _prow.startswith(str(_DRUZYNA)) else "prowadzi drużyna " + _rywal + ".")))
+        with _sedzia_lock:
+            _sedzia_wiadomosci.append(_krotko)
+        log("RYWALIZACJA", _krotko + " (cała ocena tylko na ekranie)")
     else:
         try:
             STATE_DIR.mkdir(parents=True, exist_ok=True)

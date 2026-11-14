@@ -5391,3 +5391,9 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        jego drużyny albo rywala, kto prowadzi, ostrzeżenie, dyskwalifikacja.
        Ta sama ocena („Utrzymany stan”) nie idzie drugi raz — w logu jedna
        linia "bez zmian". Na ekranie paski jak dotąd.
+
+ v480nj (2026-11-14, uzytkownik): gdy ocena Sędziego jest bez zmian, MAIN
+     dostaje zamiast niej jedną krótką linię, np. "Ocena Sędziego z 11:30:
+     bez zmian — wy 2%, drużyna 2 5%, prowadzi drużyna 2." Cała ocena idzie
+     do niego tylko przy zmianie procentu, prowadzenia, ostrzeżenia albo
+     dyskwalifikacji.
