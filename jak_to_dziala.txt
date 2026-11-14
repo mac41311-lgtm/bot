@@ -5504,3 +5504,9 @@ v480nr (2026-11-14)
        zdanie o tym, kto czyta „ocenę”, zgodne z tym.
      - Fałszywe „Sędzia liczy teraz procent inaczej” po każdej zmianie słów
        w prompcie Sędziego usunięte (skala = stała, nie hash promptu).
+
+v480ns (2026-11-14)
+     - Przerwa konta za błędy serwera (2 h, plik ~/.ael_przerwa_konta_N.txt)
+       kończy się od razu, gdy plik z tokenem tego konta zapisano po jej
+       początku — nowy token dostaje próbę (było: czekanie do końca 2 h, także
+       po restarcie). Czekanie sprawdza to co 30 s. Drugie konto bez zmian.

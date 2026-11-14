@@ -6900,11 +6900,34 @@ def _plik_przerwy_konta(account):
 
 
 def _przerwa_konta_do(account):
-    """Do kiedy (time.time()) konto ma przerwe za bledy serwera; 0 = brak."""
+    """Do kiedy (time.time()) konto ma przerwe za bledy serwera; 0 = brak.
+    v480ns (uzytkownik 2026-11-14: "zmienilem token i czemu nie ma zadnej
+    proby"): plik z tokenem zapisany po poczatku przerwy konczy ja od razu —
+    nowy token dostaje probe, a nie czeka do konca 2 h."""
+    p = _plik_przerwy_konta(account)
     try:
-        return float(_plik_przerwy_konta(account).read_text().strip() or 0)
+        do = float(p.read_text().strip() or 0)
     except Exception:
         return 0.0
+    if do > time.time():
+        try:
+            plik_tokenu = TOKEN_FILE if int(account) == 1 else TOKEN_FILE_2
+            if plik_tokenu.stat().st_mtime > p.stat().st_mtime:
+                nowy = _czysty_token(read_text(plik_tokenu))
+                p.unlink()
+                if nowy and not re.search(r"\s", nowy):
+                    _account_tokens[account] = nowy
+                _bledy_serwera[account] = 0
+                try:
+                    _get_health(account)["cooldown_until"] = 0.0
+                except Exception:
+                    pass
+                log("DEEPSEEK", "Konto " + str(account) + ": plik z tokenem zapisany po początku "
+                    "przerwy (" + _kawalek_klucza(nowy) + ") — kończę przerwę i próbuję od razu.")
+                return 0.0
+        except Exception:
+            pass
+    return do
 
 
 # ------------------------------------------------------------
@@ -7360,10 +7383,17 @@ def _deepseek_circuit_wait(name):
             "Konto " + str(account) + " ma przerwę za błędy serwera "
             "DeepSeek — czekam do "
             + datetime.fromtimestamp(health["cooldown_until"]).strftime("%H:%M")
-            + " i wtedy próbuję jedną wiadomością."
+            + " i wtedy próbuję jedną wiadomością (nowy token w pliku kończy "
+            "przerwę od razu)."
         )
 
-        time.sleep(remaining)
+        # v480ns: co 30 s sprawdzam, czy nie przyszedl nowy token
+        _do = health["cooldown_until"]
+        while time.time() < _do:
+            time.sleep(min(30.0, max(0.0, _do - time.time())))
+            if _przerwa_konta_do(account) <= time.time():
+                health["cooldown_until"] = 0.0
+                break
 
     elif remaining > 0:
 
