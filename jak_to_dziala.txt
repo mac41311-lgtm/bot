@@ -5514,3 +5514,5 @@ v480ns (2026-11-14)
 v480nt (2026-11-14): druzyna 2 dostaje PYTHONUNBUFFERED=1 - jej terminal.log dostaje kazda linie od razu (wczesniej bufor 8 KB: logi pojawialy sie paczkami dopiero po dluzszym czasie).
 
 v480nu (2026-11-14): komenda z ostatniego RUN MAIN-a, ktora poszla w tlo, jest opisana tylko raz - w 'Twój ostatni krok' (linia: liczy dalej w tle; pliki mogą być niepełne; wynik przyjdzie sam). Sekcja 'W tle' jej nie powtarza. Komenda LAPTOP: w tle ma metke (laptop), nie (telefon).
+
+v480nv (2026-11-14): komenda roli z PODGLĄD (np. python3 -c) ma numer komendy i zapisuje kod wyjścia - rejestr procesów nie pisze już 'nie wiadomo, nikt go nie zatrzymał' o zwykłym końcu podglądu.

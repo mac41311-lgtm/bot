@@ -11208,10 +11208,26 @@ def _uruchom_podglad(komenda, rola=None):
             + _komenda_jedna_linia(komenda, 160))
         return "$ " + komenda + "\n(nie uruchomiłem: " + odm + ")"
     _log_komendy(_imie_k, komenda, "zagląda")
+    # v480nv: podglad ma swoj numer komendy (AEL_KOMENDA) i zapisuje kod
+    # wyjscia — rejestr procesow pisal "nie wiadomo, nikt go nie zatrzymał"
+    # o "python3 -c" z PODGLĄD (bieg 2026-11-14 19:00, druzyna 1)
+    _kid_p = _nowy_numer_komendy()
+    _komendy_trwajace[_kid_p] = str(komenda)
     try:
         os.makedirs(cwd, exist_ok=True)
-        r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
-                           errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+        try:
+            r = subprocess.run(["bash", "-c", komenda], cwd=cwd, capture_output=True, text=True,
+                               errors="replace", timeout=60, stdin=subprocess.DEVNULL,
+                               env=dict(os.environ, AEL_KOMENDA=_kid_p))
+        finally:
+            _komendy_trwajace.pop(_kid_p, None)
+        try:
+            _ost_p = [l for l in ((r.stderr if r.returncode else r.stdout or r.stderr) or "").splitlines() if l.strip()]
+            _zdarzenie_procesu(rodzaj="koniec_komendy", maszyna="telefon", kid=_kid_p,
+                               druzyna=_DRUZYNA or "1", kod=r.returncode,
+                               ostatnia=short(_ost_p[-1], 200) if _ost_p else "")
+        except Exception:
+            pass
         # v480il: podglad (ps/top bez uruchamiania) tez nie pokazuje nazw
         # procesow rywala — tylko jego zuzycie, jak termux_run.
         _uk = _ukryj_rywala_w_wyniku({"stdout": r.stdout or "", "stderr": r.stderr or ""})
