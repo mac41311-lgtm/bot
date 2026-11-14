@@ -5476,3 +5476,17 @@ v480np (2026-11-14)
        wprost wstawianie i usuwanie linii, bez wielkich liter i starych
        przykładów („kod gry, build.gradle”). Pozostałe role (Tomek, Marek, Ola,
        Wojtek, Ela, Kamil, Igor) plików nie poprawiają w swojej pracy — bez zmian.
+
+v480nq (2026-11-14)
+     - Raport kroku dla MAIN-a i zespołu: każda komenda, proces i plik raz.
+       Nagłówek akcji to istota komendy (bez cd/echo-nagłówków/2>/dev/null/
+       LAPTOP:) + „(laptop, 4 s)”. Komenda na dwie maszyny: znacznik [laptop]/
+       [telefon] tam, gdzie zmienia się maszyna, kod tylko gdy ≠ 0 (było
+       „── laptop: <kawałek komendy> (kod 0) ──” przy każdej części).
+       „stan: LECI_W_TLE / komunikat: …” → „→ liczy dalej w tle; wynik
+       przyjdzie sam”. Pole „na_laptopie:” znika (jest w nagłówku).
+     - Sekcja „Pliki” zamiast pola „zmiany_plikow:” przy akcji i sekcji „Nowe
+       na dysku”: każdy plik raz (kto/kiedy/co, rozmiar, „pusty”).
+     - Sekcja „W tle” (było „Dalej w tle”): proces raz — krótka nazwa skryptu,
+       maszyna, ile trwa „z ilu” (timeout), log; proces laptopa śledzony już
+       jako komenda nie dostaje drugiej linii.

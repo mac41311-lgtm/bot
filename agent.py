@@ -29211,6 +29211,47 @@ def _historia_pliku(p, ile=4, dla=None):
     return "; ".join(_opis_zmiany(w, dla) for w in lista[-ile:])
 
 
+_zmiany_plikow_dla_maina = []
+
+
+def _pliki_blok_dla_maina(nowe_blok):
+    """v480nq: wszystko o plikach w jednym miejscu, kazdy plik raz:
+    cudze zmiany (kto, kiedy, co) i to, co przybylo na dysku (rozmiar)."""
+    linie, klucze = [], set()
+    while _zmiany_plikow_dla_maina:
+        z = _zmiany_plikow_dla_maina.pop(0)
+        sc, _, opis = z.partition(" — ostatnie zmiany: ")
+        k = os.path.basename(sc.strip().rstrip("/"))
+        klucze.add(k)
+        linie.append("• " + sc.strip() + (" — " + opis if opis else ""))
+    for l in str(nowe_blok or "").splitlines():
+        l = l.strip()
+        if not l.startswith("- "):
+            continue
+        poz = l[2:]
+        m = re.match(r"(.*?)(?: \((\d+) B\))?$", poz)
+        sc = m.group(1) if m else poz
+        k = os.path.basename(sc.rstrip("/"))
+        try:
+            sc = _sciezka_od_domu(sc) if sc.startswith(str(HOME)) else sc
+            if _DRUZYNA and sc.startswith("~/MAIN_" + str(_DRUZYNA) + "/"):
+                sc = sc[len("~/MAIN_" + str(_DRUZYNA) + "/"):]
+        except Exception:
+            pass
+        rozm = ""
+        if m and m.group(2):
+            b = int(m.group(2))
+            rozm = (" — " + str(b) + " B" + (" (pusty)" if b <= 2 else "")) if b < 10240 else (
+                " — " + str(round(b / 1024)) + " kB" if b < 10485760 else " — " + str(round(b / 1048576)) + " MB")
+        if k in klucze:
+            linie = [x + rozm if os.path.basename(x[2:].split(" — ")[0].rstrip("/")) == k
+                     and rozm and rozm not in x else x for x in linie]
+            continue
+        klucze.add(k)
+        linie.append("• " + sc + (rozm or " — nowe"))
+    return "\n".join(linie)
+
+
 def _nowe_zmiany_dla(kto, pliki):
     """
     v480ly: zmiany plikow, ktorych `kto` jeszcze nie widzial — jedna linia
@@ -34126,6 +34167,7 @@ def _wykonaj_czesci_maszyn(command_str, czesci):
         + " | ".join(m + ": " + short(k, 60) for _s, m, k in czesci))
     rc, wy, bl, opis, pominiete = 0, [], [], [], []
     na_laptopie = False
+    _ostatnia_maszyna = []
     for sep, maszyna, kom in czesci:
         if (sep == "&&" and rc != 0) or (sep == "||" and rc == 0):
             pominiete.append(maszyna + ": " + short(kom, 80))
@@ -34138,11 +34180,22 @@ def _wykonaj_czesci_maszyn(command_str, czesci):
             kod = 0 if w.get("ok") else 1
         rc = int(kod)
         na_laptopie = na_laptopie or maszyna == "laptop"
-        naglowek = "── " + maszyna + ": " + short(kom, 120) + " (kod " + str(rc) + ") ──"
+        # v480nq (uzytkownik 2026-11-14: "ta sama komenda powtarzana wiele
+        # razy"): zamiast "── laptop: <kawalek komendy> (kod 0) ──" przy
+        # kazdej czesci — znacznik maszyny tylko tam, gdzie sie zmienia,
+        # a kod tylko, gdy nie jest zerem. Komende MAIN zna, sam ja napisal.
         tresc = str(w.get("stdout") or "").rstrip("\n")
         if w.get("message") and not tresc:
             tresc = str(w.get("message"))
-        wy.append(naglowek + ("\n" + tresc if tresc else ""))
+        _znacznik = ""
+        if rc != 0:
+            _znacznik = "[" + maszyna + " — kod " + str(rc) + " w części: " + short(kom, 80) + "]"
+        elif tresc and maszyna != (_ostatnia_maszyna[0] if _ostatnia_maszyna else None):
+            _znacznik = "[" + maszyna + "]"
+        if tresc or _znacznik:
+            if tresc:
+                _ostatnia_maszyna[:] = [maszyna]
+            wy.append(_znacznik + ("\n" if _znacznik and tresc else "") + tresc)
         if str(w.get("stderr") or "").strip():
             bl.append("[" + maszyna + "] " + str(w.get("stderr")).rstrip("\n"))
         if w.get("podpowiedz"):
@@ -44638,7 +44691,7 @@ def _pusc_czekanie_w_tle(name, args, sekundy, pominiete=None):
         "ok": True,
         "status": "CZEKA_W_TLE",
         "command": cmd,
-        "message": "Czekanie poszło w tle — opis jest w sekcji „Dalej w tle”.",
+        "message": "Czekanie poszło w tle — opis jest w sekcji „W tle”.",
     }
 
 
@@ -45132,7 +45185,7 @@ def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete, kto="MAIN"):
         "ok": True,
         "status": "LECI_W_TLE",
         "command": cmd,
-        "message": "Komenda liczy dalej w tle — opis jest w sekcji „Dalej w tle”.",
+        "message": "Komenda liczy dalej w tle — opis jest w sekcji „W tle”.",
     }, True
 
 
@@ -45426,6 +45479,32 @@ def _nowe_tlo_dla_maina():
     return nowe
 
 
+def _skrypty_w_tle_sledzone():
+    """v480nq: nazwy skryptow z komend, ktore program sam sledzi w tle —
+    proces laptopa o tej nazwie nie dostaje drugiej linii."""
+    out = set()
+    try:
+        for r in list(_w_tle):
+            if r.get("wynik") is None and r.get("rodzaj") != "czekanie":
+                for m in re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", str(r.get("komenda") or "")):
+                    out.add(os.path.basename(m))
+    except Exception:
+        pass
+    return out
+
+
+def _log_laptopa_dla(komenda):
+    """v480nq: log procesu laptopa o nazwie skryptu z tej komendy, gdy go znamy."""
+    try:
+        nazwy = {os.path.basename(m) for m in re.findall(r"([\w.~/-]+\.(?:py|sh|js|pl|rb))\b", str(komenda or ""))}
+        for d in list((_laptop_moje_wszystkie.get("procesy") or {}).values()):
+            if d.get("nazwa") in nazwy and d.get("log") and "/.ael_laptop/" not in d.get("log"):
+                return "LAPTOP: tail -n 5 " + re.sub(r"^/home/[^/]+/", "~/", d.get("log"))
+    except Exception:
+        pass
+    return ""
+
+
 def _karta_startu(r, teraz):
     czekanie = r["rodzaj"] == "czekanie"
     minelo = int(teraz - r["start"])
@@ -45446,9 +45525,8 @@ def _karta_startu(r, teraz):
         # tu wystarczy jej krotka nazwa (bylo: cala komenda drugi raz)
         _wyzej = (not r.get("autor") and r.get("komenda") in (_ostatni_run().get("komendy") or []))
         linie = [
-            "• Komenda" + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
-            + ": " + (_nazwa_w_tle(r["komenda"]) + " (z Twojego RUN wyżej)" if _wyzej
-                      else _komenda_jedna_linia(r["komenda"], 140))
+            "• " + _nazwa_w_tle(r["komenda"]) + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
+            + (" (z Twojego RUN wyżej)" if _wyzej else "")
             + " — liczy dłużej niż " + _min_s(_W_TLE_PO_S) + ", więc liczy "
             "dalej w tle; pliki, które zapisuje, mogą być jeszcze niepełne."
         ]
@@ -45536,11 +45614,21 @@ def _czekanie_blok(czesci=None):
                     continue
                 # v480kf: instalacja/pobieranie — co sie pobiera i ile
                 _inst = _postep_instalacji_rzeczy(r) if r["rodzaj"] != "czekanie" else ""
+                # v480nq: komenda w tle krotka nazwa (skrypt + maszyna), czas
+                # "z ilu", gdy jest timeout, i log, gdy program go zna z laptopa
+                _nazwa_r = (_nazwa_w_tle(r["komenda"]) if co == "komenda"
+                            else _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140))
+                _z_ilu = ""
+                if co == "komenda" and not _zostalo:
+                    _mt = re.search(r"\btimeout\s+(?:-\S+\s+)*(\d+)\b", str(r["komenda"]))
+                    if _mt:
+                        _z_ilu = " z " + _min_s(int(_mt.group(1)))
+                _log_r = _log_laptopa_dla(r["komenda"]) if co == "komenda" else ""
                 linie.append(
-                    "• " + co.capitalize() + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
-                    + ": " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
+                    "• " + _nazwa_r + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
                     + " — " + ((_inst + "; ") if _inst else "")
-                    + (_zostalo.lstrip(", ") if _zostalo else "trwa " + _min_s(teraz - r["start"])) + "."
+                    + (_zostalo.lstrip(", ") if _zostalo else "trwa " + _min_s(teraz - r["start"]) + _z_ilu)
+                    + (", log: " + _log_r if _log_r else "") + "."
                 )
     if linie:
         trwa.append("\n".join(linie))
@@ -45676,8 +45764,11 @@ def _wykonaj_akcje_maina(decision, step):
                     and result.get("status") not in ("LECI_W_TLE", "AUTO_BACKGROUNDED",
                                                      "JUZ_LICZY_W_TLE", "JUZ_CZEKA_W_TLE")):
                 _zm_pl = _nowe_zmiany_dla("MAIN", _pliki_z_komendy(_cmd_akcji))
-                if _zm_pl:
-                    result["zmiany_plikow"] = " | ".join(_zm_pl)
+                # v480nq: do jednej sekcji "Pliki" w wiadomosci MAIN-a,
+                # nie jako pole przy wyniku akcji
+                for _z in _zm_pl:
+                    if _z not in _zmiany_plikow_dla_maina:
+                        _zmiany_plikow_dla_maina.append(_z)
                 # v480nd: pytanie do uzytkownika wypisane echem (bieg
                 # 2026-11-13, druzyna 1: "pytanie A/B/C do uzytkownika") —
                 # uzytkownik terminala zespolu nie czyta.
@@ -45850,7 +45941,8 @@ def _wykonaj_akcje_maina(decision, step):
 # potrzebne?"): w wyniku termux_run komenda szla drugi raz (juz byla w
 # naglowku akcji), do tego limit_ciszy_s, maks_czas_s, duration_s, a
 # stdout jako jedna linia JSON z "\n" zamiast nowych linii.
-_POLA_BEZ_ZNACZENIA = frozenset(("limit_ciszy_s", "maks_czas_s", "duration_s"))
+# v480nq: "na_laptopie" stoi w naglowku akcji ("(laptop, 4 s)"), zmiany plikow w sekcji "Pliki"
+_POLA_BEZ_ZNACZENIA = frozenset(("limit_ciszy_s", "maks_czas_s", "duration_s", "na_laptopie"))
 
 
 def _bez_sleep_na_poczatku(cmd):
@@ -45901,6 +45993,12 @@ def _wynik_dla_maina(wynik, args, limit):
     # czekaniu idzie zdaniem (bez komendy przepisanej przez program), a
     # proste pola jako "pole: wartość", po jednym w linii.
     _notka = ""
+    # v480nq: "stan: LECI_W_TLE" + "komunikat: … sekcji …" — jedno zdanie
+    if reszta.get("status") in ("LECI_W_TLE", "AUTO_BACKGROUNDED"):
+        reszta.pop("status", None)
+        reszta.pop("message", None)
+        reszta.pop("command", None)
+        _notka = "→ liczy dalej w tle; wynik przyjdzie sam, gdy się skończy."
     if reszta.get("czekanie"):
         _notka = str(reszta.pop("czekanie"))
         reszta.pop("command", None)
@@ -45933,7 +46031,8 @@ def _wynik_dla_maina(wynik, args, limit):
     tekst = (
         out
         + ("\n" + wyj if wyj else ("\n(nic nie wypisało)"
-                                  if "stdout" in wynik and not bl and not wynik.get("czekanie") else ""))
+                                  if "stdout" in wynik and not bl and not wynik.get("czekanie")
+                                  and wynik.get("status") not in ("LECI_W_TLE", "AUTO_BACKGROUNDED") else ""))
         + ("\nstderr:\n" + bl if bl else "")
         + ("\n" + kod_linia if kod_linia else "")
     )
@@ -45948,6 +46047,65 @@ def _komenda_jedna_linia(kom, limit=240):
     if len(linie) > 1:
         pierwsza += " … (+" + str(len(linie) - 1) + " linii)"
     return short(pierwsza, limit)
+
+
+_ECHO_NAGLOWEK_RE = re.compile(r"""^\s*(?:echo|printf)\s+(?:-e\s+)?(?:'[^'$`]*'|"[^"$`]*"|[^\s;&|$`]+)\s*$""")
+
+
+def _istota_komendy(kom, limit=200):
+    """v480nq: podpis akcji dla MAIN-a — sama istota komendy: bez "cd X &&"
+    na poczatku, bez echo-naglowkow ('=== … ==='), bez 2>/dev/null i bez
+    slow LAPTOP:/TELEFON: (maszyna stoi w nawiasie). Cala komenda MAIN zna."""
+    k = str(kom or "").strip()
+    pierwsza = k.split("\n")[0]
+    reszta = len(k.split("\n")) - 1
+    seg = []
+    for cz in re.split(r"\s*(?:&&|;)\s*", pierwsza):
+        cz = re.sub(r"\b(?:LAPTOP|TELEFON)\s*:\s*", "", cz)
+        cz = re.sub(r"\s*\d?>\s*/dev/null", "", cz).strip()
+        if not cz or re.match(r"^cd(\s|$)", cz) or _ECHO_NAGLOWEK_RE.match(cz):
+            continue
+        seg.append(cz)
+    t = "; ".join(seg) or pierwsza
+    if reszta:
+        t += " … (+" + str(reszta) + " linii)"
+    return short(t, limit)
+
+
+def _metka_akcji(tool, wynik):
+    """v480nq: "(laptop, 4 s)" — gdzie liczylo i ile trwalo."""
+    if not isinstance(wynik, dict):
+        return ""
+    cz = []
+    if str(tool) in ("termux_run", "shell"):
+        nl = str(wynik.get("na_laptopie") or "")
+        try:
+            jest_laptop = _laptop_skonfigurowany()
+        except Exception:
+            jest_laptop = False
+        if nl.startswith("część"):
+            cz.append("telefon i laptop")
+        elif nl:
+            cz.append("laptop")
+        elif jest_laptop:
+            cz.append("telefon")
+    try:
+        d = float(wynik.get("duration_s"))
+        cz.append("<1 s" if d < 1 else (str(int(round(d))) + " s") if d < 90 else _min_s(d))
+    except (TypeError, ValueError):
+        pass
+    cz = [c for c in cz if c]
+    return (" (" + ", ".join(cz) + ")") if cz else ""
+
+
+def _naglowek_wyniku(w):
+    """v480nq: naglowek akcji z RUN-a — ten sam dla MAIN-a i zespolu."""
+    w = w if isinstance(w, dict) else {}
+    _wynik = w.get("wynik")
+    _a_kom = (w.get("args") or {}).get("command") if isinstance(w.get("args"), dict) else None
+    if str(w.get("tool")) in ("termux_run", "shell") and isinstance(_a_kom, str) and _a_kom.strip():
+        return _istota_komendy(_a_kom) + _metka_akcji(w.get("tool"), _wynik)
+    return _naglowek_akcji(w.get("tool"), w.get("args")) + _metka_akcji(w.get("tool"), _wynik)
 
 
 def _naglowek_akcji(tool, args):
@@ -45998,8 +46156,9 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
                 w["_dla_maina"] = _wynik_tylko_nowe(_wynik, _kom)
             except Exception:
                 w["_dla_maina"] = _wynik
+        _nagl = _naglowek_wyniku(w)
         tekst = (
-            str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args"))
+            str(i + 1) + ". " + _nagl
             + "\n" + _wynik_dla_maina(w["_dla_maina"], w.get("args"), na_akcje)
         )
         # v480gf: komenda czekania stala drugi raz — w ramce "W TLE" na
@@ -46007,7 +46166,7 @@ def _wyniki_run_blok(last_result, na_akcje=3500, razem=14000):
         # "dwa razy to samo"). Tu zostaje jedna linia.
         if isinstance(_wynik, dict) and _wynik.get("status") == "CZEKA_W_TLE":
             tekst = (str(i + 1) + ". " + str(w.get("tool"))
-                     + " — poszło w tle jako czekanie (karta w sekcji „Dalej w tle”).")
+                     + " — poszło w tle jako czekanie (opis w sekcji „W tle”).")
         elif isinstance(_wynik, dict) and _wynik.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
             tekst = (str(i + 1) + ". " + str(w.get("tool")) + " — "
                      + str(_wynik.get("message") or "to samo czekanie już leci w tle."))
@@ -46154,7 +46313,7 @@ def _run_script_directly(path, task_text):
         if shell_result.get("status") == "LECI_W_TLE":
             _msg = (path.name + " liczy dłużej niż " + _min_s(_W_TLE_PO_S)
                     + " — liczy dalej w tle; wynik przyjdzie sam, gdy się skończy "
-                    "(sekcja „Dalej w tle”).")
+                    "(sekcja „W tle”).")
         return {
             "ok": True,
             "status": "COMPLETED",
@@ -51649,11 +51808,11 @@ def _condense_last_result_for_team(last_result, limit=2500, pelne=None):
             except Exception:
                 pass
             if isinstance(_wy, dict) and _wy.get("status") == "CZEKA_W_TLE":
-                return str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — poszło w tle jako czekanie."
+                return str(i + 1) + ". " + _naglowek_wyniku(w) + " — poszło w tle jako czekanie."
             if isinstance(_wy, dict) and _wy.get("status") in ("JUZ_CZEKA_W_TLE", "JUZ_LICZY_W_TLE"):
-                return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + " — "
+                return (str(i + 1) + ". " + _naglowek_wyniku(w) + " — "
                         + str(_wy.get("message") or "to samo już leci w tle."))
-            return (str(i + 1) + ". " + _naglowek_akcji(w.get("tool"), w.get("args")) + "\n"
+            return (str(i + 1) + ". " + _naglowek_wyniku(w) + "\n"
                     + _wynik_dla_maina(_wy, w.get("args"), _limit_akcji))
         parts.append("\n\n".join(_jedna_akcja(i, w) for i, w in enumerate(_wr)))
         tool_trace = None
@@ -56740,10 +56899,16 @@ def main_decide(
              else "Pamięć telefonu"), _uwagi_pamieci)
     _sekcja("Laptop", _laptop_zdanie)
     _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
-    _sekcja("Dalej w tle — wynik przyjdzie sam", _tlo_trwa)
+    _sekcja("W tle — wynik przyjdzie sam", _tlo_trwa)
     _sekcja("Zespół", team_block)
     _sekcja("Ocena", (_werdykty or "") + "\n" + (_postep_dla_maina or ""))
-    _sekcja("Nowe na dysku", _bez_naglowka(_nowe_pliki, "Nowe na dysku w tym kroku:"))
+    # v480nq: zmiany plikow (bylo pole "zmiany_plikow" przy akcji) i nowe na
+    # dysku (bylo "Nowe na dysku") w jednej sekcji, kazdy plik raz
+    try:
+        _pliki_txt = _pliki_blok_dla_maina(_nowe_pliki)
+    except Exception:
+        _pliki_txt = _bez_naglowka(_nowe_pliki, "Nowe na dysku w tym kroku:")
+    _sekcja("Pliki", _pliki_txt)
     _sekcja("Ekran", (_chrome_dla_maina or "") + "\n" + (_android_dla_maina or ""))
     _sekcja("", _burza)
     _sekcja("", (_format_block or "") + (ask_contract_block or ""))
@@ -58979,7 +59144,7 @@ def _laptop_dla_maina_akapit():
         "nim w folderze ~/" + f + " na laptopie, z tymi samymi wynikami, błędami i tłem co na "
         "telefonie, np. LAPTOP: python3 skrypt.py albo LAPTOP: nproc; free -h. Proces na "
         "laptopie liczy, aż sam skończy, także gdy połączenie się zerwie; to, co tam liczy, "
-        "widzisz w „Dalej w tle”. W jednej komendzie możesz przechodzić między maszynami: po "
+        "widzisz w sekcji „W tle”. W jednej komendzie możesz przechodzić między maszynami: po "
         "; albo && wpisz LAPTOP: (dalej na laptopie) albo TELEFON: (z powrotem na telefonie), "
         "np. sleep 600; LAPTOP: tail -5 log.txt — program wykona części po kolei, każdą na "
         "swojej maszynie, i odda jeden wynik. Pliki z kodem i małe pliki tekstowe są na obu "
@@ -67702,7 +67867,11 @@ def _raport_z_tla():
             _opisy = []
             _wsz = list((_laptop_moje_wszystkie.get("procesy") or {}).values())
             _samodz = {d.get("nazwa") for d in _laptop_moje_widziane.values()}
+            _sledzone = _skrypty_w_tle_sledzone()
             for n, t in _lp:
+                # v480nq: ten proces ma juz linie jako komenda w tle
+                if n in _sledzone:
+                    continue
                 _lg = next((d.get("log") for d in _wsz if d.get("nazwa") == n and d.get("log")
                             and "/.ael_laptop/" not in d.get("log")), "")
                 _o = n + " — " + _min_s(t)
@@ -67711,7 +67880,8 @@ def _raport_z_tla():
                 elif n not in _samodz:
                     _o += ", wynik przyjdzie z komendą, która go puściła"
                 _opisy.append(_o)
-            zdania.append("• Na laptopie liczy (Wasze): " + "; ".join(_opisy) + ".")
+            if _opisy:
+                zdania.append("• Na laptopie liczy (Wasze): " + "; ".join(_opisy) + ".")
     except Exception:
         pass
     return zdania
