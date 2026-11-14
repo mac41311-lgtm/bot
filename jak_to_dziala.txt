@@ -5415,3 +5415,22 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        części celu brak — słowami celu), bez zadań, wariantów, prognoz
        i uwag o metodzie; szerzej tylko w "uzasadnienie" dla użytkownika.
        Wznowiona rozmowa Sędziego dostaje zmianę raz (diff instrukcji).
+
+ v480nl (2026-11-14, uzytkownik: "po co Sędzia coś uruchamia, będziemy
+     zabierać zasoby — wymyśl coś innego"):
+     - Sędzia sam nie uruchamia już komendy "sprawdz" (_SEDZIA_URUCHAMIA =
+       False; True przywraca stare zachowanie). Wynik jest potwierdzony, gdy
+       program widział, jak dokładnie ta komenda, puszczona przez drużynę
+       w jej folderze, wypisała tę liczbę w ostatniej linii, a pliki, których
+       używa, od tamtej pory się nie zmieniły (mechanizm z v480lp).
+     - Gdy takiego przebiegu nie ma: werdykt "czeka na przebieg" (raz do
+       MAIN-a) z tym, co zrobić: uruchomić tę komendę samemu. Gdy drużyna
+       ją puści, program sprawdza od razu (nowy wpis w widziane_<n>.jsonl),
+       bez czekania na zmianę wynik.json.
+     - Naprawione przy okazji: przebieg URUCHOM zespołu ("cd '/data/…/MAIN_1'
+       && …", pełna ścieżka) nie zgadzał się dotąd z "~/MAIN_1" Sędziego, więc
+       Sędzia liczył od nowa coś, co zespół już policzył.
+     - Tekst o rywalizacji (akapit o Sędzim) przepisany w całości.
+     - Rzeczywiście (rejestr procesów drużyny 1, 01–14.11): Sędzia puścił
+       "sprawdz" ok. 12 razy, zwykle <1 min, najdłużej 8 min (przerwane
+       timeoutem); 14.11 raz, o 02:31 (31 s).

@@ -68269,17 +68269,18 @@ def _rywalizacja_tekst():
         "także w Debianie. Czas próby zależy więc też od tego, czy druga "
         "drużyna akurat liczy — wolniejszy krok nie musi znaczyć, że "
         "Wasz kod jest gorszy.\n\n"
+        # v480nl: akapit o Sedzim przepisany w calosci — Sedzia sam nic nie
+        # uruchamia, potwierdza liczbe z przebiegu druzyny.
         "Sędzią jest sam program. Gdy macie wynik, zapiszcie go w "
         "~/MAIN_" + my + "/wynik.json jako {\"opis\": \"co osiągnęliście\", "
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
         "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
-        "liczbę\"}. Program uruchomi tę komendę w bashu, w waszym "
-        "folderze"
-        # v480jb: akapit o Sedzim przepisany w calosci — sprawdz z LAPTOP:
-        + (" na telefonie — albo na laptopie, w Waszym folderze tam, gdy "
-           "komenda zaczyna się od LAPTOP:" if _laptop_skonfigurowany() else "")
-        + " (może trwać do " + str(_SEDZIA_MAKS_S // 60) + " minut), i "
-        "porówna liczbę. Mniej więcej co pół godziny Sędzia ocenia obie "
+        "liczbę\"}. Program sam tej komendy nie uruchamia, żeby nie zabierać "
+        "Wam procesora: wynik jest potwierdzony, gdy program widział, jak "
+        "dokładnie ta komenda, puszczona przez Was w Waszym folderze"
+        + (" (na telefonie albo, z LAPTOP:, na laptopie)" if _laptop_skonfigurowany() else "")
+        + ", wypisała tę liczbę w ostatniej linii, a pliki, których używa, "
+        "od tamtej pory się nie zmieniły. Mniej więcej co pół godziny Sędzia ocenia obie "
         "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
         + " tylko jej procent i to, kto prowadzi. Jej wyników, liczb ani "
         "opisu jej pracy program Wam nie pokazuje.\n\n"
@@ -69469,6 +69470,13 @@ def _rdzen_komendy(komenda, katalog_tel="~", druzyna=None):
             continue
         if slowa[0] == "cd" and len(slowa) > 1:
             cel = slowa[1].strip("\"'")
+            # v480nl: URUCHOM zespolu robi "cd '/data/…/home/MAIN_1' && …"
+            # (pelna sciezka), a Sedzia liczy w "~/MAIN_1" — to ten sam
+            # folder; dotad przebiegi zespolu nigdy sie nie zgadzaly.
+            for _dom in (str(HOME), "$HOME", "${HOME}"):
+                if not laptop and (cel == _dom or cel.startswith(_dom.rstrip("/") + "/")):
+                    cel = "~" + cel[len(_dom.rstrip("/")):]
+                    break
             katalog = cel if cel.startswith(("~", "/")) else (katalog.rstrip("/") + "/" + cel)
             continue
         while slowa:
@@ -69739,6 +69747,21 @@ def _sedzia_ocen(numer):
                 "program już widział, ale " + str(_wid_powod) + " — liczę od nowa.")
     except Exception as e:
         log("RYWALIZACJA", "Sędzia: sprawdzenie widzianych przebiegów nie wyszło: " + str(e)[:200])
+    # v480nl: Sedzia sam nic nie uruchamia — potwierdza tylko to, co program
+    # widzial w przebiegu samej druzyny (patrz _widziana_liczba).
+    if not _SEDZIA_URUCHAMIA:
+        werdykt.update(werdykt="czeka na przebieg", czeka_na_przebieg=True, szczegol=(
+            "program nie widział jeszcze, żeby ta komenda wypisała " + str(dane.get("wynik"))
+            + ", albo pliki, których używa, zmieniły się od tamtego przebiegu"
+            + ((" (" + str(locals().get("_wid_powod")) + ")") if locals().get("_wid_powod")
+               and locals().get("_wid_powod") not in ("program nie widział tej komendy z tą liczbą",
+                                      "brak widzianych przebiegów") else "")
+            + ". Sędzia sam jej nie uruchamia, żeby nie zabierać Wam procesora — gdy uruchomicie "
+            "dokładnie tę komendę ze \"sprawdz\" (URUCHOM albo RUN, w folderze drużyny) i wypisze "
+            "tę liczbę w ostatniej linii, program potwierdzi wynik od razu"))
+        log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": czeka, aż drużyna sama uruchomi "
+            "komendę ze \"sprawdz\" — sam jej nie uruchamia.")
+        return werdykt
     stan_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".json")
     wyj_plik = _RYWALIZACJA_DIR / ("sprawdzanie_" + str(numer) + ".out")
     klucz = json.dumps([str(dane.get(k)) for k in ("opis", "wynik", "lepiej", "sprawdz")],
@@ -70004,6 +70027,12 @@ def _werdykt_zdaniem(w, kto, z_opisem=True, trwalosc=True):
 
 
 _SEDZIA_PONOW_S = 600
+# v480nl (uzytkownik 2026-11-14: "po co cos uruchamia… bedziemy zabierac
+# zasoby, wymysl cos innego"): Sedzia nie uruchamia "sprawdz" sam. Liczba
+# jest potwierdzona, gdy program widzial, jak ta sama komenda, puszczona
+# przez druzyne w jej folderze, wypisala ja w ostatniej linii, a pliki,
+# ktorych uzywa, od tamtej pory sie nie zmienily (v480lp). True = jak dawniej.
+_SEDZIA_URUCHAMIA = False
 
 
 def _sedzia_petla():
@@ -70047,9 +70076,23 @@ def _sedzia_petla():
             return ""
     widziana_tablica_rywala = 0.0
     ponow_o = [0.0]   # v480kq: kiedy sprawdzic ponownie "nie sprawdzone"
+    # v480nl: wynik czeka na przebieg druzyny — nowy wpis w widziane_<n>
+    # (druzyna sama puscila komende) to powod, zeby sprawdzic jeszcze raz
+    try:
+        czeka_widziane = [bool(_tab.get("czeka_na_przebieg")), _mtime(_widziane_plik(_DRUZYNA)),
+                          _tab.get("_klucz_wyniku", "")]
+    except Exception:
+        czeka_widziane = [False, 0.0, ""]
 
     while True:
         try:
+            if czeka_widziane[0]:
+                _mw = _mtime(_widziane_plik(_DRUZYNA))
+                if _mw and _mw != czeka_widziane[1]:
+                    czeka_widziane[1] = _mw
+                    if _klucz() == ostatni_klucz:
+                        ostatni_klucz = ""
+                        widziany_wynik = 0.0
             m = _mtime(moj_plik)
             if ponow_o[0] and time.time() >= ponow_o[0]:
                 ponow_o[0] = 0.0
@@ -70084,12 +70127,20 @@ def _sedzia_petla():
                 ostatni_klucz = _klucz() or k
                 w["_mtime_wyniku"] = widziany_wynik
                 w["_klucz_wyniku"] = ostatni_klucz
+                _czekal_juz = czeka_widziane[0] and czeka_widziane[2] == ostatni_klucz
+                czeka_widziane[0] = bool(w.get("czeka_na_przebieg"))
+                czeka_widziane[1] = _mtime(_widziane_plik(_DRUZYNA))
+                czeka_widziane[2] = ostatni_klucz
                 if w.get("ponow"):
                     ponow_o[0] = time.time() + _SEDZIA_PONOW_S
                 _RYWALIZACJA_DIR.mkdir(parents=True, exist_ok=True)
                 tmp = moja_tablica.with_suffix(".tmp")
                 tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
                 os.replace(tmp, moja_tablica)
+                if _czekal_juz and w.get("czeka_na_przebieg"):
+                    # v480nl: ten sam wynik dalej czeka — MAIN wie to juz
+                    time.sleep(_SEDZIA_CO_S)
+                    continue
                 with _sedzia_lock:
                     # starszy, jeszcze niedoręczony werdykt wyniku jest nieaktualny
                     _sedzia_wiadomosci[:] = [
