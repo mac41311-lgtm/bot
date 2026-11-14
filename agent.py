@@ -32078,6 +32078,9 @@ _LAPTOP_SSH = ("ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterv
 _LAPTOP_RE = re.compile(
     r"^\s*(?:cd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*&&\s*)?LAPTOP\s*:\s*(.+)$",
     re.IGNORECASE | re.DOTALL)
+# v480ny: "LAPTOP:" po && ; || w srodku komendy (program dzieli ja na
+# czesci dla obu maszyn) — do metek "(na laptopie)", nie do wykonania
+_LAPTOP_GDZIES_RE = re.compile(r"(?:^|&&|;|\|\||\n)\s*LAPTOP\s*:", re.IGNORECASE)
 _LAPTOP_WYLACZA_RE = re.compile(
     r"\b(?:shutdown|poweroff|halt|reboot|init\s+[06]|telinit\s+[06]"
     r"|systemctl\s+(?:\S+\s+)*(?:poweroff|reboot|halt|suspend|hibernate|kexec)"
@@ -45278,7 +45281,9 @@ def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete, kto="MAIN"):
         "message": "Komenda liczy dalej w tle — opis jest w sekcji „W tle”.",
         # v480nu: metka "(laptop)" przy akcji — bylo "(telefon)" dla
         # komendy LAPTOP:, ktora poszla w tlo
-        **({"na_laptopie": "~/" + _laptop_folder() + " na laptopie"} if _LAPTOP_RE.search(cmd) else {}),
+        **({"na_laptopie": "~/" + _laptop_folder() + " na laptopie"} if _LAPTOP_RE.search(cmd)
+           else {"na_laptopie": "część na laptopie (~/" + _laptop_folder() + ")"}
+           if _LAPTOP_GDZIES_RE.search(cmd) else {}),
     }, True
 
 
@@ -56826,10 +56831,19 @@ def main_decide(
     # naglowek "### …" i pojawia sie tylko, gdy cos w niej jest.
     # v410/v435: wynik kroku tylko, gdy cos sie stalo; po ASK — odpowiedzi.
     _twoj_krok = ""
+    # v480ny: wynik RUN-a, ktorego MAIN jeszcze nie widzial (pytania obok
+    # RUN poszly na poczatek kroku i od razu wrocily odpowiedzi) — osobna
+    # sekcja nad odpowiedziami. Bieg 2026-11-14 20:32 (druzyna 1): grep
+    # keyword_lookup_action i start seeda 1 przepadly, MAIN dostal same
+    # odpowiedzi Marka.
+    _run_przed_odp = ""
     if asked_followup:
         _twoj_krok = ask_block
+        if globals().get("_run_niepokazany") and not _jeszcze_nic_sie_nie_stalo(last_result):
+            _run_przed_odp = re.sub(r"(?m)^Wyniki akcji RUN:\n", "", str(_facts or ""))
     elif not _jeszcze_nic_sie_nie_stalo(last_result):
         _twoj_krok = _facts
+    globals()["_run_niepokazany"] = False
     _twoj_krok = re.sub(r"(?m)^Wyniki akcji RUN:\n", "", str(_twoj_krok or ""))
     if _main_topic_block.strip():
         _twoj_krok = _main_topic_block.strip() + "\n" + _twoj_krok
@@ -57025,6 +57039,7 @@ def main_decide(
              else "Pamięć telefonu i laptopa" if "na laptopie" in _up
              else "Pamięć telefonu"), _uwagi_pamieci)
     _sekcja("Laptop", _laptop_zdanie)
+    _sekcja("Twój ostatni krok", _run_przed_odp)
     _sekcja("Odpowiedzi zespołu" if asked_followup else "Twój ostatni krok", _twoj_krok)
     _sekcja("W tle — wynik przyjdzie sam", _tlo_trwa)
     _sekcja("Zespół", team_block)
@@ -65224,6 +65239,7 @@ def run_agent(goal):
 
             last_result = _wykonaj_akcje_maina(decision, step)
             globals()["_taski_przy_blokadzie"] = 0
+            globals()["_run_niepokazany"] = True
 
             # v480cl: bieg 2026-10-17 22:31 (druzyna 2) — MAIN odpisal
             # RUN-em i trzema ASK naraz (Bartek, Igor, Tomek). Wykonal
@@ -67161,7 +67177,7 @@ def _nazwa_w_tle(komenda):
     # v480jh: rzecz liczona na laptopie dostaje dopisek, zeby w "Dalej w
     # tle" / "Skonczone w tle" nie mylila sie z procesem na telefonie.
     na_laptopie = ""
-    if _LAPTOP_SSH.strip() in tekst or _LAPTOP_RE.search(tekst):
+    if _LAPTOP_SSH.strip() in tekst or _LAPTOP_RE.search(tekst) or _LAPTOP_GDZIES_RE.search(tekst):
         na_laptopie = " (na laptopie)"
     else:
         # v480js: gdy jest laptop, telefon tez ma dopisek — MAIN szukal na
