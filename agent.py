@@ -5867,6 +5867,8 @@ def _zdania_dla_nowej_rozmowy(rola, wiadomosc=""):
         wyslane = set(wpis.get("zdania") or []) if wpis.get("rozmowa") == rozmowa else set()
         tresc = str(wiadomosc or "")
         brakuje = [z for z in zdania if _odcisk(z) not in wyslane and z not in tresc]
+        if not wyslane:
+            brakuje = _przytnij_dla_nowej_rozmowy(brakuje)
         wszystko[rola] = {"rozmowa": rozmowa,
                           "zdania": sorted(wyslane | {_odcisk(z) for z in zdania})}
         _ZDANIA_WYSLANE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -5874,6 +5876,50 @@ def _zdania_dla_nowej_rozmowy(rola, wiadomosc=""):
         return brakuje
     except Exception:
         return []
+
+
+# v480nk (uzytkownik 2026-11-14): nowa rozmowa roli nie dostaje juz calej
+# historii wiadomosci uzytkownika z tego celu. Bieg 2026-11-14 10:15 (druzyna
+# 2): Ola w nowej rozmowie dostala ok. 28 wiadomosci od 01.11 (26 tys.
+# znakow), w tym stare notki o poprawkach programu ("Poprawki w programie
+# (v480mr)…") i sprzeczne kierunki — MAIN potem "Pivot na mózg 3D — user 3×
+# prosił", a za chwile "Pivot na grę — user 3×". Teraz nowa rozmowa dostaje
+# ostatnie _ZDANIA_NOWEJ_ROZMOWY wiadomosci bez notek o poprawkach programu
+# (opisuja stary stan programu), a cala lista lezy w pliku. Rozmowa, ktora
+# trwa, dostaje kazda nowa wiadomosc raz, jak dotad (takze notke o poprawce).
+_ZDANIA_NOWEJ_ROZMOWY = 6
+_NOTKA_O_PROGRAMIE_RE = re.compile(
+    r"^\s*(?:Użytkownik:\s*)?(?:Poprawki w programie|Poprawiliśmy|Program poprawiony|"
+    r"Co się zmieniło w programie|Kolejne poprawki programu|Zmiany w programie)", re.I)
+
+
+def _plik_wiadomosci_uzytkownika():
+    return HOME / ("AEL_WIADOMOSCI_UZYTKOWNIKA" + (("_" + str(_DRUZYNA)) if _DRUZYNA else "") + ".md")
+
+
+def _przytnij_dla_nowej_rozmowy(zdania):
+    """Lista zdan dla rozmowy, ktora nie dostala jeszcze zadnego (nowa)."""
+    try:
+        zdania = list(zdania or [])
+        bez_notek = [z for z in zdania if not _NOTKA_O_PROGRAMIE_RE.match(z)]
+        if len(bez_notek) == len(zdania) and len(zdania) <= _ZDANIA_NOWEJ_ROZMOWY:
+            return zdania
+        zostaja = bez_notek[-_ZDANIA_NOWEJ_ROZMOWY:]
+        reszta = len(zdania) - len(zostaja)
+        plik = _plik_wiadomosci_uzytkownika()
+        try:
+            plik.write_text(
+                "# Wszystkie wiadomości użytkownika z tego celu (najstarsze pierwsze)\n\n"
+                + "\n\n".join("- " + z for z in zdania) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        if reszta > 0:
+            zostaja.append("(Program: to ostatnie wiadomości użytkownika z tego celu; pozostałych (starszych i notek o poprawkach programu) jest "
+                           + str(reszta) + " — wszystkie leżą w " + _sciezka_od_domu(str(plik)) + ".)")
+        return zostaja
+    except Exception:
+        return list(zdania or [])
+
 
 
 def _z_brakujacymi_zdaniami(rola, wiadomosc):
@@ -5931,6 +5977,8 @@ def _jeszcze_niewyslane_zdania(rola, zdania):
 
         if nowe:
             wyslane.update(_odcisk(z) for z in nowe)
+            if not wpis.get("zdania"):
+                nowe = _przytnij_dla_nowej_rozmowy(nowe)
             wszystko[rola] = {
                 "rozmowa": rozmowa or poprzednia,
                 "zdania": sorted(wyslane),
@@ -58733,8 +58781,22 @@ def _pierwsza_wiadomosc(rola=None):
     # (dziesiatki linii) leza w pliku, nie na poczatku jego rozmowy.
     if str(rola) == "MAIN":
         _lap_m = _laptop_dla_maina_akapit()
-        return ((_JAK_TO_DZIALA.replace("\n\nWykonanie. ", "\n\n" + _lap_m + "\n\nWykonanie. ", 1)
-                 if _lap_m else _JAK_TO_DZIALA) + "\n\nTermux API, ADB DEBUGOWANIE, Android")
+        _jtd = _JAK_TO_DZIALA
+        # v480nk: zdanie o ADB zgodne ze stanem przy starcie rozmowy. Bieg
+        # 2026-11-14: ADB caly dzien "Connection refused", a MAIN mial
+        # w opisie, ze jest polaczone.
+        try:
+            if _adb_offline[0] > time.time():
+                _jtd = _jtd.replace(
+                    ", a ADB jest połączone bezprzewodowo z tym samym telefonem, więc da się przez "
+                    "nie instalować APK, uruchamiać aplikacje i zaglądać na ekran. ",
+                    ". ADB (instalowanie APK, uruchamianie aplikacji, ekran — narzędzia android_) "
+                    "przy starcie tej rozmowy było nieosiągalne; program sam próbuje się połączyć, "
+                    "a android_state pokaże, czy już działa. ", 1)
+        except Exception:
+            pass
+        return ((_jtd.replace("\n\nWykonanie. ", "\n\n" + _lap_m + "\n\nWykonanie. ", 1)
+                 if _lap_m else _jtd) + "\n\nTermux API, ADB DEBUGOWANIE, Android")
 
     if rola is not None:
         return _platforma + "\n\n" + _jak_rozmawiamy()
@@ -58815,6 +58877,10 @@ def _jak_rozmawiamy_laptop():
 
 
 def _jak_rozmawiamy(laptop=True):
+    # v480nk: akapit przepisany w calosci — instalacja nie "czeka, az sie
+    # skonczy": dluzsza niz 2 min liczy w tle jak kazde uruchomienie, a wynik
+    # przychodzi sam (bieg 2026-11-14 10:23: zespol dawal "timeout 180 pip
+    # install", zeby nie czekac, i instalacja sie urywala).
     # v480mi: akapit przepisany w calosci — cztery sposoby zmiany pliku, na
     # wszystkich plikach (uzytkownik 2026-11-07), wstawianie w srodek.
     # v480lz: akapit przepisany w calosci — doszlo zdanie o „...” w
@@ -58833,8 +58899,9 @@ def _jak_rozmawiamy(laptop=True):
         "działa. Uruchomienie dłuższe niż 2 minuty liczy dalej w tle, "
         "a jego wynik dostaje autor i MAIN, gdy się skończy. Bibliotekę "
         "albo program, którego brakuje, instalujecie tak samo (URUCHOM: "
-        "pip install pakiet albo URUCHOM: pkg install -y pakiet) — program "
-        "czeka, aż instalacja się skończy, i oddaje jej wynik. "
+        "pip install pakiet albo URUCHOM: pkg install -y pakiet). Dłuższa "
+        "instalacja też liczy dalej w tle, a gdy się skończy, program mówi, "
+        "co weszło, a co nie i dlaczego. "
         + (_jak_rozmawiamy_laptop() if laptop else "")
         + "Pliki "
         "zmieniacie na cztery sposoby i każdy działa na wszystkich plikach "
@@ -70407,7 +70474,13 @@ def uruchom_sedziego():
 # v480gt: przepisany w calosci — te same zasady w czasie terazniejszym,
 # bez zdan o historii ("wczesniej odjales… oddajesz", "zanim dostales
 # te zasade"), ktore nowy Sedzia mogl brac za polecenie oddawania.
-ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Mniej więcej co kwadrans dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
+# v480nk (uzytkownik 2026-11-14): przepisany w calosci — co pol godziny;
+# "ocena" to 3-4 zdania stanu (potwierdzone, odjete, brakujace czesci celu
+# slowami celu), bez zadan, wariantow, prognoz i uwag o metodzie. Bieg
+# 2026-11-14 12:05: ocena druzyny 1 miala ok. 2000 znakow z lista zadan
+# ("Do celu brakuje: ukonczonego agent_lang…, rozstrzygniecia pytania
+# Tomka…"), a MAIN w nocy 23 razy na 123 odpowiedzi kierowal sie Sedzia.
+ARBITER_PROMPT = """Jesteś Sędzią rywalizacji. Dwie drużyny pracują jednocześnie nad tym samym celem użytkownika, każda w swoim folderze: drużyna 1 w ~/MAIN_1, drużyna 2 w ~/MAIN_2. Nie należysz do żadnej z nich i obie traktujesz jednakowo. Mniej więcej co pół godziny dostajesz o każdej drużynie: co wykonała i jak to uzasadniła, jej wynik sprawdzony przez program, listę i treść ostatnio zmienionych plików w jej folderze, komendy, których ostatnio używała, oraz ostatnie wypowiedzi jej zespołu. Oceniasz wyłącznie na podstawie tego materiału.
 
 Miarą jest treść celu użytkownika: to, co ma powstać, jakie ma być i skąd ma się wziąć. Jako zrobione liczysz to, co ma wynik potwierdzony przez program i zgadza się z treścią celu; to, co dopiero ruszyło, opisujesz jako rozpoczęte. Potwierdzony wynik mówi tylko, że komenda wypisuje tę liczbę — gdy drużyna sama ustaliła, że był przypadkowy albo nie wytrzymał powtórzenia, liczysz go tak, jak ustaliła. Porównanie z czymś spoza pracy drużyny — innym modelem, programem albo ludzką metodą — liczysz jako potwierdzone tylko wtedy, gdy komenda sprawdzająca sama uruchamia obie strony na tych samych zadaniach i żadna z nich nie była na tych zadaniach uczona; liczba drugiej strony wpisana ręcznie, wzięta z innego pomiaru albo zmierzona na zadaniach, na których drużyna się uczyła, jest tylko opisem. Wynik drugiej strony, który wygląda nieprawdopodobnie słabo jak na to, czym ona jest, traktujesz jako znak, że jej test trzeba sprawdzić, i piszesz to w ocenie. To, co drużyna pisze o sobie, waży mniej niż to, co widać w jej krokach, komendach i plikach.
 
@@ -70415,7 +70488,7 @@ Każda drużyna dochodzi do wyniku sama, we własnym folderze. Drużynom nie wol
 
 Dyskwalifikacja jest w każdej rywalizacji. Drużyna, która weźmie coś od rywala — czyta jego folder, przenosi do siebie jego kod albo pliki z kodem lub wynikami, albo odtwarza u siebie pomysł, który zna od rywala — zostaje zdyskwalifikowana. Tak samo od razu zdyskwalifikowana zostaje drużyna, która planuje lub próbuje wprowadzić Cię w błąd — ukryć, na czym naprawdę zbudowała pracę, przebrać znany pomysł w inne słowa albo podłożyć się pod Twój sposób oceniania. W polu "dyskwalifikacja" piszesz wtedy powód, czyli co zrobiła i w którym kroku, komendzie, pliku albo w jakich jej słowach to widać. Program sam pilnuje folderu rywala: komendy, która do niego sięga, nie wykonuje, a na liście komend widzisz ją z dopiskiem, że ją zablokował. Taka komenda nic drużynie nie dała, więc nie jest braniem od rywala ani czytaniem jego folderu; opisujesz ją w ocenie, a o dyskwalifikacji decyduje to, co drużyna od rywala naprawdę dostała. Pomysł, na który drużyna wpadła sama albo który wzięła ze źródeł spoza rywalizacji, jest jej, nawet gdy rywal ma podobny. To, co do rozmowy drużyny wstawił sam program — na przykład automatyczna odpowiedź o pliku albo widok procesów telefonu — nie jest jej naruszeniem; liczy się tylko to, co drużyna sama zrobiła z tą wiedzą. Drużyna dostaje od programu o rywalu jego procent i to, kto prowadzi; znajomość tego nie jest naruszeniem. Rozmowa o pomyśle po to, żeby go odrzucić, jest uczciwą pracą. Gdy dowód nie jest pewny, opisujesz sprawę w ocenie i odejmujesz z procentu, a pole zostawiasz puste. Gdy cel sam przewiduje dyskwalifikację, drużyna, która jawnie spełniła warunek z celu — sama to przyznaje albo widać to wprost w jej kodzie i opisie — dostaje za tę uczciwość ostrzeżenie: w polu "ostrzezenie" piszesz, co zbudowała i gdzie to widać. Program liczy ostrzeżenia i przy każdej ocenie podaje Ci, ile drużyna już ma; trzecie kończy się dyskwalifikacją. Ostrzeżenie dajesz za nową pracę, a ta sama, niezmieniona praca, za którą drużyna już je dostała, po prostu się nie liczy do procentu. Zdyskwalifikowaną drużynę program zaczyna od nowa — cały zespół od zera, z tym samym celem — a nowa drużyna i rywal dostają Twój powód. Jej folder znika, ale to, co było w nim własne i zgodne z celem i z zasadami, nie musi przepaść: gdy wypełniasz pole "dyskwalifikacja" albo dajesz ostrzeżenie, które będzie trzecie, w polu "spadek" wymieniasz pliki lub podfoldery z jej folderu (ścieżki względem niego), które drużyna zrobiła sama, zgadzają się z treścią celu i warto, żeby nowa drużyna mogła je rozwijać — nigdy tego, co pochodzi od rywala; gdy żaden się nie nadaje, zostawiasz to pole puste. Nowa drużyna dostaje je w podfolderze spadek swojego folderu. Nową drużynę oceniasz od zera: spadek liczysz jej jako punkt startu, tak jak go oceniłeś, a dalej oceniasz wyłącznie jej własne kroki; jej ostrzeżenia też liczą się od zera.
 
-Procent mówi, jaka część całego celu użytkownika jest już potwierdzona: 0% to nic, a 100% to cel osiągnięty w całości, tak jak go opisał użytkownik. Gdy cel ma etapy albo szczeble, każdy waży tyle, o ile przybliża do końca całego celu, więc potwierdzone wczesne etapy przy dalekim końcu to mały procent. Ilość pracy, próby i ustalenia — także uczciwe wyniki negatywne — nie dodają procentu, dopóki nie potwierdzają części celu. Każdą ocenę liczysz od stanu celu, a nie od swojej poprzedniej liczby; poprzednie oceny służą tylko temu, żeby ten sam stan oceniać tak samo. Gdy użytkownik zmieni cel, oceniasz od nowa względem nowego celu: wcześniejsze procenty dotyczyły innego celu i nie są punktem startu, a to, co drużyna zbudowała wcześniej, liczysz tylko na tyle, na ile potwierdza część nowego celu. W "ocena" piszesz krótko i konkretnie, co drużyna ma potwierdzone, co odjąłeś i dlaczego oraz czego brakuje do celu — jako opis stanu, bo drogę wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik. Dlatego "ocena" każdej drużyny mówi tylko o niej samej, bez wyników i liczb rywala.
+Procent mówi, jaka część całego celu użytkownika jest już potwierdzona: 0% to nic, a 100% to cel osiągnięty w całości, tak jak go opisał użytkownik. Gdy cel ma etapy albo szczeble, każdy waży tyle, o ile przybliża do końca całego celu, więc potwierdzone wczesne etapy przy dalekim końcu to mały procent. Ilość pracy, próby i ustalenia — także uczciwe wyniki negatywne — nie dodają procentu, dopóki nie potwierdzają części celu. Każdą ocenę liczysz od stanu celu, a nie od swojej poprzedniej liczby; poprzednie oceny służą tylko temu, żeby ten sam stan oceniać tak samo. Gdy użytkownik zmieni cel, oceniasz od nowa względem nowego celu: wcześniejsze procenty dotyczyły innego celu i nie są punktem startu, a to, co drużyna zbudowała wcześniej, liczysz tylko na tyle, na ile potwierdza część nowego celu. W "ocena" piszesz trzy, najwyżej cztery zdania o stanie drużyny: jaka część celu ma potwierdzony wynik i jaki, co odjąłeś i dlaczego, oraz których części celu jeszcze nie ma — nazwanych tak, jak nazywa je cel. To opis stanu, który drużyna czyta w trakcie pracy, więc nie ma w nim zadań, wariantów do wyboru, prognoz ani uwag o metodzie: drogę i kolejne kroki wybiera sama drużyna. W "prowadzi" wpisujesz 1, 2 albo "remis", gdy różnica jest za mała, by ją uczciwie rozstrzygnąć, a w "uzasadnienie" — na jakiej podstawie; tu możesz pisać szerzej, bo uzasadnienie czyta tylko użytkownik. Każda drużyna dostaje swoją ocenę w całości, a o rywalu tylko jego procent i to, kto prowadzi; uzasadnienie i opis drugiej drużyny widzi tylko użytkownik. Dlatego "ocena" każdej drużyny mówi tylko o niej samej, bez wyników i liczb rywala.
 
 {
   "druzyna_1": {"procent": 0, "ocena": "", "ostrzezenie": "", "dyskwalifikacja": "", "spadek": []},

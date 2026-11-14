@@ -5397,3 +5397,21 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      bez zmian — wy 2%, drużyna 2 5%, prowadzi drużyna 2." Cała ocena idzie
      do niego tylko przy zmianie procentu, prowadzenia, ostrzeżenia albo
      dyskwalifikacji.
+
+ v480nk (2026-11-14, uzytkownik: "teksty mają na nich nie wpływać, żeby
+     nie zabłądzili" — przegląd: notatki/teksty_programu_wplyw_2026-11-14.md):
+     - Nowa rozmowa roli dostaje ostatnie 6 wiadomości użytkownika z tego
+       celu, bez notek o poprawkach programu ("Poprawki w programie…",
+       "Poprawiliśmy…"), plus jedną linię, ile jest pozostałych i gdzie leżą
+       wszystkie: ~/AEL_WIADOMOSCI_UZYTKOWNIKA_<drużyna>.md. Rozmowa, która
+       trwa, dostaje każdą nową wiadomość raz, jak dotąd.
+     - "Jak rozmawiamy" przepisane w całości: instalacja nie "czeka, aż się
+       skończy" — dłuższa liczy w tle, a program mówi, co weszło, a co nie
+       i dlaczego (to dostają nowe rozmowy ról).
+     - MAIN "Telefon.": gdy przy starcie jego rozmowy ADB jest nieosiągalne,
+       zdanie mówi to wprost zamiast "ADB jest połączone".
+     - Prompt Sędziego przepisany w całości: ocena co pół godziny; "ocena"
+       to 3–4 zdania stanu (co potwierdzone, co odjęte i dlaczego, których
+       części celu brak — słowami celu), bez zadań, wariantów, prognoz
+       i uwag o metodzie; szerzej tylko w "uzasadnienie" dla użytkownika.
+       Wznowiona rozmowa Sędziego dostaje zmianę raz (diff instrukcji).
