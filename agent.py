@@ -68581,6 +68581,8 @@ def _odpal_druzyne_2():
     write_text(_DRUZYNA2_DIR / "current_goal.txt", _druzyna2["cel"])
     env = dict(os.environ)
     env["AEL_DRUZYNA"] = "2"
+    # v480nt: wyjscie do pliku bez bufora - kazda linia od razu w terminal.log
+    env["PYTHONUNBUFFERED"] = "1"
     env.pop("AEL_PO_AKTUALIZACJI", None)
     env.pop("AEL_URUCHOMIENIE_ID", None)
     with open(_DRUZYNA2_DIR / "terminal.log", "a", encoding="utf-8") as wyjscie:

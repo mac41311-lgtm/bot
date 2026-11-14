@@ -5510,3 +5510,5 @@ v480ns (2026-11-14)
        kończy się od razu, gdy plik z tokenem tego konta zapisano po jej
        początku — nowy token dostaje próbę (było: czekanie do końca 2 h, także
        po restarcie). Czekanie sprawdza to co 30 s. Drugie konto bez zmian.
+
+v480nt (2026-11-14): druzyna 2 dostaje PYTHONUNBUFFERED=1 - jej terminal.log dostaje kazda linie od razu (wczesniej bufor 8 KB: logi pojawialy sie paczkami dopiero po dluzszym czasie).
