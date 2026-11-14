@@ -10225,7 +10225,15 @@ def _deepseek_looks_truncated(text, status):
     # Bartek napisal w zdaniu "` ```markdown `" i pelna odpowiedz (serwer:
     # skonczona) dostala 4 prosby o dalszy ciag.
     if _nieparzyste_plotki(stripped):
-        return True, "niedomkniety blok ``` (kod urwany w polowie)"
+        # v480nx: po ostatnim ``` stoi juz zwykly tekst (pogrubione zdanie
+        # na poczatku linii), a odpowiedz konczy sie pelnym zdaniem — to
+        # zle sparowane ``` autora, nie urwany kod. Bieg 2026-11-14 20:03:
+        # Bartek dal "Stary fragment:\n```…\nNowy fragment:\n```…```" i
+        # pelna odpowiedz kosztowala 2 min prosby o dalszy ciag.
+        _po_plotku = re.split(r"(?m)^[ \t]*```[^\n]*$", stripped)[-1]
+        if not (re.search(r"(?m)^[ \t>-]*\*\*[A-Za-zÀ-ž]", _po_plotku)
+                and re.search(r"[.!?:)✓*]\s*$", _bez_ozdob_na_koncu(stripped))):
+            return True, "niedomkniety blok ``` (kod urwany w polowie)"
 
     if len(stripped) < _TRUNCATION_MIN_LEN:
         # Krotka wypowiedz bez kropki to zwykle po prostu krotka
@@ -11440,6 +11448,10 @@ def _cudzyslow_otwarty(k):
         return False
 
 
+# v480nx: (rola, plik) -> kiedy program naniosl poprawke tej roli
+_naniesione_niedawno = {}
+# v480nx: odpowiedz, przy ktorej logowano "w międzyczasie poprawiał"
+_w_miedzyczasie_log = {}
 # v480nw: pierwsze linie komend, przy ktorych odpowiedz roli sie urwala
 _komendy_urwane = set()
 
@@ -11742,9 +11754,12 @@ def _podglad_dla_roli_rundy(rola, odp, zapisane):
         # 16 minut (pisane "jesli poprawka wejdzie") zabilo liczace procesy,
         # a Bartek dostal ten wynik i nie wiedzial, skad sie wzial.
         if _wiadomosci_do_roli.get(rola, 0) != _n_przed:
-            log("PROGRAM", imie + " w międzyczasie poprawiał swój kod w rozmowie z programem — komend "
-                "z jego wcześniejszej odpowiedzi nie uruchamiam (są już nieaktualne); dalej liczy się "
-                "jego ostatnia odpowiedź.")
+            # v480nx: ta sama linia raz na odpowiedz (bylo dwa razy w logu)
+            if _w_miedzyczasie_log.get(rola) != id(odp):
+                _w_miedzyczasie_log[rola] = id(odp)
+                log("PROGRAM", imie + " w międzyczasie poprawiał swój kod w rozmowie z programem — komend "
+                    "z jego wcześniejszej odpowiedzi nie uruchamiam (są już nieaktualne); dalej liczy się "
+                    "jego ostatnia odpowiedź.")
             _ost = _ostatnia_odp_roli.get(rola)
             if _ost and str(_ost).strip():
                 return _ost
@@ -26581,6 +26596,7 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                            + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B" + _skl
                            + ", kopia: .kopie/" + Path(w["backup"]).name + ").]")
             else:
+                _naniesione_niedawno[(str(rola), str(p))] = time.time()
                 out.append("[Program od razu naniósł poprawkę " + imie_d + " na " + sciezka
                            + ((" " + linie) if linie else "")
                            + " (" + str(w["size_before"]) + " B -> " + str(w["size_after"]) + " B" + _skl
@@ -26588,6 +26604,11 @@ def _naniesc_poprawke_autora(rola, odp, foldery):
                            + (" Plik jest gotowy do uruchomienia" + (": " + _jak if _jak else "") + "."
                               if _skl == ", składnia OK" else "") + "]")
         for p in juz:
+            # v480nx: te zmiane program naniosl chwile temu z rozmowy z autorem
+            # (runda poprawki) i juz to zglosil — bez sprzecznego "program
+            # niczego nie zmieniał" obok "naniósł" (bieg 2026-11-14 20:06)
+            if time.time() - _naniesione_niedawno.get((str(rola), str(p)), 0) < 1800:
+                continue
             sciezka = _sciezka_od_domu(str(p))
             log("PROGRAM", "Poprawka " + imie_d + " do " + _plik_do_logu(p) + " już jest w pliku — bez zmian.")
             out.append("[Zmiana z poprawki " + imie_d + " już jest w pliku " + sciezka
@@ -50117,6 +50138,19 @@ def _naloz_pary_na_plik(path, bloki, zapisz=True, kto=None):
     naniesione = 0
     juz_byly = 0
 
+    # v480nx: ten sam stary fragment kilka razy w jednej odpowiedzi (autor
+    # dal wersje "do potwierdzenia", a pod nia ostateczna) — liczy sie
+    # ostatnia. Bieg 2026-11-14 20:00 (druzyna 1): Bartek dal dwie wersje
+    # poprawki tej samej funkcji, program nanosil obie po kolei, druga juz
+    # nie pasowala i cala poprawka odpadala.
+    try:
+        _ost_dla = {}
+        for _i, (_st, _nw) in enumerate(bloki):
+            _ost_dla[str(_st).strip()] = _i
+        bloki = [b for _i, b in enumerate(bloki) if _ost_dla.get(str(b[0]).strip()) == _i]
+    except Exception:
+        pass
+
     for stary, nowy in bloki:
 
         # v480iz: fragment z bloku ```…``` ma zdjete wspolne wciecie, a w
@@ -50138,8 +50172,23 @@ def _naloz_pary_na_plik(path, bloki, zapisz=True, kto=None):
             return {"applied": False, "reason": _powod_wciec(zmieniony, stary, target.name)}
 
         if stan == "brak":
-            _blisko = _najblizszy_fragment(zmieniony, stary)
-            _uw = _uwaga_o_skrocie(zmieniony, stary, nowy)
+            # v480nx: fragment jest w pliku na dysku, a zniknal dopiero przez
+            # wczesniejsza poprawke z tej samej odpowiedzi — mowimy to wprost;
+            # "najblizszy tekst" zawsze z pliku na dysku (bylo: z wersji po
+            # wczesniejszych poprawkach, ktorej nikt nie zapisal — Bartek
+            # wzial ja za zmiane Ani)
+            if naniesione and _naloz_pare(original, stary, nowy)[1] in ("ok", "juz"):
+                return {
+                    "applied": False,
+                    "reason": (
+                        "Fragment " + _poczatek_fragmentu(stary) + " stoi w pliku " + target.name
+                        + ", ale wcześniejsza poprawka z tej samej Twojej odpowiedzi zmienia już "
+                        "to miejsce — dwie poprawki nachodzą na siebie. Nic nie zmieniono, plik "
+                        "jest taki jak przed Twoją odpowiedzią. Daj jedną poprawkę na to miejsce."
+                    ),
+                }
+            _blisko = _najblizszy_fragment(original, stary)
+            _uw = _uwaga_o_skrocie(original, stary, nowy)
             return {
                 "applied": False,
                 "reason": (

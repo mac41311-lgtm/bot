@@ -5518,3 +5518,5 @@ v480nu (2026-11-14): komenda z ostatniego RUN MAIN-a, ktora poszla w tlo, jest o
 v480nv (2026-11-14): komenda roli z PODGLĄD (np. python3 -c) ma numer komendy i zapisuje kod wyjścia - rejestr procesów nie pisze już 'nie wiadomo, nikt go nie zatrzymał' o zwykłym końcu podglądu.
 
 v480nw (2026-11-14): komenda roli (URUCHOM/PODGLĄD), w której odpowiedź urwała się przed zamknięciem cudzysłowu, nie jest uruchamiana; rola dostaje: 'Twoja odpowiedź urwała się w tej komendzie … napisz ją jeszcze raz w całości'.
+
+v480nx (2026-11-14): poprawki fragmentu: ten sam stary fragment kilka razy w jednej odpowiedzi -> liczy się ostatni; dwie nachodzące poprawki -> jasny komunikat; 'Najbliższy tekst w pliku' zawsze z pliku na dysku (był z niezapisanej wersji po wcześniejszej poprawce); brak sprzecznego 'już jest w pliku — program niczego nie zmieniał' po 'naniósł'; linia 'w międzyczasie poprawiał' raz; źle sparowane ``` z pełnym zdaniem na końcu nie uruchamia prośby o dalszy ciąg.
