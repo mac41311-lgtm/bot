@@ -11150,6 +11150,15 @@ def _uruchom_podglad(komenda, rola=None):
     # v480lx: jedna linia [KOMENDA] na komende roli — "zagląda" (sam
     # odczyt), "uruchamia" albo "nie uruchomione (dlaczego)"
     _imie_k = _IMIE_AUTORA.get(rola, (rola or "zespół",))[0] if rola else "zespół"
+    if komenda.strip() in _komendy_urwane and _cudzyslow_otwarty(komenda):
+        _komendy_urwane.discard(komenda.strip())
+        log("KOMENDA", str(_imie_k) + " — nie uruchomione (odpowiedź urwała się w tej komendzie): "
+            + _komenda_jedna_linia(komenda, 160))
+        return ("$ " + komenda.split("\n")[0] + "\n[Nie uruchomiłem: Twoja odpowiedź urwała się "
+                "w tej komendzie — cudzysłów otwarty w niej nie zamyka się do końca odpowiedzi, "
+                "więc powłoka dostałaby sam początek. Napisz tę komendę jeszcze raz w całości. "
+                "Dłuższy kod najprościej zapisać jako plik (blok kodu z # nazwa.py w pierwszej "
+                "linii) i dać URUCHOM: python3 nazwa.py.]")
     _brak_konca = _heredoc_bez_konca(komenda)
     if _brak_konca:
         log("KOMENDA", str(_imie_k) + " — nie uruchomione (heredoc <<" + _brak_konca
@@ -11431,6 +11440,9 @@ def _cudzyslow_otwarty(k):
         return False
 
 
+# v480nw: pierwsze linie komend, przy ktorych odpowiedz roli sie urwala
+_komendy_urwane = set()
+
 _HEREDOC_URUCHOM_RE = re.compile(r"<<(-?)\s*['\"]?([A-Za-z_]\w*)['\"]?")
 
 
@@ -11480,12 +11492,23 @@ def _komenda_do_konca(tekst, m):
         return k
     if not _cudzyslow_otwarty(k):
         return k
-    reszta = tekst[m.end():].split("\n")[1:201]
+    _wszystkie = tekst[m.end():].split("\n")[1:]
+    reszta = _wszystkie[:200]
     linie = [k]
     for l in reszta:
         linie.append(l)
         if not _cudzyslow_otwarty("\n".join(linie)):
             return "\n".join(linie)
+    # v480nw: cudzyslow nie zamyka sie az do konca odpowiedzi — odpowiedz
+    # urwala sie w tej komendzie (bieg 2026-11-14 18:56: DeepSeek uciał
+    # Bartka na "from sim_lang_env_v1 import SimLang", program uruchomil
+    # sam poczatek "python3 -c \"" i podpowiadal o cudzyslowie)
+    if len(_wszystkie) <= 200:
+        _komendy_urwane.add(k.strip())
+        try:
+            _komendy_urwane.add(_komenda_z_podgladu(k).strip())
+        except Exception:
+            pass
     return k
 
 
