@@ -58878,6 +58878,7 @@ def _jak_rozmawiamy(laptop=True, rola=None):
     # v480no: przepisany w calosci (uzytkownik 2026-11-14: "sprawdz dlugosci
     # promptow… czy zgadzaja sie do roli… tak jak bys sam chcial dostac").
     # Te same mozliwosci co v480nk, bez powtorzen; sklad zespolu bez samej
+    # (v480np: dopisane wprost usuwanie linii — uzytkownik 2026-11-14.)
     # roli (Bartek czytal "Bartek (kod i technika)" o sobie).
     _inni = [opis for r, opis in _SKLAD_ZESPOLU if r != str(rola)]
     _pomoc = ("" if str(rola) in ("CODE_REVIEWER", "CODE_FIXER") else
@@ -58902,9 +58903,10 @@ def _jak_rozmawiamy(laptop=True, rola=None):
         "fragment:”. Program nanosi ją od razu i mówi, w których liniach; gdy fragmentu nie "
         "znajdzie, nic nie zmienia i pokazuje, co tam stoi najbliżej. W „Starym fragmencie” "
         "„...” zastępuje tekst w środku linii, a linia z samym „...” kilka całych linii; "
-        "„...” w tym samym miejscu „Nowego” zostawia tamten tekst. Kod w środek pliku "
-        "wstawia poprawka z linią, za którą ma wejść, w „Starym” i tą samą linią z nowym "
-        "kodem pod nią w „Nowym”. Pusty „Stary fragment:” albo „Dopisz na końcu <plik>:” "
+        "„...” w tym samym miejscu „Nowego” zostawia tamten tekst. Tą samą poprawką "
+        "wstawiacie kod w środek pliku (w „Starym” linia, za którą ma wejść, w „Nowym” ta "
+        "sama linia i nowy kod pod nią) i usuwacie niepotrzebne linie (w „Starym” te linie, "
+        "w „Nowym” tylko to, co ma zostać, albo nic). Pusty „Stary fragment:” albo „Dopisz na końcu <plik>:” "
         "dopisuje blok na końcu pliku, więc duży plik można budować kawałkami. Poprawka, przy "
         "której napiszecie, że jej jeszcze nie nanosicie, zostaje propozycją. Kto, kiedy i "
         "jak zmieniał plik, program pokazuje przy PODGLĄDZIE i uruchomieniu. "

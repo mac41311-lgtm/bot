@@ -5467,3 +5467,8 @@ v480no (2026-11-14)
        (te same możliwości, ~800 znaków krócej, skład bez samej roli);
        PODGLĄD bez przykładu „cat wynik.json”; Kamil i Wojtek z pełnym składem;
        Marek ocenia plany zespołu; MAIN ma skład zespołu raz, nie trzy razy.
+
+v480np (2026-11-14)
+     - Opis dla Bartka/Piotra/Ani mówi wprost, że poprawką fragmentu usuwa się
+       też niepotrzebne linie (w „Starym” te linie, w „Nowym” to, co zostaje,
+       albo nic) — parser obsługiwał to już wcześniej.
