@@ -5382,3 +5382,12 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
        drużyny leży plik o tej nazwie (literówka w ścieżce), albo że nikt go
        jeszcze nie zapisał (i podobne nazwy). W rywalizacji szuka tylko we
        własnym folderze.
+
+ v480ni (2026-11-14, uzytkownik: "Sędzia co 30 min albo dłużej, żeby
+     zespołowi nie mieszać, chyba że to im pomaga"):
+     - Sędzia ocenia co 30 min (było 15). Zasady bez zmian: tylko gdy konto 1
+       wolne i któraś drużyna zrobiła krok; nikt na niego nie czeka.
+     - MAIN dostaje ocenę tylko wtedy, gdy coś się w niej zmieniło: procent
+       jego drużyny albo rywala, kto prowadzi, ostrzeżenie, dyskwalifikacja.
+       Ta sama ocena („Utrzymany stan”) nie idzie drugi raz — w logu jedna
+       linia "bez zmian". Na ekranie paski jak dotąd.

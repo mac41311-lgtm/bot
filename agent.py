@@ -68212,7 +68212,7 @@ def _rywalizacja_tekst():
         + (" na telefonie — albo na laptopie, w Waszym folderze tam, gdy "
            "komenda zaczyna się od LAPTOP:" if _laptop_skonfigurowany() else "")
         + " (może trwać do " + str(_SEDZIA_MAKS_S // 60) + " minut), i "
-        "porówna liczbę. Mniej więcej co kwadrans Sędzia ocenia obie "
+        "porówna liczbę. Mniej więcej co pół godziny Sędzia ocenia obie "
         "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
         + " tylko jej procent i to, kto prowadzi. Jej wyników, liczb ani "
         "opisu jej pracy program Wam nie pokazuje.\n\n"
@@ -70152,14 +70152,53 @@ def _zdanie_o_nowej_skali(o):
     return ""
 
 
+# v480ni (uzytkownik 2026-11-14: "zeby zespolowi nie mieszac, chyba ze to
+# im pomaga"): MAIN dostaje ocene tylko wtedy, gdy cos sie w niej zmienilo
+# — procent jego druzyny albo rywala, kto prowadzi, ostrzezenie albo
+# dyskwalifikacja. Bieg 2026-11-14 05:56-09:37: 14 razy z rzedu "Utrzymany
+# stan 1%" szlo do MAIN-a jako nowa wiadomosc. Na ekranie i w logu ocena
+# jest jak dotad za kazdym razem.
+_PLIK_KLUCZA_OCENY = STATE_DIR / "klucz_dostarczonej_oceny.json"
+
+
+def _klucz_oceny(o, druzyna):
+    try:
+        rywal = "2" if str(druzyna) == "1" else "1"
+        moja = o.get("druzyna_" + str(druzyna)) or {}
+        jego = o.get("druzyna_" + rywal) or {}
+        return json.dumps([
+            moja.get("procent"), jego.get("procent"), str(o.get("prowadzi", "")).strip().lower()[:10],
+            {k: v for k, v in moja.items() if "dyskwal" in k or "ostrze" in k},
+            {k: v for k, v in jego.items() if "dyskwal" in k},
+        ], ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        return ""
+
+
 def _daj_ocene(o, step):
     if not o:
         return
     _skala = _zdanie_o_nowej_skali(o)
-    with _sedzia_lock:
-        _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
-        if _skala:
-            _sedzia_wiadomosci.append(_skala)
+    _klucz = _klucz_oceny(o, _DRUZYNA)
+    try:
+        _bez_zmian = bool(_klucz) and json.loads(
+            _PLIK_KLUCZA_OCENY.read_text(encoding="utf-8")).get("klucz") == _klucz
+    except Exception:
+        _bez_zmian = False
+    if _bez_zmian and not _skala:
+        log("RYWALIZACJA", "Ocena Sędziego z " + str(o.get("czas", "")) + " bez zmian (te same procenty "
+            "i prowadzenie) — zespołowi jej nie wysyłam, ma poprzednią.")
+    else:
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            _PLIK_KLUCZA_OCENY.write_text(json.dumps({"klucz": _klucz, "czas": o.get("czas")},
+                                                     ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        with _sedzia_lock:
+            _sedzia_wiadomosci.append(_ocena_zdaniem(o, _DRUZYNA))
+            if _skala:
+                _sedzia_wiadomosci.append(_skala)
     if _skala:
         log("RYWALIZACJA", _skala)
     _pelna = _ocena_zdaniem(o)
@@ -70221,9 +70260,14 @@ def pasek_rywalizacji(o):
 # zajete rozmowa druzyny 1.
 #
 # Teraz jest jedna, zawsze najnowsza ocena. Proces druzyny 1 prosi o nia
-# Sedziego co kwadrans, gdy konto 1 jest wolne, a kazda druzyna dostaje
+# Sedziego co kwadrans (od v480ni co 30 min), gdy konto 1 jest wolne, a kazda druzyna dostaje
 # ja raz, na swoim najblizszym kroku. Nikt na nikogo nie czeka.
-_SEDZIA_CO_S_OCENA = 15 * 60
+#
+# v480ni (uzytkownik 2026-11-14: "co 30 min albo dluzej, zeby zespolowi nie
+# mieszac"): co 30 min. Bieg 2026-11-14 05:56-09:37 — 14 ocen co ok.
+# 16 min, przy drużynie 1 wszystkie "Utrzymany stan 1%"; ocena (ok. 24 kB)
+# liczy sie w tempie telefonu jak kilka wiadomosci.
+_SEDZIA_CO_S_OCENA = 30 * 60
 _PLIK_ODEBRANEJ_OCENY = STATE_DIR / "odebrana_ocena_sedziego.txt"
 
 
