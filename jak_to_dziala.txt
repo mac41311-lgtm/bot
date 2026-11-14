@@ -5472,3 +5472,7 @@ v480np (2026-11-14)
      - Opis dla Bartka/Piotra/Ani mówi wprost, że poprawką fragmentu usuwa się
        też niepotrzebne linie (w „Starym” te linie, w „Nowym” to, co zostaje,
        albo nic) — parser obsługiwał to już wcześniej.
+     - Opis narzędzia termux_patch_file (wykonawca w TASK) przepisany w całości:
+       wprost wstawianie i usuwanie linii, bez wielkich liter i starych
+       przykładów („kod gry, build.gradle”). Pozostałe role (Tomek, Marek, Ola,
+       Wojtek, Ela, Kamil, Igor) plików nie poprawiają w swojej pracy — bez zmian.

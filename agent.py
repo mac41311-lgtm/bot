@@ -23612,20 +23612,16 @@ def _gemini_tools_legacy():
             "type": "function",
             "name": "termux_patch_file",
             "description": (
-                "Podmień DOKŁADNIE JEDNO wystąpienie fragmentu "
-                "'search' na 'replace' w istniejącym pliku "
-                "projektu (kod gry, build.gradle itp.) — NIE "
-                "agent.py. UŻYWAJ TEGO zamiast termux_write_file, "
-                "gdy zmieniasz fragment DUŻEGO, już istniejącego "
-                "pliku — nie przepisuj całej zawartości od nowa, "
-                "to marnuje tokeny i ryzykuje zgubienie reszty "
-                "pliku. termux_write_file zostaw dla NOWYCH plików "
-                "albo bardzo małych. 'search' musi wystąpić w "
-                "pliku dokładnie raz (skopiuj 1:1 z tego, co "
-                "wcześniej odczytałeś przez termux_read_file) — "
-                "inaczej patch zostanie odrzucony. Dla plików .py "
-                "automatycznie sprawdzany jest py_compile z "
-                "rollbackiem przy błędzie składni."
+                # v480np: opis przepisany w calosci (uzytkownik 2026-11-14) —
+                # wprost wstawianie i usuwanie linii, bez krzyku i starych przykladow.
+                "Zmienia jedno miejsce w istniejącym pliku (nie dotyczy agent.py): "
+                "fragment 'search', skopiowany 1:1 z pliku i stojący w nim dokładnie "
+                "raz, zastępuje tekstem 'replace'. Tak samo wstawia się nowe linie (w "
+                "'search' linia, za którą mają wejść, w 'replace' ta sama linia i nowe "
+                "pod nią) i usuwa niepotrzebne (w 'replace' tylko to, co ma zostać, "
+                "albo pusty tekst). Duży plik zmienia się tym zamiast przepisywać go "
+                "przez termux_write_file. Plik .py program sprawdza py_compile i przy "
+                "błędzie składni przywraca poprzednią wersję."
             ),
             "parameters": {
                 "type": "object",
