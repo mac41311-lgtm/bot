@@ -45216,6 +45216,9 @@ def _wykonaj_z_przejsciem_w_tlo(name, args, pominiete, kto="MAIN"):
         "status": "LECI_W_TLE",
         "command": cmd,
         "message": "Komenda liczy dalej w tle — opis jest w sekcji „W tle”.",
+        # v480nu: metka "(laptop)" przy akcji — bylo "(telefon)" dla
+        # komendy LAPTOP:, ktora poszla w tlo
+        **({"na_laptopie": "~/" + _laptop_folder() + " na laptopie"} if _LAPTOP_RE.search(cmd) else {}),
     }, True
 
 
@@ -45554,6 +45557,12 @@ def _karta_startu(r, teraz):
         # wiadomosci wyzej ("Twój ostatni krok", ze stanem LECI_W_TLE) —
         # tu wystarczy jej krotka nazwa (bylo: cala komenda drugi raz)
         _wyzej = (not r.get("autor") and r.get("komenda") in (_ostatni_run().get("komendy") or []))
+        # v480nu: komenda z ostatniego RUN MAIN-a jest opisana w "Twój ostatni
+        # krok" — tu nie ma jej drugi raz (zostaje tylko lista pominietych akcji)
+        if _wyzej:
+            return ("Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
+                    + " — mogą zależeć od wyniku, więc wyślij je, gdy przyjdzie."
+                    ) if r.get("pominiete") else ""
         linie = [
             "• " + _nazwa_w_tle(r["komenda"]) + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
             + (" (z Twojego RUN wyżej)" if _wyzej else "")
@@ -45617,8 +45626,9 @@ def _czekanie_blok(czesci=None):
                 _w_tle.remove(r)
             elif not r.get("pokazany"):
                 r["pokazany"] = True
-
-                trwa.append(_karta_startu(r, teraz))
+                _k = _karta_startu(r, teraz)
+                if _k:
+                    trwa.append(_k)
             else:
                 co = "czekanie" if r["rodzaj"] == "czekanie" else "komenda"
                 # v480fc: DeepSeek nie czuje uplywu czasu miedzy wiadomosciami
@@ -46028,7 +46038,10 @@ def _wynik_dla_maina(wynik, args, limit):
         reszta.pop("status", None)
         reszta.pop("message", None)
         reszta.pop("command", None)
-        _notka = "→ liczy dalej w tle; wynik przyjdzie sam, gdy się skończy."
+        # v480nu: to jedyne miejsce o tej komendzie — sekcja "W tle" juz jej
+        # nie powtarza (uzytkownik 2026-11-14: "ostatni krok plus w tle to samo")
+        _notka = ("→ liczy dalej w tle; pliki, które zapisuje, mogą być jeszcze niepełne; "
+                  "wynik przyjdzie sam, gdy się skończy.")
     if reszta.get("czekanie"):
         _notka = str(reszta.pop("czekanie"))
         reszta.pop("command", None)
