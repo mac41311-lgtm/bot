@@ -5443,3 +5443,18 @@ v480nm (2026-11-14)
      - Werdykt "czeka na przebieg" do MAIN-a też tylko stwierdza fakt:
        wynik zostanie potwierdzony, gdy program zobaczy przebieg tej komendy
        w folderze drużyny z tą liczbą w ostatniej linii.
+
+v480nn (2026-11-14)
+     - Drużyny skupiały się na Sędzim i pisały „specjalną” komendę pod niego
+       (bieg 13:34: 4 przebiegi „sprawdz”, żaden się nie liczył — timeout +
+       bash -lc, kod 2 przez ls obok). Teraz wynik jest potwierdzany z ich
+       zwykłej pracy: komenda ze „sprawdz” gdziekolwiek w przebiegu (też w
+       timeout, bash -lc, pętli, z innymi komendami, przy kodzie ≠ 0), liczba
+       gdzieś w wyjściu, pliki bez zmian. Nie liczy się liczba wpisana w
+       komendę (echo 0.715), wypisana z pliku (cat/grep/tail pliku, $(cat …))
+       ani z dodatkowego python3 -c.
+     - Akapit o Sędzim bez opisu mechanizmu: „Program potwierdza go z Waszych
+       własnych przebiegów tej komendy.”
+     - Zmieniony tekst rywalizacji przychodzi bez nagłówka „Zasady
+       rywalizacji się zmieniły”.
+     - „Czeka na przebieg” zostaje w logu, MAIN go nie dostaje.

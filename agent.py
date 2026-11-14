@@ -6177,12 +6177,9 @@ def _goal_briefing_for(name):
                 write_json(_CEL_WYSLANY_FILE, _wyslane)
                 # v480dq: rozmowa znala juz poprzednie zasady — mowimy
                 # wprost, ze to zmiana i od kiedy obowiazuje.
-                _zmiana = (
-                    "Zasady rywalizacji się zmieniły — od teraz obowiązują "
-                    "te poniżej (zastępują poprzednie):\n\n"
-                    if _znala_stare else ""
-                )
-                return _zmiana + _rywal + "\n\n"
+                # v480nn (uzytkownik): bez naglowka "zasady sie zmienily" —
+                # zmieniony tekst przychodzi jak zwykly opis, nie alarm.
+                return _rywal + "\n\n"
             return ""
 
         # v480cs: bieg 2026-10-19 14:52 — rozmowa Sedziego dobila do
@@ -68269,18 +68266,14 @@ def _rywalizacja_tekst():
         "także w Debianie. Czas próby zależy więc też od tego, czy druga "
         "drużyna akurat liczy — wolniejszy krok nie musi znaczyć, że "
         "Wasz kod jest gorszy.\n\n"
-        # v480nm: akapit o Sedzim przepisany w calosci — same fakty o tym,
-        # jak wynik jest potwierdzany, bez powodow i bez wskazowek.
+        # v480nn: akapit o Sedzim przepisany w calosci — bez opisu
+        # mechanizmu potwierdzania (zespol skupial sie na nim, nie na celu).
         "Sędzią jest sam program. Wynik drużyny to plik "
         "~/MAIN_" + my + "/wynik.json w postaci {\"opis\": \"co osiągnęliście\", "
         "\"wynik\": liczba, \"lepiej\": \"więcej\" albo \"mniej\", "
-        "\"sprawdz\": \"komenda, która w ostatniej linii wypisuje tę "
-        "liczbę\"}. Program tej komendy nie uruchamia. Wynik jest "
-        "potwierdzony, gdy program widział, że dokładnie ta komenda, "
-        "uruchomiona w folderze drużyny"
-        + (" (na telefonie albo, z LAPTOP:, na laptopie)" if _laptop_skonfigurowany() else "")
-        + ", wypisała tę liczbę w ostatniej linii, a pliki, których używa, "
-        "od tamtej pory się nie zmieniły. Mniej więcej co pół godziny Sędzia ocenia obie "
+        "\"sprawdz\": \"komenda, która wypisuje tę liczbę\"}. Program "
+        "potwierdza go z Waszych własnych przebiegów tej komendy. "
+        "Mniej więcej co pół godziny Sędzia ocenia obie "
         "drużyny. Swoją ocenę dostajecie w całości, a o drużynie " + oni
         + " tylko jej procent i to, kto prowadzi. Jej wyników, liczb ani "
         "opisu jej pracy program Wam nie pokazuje.\n\n"
@@ -69376,7 +69369,7 @@ _WIDZIANE_MAKS = 300
 _RDZEN_POMIJA = {"cd", "echo", "printf", "tail", "head", "grep", "egrep", "cat", "true",
                  "ps", "ls", "sleep", "date", "wc", "sort", "uniq", "awk", "sed", "tee",
                  "pwd", "export", "set", "free", "nproc", "uptime", "du", "df", "mkdir",
-                 "touch", "which", "type", ":"}
+                 "touch", "which", "type", ":", "for", "done", "fi", "}", ")"}
 
 
 def _widziane_plik(numer):
@@ -69419,16 +69412,30 @@ def _dopisz_widziane(numer, wpis):
 
 def _zapisz_widziana(komenda, wynik, start):
     try:
-        if not _DRUZYNA or not isinstance(wynik, dict) or wynik.get("returncode") != 0:
+        # v480nn: liczy sie kazdy przebieg zespolu z czescia liczaca, tez z
+        # kodem != 0 calosci (np. "ls brak.json" obok) — zespol nie ma
+        # pisac osobnej komendy pod Sedziego. "liczby" = wszystkie liczby
+        # z ostatnich linii wyjscia (patrz _widziana_liczba).
+        if not _DRUZYNA or not isinstance(wynik, dict):
             return
         if str(getattr(_kid_tl, "kid", "") or "").startswith("s"):
             return
-        liczba = _ostatnia_liczba(wynik.get("stdout"))
-        if liczba is None or not _rdzen_komendy(komenda)[2]:
+        if not _rdzen_komendy(komenda)[2]:
+            return
+        wyj = str(wynik.get("stdout") or "")
+        liczby = []
+        for _l in wyj.splitlines()[-200:]:
+            for _z in re.findall(r"[-+]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", _l):
+                if _z not in liczby:
+                    liczby.append(_z)
+        if not liczby:
             return
         _dopisz_widziane(_DRUZYNA, {"start": float(start), "koniec": time.time(),
-                                    "komenda": str(komenda)[:3000], "liczba": liczba,
-                                    "zapis": _ostatnia_liczba_tekst(wynik.get("stdout"))})
+                                    "komenda": str(komenda)[:3000],
+                                    "liczba": _ostatnia_liczba(wyj),
+                                    "zapis": _ostatnia_liczba_tekst(wyj),
+                                    "liczby": liczby[-400:],
+                                    "kod": wynik.get("returncode")})
     except Exception:
         pass
 
@@ -69448,13 +69455,28 @@ def _zapisz_potwierdzenie_sedziego(numer, komenda, liczba, zapis, start):
         pass
 
 
+_POWLOKA_C_RE = re.compile(r"""\b(?:bash|sh)\s+(?:-[a-z]*c[a-z]*)\s+(?:'([^']*)'|"([^"]*)")""")
+
+
+def _rozwin_powloke(komenda):
+    """v480nn: `timeout 120 bash -lc '…'` / `sh -c "…"` — liczy sie to, co
+    jest w srodku; dotad taki przebieg zespolu nie byl rozpoznany."""
+    k = str(komenda or "")
+    for _ in range(3):
+        k2 = _POWLOKA_C_RE.sub(lambda m: (m.group(1) if m.group(1) is not None else m.group(2)), k)
+        if k2 == k:
+            break
+        k = k2
+    return k
+
+
 def _rdzen_komendy(komenda, katalog_tel="~", druzyna=None):
     """(laptop?, katalog, [segmenty liczace]) — bez cd/echo/tail/…,
     timeout/nice/time i przekierowan. Komenda druzyny na telefonie startuje
     w ~, sprawdzanie Sedziego w ~/MAIN_n (katalog_tel). v480lw: `druzyna` —
     Sedzia (w procesie druzyny 1) liczy folder na laptopie druzyny n, nie
     swojej: "LAPTOP: python3 x.py" druzyny 2 to ~/MAIN_2 na laptopie."""
-    k = str(komenda or "").strip()
+    k = _rozwin_powloke(komenda).strip()
     laptop = False
     m = _LAPTOP_RE.match(k)
     if m:
@@ -69480,7 +69502,9 @@ def _rdzen_komendy(komenda, katalog_tel="~", druzyna=None):
             katalog = cel if cel.startswith(("~", "/")) else (katalog.rstrip("/") + "/" + cel)
             continue
         while slowa:
-            if slowa[0] in ("time", "nohup", "setsid", "command", "exec", "env"):
+            # v480nn: petle i warunki ("for …; do X; done", "if X; then")
+            if slowa[0] in ("time", "nohup", "setsid", "command", "exec", "env",
+                            "do", "then", "else", "if", "while", "until", "!", "{", "("):
                 slowa = slowa[1:]
             elif slowa[0] == "nice":
                 slowa = slowa[1:]
@@ -69518,7 +69542,7 @@ def _ogon_bez_nowych_liczb(komenda):
     "sprawdz". Tak samo "; echo 0.19", "| awk …", "; cat wynik.txt",
     "| head -1" czy "; wc -l log" zmienialyby to, co jest ostatnia liczba.
     """
-    k = str(komenda or "").strip()
+    k = _rozwin_powloke(komenda).strip()
     m = _LAPTOP_RE.match(k)
     if m:
         k = m.group(1).strip()
@@ -69602,22 +69626,86 @@ def _widziana_liczba(numer, komenda, ogloszony, zapis_ogloszonej=None):
     for linia in reversed(linie):
         try:
             w = json.loads(linia)
-            liczba = float(w.get("liczba"))
         except Exception:
             continue
-        if not _liczby_zgodne(liczba, ogloszony, w.get("zapis"), zapis_ogloszonej):
+        if not isinstance(w, dict):
             continue
         l2, k2, r2 = _rdzen_komendy(w.get("komenda"), druzyna=str(numer))
-        # v480ls: liczba jest z ostatniego segmentu — "sprawdz" musi byc
-        # koncem tamtej komendy, a za nim nic, co pisze nowe liczby
-        if (l2 != laptop or k2 != katalog or r2[-len(rdzen):] != rdzen
-                or not _ogon_bez_nowych_liczb(w.get("komenda"))):
+        if l2 != laptop or k2 != katalog:
             continue
+        # v480ls: liczba z ostatniej linii, "sprawdz" na koncu komendy
+        scisle = False
+        try:
+            scisle = (w.get("liczba") is not None
+                      and _liczby_zgodne(float(w.get("liczba")), ogloszony, w.get("zapis"), zapis_ogloszonej)
+                      and r2[-len(rdzen):] == rdzen and _ogon_bez_nowych_liczb(w.get("komenda")))
+        except Exception:
+            scisle = False
+        # v480nn: albo "sprawdz" gdziekolwiek w zwyklym przebiegu zespolu
+        # (timeout, bash -lc, petla, inne komendy obok), a liczba gdzies w
+        # wyjsciu — byle nie z wypisania pliku ani wpisana w komende.
+        if not scisle and not (_zawiera_ciag(r2, rdzen)
+                               and _luzny_przebieg_ok(w, rdzen, r2, ogloszony, zapis_ogloszonej)):
+            continue
+        if not scisle:
+            _z = next(z for z in (w.get("liczby") or []) if _da_sie_float(z)
+                      and _liczby_zgodne(float(z.replace(",", ".")), ogloszony, z, zapis_ogloszonej))
+            w = dict(w, liczba=float(_z.replace(",", ".")), zapis=_z)
         ok = _pliki_bez_zmian(laptop, katalog, rdzen, float(w.get("start") or 0), numer)
         if ok is True:
             return w, None
         powod = ok
     return None, powod
+
+
+def _zawiera_ciag(calosc, czesc):
+    n = len(czesc)
+    return n > 0 and any(calosc[i:i + n] == czesc for i in range(len(calosc) - n + 1))
+
+
+_CZYTA_PLIK = {"cat", "head", "tail", "grep", "egrep", "fgrep", "sed", "awk", "jq", "less",
+               "more", "tac", "nl", "column", "strings", "xxd", "od", "cut", "paste"}
+
+
+def _luzny_przebieg_ok(w, rdzen, r2, ogloszony, zapis_ogloszonej):
+    """v480nn: luzne dopasowanie widzianego przebiegu. True, gdy liczba jest
+    w wyjsciu, nie stoi w samej komendzie, nic w komendzie nie wypisuje
+    plikow (cat/grep/tail pliku…), a poza "sprawdz" nie ma kodu z -c/-e."""
+    kom = _rozwin_powloke(w.get("komenda"))
+    if not any(_liczby_zgodne(float(z.replace(",", ".")), ogloszony, z, zapis_ogloszonej)
+               for z in (w.get("liczby") or []) if re.fullmatch(r"[-+]?[\d.,eE+-]+", z or "")
+               and _da_sie_float(z)):
+        return False
+    for z in re.findall(r"\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?", kom):
+        if _da_sie_float(z) and _liczby_zgodne(float(z.replace(",", ".")), ogloszony, z, zapis_ogloszonej):
+            return False
+    if "$(" in kom or "`" in kom:
+        if re.search(r"(?:\$\(|`)\s*(?:" + "|".join(_CZYTA_PLIK) + r")\b", kom):
+            return False
+    for czesc in re.split(r"&&|\|\||[;\n]", _LAPTOP_RE.sub(lambda m: m.group(1), kom.strip())):
+        pierwsza = czesc.split("|")[0]
+        pierwsza = re.sub(r"\s*\d*>>?\s*(?:&\s*\d+|\S+)", " ", pierwsza)
+        slowa = pierwsza.split()
+        while slowa and slowa[0] in ("do", "then", "else", "if", "while", "until", "!", "{", "(",
+                                     "time", "nohup", "env", "command"):
+            slowa = slowa[1:]
+        if slowa and slowa[0] in _CZYTA_PLIK:
+            argi = [a for a in slowa[1:] if not a.startswith("-")]
+            if any("/" in a.strip("\"'") or re.search(r"\.\w{1,5}$", a.strip("\"'")) for a in argi):
+                return False
+    i = next((i for i in range(len(r2) - len(rdzen) + 1) if r2[i:i + len(rdzen)] == rdzen), 0)
+    for seg in r2[:i] + r2[i + len(rdzen):]:
+        if re.search(r"(?:^|\s)-(?:c|e)(?:\s|$)", seg):
+            return False
+    return True
+
+
+def _da_sie_float(z):
+    try:
+        float(str(z).replace(",", "."))
+        return True
+    except ValueError:
+        return False
 
 
 def _potwierdzenie_spojne(w, ogloszony=None, zapis=None):
@@ -70137,8 +70225,11 @@ def _sedzia_petla():
                 tmp = moja_tablica.with_suffix(".tmp")
                 tmp.write_text(json.dumps(w, ensure_ascii=False, indent=1), encoding="utf-8")
                 os.replace(tmp, moja_tablica)
-                if _czekal_juz and w.get("czeka_na_przebieg"):
-                    # v480nl: ten sam wynik dalej czeka — MAIN wie to juz
+                if w.get("czeka_na_przebieg"):
+                    # v480nn (uzytkownik: zespol nie ma pracowac pod Sedziego):
+                    # "czeka na przebieg" zostaje w logu, MAIN go nie dostaje
+                    if not _czekal_juz:
+                        log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA, trwalosc=False))
                     time.sleep(_SEDZIA_CO_S)
                     continue
                 with _sedzia_lock:
