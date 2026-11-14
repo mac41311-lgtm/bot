@@ -5490,3 +5490,17 @@ v480nq (2026-11-14)
      - Sekcja „W tle” (było „Dalej w tle”): proces raz — krótka nazwa skryptu,
        maszyna, ile trwa „z ilu” (timeout), log; proces laptopa śledzony już
        jako komenda nie dostaje drugiej linii.
+
+v480nr (2026-11-14)
+     - Ocena Sędziego nie kieruje już decyzjami zespołu (bieg 14:08: Tomek
+       „A to siatka, Sędzia nie kupi”, „Sędzia nadal 2%”). MAIN dostaje tablicę:
+       „Ocena Sędziego z 14:35: wy 2% celu, drużyna 2 4%, prowadzi drużyna 2.”
+       + ostrzeżenie/dyskwalifikacja z powodem (to zasady). Opis stanu
+       („ocena”) i uzasadnienie czyta użytkownik (ekran, AEL-MINI).
+     - Ela nie dostaje oceny Sędziego (liczy sama).
+     - Tekst rywalizacji: „liczy się to, co naprawdę działa i da się
+       powtórzyć” (było „wynik, który przetrwa sprawdzenie”); akapit o Sędzim
+       mówi, że drużyny dostają procent obu i kto prowadzi. Prompt Sędziego:
+       zdanie o tym, kto czyta „ocenę”, zgodne z tym.
+     - Fałszywe „Sędzia liczy teraz procent inaczej” po każdej zmianie słów
+       w prompcie Sędziego usunięte (skala = stała, nie hash promptu).
