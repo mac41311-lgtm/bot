@@ -5360,3 +5360,25 @@ CZESC 40. CO ZMIENILO v480 (bieg 2026-10-11 09:20 — urwane treningi, Ela 99%)
      ~/api_token_2.txt; na starcie jedna linia UWAGA, przy czekaniu linia
      w ~/AEL_WYSYLKA_DEEPSEEK.md i powiadomienie. Nowy token konta 1 tez nie
      trafia juz po cichu do konta 2.
+
+ v480nh (2026-11-14, logi drużyn z 00:38 i 10:51):
+     - Nowy plik podpisany samą ścieżką w osobnym bloku (```
+       eksperymenty/a/b.py ``` tuż nad blokiem kodu) program zapisuje od razu,
+       jak podpis "# ~/MAIN_n/b.py". Dotąd przepadał bez słowa (Ania 3 razy:
+       07:53, 08:20, 10:27), a jej URUCHOM kończył się FileNotFoundError.
+     - Komenda w tle przerwana sygnałem: rola i MAIN dostają, kto ją
+       zatrzymał (np. "zatrzymał ją Bartek o 11:35:54 komendą: pkill …")
+       albo że przerwał ją limit `timeout N` z tej samej komendy.
+     - Instalacja urwana w trakcie (timeout, kill; kod 0 od "| tail"):
+       zdanie "Instalacja NIE skończyła się — urwała się na: …", że pakiet
+       nie jest zainstalowany i co zrobić (bez timeout w tle albo
+       pkg search). Każdy wynik instalacji (obie drużyny) idzie do
+       ~/AEL_INSTALACJE.md (data, drużyna, kto, komenda, skutek).
+     - Proces pomocniczy pip (_in_process.py) nie daje już MAIN-owi linii
+       "nie wiadomo, nikt go nie zatrzymał"; czas komendy w tle liczony do
+       ostatniego zapisu jej logu, nie do chwili, w której program to
+       zauważył.
+     - Brak pliku w wyniku komendy (telefon): dopisane, gdzie w folderze
+       drużyny leży plik o tej nazwie (literówka w ścieżce), albo że nikt go
+       jeszcze nie zapisał (i podobne nazwy). W rywalizacji szuka tylko we
+       własnym folderze.

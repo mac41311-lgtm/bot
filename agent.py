@@ -11277,7 +11277,8 @@ def _wynik_dla_zespolu(komenda, cwd, rola=None):
 def _opis_dla_zespolu(komenda, cwd, wynik):
     if isinstance(wynik, dict) and ("stdout" in wynik or "stderr" in wynik):
         opis = _opis_wyniku_czekania({
-            k: wynik[k] for k in ("stdout", "stderr", "returncode", "czekanie") if k in wynik})
+            k: wynik[k] for k in ("stdout", "stderr", "returncode", "czekanie",
+                                  "kto_zatrzymal", "podsumowanie", "podpowiedz_pliku") if k in wynik})
     elif isinstance(wynik, dict):
         # odmowa programu (np. folder rywala) — jej komunikat, bez pol technicznych
         opis = str(wynik.get("message") or wynik.get("error") or "")
@@ -25288,6 +25289,12 @@ def _pliki_pod_naglowkami(text):
         przed = text[:m.start()]
         k = przed.rfind("```")
         linie = [l for l in (przed[k + 3:] if k >= 0 else przed).splitlines() if l.strip()]
+        # v480nh: nad blokiem stoi blok z sama nazwa pliku ("```\nx.py\n```")
+        if not linie and k >= 0:
+            _pop = re.search(r"```[a-zA-Z0-9_+-]*\n([^`]*?)\n?[ \t]*$", przed[:k])
+            _sc = _sama_sciezka_w_bloku(_pop.group(1)) if _pop else ""
+            if _sc and "/" not in _sc.replace("~/", ""):
+                linie = [_sc]
         if not linie or len(linie[-1]) > 160:
             continue
         nazwa = _nazwa_z_naglowka(linie[-1])
@@ -34319,6 +34326,82 @@ def _numer_komendy():
     return getattr(_kid_tl, "kid", None) or ""
 
 
+# v480nh: brak pliku w wyniku komendy — gdzie lezy plik o tej nazwie.
+# Bieg 2026-11-14 03:05 i 03:58 (druzyna 2): Bartek dwa razy wpisal
+# "eksymenty/" zamiast "eksperymenty/" i dostawal samo "No such file";
+# 07:53-10:27 Ania uruchamiala plik, ktorego program nie zapisal.
+_BRAK_PLIKU_RE = re.compile(
+    r"can't open file '([^'\n]+)'|No such file or directory: '([^'\n]+)'|"
+    r"^(?:cat|head|tail|python3?|bash|sh|wc|grep|sed|cp|mv): (?:cannot (?:open|stat|access) )?'?([^':\n]+?)'?: No such file or directory",
+    re.M)
+
+
+def _podpowiedz_brak_pliku(komenda, tekst):
+    """Zdanie dla tego, kto uruchomil komende, albo "" (tylko telefon; w
+    rywalizacji szuka wylacznie w folderze wlasnej druzyny)."""
+    try:
+        komenda = str(komenda or "")
+        if re.match(r"\s*LAPTOP\s*:", komenda) or "No such file" not in str(tekst or ""):
+            return ""
+        m_cd = re.match(r"\s*cd\s+([^\s;&|]+)\s*&&", komenda)
+        baza = _resolve_home_relative_path(m_cd.group(1)) if m_cd else HOME
+        korzen = Path(_folder_druzyny(_DRUZYNA)) if _DRUZYNA else None
+        if korzen is None:
+            try:
+                rel = Path(baza).resolve().relative_to(HOME.resolve())
+                korzen = HOME / rel.parts[0] if rel.parts else None
+            except Exception:
+                korzen = None
+        if korzen is None or not korzen.is_dir() or korzen.resolve() == HOME.resolve():
+            return ""
+        zdania = []
+        for m in _BRAK_PLIKU_RE.finditer(str(tekst)):
+            sc = next(g for g in m.groups() if g).strip()
+            if any(c in sc for c in "*?[") or not re.search(r"\.\w{1,5}$", sc):
+                continue
+            pelna = Path(sc) if sc.startswith("/") else Path(baza) / sc
+            try:
+                pelna.resolve().relative_to(korzen.resolve())
+            except Exception:
+                continue
+            if pelna.exists():
+                continue
+            nazwa = pelna.name
+            trafione, wszystkie, ile = [], [], 0
+            for dp, dn, fn in os.walk(korzen):
+                dn[:] = [d for d in dn if not d.startswith(".") and d not in (
+                    "__pycache__", "node_modules", "venv", ".venv", "site-packages")]
+                for f in fn:
+                    ile += 1
+                    pf = Path(dp) / f
+                    if f == nazwa:
+                        trafione.append(pf)
+                    elif pf.suffix == pelna.suffix:
+                        wszystkie.append(pf)
+                if ile > 20000:
+                    break
+
+            def _wzgl(x):
+                try:
+                    return str(Path(x).relative_to(Path(baza)))
+                except Exception:
+                    return _sciezka_od_domu(str(x))
+
+            if trafione:
+                zdania.append("Pliku " + _wzgl(pelna) + " nie ma; plik o tej nazwie jest tu: "
+                              + ", ".join(_wzgl(t) for t in trafione[:3]) + ".")
+            else:
+                bliskie = difflib.get_close_matches(_wzgl(pelna), [_wzgl(w) for w in wszystkie], n=3, cutoff=0.75)
+                zdania.append("Pliku " + _wzgl(pelna) + " nie ma — w folderze drużyny nie ma żadnego pliku o tej nazwie"
+                              + (" (podobne: " + ", ".join(bliskie) + ")" if bliskie else
+                                 ", więc nikt go jeszcze nie zapisał") + ".")
+            if len(zdania) >= 3:
+                break
+        return " ".join(dict.fromkeys(zdania))
+    except Exception:
+        return ""
+
+
 def termux_run(command):
     """v480kf: po instalacji/pobieraniu na wierzchu wynik dostaje jedno
     zdanie "podsumowanie": co zainstalowano albo pierwsza linia bledu i co
@@ -34358,13 +34441,23 @@ def termux_run(command):
     except Exception:
         pass
     try:
+        if isinstance(wynik, dict) and not wynik.get("podpowiedz_pliku"):
+            _pp = _podpowiedz_brak_pliku(command, str(wynik.get("stdout") or "") + "\n"
+                                         + str(wynik.get("stderr") or ""))
+            if _pp:
+                wynik["podpowiedz_pliku"] = _pp
+    except Exception:
+        pass
+    try:
         if (isinstance(wynik, dict) and isinstance(wynik.get("returncode"), int)
                 and _to_instalacja(command) and not wynik.get("podsumowanie")):
             _p = _podsumowanie_instalacji(str(wynik.get("stdout") or "") + "\n"
-                                          + str(wynik.get("stderr") or ""), wynik.get("returncode"))
+                                          + str(wynik.get("stderr") or ""), wynik.get("returncode"),
+                                          command, time.time() - _t_start)
             if _p:
                 wynik["podsumowanie"] = _p
                 log("TERMUX", _p)
+                _zapisz_instalacje(command, _p, _kto_puszcza(command))
     except Exception:
         pass
     return wynik
@@ -44349,6 +44442,14 @@ def _uruchom_rzecz(rzecz, praca, cichy):
             wynik = {"ok": False, "error": str(e), "error_type": type(e).__name__}
         if isinstance(wynik, dict):
             wynik = _ukryj_rywala_w_wyniku(_bez_ostrzezen_pythona(wynik))
+            # v480nh: kto ja przerwal (pkill kolegi, wlasny timeout N)
+            try:
+                _kz = _kto_zatrzymal_komende(rzecz.get("komenda"), rzecz.get("start"),
+                                             wynik.get("returncode"), time.time())
+                if _kz and not wynik.get("podsumowanie"):
+                    wynik["kto_zatrzymal"] = _kz
+            except Exception:
+                pass
         with _w_tle_lock:
             rzecz["wynik"] = wynik
             rzecz["koniec"] = time.time()
@@ -45009,6 +45110,13 @@ def _opis_wyniku_czekania(w):
     # v480ew: "kod wyjścia: 0" przy udanym odczycie nic nie mowi
     if "returncode" in w and w.get("returncode") not in (0, "0"):
         czesci.append(_opis_kodu_wyjscia(w.get("returncode")))
+    if w.get("kto_zatrzymal"):
+        czesci.append(str(w["kto_zatrzymal"]))
+    # v480nh: zdanie o instalacji (co weszlo / ze sie urwala) tez dla roli
+    if w.get("podsumowanie") and (out or err):
+        czesci.append(str(w["podsumowanie"]))
+    if w.get("podpowiedz_pliku"):
+        czesci.append(str(w["podpowiedz_pliku"]))
     if w.get("czekanie"):
         czesci.append(str(w["czekanie"]))
     # v480go: JSON z polami programu tylko wtedy, gdy nie ma nic innego
@@ -45743,6 +45851,11 @@ def _wynik_dla_maina(wynik, args, limit):
         kod_linia = _opis_kodu_wyjscia(reszta["returncode"])
     if "returncode" in reszta:
         reszta = {k: v for k, v in reszta.items() if k not in ("ok", "returncode")}
+    # v480nh: kto przerwal — zdaniem pod kodem, nie "pole: wartosc"
+    if reszta.get("kto_zatrzymal"):
+        kod_linia = (kod_linia + " — " if kod_linia else "") + str(reszta.pop("kto_zatrzymal"))
+    if reszta.get("podpowiedz_pliku"):
+        kod_linia = (kod_linia + "\n" if kod_linia else "") + str(reszta.pop("podpowiedz_pliku"))
     # v480gx: bieg 2026-10-27 11:23 — MAIN dostawal {"command": "… && true
     # && …", "czekanie": "To, na co czekałeś…"} i {"bytes": 681}. Notka o
     # czekaniu idzie zdaniem (bez komendy przepisanej przez program), a
@@ -46392,10 +46505,12 @@ def _blok_dokladnie_dla(text, sciezka):
             _pop = _bloki[_ib - 1]
             _kod_pop = _wyrownaj_blok(_pop.group(2))
             if (not str(text)[_pop.end():m.start()].strip()
-                    and _blok_sam_komentarz(_kod_pop) and _podpis_w_naglowku(_kod_pop, sciezka)):
+                    and ((_blok_sam_komentarz(_kod_pop) and _podpis_w_naglowku(_kod_pop, sciezka))
+                         or _sciezka_pasuje(_sama_sciezka_w_bloku(_kod_pop), sciezka))):
                 _podpis_wyzej = True
 
-        if not kod.strip() or _blok_poprawki(text, m.start()) or _blok_sam_komentarz(kod):
+        if (not kod.strip() or _blok_poprawki(text, m.start()) or _blok_sam_komentarz(kod)
+                or _sama_sciezka_w_bloku(kod)):
             continue
 
         z_heredoca = _tresc_z_heredoc(kod, sciezka)
@@ -46653,6 +46768,34 @@ def _blok_sam_komentarz(kod):
     nastepnego bloku, nie tresc pliku."""
     linie = [l.strip() for l in str(kod or "").splitlines() if l.strip()]
     return bool(linie) and all(l.startswith(("#", "//")) for l in linie)
+
+
+# v480nh: blok z sama sciezka, bez "#" ("```\neksperymenty/a/b.py\n```"),
+# tuz nad blokiem kodu podpisuje go tak samo jak "# ~/MAIN_1/b.py". Bieg
+# 2026-11-14 07:53, 08:20 i 10:27 (druzyna 2): Ania trzy razy dala nowy
+# plik w ten sposob, program go nie zapisal, jej URUCHOM konczyl sie
+# FileNotFoundError, a ona pisala plik drugi raz przez cat > (heredoc).
+_SAMA_SCIEZKA_RE = re.compile(
+    r"\s*(?:[\w ]{0,20}:\s*)?[`*_'\"]*((?:~/|/|\./)?(?:[\w.-]+/)*" + _NAZWA_PLIKU_KODU
+    + r")[`*_'\"]*\s*:?\s*$")
+
+
+def _sama_sciezka_w_bloku(kod):
+    """v480nh: sciezka/nazwa pliku, gdy blok ma jedna linie i jest nia
+    sama sciezka (bez kodu), inaczej ""."""
+    linie = [l.strip() for l in str(kod or "").splitlines() if l.strip()]
+    if len(linie) != 1 or len(linie[0]) > 200:
+        return ""
+    m = _SAMA_SCIEZKA_RE.fullmatch(re.sub(r"^\s*(?:#|//)\s*", "", linie[0]))
+    return m.group(1) if m else ""
+
+
+def _sciezka_pasuje(podana, sciezka):
+    """v480nh: "eksperymenty/a/b.py" pasuje do ~/MAIN_2/eksperymenty/a/b.py
+    (koniec sciezki), gola nazwa — do pliku o tej nazwie."""
+    a = [x for x in str(podana or "").replace("~/", "").split("/") if x and x != "."]
+    b = [x for x in str(sciezka or "").split("/") if x]
+    return bool(a) and len(a) <= len(b) and b[-len(a):] == a
 
 
 # v480da: kod autora, ktory sie nie kompiluje, wraca do autora od razu,
@@ -66434,7 +66577,7 @@ def _postep_instalacji_rzeczy(r):
         return ""
 
 
-def _podsumowanie_instalacji(tekst, kod):
+def _podsumowanie_instalacji(tekst, kod, komenda=None, trwal_s=None):
     """v480kf: na koniec instalacji jedno zdanie: co zainstalowano albo
     pierwsza prawdziwa linia bledu i co z nia zrobic. "" gdy nic nie
     rozpoznano."""
@@ -66442,6 +66585,9 @@ def _podsumowanie_instalacji(tekst, kod):
         linie = [([c for c in l.split("\r") if c.strip()] or [""])[-1].strip()
                  for l in str(tekst or "").split("\n")]
         linie = [l for l in linie if l]
+        _niedok = _instalacja_niedokonczona(linie, komenda, trwal_s, kod)
+        if _niedok:
+            return _niedok
         if kod == 0:
             for l in reversed(linie):
                 m = re.match(r"Successfully installed\s+(.+)", l)
@@ -66473,6 +66619,84 @@ def _podsumowanie_instalacji(tekst, kod):
                 + (" Co zrobić: " + rada if rada else ""))
     except Exception:
         return ""
+
+
+# v480nh: pip/apt w trakcie — ostatnia linia mowi, ze praca jeszcze szla
+_INSTALACJA_W_TRAKCIE_RE = re.compile(
+    r"still running|^(?:Collecting|Downloading|Obtaining|Building wheels? for|Building wheel for|"
+    r"Preparing metadata|Installing build dependencies|Getting requirements to build|"
+    r"Installing collected packages|Running setup\.py|Unpacking|Get:\d+|Setting up|"
+    r"Receiving objects|Resolving deltas)", re.I)
+_INSTALACJA_KONIEC_RE = re.compile(
+    r"^(?:Successfully installed|Requirement already satisfied|ERROR|E:|error:|fatal:)|"
+    r"Failed building wheel|subprocess-exited-with-error|0 upgraded, 0 newly installed", re.I)
+
+
+def _instalacja_niedokonczona(linie, komenda, trwal_s, kod):
+    """
+    v480nh: instalacja, ktora sie nie skonczyla (urwana w trakcie: timeout,
+    kill), zdaniem — co sie stalo i co dalej; "" gdy skonczyla sie normalnie.
+    Bieg 2026-11-14 10:23 (druzyna 2): "timeout 180 pip install matplotlib
+    2>&1 | tail -5" — pip przerwany na "Preparing metadata … still
+    running", kod 0 (od tail), program pisal "skończył się poprawnie",
+    a MAIN dalej myslal, ze matplotlib "doinstaluje się w tle".
+    """
+    try:
+        if not linie:
+            return ""
+        ost = linie[-1]
+        if _INSTALACJA_KONIEC_RE.search(ost) or not _INSTALACJA_W_TRAKCIE_RE.search(ost):
+            return ""
+        if any(re.match(r"Successfully installed", l) for l in linie[-5:]):
+            return ""
+        lim = _limit_timeout(komenda) if komenda else None
+        przez_timeout = bool(lim and (trwal_s is None or trwal_s >= lim - 3))
+        try:
+            k = int(kod)
+        except (TypeError, ValueError):
+            k = None
+        if not przez_timeout and k not in (124, 137, 143, -9, -15) and k != 0:
+            return ""
+        pakiety = re.findall(r"\b(?:pip3?|pkg|apt(?:-get)?)\s+install\s+((?:[-\w.\[\]=<>~]+\s*)+)", str(komenda or ""))
+        pak = " ".join(p for p in (pakiety[0].split() if pakiety else [])
+                       if re.match(r"[A-Za-z][\w.\-\[\]]*(?:[=<>~!]=?[\w.*]+)?$", p))
+        return (
+            "Instalacja NIE skończyła się — urwała się na: „" + short(ost, 160) + "”"
+            + (" (przerwał ją limit `timeout " + (str(int(lim)) if lim == int(lim) else str(lim))
+               + "` z tej komendy)" if przez_timeout else "")
+            + ("; kod 0 to kod potoku (np. | tail), nie instalacji" if k == 0 else "")
+            + ". " + (pak + " nie jest" if pak else "Pakiet nie jest") + " zainstalowany. "
+            + "Co zrobić: budowanie ze źródeł trwa na telefonie długo — puśćcie instalację bez `timeout` "
+            + "(program sam przeniesie ją w tło i da znać, gdy się skończy), albo sprawdźcie, czy jest "
+            + "gotowa paczka systemu: pkg search " + (pak.split()[0] if pak else "<nazwa>")
+            + ". Czy pakiet jest: python3 -c 'import <moduł>'. Co już instalowano (obie drużyny): "
+            + "~/AEL_INSTALACJE.md."
+        )
+    except Exception:
+        return ""
+
+
+# v480nh: wspolny spis instalacji (obie druzyny, caly telefon) — kto, co,
+# z jakim skutkiem; zeby nikt nie instalowal w kolko tego samego ani nie
+# myslal, ze cos jest, gdy instalacja sie urwala.
+_INSTALACJE_PLIK = HOME / "AEL_INSTALACJE.md"
+
+
+def _zapisz_instalacje(komenda, podsumowanie, kto=None):
+    try:
+        if not podsumowanie:
+            return
+        m = re.search(r"(?:pip3?|pkg|apt(?:-get)?|npm|conda)\s+install\s+[^;&|\n]*", str(komenda or ""))
+        co = short(m.group(0) if m else _komenda_jedna_linia(komenda, 120), 160)
+        nowy = not _INSTALACJE_PLIK.exists()
+        with open(_INSTALACJE_PLIK, "a", encoding="utf-8") as f:
+            if nowy:
+                f.write("# Instalacje na tym telefonie i laptopie (zapisuje program, obie drużyny)\n\n")
+            f.write("- " + time.strftime("%Y-%m-%d %H:%M") + " [drużyna " + (_DRUZYNA or "1") + "]"
+                    + ((" " + str(kto)) if kto else "") + ": `" + co + "` — "
+                    + short(" ".join(str(podsumowanie).split()), 400) + "\n")
+    except Exception:
+        pass
 
 
 def _postep_z_logu(sciezka, linie, start=None, komenda=None, cwd=None):
@@ -66784,6 +67008,66 @@ def _kill_trafia(komenda, pid, nazwa, kom):
     return False
 
 
+# v480nh: limit "timeout N" (albo "timeout -s KILL 5m") w komendzie — w sekundach.
+_TIMEOUT_W_KOMENDZIE_RE = re.compile(
+    r"(?:^|[\s;&|(])timeout\s+(?:-[a-zA-Z]+(?:\s+[A-Z0-9]+)?\s+|--[\w-]+(?:=\S+)?\s+)*(\d+(?:\.\d+)?)([smhd]?)(?=\s)")
+
+
+def _limit_timeout(komenda):
+    """v480nh: najmniejszy limit `timeout N` w komendzie (sekundy) albo None."""
+    lim = None
+    for m in _TIMEOUT_W_KOMENDZIE_RE.finditer(" " + str(komenda or "")):
+        try:
+            sek = float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+        except Exception:
+            continue
+        if sek > 0 and (lim is None or sek < lim):
+            lim = sek
+    return lim
+
+
+def _kto_zatrzymal_komende(komenda, start, kod, koniec=None):
+    """
+    v480nh: kto przerwal komende, ktora skonczyla sie sygnalem albo trwala
+    tyle, ile jej wlasny limit `timeout N` — zdanie albo "". Bieg
+    2026-11-14 11:21 i 11:35 (druzyna 1): Bartek sam zatrzymal swoj bieg
+    przez pkill, wynik w tle mowil tylko "kill/pkill albo program", a Bartek
+    napisal, ze to pewnie MAIN go zabil. Bieg 2026-11-14 10:23 (druzyna 2):
+    "timeout 180 pip install matplotlib" przerwal instalacje, a program
+    pisal, ze nikt jej nie zatrzymal.
+    """
+    try:
+        try:
+            k = int(kod)
+        except (TypeError, ValueError):
+            k = None
+        komenda = str(komenda or "")
+        start = float(start or 0)
+        trwal = float(koniec or time.time()) - start if start else None
+        lim = _limit_timeout(komenda)
+        if lim and trwal is not None and trwal >= lim - 3 and (
+                k in (None, 0, 124, 137, 143, -9, -15) or k is None):
+            return ("przerwał ją limit `timeout " + (str(int(lim)) if lim == int(lim) else str(lim))
+                    + "` z tej samej komendy (po " + _min_s(lim) + ") — nie skończyła pracy; "
+                    + "bez `timeout` (albo z większym) program sam przeniesie ją w tło i da znać, gdy się skończy")
+        if k in (-15, 143, -9, 137, -2, 130, -1, 129) and start:
+            nazwy = re.findall(r"(?<![\w/.~$-])(" + _NAZWA_PLIKU_KODU + r")(?![\w-])", komenda)
+            nazwa = nazwy[0] if nazwy else ""
+            for z in reversed(_zdarzenia_od(start - 1)):
+                if z.get("rodzaj") == "program" and nazwa and nazwa in str(z.get("opis") or ""):
+                    return "zatrzymał ją program — " + short(str(z.get("opis") or ""), 200)
+                if (z.get("rodzaj") == "zespol"
+                        and str(z.get("druzyna") or "1") == (_DRUZYNA or "1")
+                        and str(z.get("komenda") or "") not in komenda
+                        and _kill_trafia(z.get("komenda"), "", nazwa, komenda)):
+                    return ("zatrzymał ją " + str(z.get("kto") or "ktoś z zespołu")
+                            + " o " + time.strftime("%H:%M:%S", time.localtime(float(z.get("t") or 0)))
+                            + " komendą: " + short(str(z.get("komenda") or ""), 160))
+    except Exception:
+        pass
+    return ""
+
+
 def _rejestr_plik():
     if (HOME / "storage" / "shared").exists():
         return PRZEBIEG_NA_TELEFONIE / "procesy.log"
@@ -67061,6 +67345,15 @@ def _jak_sie_skonczyl(klucz, d, widziany):
                                    "razy po kolei albo robi coś dalej) — jej wynik i kod przyjdą, gdy się skończy")
     except Exception:
         pass
+    # v480nh: proces pomocniczy instalacji (pip buduje pakiet w osobnym
+    # procesie) — jego koniec to czesc instalacji, ktorej wynik przychodzi
+    # z jej komenda. Bieg 2026-11-14 10:39 (druzyna 2): "_in_process.py
+    # przestał działać — nie wiadomo, nikt go nie zatrzymał", a przerwal go
+    # timeout 180 z komendy pip install.
+    if re.search(r"pip/_vendor/|pyproject_hooks|(?:^|/)setup\.py\b|_in_process\.py|pip3? install",
+                 str(d.get("kom") or "") + " " + str(d.get("nazwa") or "")):
+        return "sam", ("proces pomocniczy instalacji (pip) — skończył się razem z nią; wynik instalacji "
+                       "przychodzi z jej komendą")
     return "nie_wiadomo", ("nie wiadomo — nikt z programu ani zespołu go nie zatrzymał, system nic "
                            "o nim nie zapisał" + (", a log jest pusty" if d.get("log") else
                                                    (", a jego wyjście szło przez ssh, nie do pliku na laptopie"
@@ -67196,6 +67489,20 @@ def _raport_z_tla():
                 _tlo_konce_nazw[_nazwa_w_tle(str(getattr(proces, "args", ""))).split(" (")[0].strip()] = time.time()
             except Exception:
                 pass
+            # v480nh: czas do ostatniego zapisu logu, nie do chwili, w ktorej
+            # program to zauwazyl (bieg 2026-11-14 10:23: "trwał 16 min" przy
+            # komendzie z timeout 180, ktora skonczyla sie po ok. 3 min)
+            _koniec_t = time.time()
+            try:
+                if log_path and start and os.path.exists(log_path):
+                    _koniec_t = min(_koniec_t, max(float(start), os.path.getmtime(log_path)))
+                    trwa = _czas_slownie(_koniec_t - start)
+            except Exception:
+                pass
+            _pelna_kom = (" ".join(str(a) for a in proces.args)
+                          if isinstance(getattr(proces, "args", ""), (list, tuple))
+                          else str(getattr(proces, "args", "")))
+            _kz = _kto_zatrzymal_komende(_pelna_kom, start, kod, _koniec_t) if start else ""
             if kod == 0:
                 jak = "skończył się poprawnie (kod 0)"
                 pokaz = linie[-8:]
@@ -67211,7 +67518,11 @@ def _raport_z_tla():
                 )
             _podsum_inst = ""
             if log_path and _to_instalacja(str(getattr(proces, "args", ""))):
-                _podsum_inst = _podsumowanie_instalacji(_ogon_logu_tekst(log_path), kod)
+                _podsum_inst = _podsumowanie_instalacji(_ogon_logu_tekst(log_path), kod, _pelna_kom,
+                                                        (_koniec_t - start) if start else None)
+                _zapisz_instalacje(_pelna_kom, _podsum_inst)
+            elif _kz:
+                jak += " — " + _kz
             _l = (
                 "• " + _nazwa_w_tle(str(getattr(proces, "args", ""))) + " (proces " + str(pid) + ") " + jak
                 + ((" " + _podsum_inst) if _podsum_inst else "")
