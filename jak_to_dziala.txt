@@ -5458,3 +5458,12 @@ v480nn (2026-11-14)
      - Zmieniony tekst rywalizacji przychodzi bez nagłówka „Zasady
        rywalizacji się zmieniły”.
      - „Czeka na przebieg” zostaje w logu, MAIN go nie dostaje.
+
+v480no (2026-11-14)
+     - Porządek w opisach ról (raport: notatki/porzadek_opisow_rol_2026-11-14.md):
+       bez linii „Termux API, ADB DEBUGOWANIE, Android”, bez nagłówka „Opis
+       na start w nowej wersji…”, zmiana opisu roli bez „AKTUALIZACJA
+       INSTRUKCJI ROLI”; pełny opis dla Bartka/Piotra/Ani przepisany w całości
+       (te same możliwości, ~800 znaków krócej, skład bez samej roli);
+       PODGLĄD bez przykładu „cat wynik.json”; Kamil i Wojtek z pełnym składem;
+       Marek ocenia plany zespołu; MAIN ma skład zespołu raz, nie trzy razy.

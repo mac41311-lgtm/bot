@@ -3871,7 +3871,7 @@ def init_deepseek():
 # przepisany w calosci. Ksztalty JSON bez zmian poza wartoscia ask_role.
 # Bez obowiazkowej konsultacji (uzytkownik: "tego nie chcemy") — MAIN
 # decyduje, prompt tylko opisuje, co daje mu kazda osoba.
-MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika. W zespole są: Tomek (następny krok), Kamil (fakty i informacje z sieci), Marek (słabe punkty i ryzyko planu), Bartek (kod i technika), Piotr (przegląd kodu i przyczyna błędu), Ania (poprawka błędu w kodzie), Ola (co wyszło z wykonania, po ludzku), Wojtek (praktyczny sens), Ela (ile celu jest naprawdę zrobione) i Igor (świeże oko z zewnątrz — nie zna celu, dostaje tylko Twoje pytanie). Każda z tych osób widzi to, czego sam nie zobaczysz: Bartek wie, jak napisać kod, Marek — co w planie może zawieść, Kamil — jakie są fakty. ASK to pytanie do jednej z nich; w ask_role wpisujesz jej imię, a odpowiedź wraca do Ciebie w tym samym kroku. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "Tomek|Kamil|Marek|Bartek|Piotr|Ania|Ola|Wojtek|Ela|Igor",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
+MAIN_PROMPT = """Jesteś MAIN-em i prowadzisz zespół, który pracuje nad celem użytkownika (kto jest w zespole i jak z nim rozmawiać, opisuje wiadomość „Kilka słów o tym, jak to wszystko działa”). ASK to pytanie do jednej osoby; w ask_role wpisujesz jej imię, a odpowiedź wraca do Ciebie w tym samym kroku. W każdym kroku dostajesz, co się stało, i odpowiadasz jedną decyzją w jednym z poniższych kształtów.\n\n{\n  "type": "TASK",\n  "reason": "",\n  "task": "",\n  "success_condition": "",\n  "write_engineer_code_to": ""\n}\n\n{\n  "type": "DONE",\n  "reason": ""\n}\n\n{\n  "type": "FAILED",\n  "reason": ""\n}\n\n{\n  "type": "NEED_USER_LOGIN",\n  "reason": "",\n  "url": "",\n  "instructions": ""\n}\n\n{\n  "type": "ASK",\n  "ask_role": "Tomek|Kamil|Marek|Bartek|Piotr|Ania|Ola|Wojtek|Ela|Igor",\n  "ask_question": ""\n}\n\n{\n  "type": "RUN",\n  "reason": "",\n  "actions": [\n    {"tool": "chrome_inspect", "args": {"tab_id": ""}},\n    {"tool": "termux_run", "args": {"command": ""}}\n  ]\n}"""
 
 
 # v352: kotwica roli — jedno zdanie, raz, na poczatku rozmowy.
@@ -3920,10 +3920,11 @@ PLANNER_PROMPT = (
 # Kamil nie dostaje _JAK_ROZMAWIAMY, a tez moze rozmawiac z zespolem.
 # v480fw: na prosbe uzytkownika (2026-10-25: "prompty dopisane do kazdej
 # roli") przepisany w calosci — PODGLĄD i jak program kladzie kod.
+# v480no: przepisany w calosci — pelny sklad zespolu (byl sprzed Piotra, Ani i Eli).
 RESEARCHER_PROMPT = (
     "Jesteś Kamilem. Sprawdzasz fakty i szukasz potrzebnych "
     "informacji. Pracujesz w zespole z Tomkiem, Markiem, Bartkiem, "
-    "Olą i Wojtkiem; gdy zwrócisz się do kogoś z nich po imieniu, "
+    "Piotrem, Anią, Olą, Wojtkiem i Elą; gdy zwrócisz się do kogoś z nich po imieniu, "
     "dostanie to od razu i odpowie. Jest też Igor — niezależny, nie "
     "zna celu i dostaje tylko to, co sam do niego napiszesz. Do plików "
     "drużyny i tego, co jest zainstalowane, zaglądasz linią PODGLĄD: "
@@ -3934,8 +3935,10 @@ RESEARCHER_PROMPT = (
 )
 
 
+# v480no: przepisany w calosci — plany calego zespolu, nie tylko Tomka
+# (tak go opisuje sklad zespolu: "słabe punkty planów").
 CRITIC_PROMPT = (
-    "Jesteś Markiem. Oceniasz pomysły i plany Tomka, szukając "
+    "Jesteś Markiem. Oceniasz pomysły i plany zespołu, szukając "
     "ich słabych punktów."
 )
 
@@ -4038,15 +4041,16 @@ PROGRESS_ESTIMATOR_PROMPT = """Jesteś Elą. Oceniasz, jaka część całego cel
 # jak u Kamila: Wojtek tez moze rozmawiac z zespolem wprost.
 # v480fw: na prosbe uzytkownika ("prompty dopisane do kazdej roli")
 # przepisany w calosci — moze sam zajrzec, co zespol zrobil.
+# v480no: przepisany w calosci — pelny sklad, przyklad PODGLĄDU bez wynik.json.
 WOJTEK_PROMPT = (
     "Jesteś Wojtkiem. Patrzysz na cel jak zwykły użytkownik "
     "i zwracasz uwagę na praktyczny sens. Pracujesz w zespole "
-    "z Tomkiem, Kamilem, Markiem, Bartkiem i Olą; gdy zwrócisz się "
+    "z Tomkiem, Kamilem, Markiem, Bartkiem, Piotrem, Anią, Olą i Elą; gdy zwrócisz się "
     "do kogoś z nich po imieniu, dostanie to od razu i odpowie. Jest "
     "też Igor — niezależny, nie zna celu i dostaje tylko to, co sam "
     "do niego napiszesz. To, co zespół naprawdę zrobił, możesz "
     "zobaczyć sam, linią PODGLĄD: z komendą do odczytu (np. ls, head, "
-    "cat wynik.json) — program oddaje Ci wynik. Decyzje podejmuje MAIN."
+    "grep -n) — program oddaje Ci wynik. Decyzje podejmuje MAIN."
 )
 
 
@@ -6326,15 +6330,13 @@ def _save_session_state(name, session, prompt_hash=None, prompt_text=None,
 # rozrzuconych po całym prompcie drobnych zmianach) — wtedy bez sensu
 # komplikować, wysyłamy całość jak wcześniej.
 def _build_prompt_update_message(old_prompt_text, new_prompt_text):
+    # v480no (uzytkownik 2026-11-14: naglowki maja nie mieszac w pracy):
+    # spokojne jedno zdanie zamiast "AKTUALIZACJA INSTRUKCJI ROLI";
+    # krotki opis roli idzie w calosci, diff tylko przy dlugim.
 
-    full_text_message = (
-        "AKTUALIZACJA INSTRUKCJI ROLI (zastępuje poprzednią "
-        "wersję instrukcji z tej rozmowy, reszta historii/"
-        "ustaleń pozostaje ważna):\n\n"
-        + new_prompt_text
-    )
+    full_text_message = "Twój opis roli w obecnej wersji programu:\n\n" + new_prompt_text
 
-    if not old_prompt_text or old_prompt_text == new_prompt_text:
+    if not old_prompt_text or old_prompt_text == new_prompt_text or len(new_prompt_text) < 3000:
         return full_text_message
 
     diff_text = "\n".join(
@@ -6349,11 +6351,8 @@ def _build_prompt_update_message(old_prompt_text, new_prompt_text):
         return full_text_message
 
     return (
-        "AKTUALIZACJA INSTRUKCJI ROLI — poniżej TYLKO zmiany (diff w "
-        "formacie unified diff, linie z '-' usunięte, z '+' dodane) "
-        "względem poprzedniej wersji Twoich instrukcji z TEJ ROZMOWY. "
-        "Wszystko, czego nie ma w tym diffie, pozostaje bez zmian — "
-        "to nadal Twoje aktualne instrukcje:\n\n"
+        "Zmiany w Twoim opisie roli (linie z „-” wypadły, z „+” doszły, "
+        "reszta zostaje jak była):\n\n"
         + diff_text
     )
 
@@ -6548,9 +6547,9 @@ def start_session(name, system_prompt):
                     # v480lf: rola, ktora juz rozmawia, dostaje ten sam
                     # opis jeszcze raz — z jednym zdaniem, ze to nowa
                     # wersja (inaczej wyglada jak powtorka bez powodu).
-                    _do_wyslania = (
-                        ("Opis na start w nowej wersji programu (zastępuje poprzedni):\n\n"
-                         + _teraz_fakty) if saved.get("fakty") else _teraz_fakty)
+                    # v480no (uzytkownik: naglowki "stare/nowe" mieszaja):
+                    # nowy opis idzie sam, bez naglowka o wersji.
+                    _do_wyslania = _teraz_fakty
                     # v353: kazda wiadomosc do DeepSeeka przechodzi
                     # przez limiter. v480lt: z rozmiarem, i wlasna
                     # kopia wysylki — biblioteczne send_message() nie
@@ -58792,13 +58791,15 @@ def _pierwsza_wiadomosc(rola=None):
                     "a android_state pokaże, czy już działa. ", 1)
         except Exception:
             pass
-        return ((_jtd.replace("\n\nWykonanie. ", "\n\n" + _lap_m + "\n\nWykonanie. ", 1)
-                 if _lap_m else _jtd) + "\n\nTermux API, ADB DEBUGOWANIE, Android")
+        # v480no: bez doklejanej linii "Termux API, ADB DEBUGOWANIE, Android"
+        # (zostalosc z v342 — nic nie mowila, a stala na poczatku/koncu opisu).
+        return (_jtd.replace("\n\nWykonanie. ", "\n\n" + _lap_m + "\n\nWykonanie. ", 1)
+                if _lap_m else _jtd)
 
     if rola is not None:
-        return _platforma + "\n\n" + _jak_rozmawiamy()
+        return _jak_rozmawiamy(rola=rola)
 
-    return "Termux API, ADB DEBUGOWANIE, Android"
+    return ""
 
 
 # v424: jak dziala swiat, w ktorym zespol rozmawia — fakt, nie polecenie.
@@ -58873,81 +58874,50 @@ def _jak_rozmawiamy_laptop():
     )
 
 
-def _jak_rozmawiamy(laptop=True):
-    # v480nk: akapit przepisany w calosci — instalacja nie "czeka, az sie
-    # skonczy": dluzsza niz 2 min liczy w tle jak kazde uruchomienie, a wynik
-    # przychodzi sam (bieg 2026-11-14 10:23: zespol dawal "timeout 180 pip
-    # install", zeby nie czekac, i instalacja sie urywala).
-    # v480mi: akapit przepisany w calosci — cztery sposoby zmiany pliku, na
-    # wszystkich plikach (uzytkownik 2026-11-07), wstawianie w srodek.
-    # v480lz: akapit przepisany w calosci — doszlo zdanie o „...” w
-    # poprawce fragmentu (bieg 2026-11-05 17:48: Bartek nie umial
-    # przepisac 1:1 linii z 640 znakami tablicy i poprawka wracala).
+def _jak_rozmawiamy(laptop=True, rola=None):
+    # v480no: przepisany w calosci (uzytkownik 2026-11-14: "sprawdz dlugosci
+    # promptow… czy zgadzaja sie do roli… tak jak bys sam chcial dostac").
+    # Te same mozliwosci co v480nk, bez powtorzen; sklad zespolu bez samej
+    # roli (Bartek czytal "Bartek (kod i technika)" o sobie).
+    _inni = [opis for r, opis in _SKLAD_ZESPOLU if r != str(rola)]
+    _pomoc = ("" if str(rola) in ("CODE_REVIEWER", "CODE_FIXER") else
+              "Autor, któremu program odda błąd w jego kodzie, może zawołać Piotra albo Anię po imieniu. ")
     return (
-        "Rozmawiacie przez program na telefonie z Androidem. Nikt z was "
-        "nie ma terminala — to, co zespół ustali, wykonuje program, a wy "
-        "dostajecie, co z tego wyszło. Do plików i środowiska zaglądacie "
-        "linią PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' "
-        "plik, head, ls, wc, python3 --version, pip show pakiet; kilka "
-        "komend łączycie przez ; albo |), a kod uruchamiacie linią "
-        "URUCHOM: z komendą (np. URUCHOM: python3 test.py). Program "
-        "wykonuje ją w folderze drużyny i oddaje wynik albo błąd temu, "
-        "kto pytał, więc autor sprawdza i poprawia swój kod sam, aż "
-        "działa. Uruchomienie dłuższe niż 2 minuty liczy dalej w tle, "
-        "a jego wynik dostaje autor i MAIN, gdy się skończy. Bibliotekę "
-        "albo program, którego brakuje, instalujecie tak samo (URUCHOM: "
-        "pip install pakiet albo URUCHOM: pkg install -y pakiet). Dłuższa "
-        "instalacja też liczy dalej w tle, a gdy się skończy, program mówi, "
-        "co weszło, a co nie i dlaczego. "
+        "Rozmawiacie przez program na telefonie z Androidem; nikt z was nie ma terminala, "
+        "a to, co zespół ustali, wykonuje program. Do plików i środowiska zaglądacie linią "
+        "PODGLĄD: z komendą do odczytu (grep -n, sed -n 'od,dop' plik, head, ls, wc, "
+        "python3 --version, pip show pakiet; kilka łączycie przez ; albo |), a uruchamiacie "
+        "i instalujecie linią URUCHOM: (np. URUCHOM: python3 test.py, URUCHOM: pip install "
+        "pakiet, URUCHOM: pkg install -y pakiet). Program robi to w folderze drużyny i oddaje "
+        "wynik albo błąd temu, kto pytał, więc autor sam sprawdza i poprawia swój kod. Co "
+        "trwa dłużej niż 2 minuty, liczy dalej w tle, a wynik dostaje autor i MAIN; po "
+        "instalacji program mówi, co weszło, a co nie i dlaczego. "
         + (_jak_rozmawiamy_laptop() if laptop else "")
-        + "Pliki "
-        "zmieniacie na cztery sposoby i każdy działa na wszystkich plikach "
-        "— kod, skrypty, notatki — swoich i cudzych. Nowy "
-        "plik piszecie w całości, w osobnym bloku, ze ścieżką tuż nad "
-        "nim; program od razu kładzie go na dysk, a plik z kodem sprawdza "
-        "i krótko uruchamia, błąd wraca do autora. Swój plik możecie też "
-        "napisać od nowa w całości pod tą samą ścieżką; poprzednia wersja "
-        "zostaje w .kopie/. Zmianę w pliku, który już "
-        "jest — swoim albo cudzym — podajecie jako poprawkę fragmentu: "
-        "nad nią ścieżka pliku (np. „Poprawka do kod/model.py”), pod nią "
-        "blok „Stary fragment:” skopiowany 1:1 z pliku i blok „Nowy "
-        "fragment:”. Program od razu nanosi ją na ten plik i mówi, w "
-        "których liniach zmienił; gdy fragmentu w tym pliku nie ma, nic "
-        "nie zmienia i pokazuje, co tam stoi najbliżej. Długiej albo "
-        "powtarzalnej linii nie trzeba przepisywać: w „Starym fragmencie” "
-        "„...” zastępuje dowolny tekst w środku linii, a linia z samym "
-        "„...” kilka całych linii; reszta zostaje 1:1 z pliku, a „...” w "
-        "tym samym miejscu „Nowego fragmentu” zostawia tamten tekst bez "
-        "zmian. Pusty „Stary "
-        "fragment:” albo „Dopisz na końcu <plik>:” nad blokiem dopisuje "
-        "blok na końcu pliku, np. nową funkcję na końcu kod/model.py "
-        "albo notatkę do NOTES.md, więc duży plik możecie budować "
-        "kawałkami w kolejnych wypowiedziach. Kod w środek pliku "
-        "wstawiacie poprawką fragmentu: w „Starym” linia, za którą ma "
-        "wejść, w „Nowym” ta sama linia i nowy kod pod nią. Poprawka, przy "
-        "której napiszecie, że jej jeszcze nie nanosicie, zostaje "
-        "propozycją. Kto, kiedy i jak zmieniał plik, program pokazuje "
-        "przy PODGLĄDZIE i uruchomieniu z tym plikiem. W zespole są: Tomek "
-        "(następny krok), Kamil (fakty i informacje), Marek (słabe punkty "
-        "planów), Bartek (kod i technika), Ola (porządkuje to, co się "
-        "wydarzyło), Wojtek (praktyczny sens) i Ela (ocenia, ile celu jest "
-        "naprawdę zrobione). Piotr przegląda kod i szuka przyczyny błędu, "
-        "Ania pisze poprawkę — MAIN może ich zapytać jak każdego, a gdy "
-        "program odda autorowi błąd w jego kodzie, autor może ich zawołać "
-        "po imieniu. "
-        "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani "
-        "niczego z programu i dostaje wyłącznie to, co ktoś sam do niego "
-        "napisze, jak w nowym czacie. Rozmowę prowadzi MAIN: pyta, kogo "
-        "potrzebuje. Gdy odpowiadacie, możecie też porozmawiać ze sobą "
-        "wprost: gdy zwrócicie się do kogoś po imieniu, dostanie to od "
-        "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą "
-        "rozmowę i to on decyduje, co zespół robi dalej. Użytkownik chce, "
-        "żeby program działał sam: loguje się, daje dostęp do kont i "
-        "podaje dane, których nikt z was nie ma — resztę ustala zespół."
+        + "Nowy plik piszecie w całości w osobnym bloku, ze ścieżką tuż nad nim; program od "
+        "razu kładzie go na dysk, a plik z kodem sprawdza i krótko uruchamia — błąd wraca do "
+        "autora. Swój plik możecie napisać od nowa pod tą samą ścieżką (poprzednia wersja "
+        "zostaje w .kopie/). Zmianę w pliku, który już jest — swoim albo cudzym, z kodem albo "
+        "z notatkami — podajecie jako poprawkę fragmentu: nad nią ścieżka (np. „Poprawka do "
+        "kod/model.py”), pod nią blok „Stary fragment:” skopiowany 1:1 z pliku i blok „Nowy "
+        "fragment:”. Program nanosi ją od razu i mówi, w których liniach; gdy fragmentu nie "
+        "znajdzie, nic nie zmienia i pokazuje, co tam stoi najbliżej. W „Starym fragmencie” "
+        "„...” zastępuje tekst w środku linii, a linia z samym „...” kilka całych linii; "
+        "„...” w tym samym miejscu „Nowego” zostawia tamten tekst. Kod w środek pliku "
+        "wstawia poprawka z linią, za którą ma wejść, w „Starym” i tą samą linią z nowym "
+        "kodem pod nią w „Nowym”. Pusty „Stary fragment:” albo „Dopisz na końcu <plik>:” "
+        "dopisuje blok na końcu pliku, więc duży plik można budować kawałkami. Poprawka, przy "
+        "której napiszecie, że jej jeszcze nie nanosicie, zostaje propozycją. Kto, kiedy i "
+        "jak zmieniał plik, program pokazuje przy PODGLĄDZIE i uruchomieniu. "
+        "W zespole są też: " + ", ".join(_inni[:-1]) + " i " + _inni[-1] + ". " + _pomoc
+        + "Jest też Igor — niezależny, spoza zespołu: nie zna celu ani niczego z programu i "
+        "dostaje tylko to, co ktoś sam do niego napisze. Rozmowę prowadzi MAIN i pyta, kogo "
+        "potrzebuje; gdy odpowiadacie i zwrócicie się do kogoś po imieniu, dostanie to od "
+        "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i decyduje, "
+        "co zespół robi dalej. Użytkownik chce, żeby program działał sam: loguje się, daje "
+        "dostęp do kont i podaje dane, których nikt z was nie ma — resztę ustala zespół."
     )
 
 
-_JAK_ROZMAWIAMY = _jak_rozmawiamy(laptop=False)
 
 
 # v480le: uzytkownik (2026-11-01: "nie maja dlugich promptow startowych…
@@ -58969,13 +58939,18 @@ _SKLAD_ZESPOLU = (
 )
 
 
+_JAK_ROZMAWIAMY = _jak_rozmawiamy(laptop=False)
+
+
 def _jak_rozmawiamy_zespol(rola=None):
+    # v480no: przepisany w calosci — przyklad PODGLĄDU bez "cat wynik.json"
+    # (kierowal uwage na plik Sedziego), reszta bez zmian.
     _inni = [opis for r, opis in _SKLAD_ZESPOLU if r != str(rola)]
     return (
         "Rozmawiacie przez program na telefonie z Androidem. Nikt z was nie ma "
         "terminala: to, co zespół ustali, wykonuje program, a wy dostajecie, co z tego "
         "wyszło. Do plików drużyny zaglądacie linią PODGLĄD: z komendą do odczytu (ls, "
-        "head, grep -n, cat wynik.json), a kod uruchamiacie linią URUCHOM: (np. URUCHOM: "
+        "head, grep -n), a kod uruchamiacie linią URUCHOM: (np. URUCHOM: "
         "python3 test.py) — program wykonuje to w folderze drużyny i oddaje wynik temu, "
         "kto pytał. "
         + _jak_rozmawiamy_laptop_krotko()
@@ -59088,11 +59063,9 @@ _JAK_TO_DZIALA = (
     "- Igor nie zna celu ani niczego z programu. Dostaje tylko to, co "
     "sam mu napiszesz, jak w nowym czacie, więc patrzy na sprawę "
     "świeżo, z zewnątrz.\n\n"
+    # v480no: bez trzeciego wyliczania rol (sklad stoi wyzej i w MAIN_PROMPT byl drugi raz).
     "Rozmowa. Zespół to Twoje główne narzędzie: każda osoba widzi to, "
-    "czego sam nie zobaczysz — Bartek pisze i poprawia kod, Marek "
-    "znajduje słabe punkty, zanim kosztują krok, Kamil sprawdza fakty "
-    "w sieci, Tomek układa następny krok, Wojtek pyta o praktyczny "
-    "sens, a Igor patrzy świeżym okiem. Pytanie do osoby, której sprawa "
+    "czego sam nie zobaczysz. Pytanie do osoby, której sprawa "
     "dotyczy, daje Ci przed RUN albo TASK to, czego sam byś nie "
     "zobaczył. ASK to pytanie do jednej osoby (w ask_role jej "
     "imię): dostaje je razem z tym, co się stało od jej ostatniej "
