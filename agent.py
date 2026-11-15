@@ -33524,6 +33524,22 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
     # nie przez pamiec, a czas na przeniesienie rosnie z rozmiarem.
     _tmp_dir = HOME / ".ael_wyrownanie_tmp"
     if wyslij:
+        # v480oi: wersja na laptopie, ktora zastapi nowsza z telefonu, idzie
+        # najpierw do .kopie/ obok (jak na telefonie przy pobieraniu) —
+        # zmiana zrobiona na laptopie nie ginie, gdy obie strony zmienily plik
+        _nadpis = [x for x in wyslij if x in zd]
+        if _nadpis:
+            linie = ["cd ~/" + f + " || exit 1"]
+            for rel in _nadpis:
+                kop = (os.path.dirname(rel) or ".") + "/.kopie"
+                linie.append("mkdir -p -- " + shlex.quote(kop) + " && cp -p -- " + shlex.quote(rel) + " "
+                             + shlex.quote(kop + "/" + os.path.basename(rel) + ".bak_" + _ts))
+            try:
+                subprocess.run(_LAPTOP_SSH.replace("-n ", "").split() + [_LAPTOP_HOST, "bash -s"],
+                               input="\n".join(linie) + "\n", capture_output=True, text=True,
+                               timeout=60, errors="replace")
+            except Exception:
+                pass
         _rozm = sum(lok.get(x, (0, 0))[1] for x in wyslij)
         try:
             _tmp_dir.mkdir(parents=True, exist_ok=True)
