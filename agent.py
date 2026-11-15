@@ -33216,6 +33216,32 @@ _LAPTOP_SYNC_MAX_PLIKOW = 3000
 _laptop_sync_przesuniecie = {}  # folder -> zegar laptopa minus zegar telefonu (s)
 
 
+def _laptop_autorskie(folder):
+    """v480oh (uzytkownik 2026-11-15, wybor "Kod wszędzie, wyniki na
+    miejscu"): sciezki wzgledne plikow pisanych w rozmowie — kazdy plik z
+    dziennika zmian, ktory choc raz zapisal albo poprawil ktos z zespolu,
+    MAIN albo wykonawca (wpis bez "komendą"). Te plus pliki z kodem program
+    trzyma takie same na obu maszynach; reszta zostaje tam, gdzie powstala."""
+    out = set()
+    try:
+        fr = Path(str(folder)).resolve()
+        for k, lista in list(_zmiany_plikow().items()):
+            if any("komendą" not in str((w or {}).get("jak") or "") for w in (lista or [])):
+                try:
+                    out.add(str(Path(k).relative_to(fr)))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return out
+
+
+def _laptop_sync_wspolny(rel, autorskie):
+    """v480oh: czy plik jest wspolny dla obu maszyn (kod albo pisany w rozmowie)."""
+    return (autorskie is None or rel in autorskie
+            or str(rel).lower().endswith(_KOD_SUFIKSY))
+
+
 def _laptop_sync_bierze(nazwa):
     """v480og: czy plik o tej nazwie wyrownujemy (kazdy oprocz pominietych)."""
     n = str(nazwa).lower()
@@ -33391,7 +33417,8 @@ def _laptop_sync_stan_zapisz(f, lok, zd):
         pass
 
 
-def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True, f_przes=None):
+def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True, f_przes=None,
+                         autorskie=None):
     """
     (wyslij, pobierz, odloz_na_laptopie, odloz_na_telefonie).
     stan None = brak pamieci (pierwsze wyrownanie): plik po jednej stronie
@@ -33412,6 +33439,8 @@ def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True, f_przes=N
     na_tel_ok = bool(zd) and len(zd) * 10 >= len(pamiec)
     wyslij, pobierz, odloz_lap, odloz_tel = [], [], [], []
     for rel, (mt, sz) in lok.items():
+        if not _laptop_sync_wspolny(rel, autorskie):
+            continue
         z = zd.get(rel)
         if z is None:
             st = pamiec.get(rel)
@@ -33423,6 +33452,8 @@ def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True, f_przes=N
             wyslij.append(rel)
     _wys = set(wyslij)
     for rel, (mt, sz) in zd.items():
+        if not _laptop_sync_wspolny(rel, autorskie):
+            continue
         l = lok.get(rel)
         if l is None:
             st = pamiec.get(rel)
@@ -33464,7 +33495,8 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
         return None
     zd, zd_pelna = zd_w
     stan = _laptop_sync_stan_czytaj(f)
-    wyslij, pobierz, odloz_lap, odloz_tel = _laptop_sync_decyzje(lok, zd, stan, lok_pelna, zd_pelna, f)
+    wyslij, pobierz, odloz_lap, odloz_tel = _laptop_sync_decyzje(lok, zd, stan, lok_pelna, zd_pelna, f,
+                                                                 _laptop_autorskie(folder))
     _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if odloz_lap:
         # na laptopie: <katalog>/.kopie/<nazwa>.bak_<czas>, jak na telefonie
@@ -33564,6 +33596,7 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
                 pass
     # pamiec po wyrownaniu: listy na nowo, gdy cos sie ruszylo; gdy laptop
     # nie odpowie — stara pamiec zostaje (najwyzej plik wroci, nic nie zginie)
+    _laptop_tl.lista_laptopa = zd
     if wyslij or pobierz or odloz_lap or odloz_tel:
         lok2, _p = _laptop_sync_lokalne(folder)
         zd2 = _laptop_sync_zdalne(f)
@@ -33571,6 +33604,7 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
             odloz_lap = [x for x in odloz_lap if x not in zd2[0]]
             odloz_tel = [x for x in odloz_tel if x not in lok2]
             _laptop_sync_stan_zapisz(f, lok2, zd2[0])
+            _laptop_tl.lista_laptopa = zd2[0]
     else:
         _laptop_sync_stan_zapisz(f, lok, zd)
 
@@ -34404,6 +34438,45 @@ def _plik_jest_w_folderze_druzyny(wynik, komenda=""):
     return wynik
 
 
+def _rozmiar_krotko(b):
+    b = int(b or 0)
+    return (str(b) + " B" if b < 10240 else str(round(b / 1024)) + " kB" if b < 10485760
+            else str(round(b / 1048576)) + " MB")
+
+
+def _plik_jest_na_telefonie(wynik):
+    """v480oh: komenda na laptopie nie znalazla pliku, ktory lezy na
+    telefonie w folderze druzyny (wynik uruchomienia na telefonie zostaje na
+    telefonie) — wynik mowi, gdzie jest i jak go przeniesc."""
+    try:
+        if not isinstance(wynik, dict):
+            return wynik
+        tekst = str(wynik.get("stderr") or "") + "\n" + str(wynik.get("stdout") or "")[-2000:]
+        if "No such file" not in tekst and "cannot open" not in tekst and "not found" not in tekst:
+            return wynik
+        folder = _folder_druzyny(_DRUZYNA) if _DRUZYNA else HOME / "AEL"
+        f = _laptop_folder()
+        jest = []
+        for m in _BRAK_PLIKU_NAZWA_RE.finditer(tekst):
+            n = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+            n = re.sub(r"^(?:~|\$HOME|/home/[^/]+)/" + re.escape(f) + "/", "", n)
+            if not n or n.startswith(("/", "~", "..")) or ".." in n.split("/"):
+                continue
+            p = Path(str(folder)) / n
+            if p.is_file() and n not in [x for x, _ in jest]:
+                jest.append((n, p.stat().st_size))
+        if jest:
+            tel = "~/" + Path(str(folder)).name
+            wynik["na_telefonie_jest"] = (
+                "Na laptopie tego nie ma, ale na telefonie w " + tel + "/ jest: "
+                + ", ".join(n + " (" + _rozmiar_krotko(b) + ")" for n, b in jest[:5])
+                + ". Na laptop przeniesie to komenda na telefonie: scp " + tel + "/" + jest[0][0]
+                + " " + _LAPTOP_HOST + ":" + f + "/" + jest[0][0] + ".")
+    except Exception:
+        pass
+    return wynik
+
+
 def _plik_jest_na_laptopie(wynik, komenda=""):
     """
     v480kb: komenda na telefonie nie znalazla pliku, ktory jest na
@@ -34733,10 +34806,12 @@ def _termux_run_wew(command):
                                 "Poza nim (np. /tmp) laptop jest wspólny z rywalem, więc tam "
                                 "program nie usuwa bez pytania — budujcie i sprzątajcie w swoim "
                                 "folderze."), "duration_s": 0.0}
+    _laptop_tl.lista_laptopa = None
     try:
         _przed = _laptop_wyrownaj()
     except Exception:
         _przed = None
+    _lista_przed = getattr(_laptop_tl, "lista_laptopa", None)
     try:
         wynik = _termux_run_lokalnie(lap)
     finally:
@@ -34787,6 +34862,21 @@ def _termux_run_wew(command):
                            + _wymien(_odl_tel))
         if _czesci:
             wynik["pliki_wyrownane"] = "; ".join(_czesci)
+        # v480oh: co ta komenda zostawila na laptopie (zostaje tam)
+        try:
+            _lista_po = getattr(_laptop_tl, "lista_laptopa", None) if _po is not None else None
+            if _lista_przed is not None and _lista_po is not None:
+                _wsp = set(_tam) | set(_stad)
+                _nowe_lap = [(r, v[1]) for r, v in sorted(_lista_po.items(), key=lambda x: -x[1][0])
+                             if r not in _wsp and (r not in _lista_przed or _lista_przed[r] != v)]
+                if _nowe_lap:
+                    wynik["pliki_na_laptopie"] = (
+                        "nowe albo zmienione na laptopie w ~/" + _laptop_folder() + " (są tylko tam): "
+                        + ", ".join(r + " (" + _rozmiar_krotko(b) + ")" for r, b in _nowe_lap[:10])
+                        + (" i " + str(len(_nowe_lap) - 10) + " innych" if len(_nowe_lap) > 10 else ""))
+        except Exception:
+            pass
+        _plik_jest_na_telefonie(wynik)
         if (wynik.get("returncode") == 255 and not str(wynik.get("stdout") or "").strip()
                 and not _LAPTOP_SSH_BLAD_RE.search(str(wynik.get("stderr") or ""))):
             wynik["message"] = (
@@ -59191,9 +59281,10 @@ def _jak_rozmawiamy_laptop():
         "Obok telefonu jest laptop z Linuksem (opis: ~/AEL_SRODOWISKO.txt). Komenda z "
         "przedrostkiem LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f + ", i działa "
         "jak na telefonie: wynik wraca do was, długa liczy w tle. Po ; albo && słowo LAPTOP: "
-        "albo TELEFON: przenosi dalszą część komendy na drugą maszynę. Folder drużyny program "
-        "trzyma taki sam na obu maszynach: przed każdą komendą LAPTOP: i po niej przenosi "
-        "nowsze pliki w drugą stronę. "
+        "albo TELEFON: przenosi dalszą część komendy na drugą maszynę. Kod i pliki pisane w "
+        "rozmowie program trzyma takie same na obu maszynach; to, co powstaje z uruchomienia "
+        "(dane, modele, wyniki, logi), zostaje na maszynie, na której powstało, a wynik "
+        "komendy mówi, co gdzie przybyło. "
         + _laptop_sudo_zdanie()
         + ("Drużyna ma na laptopie połowę procesora i pamięci, drugą połowę ma rywal. "
            if _DRUZYNA else "")
@@ -59306,9 +59397,10 @@ def _laptop_dla_maina_akapit():
         "jak na telefonie: wynik i błędy wracają, długa liczy w tle aż sama skończy, także gdy "
         "połączenie się zerwie, i widać ją w sekcji „W tle”. Po ; albo && słowo LAPTOP: albo "
         "TELEFON: przenosi dalszą część komendy na drugą maszynę; program wykona części po "
-        "kolei i odda jeden wynik. Folder drużyny program trzyma "
-        "taki sam na obu maszynach: przed każdą komendą LAPTOP: i po niej przenosi nowsze "
-        "pliki w drugą stronę. "
+        "kolei i odda jeden wynik. Kod i pliki pisane w rozmowie "
+        "program trzyma takie same na obu maszynach; to, co powstaje z uruchomienia (dane, "
+        "modele, wyniki, logi), zostaje na maszynie, na której powstało, a wynik komendy "
+        "mówi, co gdzie przybyło. "
         + _laptop_sudo_zdanie()
         + ("Drużyna ma na laptopie połowę procesora i pamięci, drugą połowę ma rywal. "
            if _DRUZYNA else "")
