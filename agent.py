@@ -70164,7 +70164,7 @@ def _sedzia_ocen(numer):
                 and _pop["werdykt"].get("werdykt") == "potwierdzone"
                 and _potwierdzenie_spojne(_pop["werdykt"], ogloszony, str(dane.get("wynik")))):
             w2 = dict(_pop["werdykt"])
-            w2.update(czas=werdykt["czas"], opis=werdykt["opis"])
+            w2.update(czas=werdykt["czas"], opis=werdykt["opis"], _tylko_opis=True)
             log("RYWALIZACJA", "Sędzia, drużyna " + str(numer) + ": zmienił się tylko opis — "
                 "liczbę z tej samej komendy potwierdziłem już " + str(_pop.get("czas") or "")
                 + ", nie uruchamiam jej drugi raz.")
@@ -70608,6 +70608,15 @@ def _sedzia_petla():
                     # "czeka na przebieg" zostaje w logu, MAIN go nie dostaje
                     if not _czekal_juz:
                         log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA, trwalosc=False))
+                    time.sleep(_SEDZIA_CO_S)
+                    continue
+                if w.get("_tylko_opis"):
+                    # v480oj: zmienil sie tylko opis w wynik.json — liczba ta
+                    # sama i juz potwierdzona, wiec zespol nie dostaje drugi raz
+                    # tego samego werdyktu (z wlasnym opisem w srodku). Bieg
+                    # 2026-11-15 21:24 (druzyna 1): opis przepisywany kilka
+                    # krokow, kazda zmiana wracala do MAIN-a jako "Wasz wynik".
+                    log("RYWALIZACJA", _werdykt_zdaniem(w, "Sędzia, drużyna " + _DRUZYNA, trwalosc=False))
                     time.sleep(_SEDZIA_CO_S)
                     continue
                 with _sedzia_lock:
