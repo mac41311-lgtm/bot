@@ -7037,6 +7037,26 @@ def _plik_tokena_konta(account):
     return TOKEN_FILE.name if account == 1 else TOKEN_FILE_2.name
 
 
+def _powiadomienie_telefonu(ident, tytul, tresc):
+    """v480ob: powiadomienie na telefonie; nieudane trafia do logu (bylo:
+    cicho — uzytkownik 2026-11-15 nie dostal powiadomienia o zatrzymanym
+    koncie drugiej druzyny, a w logu nie bylo sladu dlaczego)."""
+    try:
+        r = subprocess.run(["termux-notification", "--id", ident, "-t", tytul, "-c", tresc],
+                           capture_output=True, timeout=15, text=True, errors="replace",
+                           stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            log("UŻYTKOWNIK", "Powiadomienie „" + tytul + "” nie wyszło (kod " + str(r.returncode)
+                + (": " + short((r.stderr or r.stdout or "").strip(), 160) if (r.stderr or r.stdout) else "")
+                + ") — sprawdź, czy aplikacja Termux:API jest zainstalowana i ma zgodę na powiadomienia.")
+            return False
+        return True
+    except Exception as e:
+        log("UŻYTKOWNIK", "Powiadomienie „" + tytul + "” nie wyszło (" + short(str(e), 160)
+            + ") — sprawdź, czy aplikacja Termux:API jest zainstalowana i ma zgodę na powiadomienia.")
+        return False
+
+
 def _zatrzymaj_konto(name, blad):
     """v480mx: serwer odmowil dostepu (INVALID_TOKEN, 401, zawieszone
     konto). Konto staje od razu: bez nowej rozmowy, bez prob tym samym
@@ -7076,16 +7096,12 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
             f"zapisz userToken do ~/{token_file_name} (nowy albo ten sam — każdy zapis "
             "pliku to sygnał „spróbuj”) — program weźmie go sam, bez restartu."
         )
-        try:
-            subprocess.run(
-                ["termux-notification", "--id", "ael_token_" + str(account),
-                 "-t", ("AEL: brak tokena, konto " if _brak else "AEL: DeepSeek odmówił dostępu, konto ") + str(account)
-                 + (" (drużyna " + _DRUZYNA + ")" if _DRUZYNA else ""),
-                 "-c", "Konto zatrzymane. Po zalogowaniu zapisz token do ~/"
-                 + token_file_name + " — program wtedy wróci."],
-                capture_output=True, timeout=15)
-        except Exception:
-            pass
+        _powiadomienie_telefonu(
+            "ael_token_" + str(account),
+            ("AEL: brak tokena, konto " if _brak else "AEL: DeepSeek odmówił dostępu, konto ") + str(account)
+            + (" (drużyna " + _DRUZYNA + ")" if _DRUZYNA else ""),
+            "Konto zatrzymane. Po zalogowaniu zapisz token do ~/"
+            + token_file_name + " — program wtedy wróci.")
         try:
             _plik_czekania_na_token(account).write_text(json.dumps({
                 "konto": account, "plik": token_file_name, "druzyna": _DRUZYNA,
@@ -7128,16 +7144,11 @@ def _czekaj_na_nowy_token(name, account, token_file_name, bez_prob=False, blad="
             "— nowy token nic wtedy nie zmieni, trzeba poczekać do tej daty. Przez "
             "pierwszą godzinę próbuję obecnym tokenem co 10 min, potem raz na godzinę."
         )
-        try:
-            subprocess.run(
-                ["termux-notification", "--id", "ael_token_" + str(account),
-                 "-t", "AEL: token konta " + str(account) + " nie działa"
-                 + (" (drużyna " + _DRUZYNA + ")" if _DRUZYNA else ""),
-                 "-c", "Wpisz nowy userToken do ~/" + token_file_name
-                 + " — program czeka i weźmie go sam."],
-                capture_output=True, timeout=15)
-        except Exception:
-            pass
+        _powiadomienie_telefonu(
+            "ael_token_" + str(account),
+            "AEL: token konta " + str(account) + " nie działa"
+            + (" (drużyna " + _DRUZYNA + ")" if _DRUZYNA else ""),
+            "Wpisz nowy userToken do ~/" + token_file_name + " — program czeka i weźmie go sam.")
         # v480lx: patrz _plik_czekania_na_token; log od razu na telefon
         try:
             _plik_czekania_na_token(account).write_text(json.dumps({
@@ -69404,6 +69415,12 @@ def _token_druzyny_2_w_terminalu():
             "przestał działać i program czeka na nowy. Jak naprawić: zaloguj się na "
             "chat.deepseek.com na koncie drużyny 2, skopiuj świeży userToken z localStorage "
             "i wpisz go do ~/" + plik + " — program weźmie go sam, bez restartu.")
+        # v480ob: powiadomienie wysyla tez drużyna 1 (pierwszy plan) — z
+        # procesu drużyny 2 w tle nie doszlo (2026-11-15 06:38)
+        _powiadomienie_telefonu(
+            "ael_token_2_d1", "AEL: drużyna 2 stoi — konto 2 zatrzymane",
+            "Token konta 2 przestał działać (od " + _hhmm(od) + "). Zaloguj się na koncie drużyny 2 "
+            "i zapisz nowy userToken do ~/" + plik + " — program weźmie go sam.")
     elif teraz - _token_2_widziany["ostatnio"] >= 1800:
         _token_2_widziany["ostatnio"] = teraz
         log("RYWALIZACJA", "Drużyna 2 nadal czeka na nowy token (od " + _hhmm(od) + ", już "
