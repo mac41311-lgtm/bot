@@ -44732,6 +44732,13 @@ def _bez_juz_pokazanego(rola, od, tekst):
         return tekst
 
 
+def _akcja_krotko(a):
+    """v480ol: pominieta akcja RUN-a z istota komendy (bylo samo "termux_run")."""
+    t = str(a.get("tool") or a.get("name") or "?")
+    k = (a.get("args") or {}).get("command") if isinstance(a.get("args"), dict) else None
+    return (t + " „" + _istota_komendy(k, 120) + "”") if isinstance(k, str) and k.strip() else t
+
+
 def _rzecz_w_tle(rodzaj, komenda, sekundy, pominiete, czeka_na=None):
     _w_tle_licznik[0] += 1
     return {
@@ -45771,8 +45778,8 @@ def _karta_startu(r, teraz):
         # v480nu: komenda z ostatniego RUN MAIN-a jest opisana w "Twój ostatni
         # krok" — tu nie ma jej drugi raz (zostaje tylko lista pominietych akcji)
         if _wyzej:
-            return ("Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
-                    + " — mogą zależeć od wyniku, więc wyślij je, gdy przyjdzie."
+            return ("Pozostałych akcji tego RUN program nie wykonał, bo mogą zależeć od "
+                    "wyniku tej w tle: " + "; ".join(r["pominiete"]) + "."
                     ) if r.get("pominiete") else ""
         linie = [
             "• " + _nazwa_w_tle(r["komenda"]) + ((" " + r["autor_dop"]) if r.get("autor_dop") else "")
@@ -45790,8 +45797,8 @@ def _karta_startu(r, teraz):
         )
     if r.get("pominiete"):
         linie.append(
-            "Nie wykonane akcje z tego RUN: " + ", ".join(r["pominiete"])
-            + " — mogą zależeć od wyniku, więc wyślij je, gdy przyjdzie."
+            "Pozostałych akcji tego RUN program nie wykonał, bo mogą zależeć od "
+            "wyniku tej w tle: " + "; ".join(r["pominiete"]) + "."
         )
     return "\n".join(linie)
 
@@ -45983,7 +45990,7 @@ def _wykonaj_akcje_maina(decision, step):
             # v480ed/eh: patrz _pusc_czekanie_w_tle(). Akcje po czekaniu
             # nie ruszaja — zalezaly od jego wyniku, ktorego jeszcze nie ma.
             _po = [
-                str(a.get("tool") or a.get("name") or "?")
+                _akcja_krotko(a)
                 for a in akcje[i + 1:_RUN_MAX_AKCJI] if isinstance(a, dict)
             ]
             result = _pusc_czekanie_w_tle(name, args, _sek_akcji, _po)
@@ -45991,7 +45998,7 @@ def _wykonaj_akcje_maina(decision, step):
         elif name == "termux_run" and _cmd_akcji:
             # v480ef: patrz _wykonaj_z_przejsciem_w_tlo().
             _po = [
-                str(a.get("tool") or a.get("name") or "?")
+                _akcja_krotko(a)
                 for a in akcje[i + 1:_RUN_MAX_AKCJI] if isinstance(a, dict)
             ]
             result, _do_tla = _wykonaj_z_przejsciem_w_tlo(name, args, _po)
@@ -46378,7 +46385,11 @@ def _naglowek_wyniku(w):
     _wynik = w.get("wynik")
     _a_kom = (w.get("args") or {}).get("command") if isinstance(w.get("args"), dict) else None
     if str(w.get("tool")) in ("termux_run", "shell") and isinstance(_a_kom, str) and _a_kom.strip():
-        return _istota_komendy(_a_kom) + _metka_akcji(w.get("tool"), _wynik)
+        _ist, _met = _istota_komendy(_a_kom), _metka_akcji(w.get("tool"), _wynik)
+        # v480ol: na telefonie tylko cd/echo, cala robota na laptopie
+        if _ist.startswith("LAPTOP: ") and "TELEFON:" not in _ist:
+            _ist, _met = _ist[len("LAPTOP: "):], _met.replace("telefon i laptop", "laptop")
+        return _ist + _met
     return _naglowek_akcji(w.get("tool"), w.get("args")) + _metka_akcji(w.get("tool"), _wynik)
 
 

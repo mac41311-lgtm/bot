@@ -5546,3 +5546,5 @@ v480oi (2026-11-15): przy wyrównaniu wersja pliku na laptopie, którą zastępu
 v480oj (2026-11-15): sama zmiana opisu w wynik.json (liczba, lepiej, sprawdz bez zmian i już potwierdzone) nie wraca do MAIN-a jako „Wasz wynik” — tylko log. Bieg 21:24 (drużyna 1): opis przepisywany przez kilka kroków, każda zmiana wracała z własnym opisem w środku.
 
 v480ok (2026-11-15): nagłówek akcji w raporcie kroku przy komendzie na dwie maszyny zostawia LAPTOP:/TELEFON: przy części, od której liczy druga maszyna (np. „md5sum wynik.json; LAPTOP: ps aux …”). Wcześniej słowa były usuwane i „python3 kod/x.py … (telefon i laptop)” nie mówiło, gdzie liczył skrypt.
+
+v480ol (2026-11-15): pominięte akcje RUN-a (pierwsza poszła w tło) wymienione z istotą komendy, a nie samym „termux_run”; zdanie to sam fakt („Pozostałych akcji tego RUN program nie wykonał, bo mogą zależeć od wyniku tej w tle: …”), bez „wyślij je”. Nagłówek komendy, której na telefonie było tylko cd/echo, a reszta na laptopie: bez „LAPTOP:” i z metką „(laptop, …)” zamiast „(telefon i laptop)”.
