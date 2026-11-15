@@ -33201,8 +33201,25 @@ def _laptop_oderwane(zdalnie, folder):
 # na laptopie pisaly "brak dane/ppc_train.tsv" i MAIN szukal przyczyny 3 kroki.
 _LAPTOP_SYNC_SUFIKSY = tuple(sorted(set(_KOD_SUFIKSY) | {
     ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".md", ".txt", ".csv", ".tsv"}))
-_LAPTOP_SYNC_MAX_B = 1024 * 1024
+# v480og: uzytkownik (2026-11-15, "znowu błąd logiczny z 1 MB… jak ty byś
+# chciał"): bieg 17:56 (druzyna 1) — dane/wojtekb30_paraphrases.json (1,6 MB)
+# lezal tylko na telefonie, skrypt na laptopie padl FileNotFoundError, a MAIN
+# zgadywal, ze to limit. Teraz folder druzyny jest taki sam na obu maszynach:
+# kazdy plik (oprocz tymczasowych), dowolnej wielkosci. Plik
+# wiekszy niz 1 MB, zmieniony w ostatnich 15 s, czeka do nastepnego
+# wyrownania (proces moze go jeszcze pisac); maly plik idzie od razu.
+_LAPTOP_SYNC_POMIN = (".tmp", ".part", ".lock", ".pid", ".swp", ".pyc", ".ael_czesc")
+_LAPTOP_SYNC_MAX_B = float("inf")  # bez limitu (uzytkownik: "to są jakieś limity")
+_LAPTOP_SYNC_SWIEZY_B = 1024 * 1024
+_LAPTOP_SYNC_SWIEZY_S = 15
 _LAPTOP_SYNC_MAX_PLIKOW = 3000
+_laptop_sync_przesuniecie = {}  # folder -> zegar laptopa minus zegar telefonu (s)
+
+
+def _laptop_sync_bierze(nazwa):
+    """v480og: czy plik o tej nazwie wyrownujemy (kazdy oprocz pominietych)."""
+    n = str(nazwa).lower()
+    return not n.endswith(_LAPTOP_SYNC_POMIN) and not n.startswith(".")
 
 
 def _laptop_sync_lokalne(folder):
@@ -33224,7 +33241,7 @@ def _laptop_sync_lokalne(folder):
                        and d not in ("__pycache__", "node_modules", "venv", ".venv",
                                      "site-packages", "spadek")]
             for f in files:
-                if not f.lower().endswith(_LAPTOP_SYNC_SUFIKSY):
+                if not _laptop_sync_bierze(f):
                     continue
                 p = Path(root) / f
                 try:
@@ -33244,11 +33261,11 @@ def _laptop_sync_lokalne(folder):
 
 def _laptop_sync_zdalne(f):
     """({rel: (mtime, rozmiar)}, pelna) z ~/<f> na laptopie albo None."""
-    wzor = " -o ".join("-iname '*" + s + "'" for s in _LAPTOP_SYNC_SUFIKSY)
-    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && { find . -type d \\( -name '.?*' -o -name __pycache__ "
+    wzor = " -o ".join("-iname '*" + s + "'" for s in _LAPTOP_SYNC_POMIN) + " -o -name '.*'"
+    skrypt = ("mkdir -p ~/" + f + " && cd ~/" + f + " && echo \"#teraz=$(date +%s)\" && { find . -type d \\( -name '.?*' -o -name __pycache__ "
               "-o -name node_modules -o -name venv -o -name site-packages -o -name spadek \\) "
-              "-prune -o -type f \\( " + wzor + " \\) -printf '%T@ %s %p\\n'; echo \"#rc=$?\"; } "
-              "2>/dev/null | head -" + str(_LAPTOP_SYNC_MAX_PLIKOW + 2))
+              "-prune -o -type f ! \\( " + wzor + " \\) -printf '%T@ %s %p\\n'; echo \"#rc=$?\"; } "
+              "2>/dev/null | head -" + str(_LAPTOP_SYNC_MAX_PLIKOW + 3))
     try:
         r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, skrypt],
                            capture_output=True, text=True, timeout=30, errors="replace")
@@ -33261,6 +33278,12 @@ def _laptop_sync_zdalne(f):
     for l in (r.stdout or "").splitlines():
         if l.startswith("#rc="):
             rc = l[4:].strip()
+            continue
+        if l.startswith("#teraz="):
+            try:
+                _laptop_sync_przesuniecie[f] = float(l[7:].strip()) - time.time()
+            except ValueError:
+                pass
             continue
         cz = l.split(" ", 2)
         if len(cz) == 3:
@@ -33368,7 +33391,7 @@ def _laptop_sync_stan_zapisz(f, lok, zd):
         pass
 
 
-def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True):
+def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True, f_przes=None):
     """
     (wyslij, pobierz, odloz_na_laptopie, odloz_na_telefonie).
     stan None = brak pamieci (pierwsze wyrownanie): plik po jednej stronie
@@ -33379,6 +33402,12 @@ def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True):
     # odkladamy tylko przy pelnych listach; pusty (albo prawie pusty) folder
     # na laptopie przy pamieci wielu plikow = inny albo wyczyszczony laptop
     # -> nic z telefonu nie odkladamy (folder wypelni sie z telefonu)
+    _teraz = time.time()
+    _przes = _laptop_sync_przesuniecie.get(f_przes, 0.0) if f_przes is not None else 0.0
+
+    def _gotowy(mt, sz, zegar):
+        # v480og: duzy plik zmieniony przed chwila moze byc jeszcze pisany
+        return sz <= _LAPTOP_SYNC_SWIEZY_B or zegar - mt >= _LAPTOP_SYNC_SWIEZY_S
     pamiec = stan if (stan and lok_pelna and zd_pelna) else {}
     na_tel_ok = bool(zd) and len(zd) * 10 >= len(pamiec)
     wyslij, pobierz, odloz_lap, odloz_tel = [], [], [], []
@@ -33388,9 +33417,9 @@ def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True):
             st = pamiec.get(rel)
             if st and na_tel_ok and _bez_zmian((mt, sz), st[0], st[1]):
                 odloz_tel.append(rel)
-            elif sz <= _LAPTOP_SYNC_MAX_B:
+            elif sz <= _LAPTOP_SYNC_MAX_B and _gotowy(mt, sz, _teraz):
                 wyslij.append(rel)
-        elif mt > z[0] + 2 and sz <= _LAPTOP_SYNC_MAX_B:
+        elif mt > z[0] + 2 and sz <= _LAPTOP_SYNC_MAX_B and _gotowy(mt, sz, _teraz):
             wyslij.append(rel)
     _wys = set(wyslij)
     for rel, (mt, sz) in zd.items():
@@ -33399,9 +33428,10 @@ def _laptop_sync_decyzje(lok, zd, stan, lok_pelna=True, zd_pelna=True):
             st = pamiec.get(rel)
             if st and _bez_zmian((mt, sz), st[2], st[3]):
                 odloz_lap.append(rel)
-            elif sz <= _LAPTOP_SYNC_MAX_B:
+            elif sz <= _LAPTOP_SYNC_MAX_B and _gotowy(mt, sz, _teraz + _przes):
                 pobierz.append(rel)
-        elif rel not in _wys and mt > l[0] + 2 and sz <= _LAPTOP_SYNC_MAX_B:
+        elif (rel not in _wys and mt > l[0] + 2 and sz <= _LAPTOP_SYNC_MAX_B
+              and _gotowy(mt, sz, _teraz + _przes)):
             pobierz.append(rel)
     return wyslij, pobierz, odloz_lap, odloz_tel
 
@@ -33434,7 +33464,7 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
         return None
     zd, zd_pelna = zd_w
     stan = _laptop_sync_stan_czytaj(f)
-    wyslij, pobierz, odloz_lap, odloz_tel = _laptop_sync_decyzje(lok, zd, stan, lok_pelna, zd_pelna)
+    wyslij, pobierz, odloz_lap, odloz_tel = _laptop_sync_decyzje(lok, zd, stan, lok_pelna, zd_pelna, f)
     _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if odloz_lap:
         # na laptopie: <katalog>/.kopie/<nazwa>.bak_<czas>, jak na telefonie
@@ -33458,33 +33488,58 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
             os.replace(str(src), str(k))
         except Exception:
             pass
+    # v480og: bez limitu rozmiaru — archiwum idzie przez plik tymczasowy,
+    # nie przez pamiec, a czas na przeniesienie rosnie z rozmiarem.
+    _tmp_dir = HOME / ".ael_wyrownanie_tmp"
     if wyslij:
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w") as tar:
-            for rel in wyslij:
-                try:
-                    tar.add(str(folder / rel), arcname=rel)
-                except Exception:
-                    pass
+        _rozm = sum(lok.get(x, (0, 0))[1] for x in wyslij)
         try:
-            subprocess.run(_LAPTOP_SSH.replace("-n ", "").split() + [
-                _LAPTOP_HOST, "mkdir -p ~/" + f + " && tar -xf - -C ~/" + f],
-                input=buf.getvalue(), capture_output=True, timeout=120)
+            _tmp_dir.mkdir(parents=True, exist_ok=True)
+            _arch = _tmp_dir / ("na_laptopa_" + str(f) + "_" + str(os.getpid()) + ".tar")
+            with tarfile.open(str(_arch), mode="w") as tar:
+                for rel in wyslij:
+                    try:
+                        tar.add(str(folder / rel), arcname=rel)
+                    except Exception:
+                        pass
+            with open(str(_arch), "rb") as _we:
+                subprocess.run(_LAPTOP_SSH.replace("-n ", "").split() + [
+                    _LAPTOP_HOST, "mkdir -p ~/" + f + " && tar -xf - -C ~/" + f],
+                    stdin=_we, capture_output=True, timeout=120 + _rozm // (256 * 1024))
             # tar zostawia czas zmiany z telefonu — nastepnym razem rowne
         except Exception:
             wyslij = []
+        finally:
+            try:
+                _arch.unlink()
+            except Exception:
+                pass
     if pobierz:
+        _rozm = sum(zd.get(x, (0, 0))[1] for x in pobierz)
+        _arch = _tmp_dir / ("z_laptopa_" + str(f) + "_" + str(os.getpid()) + ".tar")
         try:
-            r = subprocess.run(
-                _LAPTOP_SSH.split() + [_LAPTOP_HOST, "cd ~/" + f + " && tar -cf - -- "
-                                       + " ".join(shlex.quote(x) for x in pobierz)],
-                capture_output=True, timeout=120)
-            with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r") as tar:
+            _tmp_dir.mkdir(parents=True, exist_ok=True)
+            with open(str(_arch), "wb") as _wy:
+                subprocess.run(
+                    _LAPTOP_SSH.split() + [_LAPTOP_HOST, "cd ~/" + f + " && tar -cf - -- "
+                                           + " ".join(shlex.quote(x) for x in pobierz)],
+                    stdout=_wy, stderr=subprocess.DEVNULL, timeout=120 + _rozm // (256 * 1024))
+            with tarfile.open(str(_arch), mode="r") as tar:
                 for m in tar.getmembers():
                     if not m.isfile() or m.name.startswith(("/", "..")) or "/../" in m.name:
                         continue
                     cel = folder / m.name
                     try:
+                        if m.size > 8 * 1024 * 1024:
+                            # duzy plik: strumieniem do pliku obok, potem podmiana
+                            cel.parent.mkdir(parents=True, exist_ok=True)
+                            tmpc = cel.with_name(cel.name + ".ael_czesc")
+                            with tar.extractfile(m) as _src, open(str(tmpc), "wb") as _dst:
+                                shutil.copyfileobj(_src, _dst, 1024 * 1024)
+                            os.replace(str(tmpc), str(cel))
+                            os.utime(str(cel), (m.mtime, m.mtime))
+                            _track_project_path(cel)
+                            continue
                         dane = tar.extractfile(m).read()
                         if cel.is_file() and cel.read_bytes() == dane:
                             os.utime(str(cel), (m.mtime, m.mtime))
@@ -33502,6 +33557,11 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
                         pass
         except Exception:
             pobierz = []
+        finally:
+            try:
+                _arch.unlink()
+            except Exception:
+                pass
     # pamiec po wyrownaniu: listy na nowo, gdy cos sie ruszylo; gdy laptop
     # nie odpowie — stara pamiec zostaje (najwyzej plik wroci, nic nie zginie)
     if wyslij or pobierz or odloz_lap or odloz_tel:
@@ -33517,7 +33577,7 @@ def _laptop_wyrownaj_pod_zamkiem(folder, f):
     def _lista(x):
         return " (" + ", ".join(x[:5]) + ("…" if len(x) > 5 else "") + ")" if x else ""
     if wyslij or pobierz or odloz_lap or odloz_tel:
-        log("LAPTOP", "Wyrównane pliki z kodem (~/" + f + "): na laptopa " + str(len(wyslij)) + _lista(wyslij)
+        log("LAPTOP", "Wyrównane pliki (~/" + f + "): na laptopa " + str(len(wyslij)) + _lista(wyslij)
             + ", z laptopa " + str(len(pobierz)) + _lista(pobierz)
             + ((", odłożone do .kopie/ na laptopie (nie ma ich już na telefonie) "
                 + str(len(odloz_lap)) + _lista(odloz_lap)) if odloz_lap else "")
@@ -59131,9 +59191,9 @@ def _jak_rozmawiamy_laptop():
         "Obok telefonu jest laptop z Linuksem (opis: ~/AEL_SRODOWISKO.txt). Komenda z "
         "przedrostkiem LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f + ", i działa "
         "jak na telefonie: wynik wraca do was, długa liczy w tle. Po ; albo && słowo LAPTOP: "
-        "albo TELEFON: przenosi dalszą część komendy na drugą maszynę. Pliki z kodem i pliki "
-        "tekstowe do 1 MB program trzyma takie same na obu maszynach; większe przenosi scp "
-        "(adres laptopa: " + _LAPTOP_HOST + "). "
+        "albo TELEFON: przenosi dalszą część komendy na drugą maszynę. Folder drużyny program "
+        "trzyma taki sam na obu maszynach: przed każdą komendą LAPTOP: i po niej przenosi "
+        "nowsze pliki w drugą stronę. "
         + _laptop_sudo_zdanie()
         + ("Drużyna ma na laptopie połowę procesora i pamięci, drugą połowę ma rywal. "
            if _DRUZYNA else "")
@@ -59246,8 +59306,9 @@ def _laptop_dla_maina_akapit():
         "jak na telefonie: wynik i błędy wracają, długa liczy w tle aż sama skończy, także gdy "
         "połączenie się zerwie, i widać ją w sekcji „W tle”. Po ; albo && słowo LAPTOP: albo "
         "TELEFON: przenosi dalszą część komendy na drugą maszynę; program wykona części po "
-        "kolei i odda jeden wynik. Pliki z kodem i pliki tekstowe do 1 MB program trzyma "
-        "takie same na obu maszynach; większe przenosi scp (adres laptopa: " + _LAPTOP_HOST + "). "
+        "kolei i odda jeden wynik. Folder drużyny program trzyma "
+        "taki sam na obu maszynach: przed każdą komendą LAPTOP: i po niej przenosi nowsze "
+        "pliki w drugą stronę. "
         + _laptop_sudo_zdanie()
         + ("Drużyna ma na laptopie połowę procesora i pamięci, drugą połowę ma rywal. "
            if _DRUZYNA else "")
