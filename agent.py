@@ -45609,10 +45609,22 @@ def _karta_startu(r, teraz):
     # v480gy: jedna linia na rzecz, jak procesy — co, i kiedy wynik.
     if czekanie:
         do = _min_s(max(0, r["start"] + (r.get("sekundy") or 0) - teraz))
+        # v480nz: "wcześniej, gdy proces się skończy" bylo nieprawda, gdy w
+        # tle nic nie liczylo — bieg 2026-11-15 07:08 (druzyna 1): MAIN
+        # "zamknal sesje" i czekal 30 min na dane od uzytkownika.
+        try:
+            _nic_w_tle = (not r.get("czeka_na") and not _zywe_w_tle()
+                          and not (_laptop_moje_wszystkie.get("procesy") or {})
+                          and not any(x is not r and x.get("wynik") is None for x in list(_w_tle)))
+        except Exception:
+            _nic_w_tle = False
         linie = [
             "• Czekanie: " + _komenda_jedna_linia(_bez_sleep(r["komenda"]), 140)
             + (" — wynik przy kolejnych 25% postępu procesu, przy jego końcu albo błędzie."
                if _czekanie_na_postep(r) else
+               " — wynik za " + do + "; w tle nic nie liczy, więc to czekanie skończy się "
+               "samym upływem czasu (bieg nie czeka na użytkownika)."
+               if _nic_w_tle else
                " — wynik najpóźniej za " + do
                + ("; czeka, aż skończy się to, co już leci w tle." if r.get("czeka_na")
                   else "; wcześniej, gdy proces się skończy."))
