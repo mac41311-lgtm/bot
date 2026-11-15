@@ -46314,11 +46314,31 @@ def _istota_komendy(kom, limit=200):
     pierwsza = k.split("\n")[0]
     reszta = len(k.split("\n")) - 1
     seg = []
+    # v480ok: komenda na dwie maszyny — przy czesci, od ktorej liczy druga
+    # maszyna, zostaje "LAPTOP:"/"TELEFON:" (jak w komendzie). Bieg
+    # 2026-11-15 20:06: naglowek "timeout 300 python3 kod/x.py … (telefon i
+    # laptop)" nie mowil, ze skrypt liczyl na laptopie, a na telefonie tylko echo.
+    _m, _maszyny = "telefon", set()
+    for _cz in re.split(r"\s*(?:&&|;)\s*", pierwsza):
+        _mm = re.match(r"\s*(LAPTOP|TELEFON)\s*:", _cz, re.I)
+        if _mm:
+            _m = _mm.group(1).lower()
+        if _cz.strip():
+            _maszyny.add(_m)
+    mieszana = len(_maszyny) > 1
+    maszyna = "telefon"
+    wypisana = "telefon"
     for cz in re.split(r"\s*(?:&&|;)\s*", pierwsza):
+        m_m = re.match(r"\s*(LAPTOP|TELEFON)\s*:\s*", cz, re.I)
+        if m_m:
+            maszyna = m_m.group(1).lower()
         cz = re.sub(r"\b(?:LAPTOP|TELEFON)\s*:\s*", "", cz)
         cz = re.sub(r"\s*\d?>\s*/dev/null", "", cz).strip()
         if not cz or re.match(r"^cd(\s|$)", cz) or _ECHO_NAGLOWEK_RE.match(cz):
             continue
+        if mieszana and maszyna != wypisana:
+            cz = maszyna.upper() + ": " + cz
+            wypisana = maszyna
         seg.append(cz)
     t = "; ".join(seg) or pierwsza
     if reszta:
