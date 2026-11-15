@@ -16498,13 +16498,27 @@ def _zatrzymane_przy_zamknieciu_blok():
         "gdy użytkownik go uruchamia od nowa. Cel się nie zmienił, bieg "
         "trwa dalej i nie czeka na użytkownika. "
     )
+    # v480om: procesy na laptopie zamkniecie programu nie zatrzymuje (licza
+    # oderwane od ssh). Bieg 2026-11-15 22:40: "W tle nic wtedy nie
+    # działało", a na laptopie dalej szlo venv/bin/pip install.
+    _lap = ""
+    try:
+        _lp = _laptop_moje_procesy()
+        if _lp:
+            _lap = ("Na laptopie dalej liczy (zamknięcie programu tego nie zatrzymuje): "
+                    + ", ".join(str(n) + " (od " + _min_s(float(t)) + ")" for n, t in _lp[:6]) + ". ")
+    except Exception:
+        _lap = ""
     if zamkniete:
+        if _lap and not linie:
+            return ("Użytkownik zamknął program (" + zamkniete + "). Na telefonie w tle nic wtedy "
+                    "nie działało. " + _lap + _dalej + "\n")
         return (
             "Użytkownik zamknął program (" + zamkniete + ")"
             + (
                 " — razem z nim zatrzymało się to, co działało w tle:\n"
                 + "\n".join(linie) + "\n" + _dalej
-                + "Jeśli to, co się przerwało, jest dalej potrzebne, możecie "
+                + _lap + "Jeśli to, co się przerwało, jest dalej potrzebne, możecie "
                 "to puścić od nowa.\n"
                 if linie else
                 ". W tle nic wtedy nie działało. " + _dalej + "\n"
@@ -33750,6 +33764,34 @@ _BRAKI = [
 ]
 
 
+def _instalacja_trwa(modul, na_laptopie):
+    """v480om: "pip install …" tej biblioteki, ktory jeszcze liczy (na
+    laptopie albo telefonie) — krotki opis procesu albo ""."""
+    try:
+        warianty = {str(modul).lower(), str(modul).lower().replace("_", "-")}
+        if na_laptopie:
+            if not _laptop_skonfigurowany() or _laptop.get("ok") is not True:
+                return ""
+            r = subprocess.run(_LAPTOP_SSH.split() + [_LAPTOP_HOST, "pgrep -af 'pip[0-9.]* install' 2>/dev/null; true"],
+                               capture_output=True, text=True, timeout=15, errors="replace")
+            wy = r.stdout or ""
+        else:
+            r = subprocess.run(["pgrep", "-af", "pip[0-9.]* install"], capture_output=True, text=True,
+                               timeout=10, errors="replace")
+            wy = r.stdout or ""
+        for l in wy.splitlines():
+            ll = l.lower()
+            if "pgrep" in ll:
+                continue
+            if any(re.search(r"(?:^|[\s=/])" + re.escape(w) + r"(?:[\s=<>~\[]|$)", ll) for w in warianty):
+                pid, _, kom = l.strip().partition(" ")
+                return ("proces " + pid + ": " + short(re.sub(r"^\S*/(?=\S*pip)", "", kom), 120)
+                        + (", na laptopie" if na_laptopie else ""))
+    except Exception:
+        pass
+    return ""
+
+
 def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
     try:
         if not isinstance(wynik, dict) or wynik.get("podpowiedz"):
@@ -33818,9 +33860,22 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
                     return wynik
             # v480jl (uzytkownik): sam blad + ktora biblioteka + przyklad z
             # <nazwa>, bez gotowej komendy i bez wyboru pakietu za zespol
+            # v480om: bieg 2026-11-15 22:40 — "brakuje sentence_transformers,
+            # doinstalujcie: LAPTOP: pip install" w chwili, gdy venv/bin/pip
+            # install sentence-transformers dalej liczyl na laptopie, a
+            # komenda szla przez venv/bin/python (systemowy pip to inne miejsce)
+            _trwa = _instalacja_trwa(glowny, na_laptopie)
+            if _trwa:
+                wynik["podpowiedz"] = (
+                    gdzie + " nie ma jeszcze biblioteki Python „" + modul + "” — jej instalacja "
+                    "dalej trwa (" + _trwa + "); gdy się skończy, import zadziała.")
+                return wynik
+            _venv = re.search(r"(?:^|[\s;&|(])((?:[\w.~/-]*/)?\.?venv)/bin/python", str(command_str or ""))
+            _pip = (_venv.group(1) + "/bin/pip install <nazwa>") if _venv else "pip install <nazwa>"
             wynik["podpowiedz"] = (
-                gdzie + " brakuje biblioteki Python „" + modul + "”. Możecie ją doinstalować, np. "
-                + ("LAPTOP: pip install <nazwa>." if na_laptopie else "pip install <nazwa>."))
+                gdzie + " brakuje biblioteki Python „" + modul + "”"
+                + (" w " + _venv.group(1) if _venv else "") + ". Możecie ją doinstalować, np. "
+                + ("LAPTOP: " if na_laptopie else "") + _pip + ".")
             return wynik
         for wzor, co, tel, lap in _BRAKI:
             m = wzor.search(tekst)
@@ -34369,7 +34424,7 @@ def _wykonaj_czesci_maszyn(command_str, czesci):
             wy.append(_znacznik + ("\n" if _znacznik and tresc else "") + tresc)
         if str(w.get("stderr") or "").strip():
             bl.append("[" + maszyna + "] " + str(w.get("stderr")).rstrip("\n"))
-        if w.get("podpowiedz"):
+        if w.get("podpowiedz") and str(w["podpowiedz"]) not in opis:
             opis.append(str(w["podpowiedz"]))
         if w.get("status") in ("LECI_W_TLE", "AUTO_BACKGROUNDED"):
             opis.append("Część „" + short(kom, 80) + "” liczy dalej w tle.")
@@ -46265,6 +46320,16 @@ def _wynik_dla_maina(wynik, args, limit):
         reszta.pop("command", None)
     if reszta.get("bez_zmian"):
         _notka = (_notka + "\n" if _notka else "") + str(reszta.pop("bez_zmian"))
+    # v480om (uzytkownik 2026-11-15: "i układ jeszcze"): uwagi programu
+    # (podpowiedz, gdzie lezy plik, co przybylo na laptopie) pod wynikiem,
+    # zdaniem — nie "podpowiedz: …" miedzy naglowkiem a wyjsciem komendy
+    _po_wyniku = []
+    for _k, _pref in (("pliki_wyrownane", "Przeniesione pliki: "), ("pliki_na_laptopie", ""),
+                      ("na_telefonie_jest", ""), ("na_laptopie_jest", ""),
+                      ("pominiete_czesci", "Części "), ("podpowiedz", "")):
+        _v = reszta.pop(_k, None)
+        if isinstance(_v, str) and _v.strip():
+            _po_wyniku.append("Program: " + _pref + _v.strip())
     _linie_pol = []
     if "ok" in reszta and isinstance(reszta["ok"], bool):
         if reszta.pop("ok") is False:
@@ -46296,6 +46361,7 @@ def _wynik_dla_maina(wynik, args, limit):
                                   and wynik.get("status") not in ("LECI_W_TLE", "AUTO_BACKGROUNDED") else ""))
         + ("\nstderr:\n" + bl if bl else "")
         + ("\n" + kod_linia if kod_linia else "")
+        + ("\n" + "\n".join(_po_wyniku) if _po_wyniku else "")
     )
     return tekst.lstrip("\n")
 
