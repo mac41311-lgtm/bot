@@ -7,7 +7,9 @@
 # (stary ~/bot zniknal wlasnie przy sprzataniu).
 
 REPO="https://github.com/mac41311-lgtm/bot.git"
-BRANCH="claude/android-termux-agent-repair-18dvrp"
+# Galaz, z ktorej idzie agent.py. Mozna nadpisac jednorazowo z powloki:
+#     BRANCH=inna/galaz bash ~/update_agent.sh
+BRANCH="${BRANCH:-claude/agent-py-analysis-fix-22wj6q}"
 SRC="$HOME/.ael-repo"
 DST="$HOME/agent"
 LOG="$DST/update.log"
