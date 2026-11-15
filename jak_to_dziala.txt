@@ -5528,3 +5528,5 @@ v480nz (2026-11-15): czekanie MAIN-a, gdy w tle nic nie liczy (telefon i laptop)
 v480oa (2026-11-15): wyrównanie plików telefon<->laptop obejmuje też małe (do 1 MB) .txt/.csv/.tsv — opis dla zespołu ('małe pliki tekstowe program sam trzyma takie same') był dotąd nieprawdziwy dla danych.
 
 v480ob (2026-11-15): powiadomienie o zatrzymanym koncie drużyny 2 wysyła też drużyna 1 (pierwszy plan); nieudane powiadomienie o tokenie trafia do logu z powodem (wcześniej cicho).
+
+v480oc (2026-11-15): nowa rozmowa roli dostaje wcześniejsze wiadomości użytkownika z nagłówkiem, że przyszły przed tą rozmową i pytania mogły już mieć odpowiedź (gdy najnowsza ma >30 min); notka 'Dziękuję… Poprawiliśmy w programie' też odfiltrowana.

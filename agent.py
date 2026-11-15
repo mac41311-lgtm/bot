@@ -5894,7 +5894,18 @@ def _zdania_dla_nowej_rozmowy(rola, wiadomosc=""):
 _ZDANIA_NOWEJ_ROZMOWY = 6
 _NOTKA_O_PROGRAMIE_RE = re.compile(
     r"^\s*(?:Użytkownik:\s*)?(?:Poprawki w programie|Poprawiliśmy|Program poprawiony|"
-    r"Co się zmieniło w programie|Kolejne poprawki programu|Zmiany w programie)", re.I)
+    r"Co się zmieniło w programie|Kolejne poprawki programu|Zmiany w programie)"
+    # v480oc: tez notka zaczeta podziekowaniem ("Dziękuję za listę
+    # ograniczeń. Poprawiliśmy w programie…") — bieg 2026-11-15
+    r"|^.{0,200}?\bPoprawiliśmy w programie\b", re.I | re.S)
+# v480oc: naglowek nad wiadomosciami uzytkownika w nowej rozmowie. Bieg
+# 2026-11-14 21:15 (druzyna 2): Ela w nowej rozmowie dostala pytanie
+# uzytkownika z 09.11 ("jaka największa długość kodu…") bez slowa, ze jest
+# stare — zespol odpowiedzial na nie drugi raz 15.11 w DLA_UZYTKOWNIKA.md.
+_NAGLOWEK_STARYCH_ZDAN = (
+    "(Program: to wcześniejsze wiadomości użytkownika z tego celu, najstarsze pierwsze — "
+    "przyszły przed tą rozmową, więc na pytania z nich zespół mógł już odpowiedzieć "
+    "(odpowiedzi są zwykle w DLA_UZYTKOWNIKA.md).)")
 
 
 def _plik_wiadomosci_uzytkownika():
@@ -5906,10 +5917,20 @@ def _przytnij_dla_nowej_rozmowy(zdania):
     try:
         zdania = list(zdania or [])
         bez_notek = [z for z in zdania if not _NOTKA_O_PROGRAMIE_RE.match(z)]
+        if not bez_notek:
+            return []
+        # naglowek tylko, gdy najnowsza wiadomosc ma juz ponad 30 min (swieza
+        # wiadomosc w nowej rozmowie to nie "wczesniejsza")
+        try:
+            _stare = time.time() - USER_SAID_FILE.stat().st_mtime > 1800
+        except Exception:
+            _stare = False
+        _nagl = [_NAGLOWEK_STARYCH_ZDAN] if _stare else []
         if len(bez_notek) == len(zdania) and len(zdania) <= _ZDANIA_NOWEJ_ROZMOWY:
-            return zdania
+            return _nagl + zdania
         zostaja = bez_notek[-_ZDANIA_NOWEJ_ROZMOWY:]
         reszta = len(zdania) - len(zostaja)
+        zostaja = _nagl + zostaja
         plik = _plik_wiadomosci_uzytkownika()
         try:
             plik.write_text(
