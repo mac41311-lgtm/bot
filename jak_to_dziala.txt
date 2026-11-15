@@ -5524,3 +5524,5 @@ v480nx (2026-11-14): poprawki fragmentu: ten sam stary fragment kilka razy w jed
 v480ny (2026-11-14): wynik RUN-a, obok którego MAIN zadał pytania, nie przepada — przychodzi jako 'Twój ostatni krok' nad 'Odpowiedzi zespołu'. Proces z 'LAPTOP:' w środku komendy (po echo &&) ma metkę (na laptopie), nie (na telefonie).
 
 v480nz (2026-11-15): czekanie MAIN-a, gdy w tle nic nie liczy (telefon i laptop), mówi prawdę: 'w tle nic nie liczy, więc to czekanie skończy się samym upływem czasu (bieg nie czeka na użytkownika)' zamiast 'wcześniej, gdy proces się skończy'.
+
+v480oa (2026-11-15): wyrównanie plików telefon<->laptop obejmuje też małe (do 1 MB) .txt/.csv/.tsv — opis dla zespołu ('małe pliki tekstowe program sam trzyma takie same') był dotąd nieprawdziwy dla danych.

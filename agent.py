@@ -33224,8 +33224,11 @@ def _laptop_oderwane(zdalnie, folder):
 # strone, plik tylko po jednej stronie — tez. Bieg 2026-10-31 22:35
 # (druzyna 1): Marek zauwazyl, ze selfloop.py na laptopie i na telefonie
 # rozni sie w linii 171. Duze dane dalej przenosi scp.
+# v480oa: tez male dane tekstowe (.txt/.csv/.tsv) — bieg 2026-11-15 07:47
+# (druzyna 1): dane/ppc_train.tsv (331 KB) byl tylko na telefonie, skrypty
+# na laptopie pisaly "brak dane/ppc_train.tsv" i MAIN szukal przyczyny 3 kroki.
 _LAPTOP_SYNC_SUFIKSY = tuple(sorted(set(_KOD_SUFIKSY) | {
-    ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".md"}))
+    ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".md", ".txt", ".csv", ".tsv"}))
 _LAPTOP_SYNC_MAX_B = 1024 * 1024
 _LAPTOP_SYNC_MAX_PLIKOW = 3000
 
