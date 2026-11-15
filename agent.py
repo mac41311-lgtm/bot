@@ -59180,7 +59180,8 @@ def _jak_rozmawiamy(laptop=True, rola=None):
         "potrzebuje; gdy odpowiadacie i zwrócicie się do kogoś po imieniu, dostanie to od "
         "razu i odpowie, a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i decyduje, "
         "co zespół robi dalej. Użytkownik chce, żeby program działał sam; daje to, czego "
-        "nikt z was nie ma (logowanie, dostęp do kont, dane)."
+        "nikt z was nie ma: logowanie na stronach, dostęp do kont, dane osobowe. "
+        "Telefon ma dostęp do internetu."
     )
 
 
@@ -59224,7 +59225,8 @@ def _jak_rozmawiamy_zespol(rola=None):
         "odpowiadacie i zwrócicie się do kogoś po imieniu, dostanie to od razu i odpowie, "
         "a jego odpowiedź wróci do was. MAIN widzi całą rozmowę i decyduje, co zespół "
         "robi dalej. Użytkownik chce, żeby program działał sam; daje to, czego nikt z "
-        "was nie ma (logowanie, dostęp do kont, dane)."
+        "was nie ma: logowanie na stronach, dostęp do kont, dane osobowe. Telefon "
+        "ma dostęp do internetu."
     )
 
 
@@ -59335,7 +59337,8 @@ _JAK_TO_DZIALA = (
     "(/data/data/com.termux/files/home). Jest Termux:API, a ADB jest "
     "połączone bezprzewodowo z tym samym telefonem, więc da się przez "
     "nie instalować APK, uruchamiać aplikacje i zaglądać na ekran. "
-    "Model telefonu, wersja Pythona i pamięć leżą w ~/AEL_SRODOWISKO.txt.\n\n"
+    "Telefon ma dostęp do internetu. Model telefonu, wersja Pythona i pamięć "
+    "leżą w ~/AEL_SRODOWISKO.txt.\n\n"
     "Wykonanie. RUN to lista do " + str(_RUN_MAX_AKCJI) + " akcji, "
     "które program wykonuje od razu, po kolei, i oddaje Ci pełne "
     "wyniki — także numerowaną listę elementów strony, po której "
@@ -66509,11 +66512,11 @@ def _plik_zespolu(nazwa, domyslna):
 
 def _zdanie_o_pliku_dla_uzytkownika():
     return (
-        " Bieg nie czeka na użytkownika. Jeśli potrzebujecie jego "
-        "decyzji albo chcecie mu coś przekazać, dopiszcie to do "
-        + _plik_dla_uzytkownika() + " — przeczyta, kiedy zechce — "
-        "i idźcie dalej z kolejnym krokiem celu. Jeśli odpisze, jego "
-        "odpowiedź przyjdzie w zwykłej wiadomości jako „Użytkownik: …”."
+        # v480of: sam fakt (uzytkownik 2026-11-15: zespol prosil go o dane,
+        # ktore mogl zdobyc sam — zdanie zapraszalo do pytan o decyzje).
+        " Bieg nie czeka na użytkownika. Plik " + _plik_dla_uzytkownika()
+        + " czyta użytkownik, kiedy zechce; jeśli odpisze, jego odpowiedź "
+        "przyjdzie w zwykłej wiadomości jako „Użytkownik: …”."
     )
 
 
