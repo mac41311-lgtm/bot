@@ -32239,93 +32239,49 @@ _LAPTOP_BIBLIOTEKI = ("numpy", "scipy", "pandas", "sklearn", "matplotlib", "torc
 
 
 def _laptop_karta_stan():
-    """v480md: stan sterownikow karty — bez zgadywania, gdy nie udalo sie odczytac."""
+    """v480od: krotko — karta i jej sterowniki (bez zgadywania)."""
     if _laptop.get("ocl") is None:
-        return " (konto ma do niej dostęp — /dev/dri)"
-    ocl, vk = bool(_laptop.get("ocl")), bool(_laptop.get("vk"))
-    z = (" (konto ma do niej dostęp — /dev/dri; sterownik OpenCL: " + ("jest" if ocl else "brak")
-         + ", Vulkan: " + ("jest" if vk else "brak"))
-    if not ocl and not vk:
-        z += (" — bez sterownika karta do liczenia się nie nada; sterowniki systemowe instaluje "
-              "użytkownik (np. mesa-vulkan-drivers), napiszcie o to w DLA_UZYTKOWNIKA.md")
-    return z + ")"
-
-
-def _laptop_instalowanie_zdanie():
-    """v480md: co jest na laptopie i co zespol moze doinstalowac sam (a co robi
-    uzytkownik). Bieg 2026-11-07: zespol uznal "GPU niedostepne, brak PyTorch" za
-    koniec drogi, choc biblioteki Pythona moze doinstalowac sam, a o sterownik
-    prosi sie uzytkownika. Puste, gdy nie udalo sie nic odczytac."""
-    lib, narz = _laptop.get("biblioteki"), _laptop.get("narzedzia")
-    if lib is None and narz is None:
         return ""
-    nazwa = lambda m: "scikit-learn" if m == "sklearn" else m
-    z = []
-    if lib is not None:
-        jest = [nazwa(m) for m in _LAPTOP_BIBLIOTEKI if m in lib]
-        brak = [nazwa(m) for m in _LAPTOP_BIBLIOTEKI if m not in lib]
-        z.append(" Biblioteki Pythona na laptopie: " + (", ".join(jest) if jest else "żadnej z podstawowych")
-                 + ("; brak: " + ", ".join(brak) if brak else "") + ".")
-    if narz is not None:
-        brak_n = [t for t in ("gcc", "g++", "make", "cmake", "git") if t not in narz]
-        z.append(" Kompilatory i narzędzia: " + (", ".join(narz) if narz else "żadnych")
-                 + ("; brak: " + ", ".join(brak_n) if brak_n else "") + ".")
-    # v480mm: venv w podfolderze "venv" folderu druzyny — tego folderu program
-    # nie kopiuje na telefon (_laptop_wyrownaj pomija venv/.venv), a sciezka
-    # poza folderem (~/venv_MAIN_n, do v480ml) w rywalizacji dostawala
-    # LAPTOP_ODMOWA (bieg 2026-11-07 19:43, druzyna 2, krok 35).
-    venv_dir = "venv"
-    if _laptop.get("pip") is False:
-        z.append(" pip nie jest zainstalowany — poproście użytkownika o pakiet python3-pip "
-                 "(DLA_UZYTKOWNIKA.md).")
-    elif _laptop.get("pep668") and _laptop.get("venv"):
-        z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo. System odmawia zwykłego "
-                 "pip install (externally-managed-environment), więc zróbcie własne środowisko w "
-                 "podfolderze venv Waszego folderu (folderu o tej nazwie program nie kopiuje na "
-                 "telefon): LAPTOP: python3 -m venv "
-                 + venv_dir + ", potem LAPTOP: " + venv_dir + "/bin/pip install <nazwa> i skrypty "
-                 "puszczajcie przez " + venv_dir + "/bin/python.")
-    elif _laptop.get("pep668"):
-        z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo: LAPTOP: pip install "
-                 "--user --break-system-packages <nazwa> (system odmawia zwykłego pip install; pakietu "
-                 "python3-venv na laptopie nie ma, więc własnego środowiska nie zrobicie — jeśli wolicie "
-                 "środowisko, poproście użytkownika o python3-venv).")
-    else:
-        z.append(" Brakujące biblioteki Pythona możecie doinstalować sami, bez sudo: LAPTOP: pip install "
-                 "--user <nazwa>.")
+    ocl, vk = bool(_laptop.get("ocl")), bool(_laptop.get("vk"))
+    if ocl and vk:
+        return " (OpenCL i Vulkan działają)"
+    if ocl or vk:
+        return " (" + ("OpenCL" if ocl else "Vulkan") + " działa, " + ("Vulkan" if ocl else "OpenCL") + " nie)"
+    return " (bez sterownika OpenCL/Vulkan)"
+
+
+def _laptop_fakty():
+    """v480od (uzytkownik 2026-11-15: "nie mogą mieć ograniczeń… mogą szukać
+    rozwiązań, bo mogą wpisywać własne komendy… zrób tak, jak ty byś chciał
+    dostać"): same fakty o laptopie, bez list bibliotek, bez przykladow i bez
+    "nie mozna" — reszte zespol sprawdzi i zrobi wlasnymi komendami."""
+    f = []
     if _laptop.get("sudo_pelne"):
-        z.append(" Programy systemowe, sterowniki i ustawienia systemu zmieniacie sami — konto ma pełne "
-                 "sudo bez hasła: LAPTOP: sudo apt install -y <pakiet> (bez -y apt czeka na odpowiedź), "
-                 "LAPTOP: sudo <komenda>.")
+        f.append("konto ma sudo bez hasła")
     elif _laptop.get("sudo"):
-        z.append(" Programy systemowe i sterowniki możecie instalować sami — konto ma sudo do apt bez "
-                 "hasła: LAPTOP: sudo apt install -y <pakiet> (bez -y apt czeka na odpowiedź).")
+        f.append("konto ma sudo do apt")
     else:
-        z.append(" Programy systemowe i sterowniki (apt) instaluje użytkownik — napiszcie o to w "
-                 "DLA_UZYTKOWNIKA.md.")
-    return "".join(z)
+        f.append("konto nie ma sudo")
+    if _DRUZYNA:
+        f.append("drużyna ma tam połowę procesora i pamięci, drugą połowę ma rywal")
+    if _laptop.get("gpu") and not _laptop.get("gpu_dostep"):
+        f.append("konto nie jest w grupie z dostępem do karty (/dev/dri)")
+    return f
 
 
 def _laptop_sudo_zdanie(krotko=False):
-    """v480md: jedno zdanie o instalowaniu na laptopie do tekstow dla zespolu —
-    zalezne od tego, czy konto na laptopie ma sudo do apt (odczyt co minute)."""
+    """v480md; v480od: sam fakt o sudo na laptopie, bez instrukcji."""
     if _laptop.get("sudo_pelne"):
-        return ("Na laptopie macie pełne sudo bez hasła: programy systemowe, sterowniki i ustawienia "
-                "systemu zmieniacie sami (LAPTOP: sudo apt install -y <pakiet>, LAPTOP: sudo <komenda>), "
-                "biblioteki Pythona w venv albo przez pip install --user. ")
+        return "Na laptopie konto ma sudo bez hasła. "
     if _laptop.get("sudo"):
-        return ("Na laptopie macie sudo do apt: programy systemowe i sterowniki instalujecie sami "
-                "(LAPTOP: sudo apt install -y <pakiet>), biblioteki Pythona w venv albo przez pip "
-                "install --user. ")
-    return ("Na laptopie nie ma sudo: biblioteki instalujecie w venv albo przez pip install --user. "
-            if not krotko else
-            "Na laptopie nie ma sudo — biblioteki instaluje się tam w venv albo przez pip install "
-            "--user. ")
+        return "Na laptopie konto ma sudo do apt. "
+    return "Na laptopie konto nie ma sudo. "
 
 
 def _laptop_sudo_jakie():
     """v480mh: krotko, jakie sudo ma konto na laptopie."""
-    return "konto ma pełne sudo" if _laptop.get("sudo_pelne") else "konto ma sudo do apt"
+    return ("konto ma pełne sudo" if _laptop.get("sudo_pelne") else
+            "konto ma sudo do apt" if _laptop.get("sudo") else "konto nie ma sudo")
 
 
 def _laptop_sygnatura():
@@ -32382,38 +32338,21 @@ def _laptop_sprzet_zmiana():
 
 
 def _laptop_opis():
-    """Jedno zdanie o laptopie dla MAIN-a / pliku srodowiska."""
+    """Opis laptopa dla MAIN-a / pliku srodowiska. v480od: przepisane w
+    calosci — sprzet, potem same fakty (_laptop_fakty)."""
     if _laptop.get("ok"):
-        return ("Laptop (" + _LAPTOP_HOST + ") jest dostępny: Linux, "
+        return ("Laptop (" + _LAPTOP_HOST + "): Linux, "
                 + str(_laptop.get("rdzenie") or "?") + " rdzenie, "
                 + str(round((_laptop.get("ram_mb") or 0) / 1024, 1)).replace(".", ",") + " GB RAM"
                 + (" (wolne " + str(round((_laptop.get("wolne_mb") or 0) / 1024, 1)).replace(".", ",") + " GB)"
                    if _laptop.get("wolne_mb") else "")
                 + (", " + _laptop["python"] if _laptop.get("python") else "")
-                + (", karta graficzna: " + _laptop["gpu"]
-                   + (_laptop_karta_stan() if _laptop.get("gpu_dostep") else
-                      " (konto nie ma jeszcze dostępu do /dev/dri — potrzebna grupa render/video, "
-                      "ustawia użytkownik)")
-                   if _laptop.get("gpu") else "")
-                + (", dla Waszej drużyny " + str(_laptop_watki())
-                   + (" wątek" if _laptop_watki() == 1 else " wątki" if _laptop_watki() < 5 else " wątków")
-                   + " procesora — Wasza stała połowa laptopa, także gdy rywal nic nie liczy, a pamięć "
-                   "też po połowie (drugą połowę ma rywal, trochę zostaje dla systemu; kartę "
-                   "graficzną macie obie drużyny)"
-                   if _DRUZYNA else "")
-                + ". Komenda z przedrostkiem LAPTOP: (w RUN, w URUCHOM: albo w zadaniu) wykona się "
-                "na nim w Waszym folderze ~/" + _laptop_folder() + " na laptopie, np. "
-                "LAPTOP: python3 skrypt.py. Pliki z kodem i małe pliki tekstowe program "
-                "sam trzyma takie same na obu maszynach; duże pliki przenosi scp: scp ~/"
-                + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "plik") + "/plik " + _LAPTOP_HOST + ":"
-                + _laptop_folder() + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + _laptop_folder()
-                + "/wynik.txt ~/" + (("MAIN_" + _DRUZYNA) if _DRUZYNA else "") + ". Bez "
-                "przedrostka komenda leci na telefonie, jak dotąd."
-                + _laptop_instalowanie_zdanie())
+                + (", karta " + re.sub(r"^[\d:.]+\s+VGA compatible controller:\s*", "", str(_laptop["gpu"]))
+                   + _laptop_karta_stan() if _laptop.get("gpu") else "")
+                + "; " + "; ".join(_laptop_fakty()) + ".")
     if _laptop.get("ok") is False:
         return ("Laptop (" + _LAPTOP_HOST + ") jest teraz niedostępny (" + str(_laptop.get("blad") or "")
-                + "). Komendy LAPTOP: nie ruszą; liczcie na telefonie albo spróbujcie później — "
-                "program sprawdza go co minutę i powie, gdy wróci.")
+                + "); program sprawdza go co minutę i powie, gdy wróci.")
     return ""
 
 
@@ -33166,6 +33105,13 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
     polecenie = re.sub(
         r"(\b(?:pkill|pgrep)\s+(?:-[A-Za-z0-9]+\s+)*-f\s+(?:-[A-Za-z0-9]+\s+)*)([\"']?)([A-Za-z0-9_])",
         r"\1\2[\3]", polecenie)
+    # v480od (uzytkownik 2026-11-15: "mogą instalować wszystko"): apt na
+    # laptopie bez terminala pytal "[Y/n]" i sam przerywal — program dopisuje
+    # -y; pip (PEP 668) instaluje wprost dzieki PIP_BREAK_SYSTEM_PACKAGES nizej
+    # (bez sudo sam przechodzi na instalacje dla konta).
+    polecenie = re.sub(
+        r"\b(apt(?:-get)?\s+(?:install|remove|purge|upgrade|full-upgrade|dist-upgrade|autoremove))\b(?![^;&|\n]*\s(?:-y|--yes|--assume-yes)\b)",
+        r"\1 -y", polecenie)
     k = str(_laptop_watki(druzyna))
     _f = _laptop_folder(druzyna)
     _d_eksport = _DRUZYNA if druzyna is None else str(druzyna or "")
@@ -33179,6 +33125,7 @@ def _na_laptopa(command_str, druzyna=None, limit_s=None):
                + " && export OMP_NUM_THREADS=" + k + " OPENBLAS_NUM_THREADS=" + k
                + " MKL_NUM_THREADS=" + k + " NUMEXPR_NUM_THREADS=" + k
                + " TORCH_NUM_THREADS=" + k + " PYTHONUNBUFFERED=1"
+               + " PIP_BREAK_SYSTEM_PACKAGES=1 DEBIAN_FRONTEND=noninteractive"
                + " AEL_DRUZYNA=" + (_d_eksport or "0")
                + ((" AEL_KOMENDA=" + _numer_komendy()) if _numer_komendy() else "")
                + (" AEL_SEDZIA=1" if limit_s else "")
@@ -33770,8 +33717,7 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
             # <nazwa>, bez gotowej komendy i bez wyboru pakietu za zespol
             wynik["podpowiedz"] = (
                 gdzie + " brakuje biblioteki Python „" + modul + "”. Możecie ją doinstalować, np. "
-                + ("LAPTOP: pip install <nazwa> (bez sudo: w venv albo z --user)." if na_laptopie
-                   else "pip install <nazwa>."))
+                + ("LAPTOP: pip install <nazwa>." if na_laptopie else "pip install <nazwa>."))
             return wynik
         for wzor, co, tel, lap in _BRAKI:
             m = wzor.search(tekst)
@@ -33784,19 +33730,13 @@ def _z_podpowiedzia_biblioteki(wynik, command_str, na_laptopie):
             if co == "programu":
                 wynik["podpowiedz"] = (
                     gdzie + " nie ma programu „" + nazwa + "” (albo to literówka w nazwie). "
-                    + (("Na laptopie możecie go doinstalować sami: LAPTOP: sudo apt install -y <pakiet> "
-                        "(" + _laptop_sudo_jakie() + "); czasem jest też wersja przez pip."
-                        if _laptop.get("sudo") else
-                        "Programy systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
-                        "potrzebny, napiszcie to w DLA_UZYTKOWNIKA.md; czasem jest też wersja przez pip.")
+                    + ("Możecie go doinstalować (" + _laptop_sudo_jakie().replace("konto", "konto na laptopie")
+                       + "); czasem jest też wersja przez pip."
                        if na_laptopie else "Możecie go doinstalować, np. pkg install <nazwa>."))
             elif lap is None and na_laptopie:
                 wynik["podpowiedz"] = (
                     gdzie + " brakuje " + co + " „" + nazwa + "”. "
-                    + ("Możecie ją doinstalować sami: LAPTOP: sudo apt install -y <pakiet> (" + _laptop_sudo_jakie() + ")."
-                       if _laptop.get("sudo") else
-                       "Biblioteki systemowe na laptopie instaluje użytkownik (sudo) — jeśli jest "
-                       "potrzebna, napiszcie to w DLA_UZYTKOWNIKA.md."))
+                    + "Możecie ją doinstalować (" + _laptop_sudo_jakie().replace("konto", "konto na laptopie") + ").")
             else:
                 wynik["podpowiedz"] = (
                     gdzie + " brakuje " + co + " „" + nazwa + "”. Możecie to doinstalować, np. "
@@ -59032,24 +58972,11 @@ def _fakty_o_srodowisku():
                           + str(round(mem.get("MemAvailable", 0) / 1048576, 1)) + " GB")
     except Exception:
         pass
-    pakiety = []
-    try:
-        import importlib.metadata as _md
-        widziane = set()
-        for d in _md.distributions():
-            n = str(d.metadata.get("Name") or "").strip()
-            if n and n.lower() not in widziane and n.lower() not in ("pip", "setuptools", "wheel"):
-                widziane.add(n.lower())
-                pakiety.append(n + " " + str(d.version))
-        pakiety.sort(key=str.lower)
-    except Exception:
-        pakiety = []
     linia = ""
     if czesci:
         linia = "Środowisko (sprawdzone przy starcie programu): " + ", ".join(czesci) + "."
-    if pakiety:
-        linia += (" Biblioteki Pythona: " + ", ".join(pakiety[:80])
-                  + (" i " + str(len(pakiety) - 80) + " innych" if len(pakiety) > 80 else "") + ".")
+    # v480od: bez listy bibliotek (uzytkownik 2026-11-15: lista moze
+    # sugerowac, ze wolno tylko to, co jest) — zespol sprawdza i instaluje sam.
     _fakty_o_srodowisku_cache = linia.strip()
     return _fakty_o_srodowisku_cache
 
@@ -59208,19 +59135,17 @@ def _jak_rozmawiamy_laptop():
         return ""
     f = _laptop_folder()
     return (
-        "Obok telefonu jest laptop z Linuksem, z większą liczbą rdzeni i pamięci. Komenda "
-        "poprzedzona LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f + ", i działa "
-        "jak na telefonie — wynik albo błąd wraca do was, a długa liczy w tle z dopiskiem "
-        "„na laptopie” — np. URUCHOM: LAPTOP: python3 test.py. W jednej linii po ; albo && "
-        "przechodzicie na drugą maszynę słowem LAPTOP: albo TELEFON:. Kod i małe pliki "
-        "tekstowe program trzyma takie same na obu maszynach, a duże pliki przenosicie scp "
-        "(URUCHOM: scp dane.bin " + _LAPTOP_HOST + ":" + f + "/ i z powrotem). "
+        "Obok telefonu jest laptop z Linuksem (opis: ~/AEL_SRODOWISKO.txt). Komenda z "
+        "przedrostkiem LAPTOP: wykonuje się na nim, w folderze drużyny ~/" + f + ", i działa "
+        "jak na telefonie: wynik wraca do was, długa liczy w tle. Po ; albo && słowo LAPTOP: "
+        "albo TELEFON: przenosi dalszą część komendy na drugą maszynę. Pliki z kodem i pliki "
+        "tekstowe do 1 MB program trzyma takie same na obu maszynach; większe przenosi scp "
+        "(adres laptopa: " + _LAPTOP_HOST + "). "
         + _laptop_sudo_zdanie()
-        + ("Drużyna ma tam stałą połowę procesora i pamięci, więc najszybciej liczy jeden "
-           "skrypt naraz z dwoma wątkami, a gdy skrypty dojdą do tej połowy pamięci, zwalniają. "
+        + ("Drużyna ma na laptopie połowę procesora i pamięci, drugą połowę ma rywal. "
            if _DRUZYNA else "")
         + "Gdy całemu laptopowi kończy się pamięć, program zatrzymuje największy skrypt "
-        "i mówi, dlaczego. "
+        "i mówi dlaczego. "
     )
 
 
@@ -59325,30 +59250,22 @@ def _laptop_dla_maina_akapit():
     except Exception:
         return ""
     f = _laptop_folder()
-    tel = ("~/MAIN_" + _DRUZYNA) if _DRUZYNA else "~"
     return (
-        "Laptop. Obok telefonu jest laptop z Linuksem, połączony przez ssh — więcej "
-        "rdzeni i pamięci (dokładnie: ~/AEL_SRODOWISKO.txt). Komenda poprzedzona LAPTOP: — "
-        "w RUN (termux_run), w zadaniu dla wykonawcy i w URUCHOM: zespołu — wykonuje się na "
-        "nim w folderze ~/" + f + " na laptopie, z tymi samymi wynikami, błędami i tłem co na "
-        "telefonie, np. LAPTOP: python3 skrypt.py albo LAPTOP: nproc; free -h. Proces na "
-        "laptopie liczy, aż sam skończy, także gdy połączenie się zerwie; to, co tam liczy, "
-        "widzisz w sekcji „W tle”. W jednej komendzie możesz przechodzić między maszynami: po "
-        "; albo && wpisz LAPTOP: (dalej na laptopie) albo TELEFON: (z powrotem na telefonie), "
-        "np. sleep 600; LAPTOP: tail -5 log.txt — program wykona części po kolei, każdą na "
-        "swojej maszynie, i odda jeden wynik. Pliki z kodem i małe pliki tekstowe są na obu "
-        "maszynach te same: przed każdą komendą LAPTOP: i po niej program przenosi nowszą "
-        "wersję w drugą stronę. Duże pliki przenosi scp " + tel + "/dane.bin " + _LAPTOP_HOST
-        + ":" + f + "/ i z powrotem scp " + _LAPTOP_HOST + ":" + f + "/model.bin " + tel + "/. "
-        + _laptop_sudo_zdanie(krotko=True)
-        + ("Wasza drużyna ma tam stałą połowę procesora i pamięci (drugą ma rywal, trochę "
-           "zostaje dla systemu), więc najszybciej liczy jeden skrypt naraz z dwoma wątkami. "
+        "Laptop. Obok telefonu jest laptop z Linuksem, połączony przez ssh (opis: "
+        "~/AEL_SRODOWISKO.txt). Komenda z przedrostkiem LAPTOP: — w RUN, w zadaniu dla "
+        "wykonawcy i w URUCHOM: zespołu — wykonuje się na nim, w folderze ~/" + f + ", i działa "
+        "jak na telefonie: wynik i błędy wracają, długa liczy w tle aż sama skończy, także gdy "
+        "połączenie się zerwie, i widać ją w sekcji „W tle”. Po ; albo && słowo LAPTOP: albo "
+        "TELEFON: przenosi dalszą część komendy na drugą maszynę; program wykona części po "
+        "kolei i odda jeden wynik. Pliki z kodem i pliki tekstowe do 1 MB program trzyma "
+        "takie same na obu maszynach; większe przenosi scp (adres laptopa: " + _LAPTOP_HOST + "). "
+        + _laptop_sudo_zdanie()
+        + ("Drużyna ma na laptopie połowę procesora i pamięci, drugą połowę ma rywal. "
            if _DRUZYNA else "")
-        + "Gdy laptopowi kończy się pamięć, program zatrzymuje jeden największy skrypt i mówi, "
-        "dlaczego. "
-        + "Bez LAPTOP: wszystko dzieje się na telefonie. Gdy laptop jest niedostępny, komenda "
-        "nie rusza, a program mówi dlaczego."
+        + "Gdy laptopowi kończy się pamięć, program zatrzymuje największy skrypt i mówi "
+        "dlaczego. Bez LAPTOP: komenda wykonuje się na telefonie."
     )
+
 
 # v480x: bez Eli. Bieg 2026-10-12 18:35 z krotkim celem: Ela
 # wpisala zdanie o logowaniu i dostepie do kont do "celu

@@ -5530,3 +5530,5 @@ v480oa (2026-11-15): wyrównanie plików telefon<->laptop obejmuje też małe (d
 v480ob (2026-11-15): powiadomienie o zatrzymanym koncie drużyny 2 wysyła też drużyna 1 (pierwszy plan); nieudane powiadomienie o tokenie trafia do logu z powodem (wcześniej cicho).
 
 v480oc (2026-11-15): nowa rozmowa roli dostaje wcześniejsze wiadomości użytkownika z nagłówkiem, że przyszły przed tą rozmową i pytania mogły już mieć odpowiedź (gdy najnowsza ma >30 min); notka 'Dziękuję… Poprawiliśmy w programie' też odfiltrowana.
+
+v480od (2026-11-15): opis laptopa i środowiska przepisany od zera — same fakty (sprzęt, sudo, połowa w rywalizacji, synchronizacja do 1 MB, strażnik pamięci), bez list bibliotek, bez przykładów komend, bez "nie można / instaluje użytkownik". Lista bibliotek telefonu usunięta z ~/AEL_SRODOWISKO.txt. W kodzie: apt na laptopie dostaje -y sam (wcześniej bez terminala przerywał), pip na laptopie instaluje wprost (PIP_BREAK_SYSTEM_PACKAGES=1, DEBIAN_FRONTEND=noninteractive). Podpowiedzi o braku programu/biblioteki: tylko "możecie doinstalować" + jakie sudo.
