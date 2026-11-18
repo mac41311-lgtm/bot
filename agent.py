@@ -45012,6 +45012,193 @@ _odstep_przyrostu = [_BUDZ_PO_PRZYROSCIE_S]
 _ODSTEP_PRZYROSTU_MAX_S = 1440
 
 
+# v480on: uzytkownik 2026-11-18 ("DeepSeek sam decyduje, co ile ma byc
+# budzony"): odstep, po ktorym program odzywa sie do MAIN-a, gdy nic sie
+# nie dzieje (dotad stale _GLOS_CO_S = 1 min), MAIN ustawia sam w pliku
+# AGENT_RULES.json w folderze druzyny: {"budzenie_co_min": N, "powod": "…"}.
+# Program pilnuje granic 1–60 min (zeby zespol nie "zasnal" na dobe) i
+# kazda zmiane dopisuje jedna linia do DLA_UZYTKOWNIKA.md (skrzynka v480df
+# daje uzytkownikowi jedno powiadomienie). Bez pliku — jak dotad, 1 min.
+# Inne pola pliku program zostawia zespolowi. Koniec procesu, awaria
+# w logu, czesciowy wynik i wiadomosc od uzytkownika dalej budza od razu.
+_AGENT_RULES_NAZWA = "AGENT_RULES.json"
+_BUDZENIE_MIN_S = 60
+_BUDZENIE_MAX_S = 3600
+_AGENT_RULES_STAN = STATE_DIR / "agent_rules_widziane.json"
+_agent_rules = {"znak": None, "s": None, "uwaga": ""}
+_KLUCZE_BUDZENIA_MIN = ("budzenie_co_min", "budzenie_min", "interwal_min",
+                        "interwał_min", "interwal_tury_min", "interval_min",
+                        "wake_interval_min", "odstep_min", "odstęp_min")
+_KLUCZE_BUDZENIA_S = ("budzenie_co_s", "interwal_s", "interval_s", "wake_interval_s")
+_KLUCZE_POWODU = ("powod", "powód", "dlaczego", "reason", "uzasadnienie")
+
+
+def _plik_agent_rules():
+    """v480on: sciezka (od ~) pliku AGENT_RULES.json zespolu — tam, gdzie
+    zespol go trzyma, domyslnie w korzeniu folderu druzyny."""
+    dom = (("~/MAIN_" + _DRUZYNA + "/") if _DRUZYNA in ("1", "2") else "~/") + _AGENT_RULES_NAZWA
+    try:
+        return _plik_zespolu(_AGENT_RULES_NAZWA, dom)
+    except Exception:
+        return dom
+
+
+def _min_tekst(s):
+    m = int(round((s or _GLOS_CO_S) / 60.0))
+    return str(max(1, m)) + " min"
+
+
+def _odczytaj_agent_rules(sciezka):
+    """v480on: (sekundy albo None, powod, uwaga). None = brak waznej
+    wartosci; uwaga mowi, co jest nie tak i jak to poprawic."""
+    p = Path(os.path.expanduser(sciezka))
+    jak = (" Plik to obiekt JSON z polem budzenie_co_min (liczba minut od 1 do 60).")
+    try:
+        tekst = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return None, "", "Programowi nie udało się odczytać " + sciezka + " (" + short(str(e), 120) + ")."
+    try:
+        d = json.loads(tekst)
+    except Exception as e:
+        return None, "", ("Plik " + sciezka + " nie jest poprawnym JSON-em (" + short(str(e), 120)
+                          + "), więc program go nie użył." + jak)
+    if not isinstance(d, dict):
+        return None, "", "Plik " + sciezka + " nie jest obiektem JSON {…}, więc program go nie użył." + jak
+    powod = ""
+    for k in _KLUCZE_POWODU:
+        if str(d.get(k) or "").strip():
+            powod = " ".join(str(d.get(k)).split())
+            break
+    wart, mnoznik, klucz = None, 60.0, None
+    for k in _KLUCZE_BUDZENIA_MIN + _KLUCZE_BUDZENIA_S:
+        if k in d:
+            wart, klucz = d.get(k), k
+            mnoznik = 1.0 if k in _KLUCZE_BUDZENIA_S else 60.0
+            break
+    if klucz is None:
+        # pole z budzeniem moze lezec poziom nizej ({"budzenie": {"co_min": 15}})
+        for k, v in d.items():
+            if isinstance(v, dict):
+                for k2 in ("co_min", "min", "minuty"):
+                    if k2 in v and any(s in str(k).lower() for s in ("budz", "interw", "interval", "wake")):
+                        wart, klucz = v.get(k2), str(k) + "." + k2
+                        break
+            if klucz:
+                break
+    if klucz is None:
+        return None, powod, ("W " + sciezka + " nie ma pola budzenie_co_min, więc odstęp budzenia "
+                             "się nie zmienił." + jak)
+    try:
+        s = float(str(wart).replace(",", ".").strip()) * mnoznik
+        if s != s or s in (float("inf"), float("-inf")):
+            raise ValueError
+    except Exception:
+        return None, powod, ("Pole " + klucz + " w " + sciezka + " nie jest liczbą („"
+                             + short(str(wart), 40) + "”), więc odstęp budzenia się nie zmienił." + jak)
+    przyjete = int(min(_BUDZENIE_MAX_S, max(_BUDZENIE_MIN_S, round(s))))
+    uwaga = ""
+    if abs(przyjete - s) >= 1:
+        uwaga = ("W " + sciezka + " jest " + klucz + " = " + short(str(wart), 20)
+                 + "; odstęp budzenia może mieć od 1 do 60 min, więc program przyjął "
+                 + _min_tekst(przyjete) + ".")
+    return przyjete, powod, uwaga
+
+
+def _odstep_budzenia():
+    """v480on: co ile sekund program odzywa sie do MAIN-a, gdy nic sie nie
+    dzieje — z AGENT_RULES.json, a bez pliku _GLOS_CO_S. Czyta plik tylko
+    po zmianie; zmiane wartosci raz dopisuje do DLA_UZYTKOWNIKA.md."""
+    try:
+        sciezka = _plik_agent_rules()
+        p = Path(os.path.expanduser(sciezka))
+        try:
+            st = p.stat()
+            znak = (str(p), st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            znak = (str(p), None, None)
+        if znak == _agent_rules["znak"]:
+            return _agent_rules["s"] or _GLOS_CO_S
+        _agent_rules["znak"] = znak
+        powod = ""
+        if znak[1] is None:
+            s = None
+        else:
+            s, powod, uwaga = _odczytaj_agent_rules(sciezka)
+            if uwaga:
+                _agent_rules["uwaga"] = uwaga
+                log("MAIN", uwaga)
+            if s is None:
+                # zly plik — zostaje poprzedni odstep
+                return _agent_rules["s"] or _GLOS_CO_S
+        _agent_rules["s"] = s
+        stan = read_json(_AGENT_RULES_STAN, {})
+        if not isinstance(stan, dict):
+            stan = {}
+        if "s" not in stan:
+            # pierwsze uruchomienie z ta wersja: bez pliku nic do ogloszenia
+            stan["s"] = None
+        if stan.get("s") != s and (stan.get("s") or _GLOS_CO_S) == (s or _GLOS_CO_S):
+            # ta sama liczba minut (plik z 1 min zamiast braku pliku)
+            stan["s"] = s
+            write_json(_AGENT_RULES_STAN, stan)
+        if stan.get("s") != s:
+            byl = stan.get("s")
+            linia = (
+                "- " + datetime.now().strftime("%d.%m %H:%M") + " (program) Odstęp, po którym "
+                "program odzywa się do MAIN-a, gdy nic się nie dzieje: "
+                + _min_tekst(byl) + " → " + _min_tekst(s)
+                + (" (plik " + sciezka + ")" if s is not None else
+                   " (plik " + sciezka + " usunięty — wartość domyślna)")
+                + ((". Powód: " + short(powod, 300)) if powod else "") + "."
+            )
+            log("MAIN", linia[2:])
+            try:
+                cel = Path(os.path.expanduser(_plik_dla_uzytkownika()))
+                cel.parent.mkdir(parents=True, exist_ok=True)
+                with open(cel, "a", encoding="utf-8") as f:
+                    f.write(("\n" if cel.exists() and cel.stat().st_size else "") + linia + "\n")
+            except Exception as e:
+                log("MAIN", "Nie dopisałem zmiany odstępu budzenia do pliku dla użytkownika: " + str(e))
+            stan["s"] = s
+            write_json(_AGENT_RULES_STAN, stan)
+        return s or _GLOS_CO_S
+    except Exception as e:
+        log("MAIN", "Nie odczytałem odstępu budzenia: " + str(e))
+        return _agent_rules["s"] or _GLOS_CO_S
+
+
+def _uwaga_agent_rules():
+    """v480on: raz — co bylo nie tak z AGENT_RULES.json (do wyniku RUN)."""
+    _odstep_budzenia()
+    u, _agent_rules["uwaga"] = _agent_rules["uwaga"], ""
+    return u
+
+
+# v480on: awaria w logu procesu bez procentow budzi od razu (dotad tylko
+# procesy z procentem; reszta czekala na przyrost po 3–24 min). Wezej niz
+# _BLAD_W_LOGU_RE, bo logi treningu maja linie typu "val error 0.31".
+_AWARIA_W_LOGU_RE = re.compile(
+    r"(?i)(\btraceback \(most recent call last\)|\bfatal\b|\bsegmentation fault\b|"
+    r"\bkilled\b|\bout of memory\b|\bno space left\b|^\s*\w*(?:error|exception)\s*:)")
+
+
+def _awarie_w_logu(plik):
+    try:
+        _, linie = _ogon_logu(os.path.expanduser(str(plik).replace("$HOME", "~")))
+        return {l for l in linie if _AWARIA_W_LOGU_RE.search(l)}
+    except Exception:
+        return set()
+
+
+def _od_uzytkownika_czeka():
+    """v480on: uzytkownik zostawil odpowiedz w skrzynce (OD_UZYTKOWNIKA.txt)."""
+    try:
+        return (Path(os.path.expanduser(_plik_od_uzytkownika())).is_file()
+                or (PRZEBIEG_NA_TELEFONIE / "OD_UZYTKOWNIKA.txt").is_file())
+    except Exception:
+        return False
+
+
 def _procent_z_logu(plik, komenda=None, cwd=None, start=None):
     """v480gz: procent postepu procesu z jego logu (None, gdy nie wiadomo)."""
     try:
@@ -45175,10 +45362,42 @@ def _bezczynnie_czekaj():
     co 5 s na telefonie."""
     zywe = _w_tle_zywe()
     procesy = _zywe_w_tle()
+    # v480on: odstep z AGENT_RULES.json (bez pliku _GLOS_CO_S, 1 min)
+    _glos = _odstep_budzenia()
     if not zywe and not procesy:
+        # v480on: w tle nic nie liczy, a MAIN nic nowego nie zrobil — dotad
+        # pytany od razu znowu. Gdy sam ustawil odstep budzenia, program
+        # czeka tyle (wczesniej: wiadomosc od uzytkownika, zmiana procesow
+        # druzyny na laptopie); bez pliku jak dotad.
+        if _agent_rules["s"] is None:
+            return
+        t0 = time.time()
+        try:
+            _lap0 = sorted(n for n, _t in (_laptop_moje_procesy() or []))
+        except Exception:
+            _lap0 = None
+        log("MAIN", "MAIN nic nowego nie zrobił, a w tle nic nie liczy — program "
+            "odezwie się do niego o " + _hhmm(t0 + _glos) + " (odstęp " + _min_tekst(_glos)
+            + " z " + _plik_agent_rules() + ") albo wcześniej, gdy przyjdzie wiadomość "
+            "od użytkownika.")
+        _nast_lap = t0 + 60
+        while time.time() < t0 + _glos:
+            if _od_uzytkownika_czeka():
+                log("MAIN", "Wiadomość od użytkownika — MAIN dostaje głos od razu.")
+                return
+            if _lap0 is not None and time.time() >= _nast_lap:
+                _nast_lap += 60
+                try:
+                    if sorted(n for n, _t in (_laptop_moje_procesy() or [])) != _lap0:
+                        log("MAIN", "Procesy drużyny na laptopie się zmieniły — MAIN dostaje głos.")
+                        return
+                except Exception:
+                    pass
+            time.sleep(5)
         return
     czekania = [r for r in zywe if r["rodzaj"] == "czekanie"]
     pliki = set()
+    _kom_pliku = {}
     for r in czekania:
         pliki |= _pliki_czekania(r["komenda"], z_procesami=False)
     # v480fd: dlugi proces w tle bez czekania — budzimy tez przyrostem w
@@ -45190,6 +45409,7 @@ def _bezczynnie_czekaj():
                 _lp, _ = _log_procesu_w_tle(_id)
                 if _lp:
                     pliki.add(_lp)
+                    _kom_pliku[_lp] = _kom
                 try:
                     _cwd = os.readlink("/proc/" + str(_id) + "/cwd")
                 except Exception:
@@ -45199,6 +45419,7 @@ def _bezczynnie_czekaj():
                 _pz = _plik_z_przekierowania(_kom)
             if _pz:
                 pliki.add(_pz)
+                _kom_pliku[_pz] = _kom
         except Exception:
             pass
     # v480gz: procesy z postepem w procentach (log + "z ilu") — MAIN-a
@@ -45212,7 +45433,7 @@ def _bezczynnie_czekaj():
         return _czekanie_na_postep(r, sledzone)
 
     t0 = time.time()
-    koniec = t0 + (3600 if sledzone else 1800)
+    koniec = t0 + max(3600 if sledzone else 1800, _glos)
     for r in zywe:
         if _trzymane(r):
             r["trzymane"] = True
@@ -45226,8 +45447,11 @@ def _bezczynnie_czekaj():
     # v480hb: glos co _GLOS_CO_S (uzytkownik wybral 1 min) — MAIN dostaje
     # wtedy jedna linie (postep + zespol), nie pelny stan.
     _koniec_pelny = koniec
-    koniec = min(koniec, t0 + _GLOS_CO_S)
+    koniec = min(koniec, t0 + _glos)
     rozmiary0 = _rozmiary_plikow(_do_przyrostu)
+    # v480on: awarie juz widoczne w logach przed czekaniem nie budza
+    awarie0 = {p: _awarie_w_logu(p) for p in _do_przyrostu}
+    nastepna_awaria = t0 + 15
     log("MAIN", "MAIN nic nowego nie zrobił — program czeka, aż coś się "
         "wydarzy w tle (najdłużej do " + _hhmm(koniec) + "), zamiast pytać "
         "go od razu znowu.")
@@ -45258,6 +45482,19 @@ def _bezczynnie_czekaj():
                     break
             if powod in ("blad", "kamien"):
                 break
+        if _do_przyrostu and time.time() >= nastepna_awaria:
+            nastepna_awaria += 15
+            for _p in _do_przyrostu:
+                if _awarie_w_logu(_p) - awarie0.get(_p, set()):
+                    powod = "blad"
+                    kamien_tekst = (_nazwa_w_tle(_kom_pliku[_p]) if _kom_pliku.get(_p)
+                                    else _sciezka_od_domu(os.path.expanduser(_p)))
+                    break
+            if powod == "blad":
+                break
+        if _od_uzytkownika_czeka():
+            powod = "uzytkownik"
+            break
         if _do_przyrostu and time.time() - t0 >= _odstep_przyrostu[0]:
             if _rozmiary_plikow(_do_przyrostu) != rozmiary0:
                 powod = "przybylo"
@@ -45297,6 +45534,7 @@ def _bezczynnie_czekaj():
         "blad": "w logu " + kamien_tekst + " pojawił się błąd",
         "koniec_tla": "coś z tego, co leciało w tle, się skończyło",
         "koniec_procesu": "proces w tle się skończył",
+        "uzytkownik": "przyszła wiadomość od użytkownika",
         "przybylo": "proces dalej działa, ale w jego logach przybyły nowe wyniki",
         "czas": ("minął czas czekań z tła" if czekania else
                  "minęło " + czekal + " bez zmian, a proces w tle dalej działa "
@@ -45343,7 +45581,7 @@ def _bezczynnie_czekaj():
     # v480fc: przy koncu czekania/procesu karta wyniku (W TLE SKOŃCZONE /
     # "Proces w tle ... skończył") i tak przychodzi w tej samej wiadomosci
     # — osobna karta POSTĘP tylko to zapowiadala (bieg 2026-10-25 08:23).
-    if powod in ("koniec_tla", "koniec_procesu"):
+    if powod in ("koniec_tla", "koniec_procesu", "uzytkownik"):
         return
     if powod in ("kamien", "blad"):
         # v480gz: stan procesu (procent, koncowka) jest w "Dalej w tle",
@@ -46150,6 +46388,15 @@ def _wykonaj_akcje_maina(decision, step):
             break
 
     globals()["_wykonuje_main"] = False
+
+    # v480on: AGENT_RULES.json zapisany z bledem albo poza 1–60 min — raz,
+    # co jest nie tak i co program przyjal
+    try:
+        _uw_rules = _uwaga_agent_rules()
+        if _uw_rules:
+            warnings.append(_uw_rules)
+    except Exception:
+        pass
 
     # v480fc: patrz _ostatni_run_maina
     _ostatni_run_maina["komendy"] = [
@@ -57249,6 +57496,14 @@ def main_decide(
         # sprawdzal eval_tfm. O zespole mowi teraz tylko zdanie przy starcie
         # tla, przy wyniku i pytanie "Czemu..." wyzej.
         _wolno_c = False
+        # v480on: bez niczego w tle "wynik przyjdzie sam" bylo nieprawda
+        try:
+            _nic_w_tle = not (_w_tle_zywe() or _zywe_w_tle()
+                              or (_laptop_moje_wszystkie.get("procesy") or {}))
+        except Exception:
+            _nic_w_tle = False
+        if _nic_w_tle:
+            return deepseek("MAIN", "Nic nowego; w tle nic nie liczy.")
         if _glos_postep_byl[0]:
             return deepseek("MAIN", "Nic nowego. Wynik przyjdzie sam" + (
                 "; w tym czasie możesz zapytać zespół (ASK z imieniem)." if _wolno_c else "."))
@@ -59628,13 +59883,23 @@ _JAK_TO_DZIALA = (
     "[nazwa — liczba znaków]; program położy go 1:1, gdy w TASK podasz "
     "write_engineer_code_to ze ścieżką pliku albo katalogu. Kod, który "
     "już jest na dysku, widzisz jako ścieżkę. Doinstalować można "
-    "wszystko — Ty, zespół i wykonawca. Uruchomienie dłuższe niż 2 "
-    "minuty — Twoje, zespołu albo Gemini — samo przechodzi w tło; "
-    "program pokazuje, ile już trwa, postęp z logu i ile zostało, a "
-    "wynik przynosi sam, gdy proces się skończy albo w logu pojawi się "
-    "błąd. Przy postępie w procentach dostajesz stan przy 25, 50 i 75%, "
-    "bez procentów — nowe linie logu po 3, 6, 12 i 24 minutach; co "
-    "minutę jedną krótką linię o stanie.\n\n"
+    "wszystko — Ty, zespół i wykonawca.\n\n"
+    # v480on: osobny akapit o tle i budzeniu, napisany w calosci
+    # (uzytkownik 2026-11-18: MAIN sam ustawia, co ile jest budzony).
+    "Tło i budzenie. Uruchomienie dłuższe niż 2 minuty — Twoje, zespołu "
+    "albo Gemini — samo przechodzi w tło; program pokazuje, ile już trwa, "
+    "postęp z logu i ile zostało. Gdy w kroku nie zrobisz nic nowego, "
+    "program czeka i sam się do Ciebie odzywa: od razu, gdy coś w tle się "
+    "skończy, w logu pojawi się błąd albo przyjdzie wiadomość od "
+    "użytkownika; przy postępie w procentach — przy 25, 50 i 75%; bez "
+    "procentów — gdy w logu przybędzie wyników, po 3, 6, 12 i 24 minutach. "
+    "Poza tym odzywa się krótką linią o stanie co tyle minut, ile stoi "
+    "w polu budzenie_co_min pliku "
+    + (("~/MAIN_" + _DRUZYNA + "/") if _DRUZYNA in ("1", "2") else "~/")
+    + "AGENT_RULES.json (od 1 do 60; bez pliku co minutę). Ten plik "
+    "piszecie i zmieniacie Wy; każdą zmianę odstępu program dopisuje "
+    "jedną linią do pliku dla użytkownika, razem z polem „powod” z tego "
+    "pliku. Pozostałe pola pliku są dla Was.\n\n"
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
     "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
