@@ -9032,7 +9032,8 @@ def _deepseek_raw_post_with_action(session, prompt, action):
         "chat_session_id": session.chat_session_id,
         "parent_message_id": session.parent_message_id,
         "prompt": prompt,
-        "ref_file_ids": [],
+        # v480oo: pliki z linii ZAŁĄCZ: (patrz _dolacz_zalaczniki)
+        "ref_file_ids": list(getattr(session, "_ael_ref_file_ids", None) or []),
         "thinking_enabled": session.thinking_enabled,
         "search_enabled": session.search_enabled,
         "action": action,
@@ -10402,6 +10403,302 @@ def _deepseek_send_experimental(name, session, prompt, action=None):
 
 
 # ============================================================
+# v480oo: ZAŁĄCZNIKI — plik z dysku w wiadomości do DeepSeeka
+# ============================================================
+#
+# Uzytkownik (2026-11-19): role maja moc dolaczyc obraz (np. klatke, ktora
+# zespol wyrenderowal) do wiadomosci, tak jak zalacznik na stronie
+# chat.deepseek.com. Sprawdzil recznie: strona widzi obrazy (opisala zdjecie
+# USG 3D i kierunek ruchu miedzy dwiema klatkami), przyjmuje PDF, DOC, XLSX,
+# PPT, obrazy, tekst i kod, odrzuca filmy.
+#
+# Linia "ZAŁĄCZ: <ścieżka>" w odpowiedzi roli -> program zapamietuje plik i
+# dolacza go do NASTEPNEJ wiadomosci tej roli: ta sama sesja HTTP i te same
+# naglowki co wiadomosci (model._get_headers, model.session), ten sam
+# rozwiazywacz proof-of-work (bez zmian w nim — inny jest tylko target_path,
+# tak jak robi to strona). Przebieg jak na stronie:
+#   POST /api/v0/file/upload_file (multipart, pole "file")
+#   GET  /api/v0/file/fetch_files?file_ids=<id>  az status SUCCESS
+#   /chat/completion z "ref_file_ids": [<id>].
+# Jeden upload na jedna linie ZAŁĄCZ:, nic nie idzie samo. Rola (poza
+# MAIN-em, ktory i tak dostaje kolejny krok) dostaje plik od razu w jednej
+# wiadomosci, jak wynik PODGLĄD:. Kazdy blad mowi, co poszlo nie tak i jak
+# to poprawic.
+_ZALACZ_RE = re.compile(
+    r"ZAŁĄCZ\**:\**[ \t]*(?:`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'"
+    r"|([^\s\"'`,;)\]}]+))"
+)
+_ZALACZNIKI_ROLI = {}   # rola -> lista {"sciezka", "plik", "blad", "id"}
+_ZALACZNIK_GOTOWY_S = 120   # ile czekamy, az DeepSeek przeczyta plik
+_ZALACZNIK_FORMATY = (
+    "Strona DeepSeeka przyjmuje obrazy, PDF, dokumenty (DOC/DOCX), arkusze "
+    "(XLSX), prezentacje (PPT), tekst i kod; filmów nie przyjmuje."
+)
+
+
+def _folder_zalacznikow():
+    """Od czego liczy sie sciezka wzgledna."""
+    if _DRUZYNA in ("1", "2"):
+        return _folder_druzyny(_DRUZYNA)
+    return HOME
+
+
+def _pokaz_sciezke(p):
+    try:
+        rel = str(Path(p).relative_to(HOME))
+        return "~" if rel in ("", ".") else "~/" + rel
+    except Exception:
+        return str(p)
+
+
+def _zalacznik_z_linii(surowa):
+    """Sciezka z linii ZAŁĄCZ: -> wpis (z bledem, gdy pliku nie da sie wziac)."""
+    tekst = str(surowa or "").strip().rstrip(".:")
+    wpis = {"sciezka": tekst, "plik": None, "blad": None, "id": None}
+    if not tekst:
+        wpis["blad"] = ("po „ZAŁĄCZ:” nie było ścieżki. Napisz linię "
+                        "ZAŁĄCZ: z pełną ścieżką pliku.")
+        return wpis
+    try:
+        p = _resolve_home_relative_path(tekst)
+        if not p.is_absolute():
+            p = _folder_zalacznikow() / p
+    except Exception as e:
+        wpis["blad"] = ("nie umiem odczytać tej ścieżki (" + str(e) + "). "
+                        "Napisz linię ZAŁĄCZ: z pełną ścieżką pliku.")
+        return wpis
+    if _DRUZYNA in ("1", "2") and _sciezka_rywala(str(p)):
+        wpis["blad"] = ("to plik drugiej drużyny, a jej pliki są poza "
+                        "zasięgiem. Załącz plik z ~/MAIN_" + _DRUZYNA + ".")
+        return wpis
+    if not p.exists():
+        wpis["blad"] = ("nie ma go na dysku telefonu (sprawdziłem "
+                        + _pokaz_sciezke(p) + "; ścieżka względna liczy się od "
+                        + _pokaz_sciezke(_folder_zalacznikow()) + "). Sprawdź, "
+                        "gdzie leży, i napisz ZAŁĄCZ: z poprawną ścieżką.")
+        return wpis
+    if p.is_dir():
+        wpis["blad"] = ("to katalog, a załączyć można plik. Napisz ZAŁĄCZ: "
+                        "ze ścieżką konkretnego pliku (jedna linia na plik).")
+        return wpis
+    try:
+        rozmiar = p.stat().st_size
+    except Exception as e:
+        wpis["blad"] = ("nie da się go odczytać (" + str(e) + "). Sprawdź "
+                        "uprawnienia pliku i napisz ZAŁĄCZ: jeszcze raz.")
+        return wpis
+    if rozmiar <= 0:
+        wpis["blad"] = ("plik jest pusty (0 bajtów). Zapisz go jeszcze raz "
+                        "i napisz ZAŁĄCZ: ponownie.")
+        return wpis
+    wpis["plik"] = p
+    wpis["sciezka"] = _pokaz_sciezke(p)
+    return wpis
+
+
+def _zapamietaj_zalaczniki(name, odp):
+    """Linie ZAŁĄCZ: z odpowiedzi roli -> pliki do jej nastepnej wiadomosci.
+    Zwraca, ile nowych wpisow doszlo."""
+    try:
+        lista = _ZALACZNIKI_ROLI.setdefault(str(name), [])
+        znane = {w["sciezka"] for w in lista}
+        nowe = 0
+        for m in _ZALACZ_RE.finditer(str(odp or "")):
+            surowa = next((g for g in m.groups() if g), "")
+            # gole slowo bez "/" i bez "." to zdanie o ZAŁĄCZ:, nie sciezka
+            if m.group(4) and "/" not in surowa and "." not in surowa.rstrip("."):
+                continue
+            wpis = _zalacznik_z_linii(surowa)
+            if wpis["sciezka"] in znane:
+                continue
+            znane.add(wpis["sciezka"])
+            lista.append(wpis)
+            nowe += 1
+            log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name))
+                + ": ZAŁĄCZ " + wpis["sciezka"]
+                + ((" — " + wpis["blad"]) if wpis["blad"] else ""))
+        if not lista:
+            _ZALACZNIKI_ROLI.pop(str(name), None)
+        return nowe
+    except Exception as e:
+        log("PROGRAM", "Załączniki " + str(name) + ": " + str(e))
+        return 0
+
+
+def _biz_z_odpowiedzi(resp):
+    """(biz_data, kod_bledu_albo_None, komunikat) z odpowiedzi DeepSeeka."""
+    try:
+        cialo = resp.json()
+    except Exception:
+        return {}, "nie-JSON", short(str(getattr(resp, "text", "") or ""), 300)
+    if not isinstance(cialo, dict):
+        return {}, "nie-JSON", short(str(cialo), 300)
+    dane = cialo.get("data") if isinstance(cialo.get("data"), dict) else {}
+    biz = dane.get("biz_data")
+    kod = cialo.get("code")
+    biz_kod = dane.get("biz_code")
+    komunikat = str(dane.get("biz_msg") or cialo.get("msg") or "")
+    blad = None
+    if kod not in (None, 0, "0"):
+        blad = "code " + str(kod)
+    elif biz_kod not in (None, 0, "0"):
+        blad = "biz_code " + str(biz_kod)
+    return (biz if isinstance(biz, dict) else {}), blad, komunikat
+
+
+def _wyslij_plik_do_deepseeka(name, session, wpis):
+    """Jeden plik na serwer DeepSeeka; ustawia wpis["id"] albo wpis["blad"].
+    Przeciazenie i odmowa dostepu ida w gore (tak jak przy wiadomosci)."""
+    from opendeep.config import config as _ods_config
+    from opendeep.pow import DeepSeekPOW
+    import mimetypes
+
+    model = session.model
+    p = Path(wpis["plik"])
+    sciezka_api = "/file/upload_file"
+    try:
+        dane = p.read_bytes()
+    except Exception as e:
+        wpis["blad"] = ("nie da się go odczytać (" + str(e) + "). Sprawdź "
+                        "plik i napisz ZAŁĄCZ: jeszcze raz.")
+        return
+    typ = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+
+    headers = dict(model._get_headers())
+    headers.pop("Content-Type", None)   # multipart ustawia go sam
+    try:
+        pow_resp = model.session.post(
+            _ods_config.base_url + "/chat/create_pow_challenge",
+            headers=model._get_headers(),
+            json={"target_path": "/api/v0" + sciezka_api},
+            timeout=_limit_dla_sesji(model.session),
+        )
+        if pow_resp.ok:
+            ch = (pow_resp.json().get("data", {}) or {}).get("biz_data", {}) or {}
+            ch = ch.get("challenge")
+            if ch:
+                headers["x-ds-pow-response"] = DeepSeekPOW().solve_challenge(ch)
+    except Exception:
+        pass
+
+    _ruch("plik", name, plik=p.name, bajtow=len(dane), typ=typ)
+    try:
+        if type(model.session).__module__.startswith("curl_cffi"):
+            from curl_cffi import CurlMime
+            mp = CurlMime()
+            mp.addpart(name="file", content_type=typ, filename=p.name, data=dane)
+            resp = model.session.post(
+                _ods_config.base_url + sciezka_api, headers=headers,
+                multipart=mp, timeout=_limit_dla_sesji(model.session))
+        else:
+            resp = model.session.post(
+                _ods_config.base_url + sciezka_api, headers=headers,
+                files={"file": (p.name, dane, typ)},
+                timeout=_limit_dla_sesji(model.session))
+    except (ImportError, AttributeError, TypeError) as e:
+        wpis["blad"] = ("program nie umie go wysłać tą wersją biblioteki "
+                        "HTTP (" + type(e).__name__ + ": " + str(e) + "). "
+                        "Napraw to może tylko zmiana programu; wiadomość "
+                        "poszła bez pliku.")
+        return
+    except Exception as e:
+        # wiadomosc jeszcze nie wyszla — ponowienie jest bezpieczne
+        raise _BladWysylki(type(e).__name__ + ": " + str(e), "nie_wyslano") from None
+
+    tresc = short(str(getattr(resp, "text", "") or ""), 400)
+    if resp.status_code in (401, 403, 429) or _wyglada_na_przeciazenie(tresc) \
+            or _odmowa_dostepu(tresc):
+        raise RuntimeError("HTTP " + str(resp.status_code) + " (wysyłanie pliku "
+                           + p.name + ") | " + tresc)
+    biz, blad, komunikat = _biz_z_odpowiedzi(resp)
+    if not resp.ok or blad:
+        wpis["blad"] = ("serwer DeepSeeka go nie przyjął (HTTP "
+                        + str(resp.status_code) + (", " + blad if blad else "")
+                        + (": " + komunikat if komunikat else "") + "). "
+                        + _ZALACZNIK_FORMATY + " Możesz załączyć plik w "
+                        "innym formacie albo mniejszy.")
+        return
+    fid = biz.get("id") or biz.get("file_id") or (biz.get("file") or {}).get("id")
+    if not fid:
+        wpis["blad"] = ("serwer przyjął plik, ale nie oddał jego numeru ("
+                        + tresc + "). Napisz ZAŁĄCZ: jeszcze raz.")
+        return
+
+    # DeepSeek czyta plik chwile — pytamy o stan coraz rzadziej
+    koniec = time.time() + _ZALACZNIK_GOTOWY_S
+    odstep = 1.0
+    stan = str(biz.get("status") or "").upper()
+    while stan != "SUCCESS":
+        if re.search(r"FAIL|ERROR|REJECT|UNSUPPORT", stan):
+            wpis["blad"] = ("DeepSeek nie przeczytał pliku (stan " + stan
+                            + (", " + str(biz.get("error_code")) if biz.get("error_code") else "")
+                            + "). " + _ZALACZNIK_FORMATY
+                            + " Możesz załączyć go w innym formacie.")
+            return
+        if time.time() > koniec:
+            wpis["blad"] = ("DeepSeek nie skończył czytać pliku w "
+                            + str(_ZALACZNIK_GOTOWY_S // 60) + " min (stan "
+                            + (stan or "nieznany") + "). Napisz ZAŁĄCZ: "
+                            "jeszcze raz; mniejszy plik czyta się szybciej.")
+            return
+        time.sleep(odstep)
+        odstep = min(odstep * 1.6, 8.0)
+        try:
+            r = model.session.get(
+                _ods_config.base_url + "/file/fetch_files",
+                headers=model._get_headers(), params={"file_ids": fid},
+                timeout=_limit_dla_sesji(model.session))
+            b, _bl, _km = _biz_z_odpowiedzi(r)
+            pliki = b.get("files") if isinstance(b.get("files"), list) else [b]
+            for f in pliki:
+                if isinstance(f, dict) and str(f.get("id") or f.get("file_id") or "") == str(fid):
+                    biz = f
+                    stan = str(f.get("status") or "").upper()
+                    break
+        except Exception:
+            pass   # nastepne pytanie o stan albo koniec czasu
+    wpis["id"] = str(fid)
+    log("DEEPSEEK", _ROLE_DISPLAY_NAME.get(name, str(name)) + ": plik "
+        + wpis["sciezka"] + " jest na serwerze DeepSeeka (" + str(len(dane))
+        + " B), idzie z wiadomością.")
+
+
+def _dolacz_zalaczniki(name, session, tekst):
+    """Przed wyslaniem: pliki z linii ZAŁĄCZ: tej roli -> ref_file_ids sesji
+    i jedna linia o kazdym pliku na poczatku wiadomosci."""
+    try:
+        session._ael_ref_file_ids = []
+    except Exception:
+        pass
+    lista = _ZALACZNIKI_ROLI.get(str(name)) or []
+    if not lista:
+        return tekst
+    for wpis in lista:
+        if wpis["id"] or wpis["blad"]:
+            continue
+        _wyslij_plik_do_deepseeka(name, session, wpis)
+    ids = [w["id"] for w in lista if w["id"]]
+    linie = []
+    for w in lista:
+        if w["id"]:
+            linie.append("W załączniku tej wiadomości: " + w["sciezka"] + ".")
+        else:
+            linie.append("Pliku " + w["sciezka"] + " nie załączyłem: " + str(w["blad"]))
+    session._ael_ref_file_ids = ids
+    naglowek = "\n".join(linie)
+    return naglowek + (("\n\n" + tekst) if str(tekst or "").strip() else "")
+
+
+def _zalaczniki_poszly(name, session):
+    """Po udanym wyslaniu wiadomosci z plikami."""
+    _ZALACZNIKI_ROLI.pop(str(name), None)
+    try:
+        session._ael_ref_file_ids = []
+    except Exception:
+        pass
+
+
+# ============================================================
 # URWALO SIE — PYTHON PYTA O DALSZY CIAG (v207)
 # ============================================================
 #
@@ -10780,6 +11077,19 @@ def deepseek(name, message):
             odp = _podglad_dla_roli(name, odp, message)
         except Exception as e:
             log("PROGRAM", "Podgląd dla " + str(name) + " nie wyszedł: " + str(e))
+    # v480oo: linia ZAŁĄCZ: — plik idzie z nastepna wiadomoscia tej roli.
+    # MAIN dostaje ja z kolejnym krokiem; reszta od razu, jedna wiadomoscia
+    # w tej samej rozmowie (jak wynik PODGLĄD:), i odpowiada, patrzac na plik.
+    # Nowe ZAŁĄCZ: w tej odpowiedzi czeka na kolejna wiadomosc (bez petli).
+    if name not in ("ARBITER",) and _zapamietaj_zalaczniki(name, odp) and name != "MAIN":
+        try:
+            with _KOLEJKA_KONTA:
+                odp2 = _deepseek_jedna_rozmowa(name, "")
+            if str(odp2 or "").strip() and not str(odp2).startswith("DEEPSEEK ERROR"):
+                odp = str(odp or "").rstrip() + "\n\n" + str(odp2).strip()
+                _zapamietaj_zalaczniki(name, odp2)
+        except Exception as e:
+            log("PROGRAM", "Załącznik dla " + str(name) + " nie poszedł: " + str(e))
     _ostatnia_odp_roli[name] = odp
     return odp
 
@@ -12259,7 +12569,8 @@ def _deepseek_jedna_rozmowa(name, message):
                 # ostatnia znana wypowiedz, tak samo jak wtedy, gdy
                 # rola nie jest w tym kroku pytana. W nastepnym kroku
                 # bedzie pytana normalnie.
-                if not _tresc_wyslana.strip():
+                # v480oo: sam plik z ZAŁĄCZ: to tez tresc tej wiadomosci
+                if not _tresc_wyslana.strip() and not _ZALACZNIKI_ROLI.get(str(name)):
 
                     log(
                         "DEEPSEEK",
@@ -12292,6 +12603,9 @@ def _deepseek_jedna_rozmowa(name, message):
                 # wspolnym tempie telefonu jak kilka zwyklych.
                 _deepseek_pace(name, len(_tresc_wyslana))
                 _activate_account_for_role(name)
+                # v480oo: pliki z linii ZAŁĄCZ: — na serwer tym samym kontem
+                # i ta sama sesja, linia o kazdym na poczatku wiadomosci
+                _tresc_wyslana = _dolacz_zalaczniki(name, session, _tresc_wyslana)
 
                 zapisz_zdarzenie(
                     "prompt",
@@ -12312,6 +12626,8 @@ def _deepseek_jedna_rozmowa(name, message):
                     session,
                     _tresc_wyslana
                 )
+                if getattr(session, "_ael_ref_file_ids", None) or _ZALACZNIKI_ROLI.get(str(name)):
+                    _zalaczniki_poszly(name, session)  # v480oo
 
                 # Eksperyment z v75 (przechwycenie statusu, który
                 # opendeep odrzuca) jest POTWIERDZONY setkami realnych
@@ -59900,14 +60216,24 @@ _JAK_TO_DZIALA = (
     "piszecie i zmieniacie Wy; każdą zmianę odstępu program dopisuje "
     "jedną linią do pliku dla użytkownika, razem z polem „powod” z tego "
     "pliku. Pozostałe pola pliku są dla Was.\n\n"
+    # v480oo: akapit "Co widać." przepisany w calosci (uzytkownik
+    # 2026-11-19) — MAIN moze sam obejrzec plik z dysku (ZAŁĄCZ:).
     "Co widać. Po wykonaniu dostajesz fakty z narzędzi: co wypisały, "
     "co się udało, co padło. Co jest na stronie, mówi chrome_inspect, "
-    "a co na ekranie telefonu — android_state; oba tekstem. Zrzut "
-    "ekranu (android_screenshot) to plik PNG, którego nikt z zespołu "
-    "nie ogląda; android_look pokazuje ekran Gemini i zwraca opis, "
-    "widoczny tekst i elementy z przybliżonymi współrzędnymi. Ekran "
-    "telefonu i Chrome zobaczysz po kroku, w którym ktoś coś na nich "
-    "robił.\n\n"
+    "a co na ekranie telefonu — android_state; oba tekstem. "
+    "android_look pokazuje ekran Gemini i zwraca opis, widoczny tekst i "
+    "elementy z przybliżonymi współrzędnymi. Ekran telefonu i Chrome "
+    "zobaczysz po kroku, w którym ktoś coś na nich robił. Plik z dysku "
+    "telefonu możesz obejrzeć sam: linia ZAŁĄCZ: ze ścieżką pliku w Twojej "
+    "odpowiedzi sprawia, że program dołącza ten plik do Twojej następnej "
+    "wiadomości, tak jak załącznik na stronie DeepSeeka, a na jej początku "
+    "pisze, co jest w załączniku. Jedna linia to jeden plik; ścieżka "
+    "względna liczy się od "
+    + (("~/MAIN_" + _DRUZYNA) if _DRUZYNA in ("1", "2") else "~")
+    + ". DeepSeek przyjmuje obrazy (także zrzut ekranu z android_screenshot), "
+    "PDF, dokumenty, arkusze, prezentacje, tekst i kod; filmów nie "
+    "przyjmuje. Osoby z zespołu mogą tak samo dołączyć plik do swojej "
+    "rozmowy.\n\n"
     "Użytkownik. Użytkownik chce, żeby program działał sam, i bieg na "
     "niego nie czeka. NEED_USER_LOGIN to prośba do niego o to, czego "
     "nikt z zespołu nie ma: zalogowanie się, dostęp do konta, hasło, "
