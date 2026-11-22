@@ -63670,7 +63670,15 @@ def _handle_need_user_login(decision):
         _jest_terminal = sys.stdin is not None and sys.stdin.isatty()
     except Exception:
         _jest_terminal = False
-    if not _jest_terminal:
+    # v480oq: z terminalem tez bez czekania. Bieg 2026-11-22 13:30
+    # (druzyna 1, rywalizacja): MAIN dal NEED_USER_LOGIN z adresem Facebooka
+    # ("opublikuj post z Twojego konta"), program stanal na Enterze w
+    # terminalu i druzyna 1 stala godzine na kroku 8 (druzyna 2 doszla z 7
+    # do 19); na ekranie ostatnia byla ocena Sedziego, wiec wygladalo, ze
+    # zatrzymal ja Sedzia. Zasada uzytkownika: bieg nie czeka na
+    # uzytkownika — prosba idzie do DLA_UZYTKOWNIKA.md (powiadomienie),
+    # odpowiedz przez OD_UZYTKOWNIKA.txt.
+    if True:
         try:
             _dla = Path(os.path.expanduser(_plik_dla_uzytkownika()))
             _dla.parent.mkdir(parents=True, exist_ok=True)
@@ -63688,14 +63696,13 @@ def _handle_need_user_login(decision):
             _gdzie = "(nie udało się zapisać: " + str(_e) + ")"
         log(
             "MAIN",
-            "Ta drużyna działa w tle, bez terminala — prośba do użytkownika "
-            "zapisana w " + _gdzie + ", bieg idzie dalej."
+            "Prośba do użytkownika (" + (login_url or "bez adresu")
+            + ") zapisana w " + _gdzie + " — bieg nie czeka, zespół idzie dalej."
         )
         return {
             "status": "PYTANIE_ZOSTAWIONE_UZYTKOWNIKOWI",
             "message": (
-                "Ta drużyna działa w tle, bez terminala, więc nikt nie "
-                "odpowie tu od razu. Prośba jest zapisana w " + _gdzie
+                "Prośba do użytkownika jest zapisana w " + _gdzie
                 + "; użytkownik dostał powiadomienie i zrobi to, kiedy "
                 "zechce. Bieg nie czeka — jeśli odpisze, odpowiedź "
                 "przyjdzie jako „Użytkownik: …”."
