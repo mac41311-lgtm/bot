@@ -4133,6 +4133,9 @@ _resume_unverified = set()
 # cały zbiór — patrz _set_current_goal().
 _current_goal_text = ""
 _goal_briefed = set()
+# v480op: cel (i opis rywalizacji) liczy sie jako dostarczony dopiero, gdy
+# na wiadomosc z nim przyszla prawdziwa odpowiedz — patrz _cel_doszedl().
+_cel_do_potwierdzenia = {}
 
 
 # v191: fakty, które zauważył SAM PYTHON (nie narzędzie Gemini) i
@@ -6151,7 +6154,15 @@ def _goal_briefing_for(name):
     if name in _ROLE_TYLKO_PYTANIE:
         return ""
 
-    _goal_briefed.add(name)
+    # v480op: rola NIE trafia tu jeszcze do _goal_briefed, a rozmowa nie
+    # jest zapisywana w cel_wyslany.json — dopiero po odpowiedzi na
+    # wiadomosc z celem (_cel_doszedl). Bieg 2026-11-22 11:58: nowy cel,
+    # MAIN dostal powitanie, wiadomosc z celem czekala na miejsce w tempie
+    # telefonu, a cel_wyslany.json juz mowil "wyslany". Uzytkownik zamknal
+    # program 12:12, o 12:13 rozmowa MAIN-a zostala wznowiona bez celu i
+    # MAIN przez 4 kroki szukal go po ~ (az znalazl w ~/agent_druzyna1).
+    # To samo przy ponownej probie tej samej wiadomosci (limit, blad
+    # serwera): druga proba szla juz bez celu.
 
     # v480aq: w rywalizacji do celu dochodzi raz opis rywalizacji —
     # takze rozmowie, ktora sam cel dostala juz wczesniej.
@@ -6189,15 +6200,14 @@ def _goal_briefing_for(name):
             and _wpis.get("cel") == _odcisk_celu
         ):
             if _rywal and _wpis.get("rywalizacja") != _odcisk_rywal:
-                _znala_stare = bool(_wpis.get("rywalizacja"))
-                _wpis["rywalizacja"] = _odcisk_rywal
-                _wyslane[name] = _wpis
-                write_json(_CEL_WYSLANY_FILE, _wyslane)
                 # v480dq: rozmowa znala juz poprzednie zasady — mowimy
                 # wprost, ze to zmiana i od kiedy obowiazuje.
                 # v480nn (uzytkownik): bez naglowka "zasady sie zmienily" —
                 # zmieniony tekst przychodzi jak zwykly opis, nie alarm.
+                _cel_do_potwierdzenia[name] = {
+                    "cel": _odcisk_celu, "rywalizacja": _odcisk_rywal}
                 return _rywal + "\n\n"
+            _goal_briefed.add(name)
             return ""
 
         # v480cs: bieg 2026-10-19 14:52 — rozmowa Sedziego dobila do
@@ -6228,10 +6238,8 @@ def _goal_briefing_for(name):
                     + "\n\n"
                 )
 
-        if _rozmowa:
-            _wyslane[name] = {"rozmowa": _rozmowa, "cel": _odcisk_celu,
-                              "rywalizacja": _odcisk_rywal}
-            write_json(_CEL_WYSLANY_FILE, _wyslane)
+        _cel_do_potwierdzenia[name] = {"cel": _odcisk_celu,
+                                       "rywalizacja": _odcisk_rywal}
     except Exception:
         pass
 
@@ -6242,6 +6250,45 @@ def _goal_briefing_for(name):
         _current_goal_text + "\n\n" + (_rywal + "\n\n" if _rywal else "")
         + _poprzednia_ocena
     )
+
+
+def _cel_doszedl(name, session):
+    """v480op: na wiadomosc z celem przyszla prawdziwa odpowiedz — dopiero
+    teraz rola ma cel w swojej rozmowie: zapis w cel_wyslany.json (wznowiona
+    rozmowa nie dostanie go drugi raz) i _goal_briefed. Nigdy nie rzuca."""
+    _p = _cel_do_potwierdzenia.pop(name, None)
+    if not _p:
+        return
+    _goal_briefed.add(name)
+    try:
+        _rozmowa = getattr(session, "chat_session_id", None)
+        if not _rozmowa:
+            return
+        _wyslane = read_json(_CEL_WYSLANY_FILE, {})
+        if not isinstance(_wyslane, dict):
+            _wyslane = {}
+        _wyslane[name] = {"rozmowa": _rozmowa, "cel": _p.get("cel"),
+                          "rywalizacja": _p.get("rywalizacja") or ""}
+        write_json(_CEL_WYSLANY_FILE, _wyslane)
+    except Exception:
+        pass
+
+
+def _rozmowa_ma_cel(name):
+    """v480op: czy obecna (albo zapisana do wznowienia) rozmowa roli
+    potwierdzila odpowiedzia biezacy cel. Bez celu w programie: True."""
+    if not _current_goal_text:
+        return True
+    try:
+        _rozmowa = _rozmowa_zdan(name)
+        _wpis = (read_json(_CEL_WYSLANY_FILE, {}) or {}).get(name) or {}
+        return bool(
+            _rozmowa and _wpis.get("rozmowa") == _rozmowa
+            and _wpis.get("cel") == hashlib.sha1(
+                _current_goal_text.encode("utf-8")).hexdigest()[:16]
+        )
+    except Exception:
+        return True
 
 
 def _load_session_state(name):
@@ -8534,6 +8581,26 @@ def _po_wznowieniu_sprzataj():
         "wiadomość; reszta czeka na jej odpowiedź, a kolejny limit zatrzyma telefon znowu.")
 
 
+def _proba_zywa(proba):
+    """v480op: czy proces, ktory wyslal probe po wznowieniu, jeszcze dziala.
+    Stary zapis bez pid: jak dotad (wazna 15 min od wyslania)."""
+    try:
+        pid = int(proba.get("pid") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return True
+    if not pid:
+        return True
+    if pid == os.getpid():
+        return True
+    if not _zyje(pid):
+        return False
+    try:
+        with open("/proc/" + str(pid) + "/cmdline", "rb") as f:
+            return b"agent" in f.read()
+    except Exception:
+        return True
+
+
 def _czekaj_na_telefon(name, znaki=0):
     """
     Czeka na miejsce we wspolnym tempie telefonu i je zajmuje. Nie trzyma
@@ -8571,7 +8638,13 @@ def _czekaj_na_telefon(name, znaki=0):
                     _ja_proba = False
                     if proba:
                         _ts = float(proba.get("ts") or 0)
-                        if _ts and teraz - _ts < _PROBA_PO_WZNOWIENIU_WAZNA_S:
+                        # v480op: probe trzyma proces, ktory jeszcze zyje.
+                        # Bieg 2026-11-22 12:13: probe wyslal proces
+                        # zamkniety przez uzytkownika o 12:12, a nowy start
+                        # czekal na jej odpowiedz do 12:23 (15 min od
+                        # wyslania) — MAIN stal 10 min bez powodu.
+                        if (_ts and teraz - _ts < _PROBA_PO_WZNOWIENIU_WAZNA_S
+                                and _proba_zywa(proba)):
                             stan = "proba"
                         else:
                             _ja_proba = True
@@ -8609,7 +8682,8 @@ def _czekaj_na_telefon(name, znaki=0):
                         st["wyslane"], st["czeka"] = wys, czeka
                         if _ja_proba:
                             st["proba_po_wznowieniu"] = {"od": float(proba.get("od") or teraz),
-                                                         "ts": teraz, "kto": kto}
+                                                         "ts": teraz, "kto": kto,
+                                                         "pid": os.getpid()}
                         _telefon_zapisz(st)
                         stan = "wolno"
                     else:
@@ -12501,6 +12575,7 @@ def _deepseek_jedna_rozmowa(name, message):
         _odmowy_tej = 0   # v480mx: odmowy serwera z kodem dla tej wiadomosci
         _wyslan_tej = 0   # v480na: ile razy ta wiadomosc naprawde poszla
         _tresc_wyslana = message
+        _cel_tu = ""  # v480op: patrz _cel_doszedl()
 
         for attempt in _proby:
 
@@ -13320,6 +13395,9 @@ def _deepseek_jedna_rozmowa(name, message):
                 # v480my: licznik limitow zeruje tylko prawdziwa odpowiedz
                 if str(text or "").strip():
                     _telefon_po_sukcesie(name)
+                    # v480op: cel w tej wiadomosci naprawde doszedl
+                    if _cel_tu.strip():
+                        _cel_doszedl(name, session)
 
                 _resume_unverified.discard(name)
                 # v480bj: czat testowy wskazal zablokowana rozmowe —
@@ -16763,7 +16841,7 @@ def _przywroc_procesy_w_tle():
         pass
 
 
-def _zatrzymane_przy_zamknieciu_blok():
+def _zatrzymane_przy_zamknieciu_blok(cel_znany=True):
     """
     v480: jednorazowa wiadomosc dla MAIN-a po starcie — co poprzednie
     uruchomienie zatrzymalo przy zamknieciu i gdzie zostaly logi.
@@ -16811,8 +16889,11 @@ def _zatrzymane_przy_zamknieciu_blok():
     _dalej = (
         "Zamknięcie programu to nie polecenie ani ocena Waszej pracy — "
         "program zamyka się np. przy aktualizacji, restarcie telefonu albo "
-        "gdy użytkownik go uruchamia od nowa. Cel się nie zmienił, bieg "
-        "trwa dalej i nie czeka na użytkownika. "
+        "gdy użytkownik go uruchamia od nowa. "
+        # v480op: rozmowa, ktora tego celu jeszcze nie miala, dostaje go w
+        # tej samej wiadomosci — "cel sie nie zmienil" byloby nieprawda.
+        + ("Cel się nie zmienił, bieg trwa dalej i nie czeka na użytkownika. "
+           if cel_znany else "Bieg nie czeka na użytkownika. ")
     )
     # v480om: procesy na laptopie zamkniecie programu nie zatrzymuje (licza
     # oderwane od ssh). Bieg 2026-11-15 22:40: "W tle nic wtedy nie
@@ -57659,7 +57740,7 @@ def main_decide(
     _blok_zamkniecia = ""
     if int(step or 0) <= 1 and not globals().get("_zamkniecie_powiedziane"):
         globals()["_zamkniecie_powiedziane"] = True
-        _bz = _zatrzymane_przy_zamknieciu_blok()
+        _bz = _zatrzymane_przy_zamknieciu_blok(_rozmowa_ma_cel("MAIN"))
         if (
             "MAIN" in globals().get("_wznowione_sesje", set())
             or (
@@ -57767,11 +57848,16 @@ def main_decide(
         )
     ):
         globals()["_restart_powiedziany"] = True
+        # v480op: rozmowa MAIN-a bez potwierdzonego celu (bieg 2026-11-22
+        # 12:13) dostaje cel w tej wiadomosci — wtedy bez "kontynuujcie od
+        # miejsca, w ktorym przerwaliscie" (niczego jeszcze nie zaczeli).
         _restart = (
             "Nowe uruchomienie programu. Poprzedni bieg został przerwany "
             "— jego ostatnie wyniki nie wracają; to, co się teraz "
             "wykona, dostaniesz tutaj. Kontynuujcie pracę nad celem od "
             "miejsca, w którym przerwaliście."
+        ) if _rozmowa_ma_cel("MAIN") else (
+            "Nowe uruchomienie programu."
         )
 
 
@@ -69734,9 +69820,12 @@ def _nowy_start_rywalizacji(usun_foldery=True):
     usuniete = []
     # v480fe: bez zgody na foldery — tylko rozmowy druzyny 2 i oceny
     # Sedziego (nowe druzyny, nowe oceny); ~/MAIN_1, ~/MAIN_2 zostaja.
+    # v480op: z folderami znikaja tez raporty DONE starych celow (bieg
+    # 2026-11-22 12:28: po usunieciu folderow MAIN czytal w
+    # ~/agent_druzyna1/raporty_done.json cel z 19.10).
     _co_usunac = (
         (_folder_druzyny(1), _folder_druzyny(2), _RYWALIZACJA_DIR, _DRUZYNA2_DIR,
-         HOME / "archiwum_rywalizacji")
+         HOME / "archiwum_rywalizacji", _PLIK_RAPORTOW_DONE)
         if usun_foldery else (_RYWALIZACJA_DIR, _DRUZYNA2_DIR)
     ) + tuple(_poza)
     for p in _co_usunac:
@@ -69747,7 +69836,10 @@ def _nowy_start_rywalizacji(usun_foldery=True):
                 shutil.rmtree(p)
             else:
                 p.unlink()
-            usuniete.append("~/" + p.name)
+            try:
+                usuniete.append("~/" + str(p.relative_to(HOME)))
+            except ValueError:
+                usuniete.append(str(p))
         except Exception as e:
             log("RYWALIZACJA", "Nie usunąłem " + str(p) + ": " + str(e))
     if usuniete:
