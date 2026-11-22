@@ -7452,8 +7452,8 @@ def _deepseek_circuit_wait(name):
 
         log(
             "DEEPSEEK",
-            "Konto " + str(account) + " ma przerwę za błędy serwera "
-            "DeepSeek — czekam do "
+            "Konto " + str(account) + " ma przerwę (limit użycia albo błędy "
+            "serwera DeepSeek) — czekam do "
             + datetime.fromtimestamp(health["cooldown_until"]).strftime("%H:%M")
             + " i wtedy próbuję jedną wiadomością (nowy token w pliku kończy "
             "przerwę od razu)."
@@ -7570,6 +7570,82 @@ def _odmowa_dostepu(blad):
 def _odmowa_serwera(blad):
     t = str(blad or "")
     return bool(_ODMOWA_SERWERA_RE.search(t)) and not _odmowa_dostepu(t)
+
+
+# v480or: dzienny limit uzycia konta. Bieg 2026-11-22 14:25-15:10: konto 2
+# dostawalo "rate_limit_reached — Usage limit reached. Your limit will reset
+# on Nov 22, 2026 at 20:00." Program bral to za "za duzo wiadomosci" calego
+# telefonu: przerwa, STOP obu druzyn, uzytkownik pisal touch
+# ~/AEL_DEEPSEEK_WZNOW, proba szla znow kontem 2 i znow STOP — druzyna 1
+# (konto 1, bez limitu) stala razem z nia. Serwer sam podaje godzine: to
+# konto czeka do niej (nic nie wysyla), reszta telefonu pracuje dalej.
+_LIMIT_UZYCIA_RE = re.compile(r"usage\s+limit\s+reached", re.IGNORECASE)
+_LIMIT_DO_RE = re.compile(
+    r"reset\s+on\s+([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})",
+    re.IGNORECASE)
+_MIESIACE_EN = {m: i + 1 for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+
+
+def _limit_uzycia_do(blad):
+    """Do kiedy (time.time()) konto ma limit uzycia; 0 = to nie ten blad.
+    Godzina z komunikatu serwera (+2 min); bez godziny albo gdy juz minela
+    (np. serwer liczy w innej strefie) — 30 min od teraz."""
+    t = str(blad or "")
+    if not _LIMIT_UZYCIA_RE.search(t):
+        return 0.0
+    teraz = time.time()
+    m = _LIMIT_DO_RE.search(t)
+    if m:
+        try:
+            ms = _MIESIACE_EN.get(m.group(1)[:3].lower())
+            if ms:
+                do = datetime(int(m.group(3)), ms, int(m.group(2)),
+                              int(m.group(4)), int(m.group(5))).timestamp() + 120
+                if teraz + 60 < do < teraz + 2 * 86400:
+                    return do
+        except Exception:
+            pass
+    return teraz + 1800
+
+
+def _po_limicie_uzycia(name, blad):
+    """v480or: konto stoi do godziny z komunikatu (plik przerwy konta, ten
+    sam co przy bledach serwera — widzi go tez druga druzyna i nowy start;
+    nowy token w pliku konczy przerwe). Bez przerwy i STOP-u telefonu.
+    Zwraca True, gdy to byl limit uzycia."""
+    do = _limit_uzycia_do(blad)
+    if not do:
+        return False
+    account = _account_of(name)
+    try:
+        _plik_przerwy_konta(account).write_text(str(do))
+    except Exception:
+        pass
+    _get_health(account)["cooldown_until"] = do
+    # proba po wznowieniu, ktora trzyma ten proces, nie blokuje innych
+    try:
+        with _ZamekTelefonu():
+            st = _telefon_czytaj()
+            pr = st.get("proba_po_wznowieniu")
+            if pr and int(pr.get("pid") or 0) in (0, os.getpid()):
+                st.pop("proba_po_wznowieniu", None)
+                _telefon_zapisz(st)
+    except Exception:
+        pass
+    _godz = datetime.fromtimestamp(do).strftime("%H:%M")
+    _log_wysylki("Konto " + str(account) + ": DeepSeek podał dzienny limit użycia tego konta ("
+        + short(str(blad), 160) + "). " + _ROLE_DISPLAY_NAME.get(name, str(name))
+        + " i reszta ról na koncie " + str(account) + " nic nie wysyłają do " + _godz
+        + ", potem ta sama wiadomość. Drugie konto i reszta telefonu pracują dalej; "
+        "nic nie trzeba wznawiać ręcznie (nowy token w pliku kończy przerwę od razu).")
+    try:
+        _powiadomienie_telefonu("ael_limit_konta_" + str(account),
+            "AEL: konto " + str(account) + " — limit DeepSeeka do " + _godz,
+            "Konto " + str(account) + " czeka do " + _godz + ", drugie pracuje dalej.")
+    except Exception:
+        pass
+    return True
 
 
 def _po_limicie(name, blad, ktory):
@@ -8995,6 +9071,10 @@ def _wyslij_w_tempie(name, session, tekst, odczekane=False):
             # v480mx/my: pierwszy limit = przerwa i jedna proba, drugi =
             # STOP telefonu (czekamy w _deepseek_pace na wznowienie). Jawny
             # koniec: po _WYSLIJ_LIMITOW_MAKS limitach blad idzie w gore.
+            if _po_limicie_uzycia(name, str(e)):
+                _deepseek_circuit_wait(name)
+                _deepseek_pace(name, len(str(tekst or "")))
+                continue
             _limity += 1
             _po_limicie(name, str(e), _limity)
             if _limity >= _WYSLIJ_LIMITOW_MAKS:
@@ -13471,6 +13551,10 @@ def _deepseek_jedna_rozmowa(name, message):
                     and not _rozmowa_zerwana(str(e))
                 ):
 
+                    if _po_limicie_uzycia(name, str(e)):
+                        _deepseek_circuit_wait(name)
+                        _proby.powtorz()
+                        continue
                     _limity_tej += 1
                     _po_limicie(name, str(e), _limity_tej)
                     # v480my: jawny koniec — kazda kolejna proba i tak
